@@ -3,10 +3,13 @@
 import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { useRouter } from "next/navigation";
-import { getUserRole } from "@/lib/roles";
+import { createSupabaseBrowser } from "@/lib/supabase";
 
 export default function AdminUsersPage() {
   const router = useRouter();
+  const supabase = createSupabaseBrowser();
+
+  const [checkingRole, setCheckingRole] = useState(true);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,18 +17,34 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // ⭐ ADMIN PROTECTION
+  // ⭐ Proper role check
   useEffect(() => {
     async function checkRole() {
-      const userRole = await getUserRole();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-      if (userRole !== "admin") {
-        router.push("/");
+      if (!user) {
+        router.push("/login");
+        return;
       }
+
+      const { data } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .single();
+
+      if (!data || data.role !== "admin") {
+        router.push("/");
+        return;
+      }
+
+      setCheckingRole(false);
     }
 
     checkRole();
-  }, [router]);
+  }, [router, supabase]);
 
   async function createUser(e: any) {
     e.preventDefault();
@@ -53,6 +72,15 @@ export default function AdminUsersPage() {
     setPassword("");
     setRole("viewer");
     setLoading(false);
+  }
+
+  // ⭐ Loading state while role check runs
+  if (checkingRole) {
+    return (
+      <AppShell title="User Management">
+        <div className="p-6">Checking permissions...</div>
+      </AppShell>
+    );
   }
 
   return (
