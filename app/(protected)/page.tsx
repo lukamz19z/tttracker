@@ -1,9 +1,3 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { isLoggedIn } from "@/lib/auth";
-
 import Link from "next/link";
 import { AppShell } from "@/components/layout/app-shell";
 
@@ -14,14 +8,6 @@ const fakeProjects = [
 ];
 
 export default function ProjectsHome() {
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!isLoggedIn()) {
-      router.push("/login");
-    }
-  }, []);
-
   return (
     <AppShell title="Projects">
       <div className="grid md:grid-cols-3 gap-4">
