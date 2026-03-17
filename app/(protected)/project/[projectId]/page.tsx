@@ -1,5 +1,3 @@
-import { AppShell } from "@/components/layout/app-shell";
-
 type Props = {
   params: Promise<{ projectId: string }>;
 };
@@ -8,7 +6,11 @@ export default async function ProjectDashboard({ params }: Props) {
   const { projectId } = await params;
 
   return (
-    <AppShell title={`Dashboard — ${projectId}`} projectId={projectId}>
+    <div>
+      <h1 className="text-2xl font-bold mb-6">
+        Dashboard — {projectId}
+      </h1>
+
       <div className="grid md:grid-cols-4 gap-4 mb-8">
         <StatCard title="Total Towers" value="120" />
         <StatCard title="Towers Complete" value="48" />
@@ -19,7 +21,7 @@ export default async function ProjectDashboard({ params }: Props) {
       <div className="bg-white p-6 rounded-2xl shadow-sm">
         Graphs area
       </div>
-    </AppShell>
+    </div>
   );
 }
 
