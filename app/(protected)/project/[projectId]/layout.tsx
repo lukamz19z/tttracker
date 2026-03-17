@@ -1,13 +1,17 @@
-import { Sidebar } from "../../../../components/layout/sidebar";
+import { Sidebar } from "@/components/layout/sidebar";
 
-export default function ProjectLayout({ children, params }: any) {
-  const projectId = params.projectId;
-
+export default function ProjectLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: { projectId: string };
+}) {
   return (
     <div className="flex">
-      <Sidebar projectId={projectId} />
+      <Sidebar projectId={params.projectId} />
 
-      <main className="flex-1 bg-slate-100 p-6 min-h-screen">
+      <main className="flex-1 p-8">
         {children}
       </main>
     </div>
