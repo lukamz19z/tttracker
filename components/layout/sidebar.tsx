@@ -22,25 +22,44 @@ export function Sidebar({ projectId }: { projectId?: string }) {
           Projects
         </Link>
 
+        <Link className={linkStyle("/admin/users")} href="/admin/users">
+          Admin
+        </Link>
+
         {projectId && (
           <>
-            <Link className={linkStyle(`/project/${projectId}`)} href={`/project/${projectId}`}>
+            <Link
+              className={linkStyle(`/project/${projectId}`)}
+              href={`/project/${projectId}`}
+            >
               Dashboard
             </Link>
 
-            <Link className={linkStyle(`/project/${projectId}/towers`)} href={`/project/${projectId}/towers`}>
+            <Link
+              className={linkStyle(`/project/${projectId}/towers`)}
+              href={`/project/${projectId}/towers`}
+            >
               Towers
             </Link>
 
-            <Link className={linkStyle(`/project/${projectId}/defects`)} href={`/project/${projectId}/defects`}>
+            <Link
+              className={linkStyle(`/project/${projectId}/defects`)}
+              href={`/project/${projectId}/defects`}
+            >
               Defects
             </Link>
 
-            <Link className={linkStyle(`/project/${projectId}/map`)} href={`/project/${projectId}/map`}>
+            <Link
+              className={linkStyle(`/project/${projectId}/map`)}
+              href={`/project/${projectId}/map`}
+            >
               Map
             </Link>
 
-            <Link className={linkStyle(`/project/${projectId}/dockets`)} href={`/project/${projectId}/dockets`}>
+            <Link
+              className={linkStyle(`/project/${projectId}/dockets`)}
+              href={`/project/${projectId}/dockets`}
+            >
               Daily Dockets
             </Link>
           </>
