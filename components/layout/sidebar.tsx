@@ -19,7 +19,6 @@ export function Sidebar({ projectId }: { projectId?: string }) {
 
   return (
     <aside className="w-64 bg-white border-r min-h-screen p-4 hidden md:block">
-      <h2 className="text-2xl font-bold mb-6">TTTracker</h2>
 
       <nav className="space-y-2">
         <Link className={linkStyle("/")} href="/">
