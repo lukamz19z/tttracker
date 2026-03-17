@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import Link from "next/link";
 import { getUserRole } from "@/lib/roles";
@@ -33,55 +32,45 @@ export default function ProjectsPage() {
   }
 
   async function loadProjects() {
-  setLoading(true);
+    setLoading(true);
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!user) {
-    router.push("/login");
-    return;
-  }
+    if (!user) {
+      router.push("/login");
+      return;
+    }
 
-  // get accessible project ids
-  const { data: accessRows, error: accessError } = await supabase
-    .from("project_access")
-    .select("project_id")
-    .eq("user_id", user.id);
+    const { data: accessRows } = await supabase
+      .from("project_access")
+      .select("project_id")
+      .eq("user_id", user.id);
 
-  if (accessError) {
-    console.error(accessError);
+    const ids = accessRows?.map((r: any) => r.project_id) || [];
+
+    if (ids.length === 0) {
+      setProjects([]);
+      setLoading(false);
+      return;
+    }
+
+    const { data: projectsData } = await supabase
+      .from("projects")
+      .select("*")
+      .in("id", ids);
+
+    setProjects(projectsData || []);
     setLoading(false);
-    return;
   }
-
-  const ids = accessRows?.map((r: any) => r.project_id) || [];
-
-  if (ids.length === 0) {
-    setProjects([]);
-    setLoading(false);
-    return;
-  }
-
-  // fetch real projects
-  const { data: projectsData, error: projectError } = await supabase
-    .from("projects")
-    .select("*")
-    .in("id", ids);
-
-  if (projectError) {
-    console.error(projectError);
-  }
-
-  setProjects(projectsData || []);
-  setLoading(false);
-}
 
   return (
-    <AppShell title="Projects">
-      
-      {/* ADMIN CREATE PROJECT PANEL */}
+    <div>
+
+      <h1 className="text-3xl font-bold mb-6">Projects</h1>
+
+      {/* ADMIN PANEL */}
       {role === "admin" && (
         <div
           onClick={() => router.push("/projects/create")}
@@ -89,15 +78,13 @@ export default function ProjectsPage() {
         >
           <h2 className="text-xl font-semibold">＋ Create New Project</h2>
           <p className="text-slate-300 text-sm mt-1">
-            Setup towers, access permissions and project dashboard
+            Setup towers, access permissions and dashboard
           </p>
         </div>
       )}
 
-      {/* LOADING */}
       {loading && <p>Loading projects...</p>}
 
-      {/* EMPTY STATE */}
       {!loading && projects.length === 0 && (
         <div className="bg-white p-6 rounded-2xl shadow-sm">
           <h2 className="text-lg font-semibold">No projects available</h2>
@@ -107,7 +94,6 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {/* PROJECT CARDS */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         {projects.map((project) => (
           <Link key={project.id} href={`/project/${project.id}`}>
@@ -135,6 +121,7 @@ export default function ProjectsPage() {
           </Link>
         ))}
       </div>
-    </AppShell>
+
+    </div>
   );
 }
