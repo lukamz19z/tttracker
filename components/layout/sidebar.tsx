@@ -42,6 +42,14 @@ export function Sidebar({ projectId }: { projectId?: string }) {
               Towers
             </Link>
 
+            {/* ⭐ NEW IMPORT LINK */}
+            <Link
+              className={linkStyle(`/project/${projectId}/import`)}
+              href={`/project/${projectId}/import`}
+            >
+              Import Towers
+            </Link>
+
             <Link
               className={linkStyle(`/project/${projectId}/defects`)}
               href={`/project/${projectId}/defects`}
