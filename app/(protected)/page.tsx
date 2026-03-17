@@ -59,10 +59,11 @@ export default function ProjectsPage() {
 
   return (
     <AppShell title="Projects">
+      
       {/* ADMIN CREATE PROJECT PANEL */}
       {role === "admin" && (
         <div
-          onClick={() => router.push("/admin/projects/create")}
+          onClick={() => router.push("/projects/create")}
           className="cursor-pointer bg-slate-900 text-white p-6 rounded-2xl mb-6 hover:opacity-90"
         >
           <h2 className="text-xl font-semibold">＋ Create New Project</h2>
@@ -74,6 +75,16 @@ export default function ProjectsPage() {
 
       {/* LOADING */}
       {loading && <p>Loading projects...</p>}
+
+      {/* EMPTY STATE */}
+      {!loading && projects.length === 0 && (
+        <div className="bg-white p-6 rounded-2xl shadow-sm">
+          <h2 className="text-lg font-semibold">No projects available</h2>
+          <p className="text-slate-500 text-sm mt-1">
+            You have not been assigned to any projects yet.
+          </p>
+        </div>
+      )}
 
       {/* PROJECT CARDS */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
