@@ -33,29 +33,50 @@ export default function ProjectsPage() {
   }
 
   async function loadProjects() {
-    setLoading(true);
+  setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("project_access")
-      .select("projects(*)")
-      .eq("user_id", user.id);
-
-    if (!error && data) {
-      const list = data.map((p: any) => p.projects);
-      setProjects(list);
-    }
-
-    setLoading(false);
+  if (!user) {
+    router.push("/login");
+    return;
   }
+
+  // get accessible project ids
+  const { data: accessRows, error: accessError } = await supabase
+    .from("project_access")
+    .select("project_id")
+    .eq("user_id", user.id);
+
+  if (accessError) {
+    console.error(accessError);
+    setLoading(false);
+    return;
+  }
+
+  const ids = accessRows?.map((r: any) => r.project_id) || [];
+
+  if (ids.length === 0) {
+    setProjects([]);
+    setLoading(false);
+    return;
+  }
+
+  // fetch real projects
+  const { data: projectsData, error: projectError } = await supabase
+    .from("projects")
+    .select("*")
+    .in("id", ids);
+
+  if (projectError) {
+    console.error(projectError);
+  }
+
+  setProjects(projectsData || []);
+  setLoading(false);
+}
 
   return (
     <AppShell title="Projects">
