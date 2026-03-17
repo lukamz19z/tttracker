@@ -35,10 +35,10 @@ export default function AdminUsersPage() {
         .eq("user_id", user.id)
         .single();
 
-      if (!data || data.role !== "admin") {
+        if (!data || data.role?.toLowerCase() !== "admin") {
         router.push("/");
-        return;
-      }
+         return;
+        }
 
       setCheckingRole(false);
     }
@@ -82,6 +82,7 @@ export default function AdminUsersPage() {
       </AppShell>
     );
   }
+  
 
   return (
     <AppShell title="User Management">
