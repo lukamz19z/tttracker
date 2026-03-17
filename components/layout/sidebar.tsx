@@ -8,8 +8,12 @@ export function Sidebar({ projectId }: { projectId?: string }) {
 
   function linkStyle(href: string) {
     return `
-      block p-2 rounded-lg
-      ${pathname === href ? "bg-slate-200 font-semibold" : "hover:bg-slate-100"}
+      block p-2 rounded-lg transition
+      ${
+        pathname === href || pathname.startsWith(href + "/")
+          ? "bg-slate-200 font-semibold"
+          : "hover:bg-slate-100"
+      }
     `;
   }
 
@@ -40,14 +44,6 @@ export function Sidebar({ projectId }: { projectId?: string }) {
               href={`/project/${projectId}/towers`}
             >
               Towers
-            </Link>
-
-            {/* ⭐ NEW IMPORT LINK */}
-            <Link
-              className={linkStyle(`/project/${projectId}/import`)}
-              href={`/project/${projectId}/import`}
-            >
-              Import Towers
             </Link>
 
             <Link
