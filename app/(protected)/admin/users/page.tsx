@@ -1,14 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppShell } from "@/components/layout/app-shell";
+import { useRouter } from "next/navigation";
+import { getUserRole } from "@/lib/roles";
 
 export default function AdminUsersPage() {
+  const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewer");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // ⭐ ADMIN PROTECTION
+  useEffect(() => {
+    async function checkRole() {
+      const userRole = await getUserRole();
+
+      if (userRole !== "admin") {
+        router.push("/");
+      }
+    }
+
+    checkRole();
+  }, [router]);
 
   async function createUser(e: any) {
     e.preventDefault();
