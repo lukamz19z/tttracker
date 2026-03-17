@@ -13,15 +13,26 @@ export default function CreateProjectPage() {
   const [client, setClient] = useState("");
   const [location, setLocation] = useState("");
   const [status, setStatus] = useState("ongoing");
+  const [totalTowers, setTotalTowers] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  async function createProject(e: any) {
+  async function createProject(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setMsg("");
 
-    const { data, error } = await supabase
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setMsg("You must be logged in.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: project, error: projectError } = await supabase
       .from("projects")
       .insert([
         {
@@ -29,18 +40,32 @@ export default function CreateProjectPage() {
           client,
           location,
           status,
+          total_towers: totalTowers ? Number(totalTowers) : null,
         },
       ])
       .select()
       .single();
 
-    if (error) {
-      setMsg(error.message);
+    if (projectError) {
+      setMsg(projectError.message);
       setLoading(false);
       return;
     }
 
-    router.push(`/project/${data.id}`);
+    const { error: accessError } = await supabase.from("project_access").insert([
+      {
+        user_id: user.id,
+        project_id: project.id,
+      },
+    ]);
+
+    if (accessError) {
+      setMsg(accessError.message);
+      setLoading(false);
+      return;
+    }
+
+    router.push(`/project/${project.id}`);
   }
 
   return (
@@ -71,13 +96,23 @@ export default function CreateProjectPage() {
             onChange={(e) => setLocation(e.target.value)}
           />
 
+          <input
+            className="w-full border p-2 rounded"
+            placeholder="Total Towers"
+            type="number"
+            value={totalTowers}
+            onChange={(e) => setTotalTowers(e.target.value)}
+          />
+
           <select
             className="w-full border p-2 rounded"
             value={status}
             onChange={(e) => setStatus(e.target.value)}
           >
             <option value="tendering">Tendering</option>
+            <option value="mobilising">Mobilising</option>
             <option value="ongoing">Ongoing</option>
+            <option value="demobilising">Demobilising</option>
             <option value="completed">Completed</option>
           </select>
 
