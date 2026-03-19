@@ -10,12 +10,7 @@ type Row = Record<string, any>;
 export default function ImportTowersPage() {
   const router = useRouter();
   const params = useParams();
-
-  console.log("PARAMS:", params);
-
   const projectId = params.projectId as string;
-
-  console.log("PROJECT ID:", projectId);
 
   const [rows, setRows] = useState<Row[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -29,8 +24,6 @@ export default function ImportTowersPage() {
       complete: (res) => {
         const data = res.data;
 
-        console.log("CSV DATA:", data);
-
         if (!data || data.length === 0) {
           alert("CSV contains no rows");
           return;
@@ -43,47 +36,59 @@ export default function ImportTowersPage() {
   }
 
   async function handleImport() {
-    if (!projectId) {
-      alert("Project ID missing in route");
+    if (!projectId || projectId === "undefined") {
+      alert("Invalid project. Please reopen project.");
       return;
     }
 
     const hasName = Object.values(mapping).includes("name");
 
     if (!hasName) {
-      alert("Map at least ONE column to Tower Name");
+      alert("You must map at least ONE column to Tower Name");
       return;
     }
 
     setLoading(true);
 
-    const towersToInsert = rows.map((row) => {
-      const core: any = {
-        project_id: projectId,
-        status: "Not Started",
-        progress: 0,
-      };
+    const towersToInsert = rows
+      .map((row) => {
+        const core: any = {
+          project_id: projectId,
+          status: "Not Started",
+          progress: 0,
+        };
 
-      const extra: any = {};
+        const extra: any = {};
 
-      columns.forEach((col) => {
-        const map = mapping[col];
+        columns.forEach((col) => {
+          const map = mapping[col];
+          const value = row[col];
 
-        if (!map) return;
+          if (!map || value === undefined || value === null || value === "")
+            return;
 
-        if (map === "name") core.name = row[col];
-        else if (map === "latitude") core.latitude = Number(row[col]);
-        else if (map === "longitude") core.longitude = Number(row[col]);
-        else if (map === "line") core.line = row[col];
-        else if (map.startsWith("extra:")) extra[col] = row[col];
-      });
+          if (map === "name") core.name = String(value).trim();
+          else if (map === "latitude")
+            core.latitude = parseFloat(value);
+          else if (map === "longitude")
+            core.longitude = parseFloat(value);
+          else if (map === "line") core.line = String(value);
+          else if (map.startsWith("extra:")) extra[col] = value;
+        });
 
-      core.extra_data = extra;
+        if (!core.name) return null;
 
-      return core;
-    });
+        core.extra_data = extra;
 
-    console.log("INSERTING:", towersToInsert);
+        return core;
+      })
+      .filter(Boolean);
+
+    if (towersToInsert.length === 0) {
+      alert("No valid towers found in CSV");
+      setLoading(false);
+      return;
+    }
 
     const supabase = createSupabaseBrowser();
 
@@ -92,8 +97,8 @@ export default function ImportTowersPage() {
       .insert(towersToInsert);
 
     if (error) {
-      console.error("SUPABASE INSERT ERROR:", error);
-      alert("Error importing towers. Check console.");
+      console.error(error);
+      alert("Import failed. Check console.");
       setLoading(false);
       return;
     }
