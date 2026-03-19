@@ -58,9 +58,16 @@ async function loadTowers() {
     t.name?.toLowerCase().includes(search.toLowerCase())
   );
 
-  if (loading) {
-    return <div className="p-8">Loading towers...</div>;
-  }
+if (loading) {
+  return (
+    <div className="p-8">
+      <p className="text-lg font-semibold">Loading towers...</p>
+      <p className="text-slate-500 text-sm">
+        If this takes more than 3 seconds check console.
+      </p>
+    </div>
+  );
+}
 
   return (
     <div className="p-8 w-full">
