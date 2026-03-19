@@ -36,69 +36,71 @@ export default function ImportTowersPage() {
   }
 
   async function handleImport() {
-    if (!projectId || projectId === "undefined") {
-      alert("Invalid project. Please reopen project.");
+    if (!projectId) {
+      alert("Invalid project");
       return;
     }
 
     const hasName = Object.values(mapping).includes("name");
 
     if (!hasName) {
-      alert("You must map at least ONE column to Tower Name");
+      alert("Map at least ONE column to Tower Name");
       return;
     }
 
+    const confirmImport = confirm(
+      "This will DELETE existing towers and replace them. Continue?"
+    );
+
+    if (!confirmImport) return;
+
     setLoading(true);
 
-    const towersToInsert = rows
-      .map((row) => {
-        const core: any = {
-          project_id: projectId,
-          status: "Not Started",
-          progress: 0,
-        };
+    const supabase = createSupabaseBrowser();
 
-        const extra: any = {};
+    // ⭐ DELETE EXISTING
+    const { error: deleteError } = await supabase
+      .from("towers")
+      .delete()
+      .eq("project_id", projectId);
 
-        columns.forEach((col) => {
-          const map = mapping[col];
-          const value = row[col];
-
-          if (!map || value === undefined || value === null || value === "")
-            return;
-
-          if (map === "name") core.name = String(value).trim();
-          else if (map === "latitude")
-            core.latitude = parseFloat(value);
-          else if (map === "longitude")
-            core.longitude = parseFloat(value);
-          else if (map === "line") core.line = String(value);
-          else if (map.startsWith("extra:")) extra[col] = value;
-        });
-
-        if (!core.name) return null;
-
-        core.extra_data = extra;
-
-        return core;
-      })
-      .filter(Boolean);
-
-    if (towersToInsert.length === 0) {
-      alert("No valid towers found in CSV");
+    if (deleteError) {
+      alert("Failed to clear old towers");
       setLoading(false);
       return;
     }
 
-    const supabase = createSupabaseBrowser();
+    const towersToInsert = rows.map((row) => {
+      const core: any = {
+        project_id: projectId,
+        status: "Not Started",
+        progress: 0,
+      };
 
-    const { error } = await supabase
-      .from("towers")
-      .insert(towersToInsert);
+      const extra: any = {};
+
+      columns.forEach((col) => {
+        const map = mapping[col];
+
+        if (!map) return;
+
+        if (map === "name") core.name = row[col];
+        else if (map === "latitude") core.latitude = Number(row[col]);
+        else if (map === "longitude") core.longitude = Number(row[col]);
+        else if (map === "line") core.line = row[col];
+        else if (map.startsWith("extra:")) extra[col] = row[col];
+      });
+
+      core.extra_data = extra;
+
+      return core;
+    });
+
+    const { error } = await supabase.from("towers").insert(towersToInsert);
 
     if (error) {
       console.error(error);
-      alert("Import failed. Check console.");
+      alert("Import failed");
       setLoading(false);
       return;
     }

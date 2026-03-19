@@ -22,11 +22,7 @@ export default function TowersPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    if (!projectId || projectId === "undefined") {
-      setLoading(false);
-      return;
-    }
-
+    if (!projectId) return;
     loadTowers();
   }, [projectId]);
 
@@ -42,7 +38,7 @@ export default function TowersPage() {
       .order("name");
 
     if (error) {
-      console.error("LOAD TOWERS ERROR:", error);
+      console.error(error);
       setLoading(false);
       return;
     }
@@ -55,38 +51,29 @@ export default function TowersPage() {
     t.name?.toLowerCase().includes(search.toLowerCase())
   );
 
-  if (!projectId || projectId === "undefined") {
-    return (
-      <div className="p-8">
-        <h2 className="text-xl font-semibold">Invalid project</h2>
-        <p className="text-slate-500">
-          Please go back and open a valid project.
-        </p>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return <div className="p-8">Loading towers...</div>;
-  }
+  if (loading) return <div className="p-8">Loading towers...</div>;
 
   return (
     <div className="p-8 w-full">
 
+      {/* HEADER */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold">Towers</h1>
           <p className="text-slate-500">View and manage tower assets</p>
         </div>
 
-        <Link
-          href={`/project/${projectId}/towers/import`}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-        >
-          Import Towers
-        </Link>
+        {towers.length > 0 && (
+          <Link
+            href={`/project/${projectId}/towers/import`}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+          >
+            Re-upload Towers
+          </Link>
+        )}
       </div>
 
+      {/* SEARCH */}
       {towers.length > 0 && (
         <input
           className="border rounded-lg p-2 mb-4 w-80"
@@ -96,6 +83,7 @@ export default function TowersPage() {
         />
       )}
 
+      {/* EMPTY STATE */}
       {towers.length === 0 && (
         <div className="bg-white border rounded-xl p-14 text-center">
           <h2 className="text-xl font-semibold mb-2">
@@ -111,16 +99,17 @@ export default function TowersPage() {
         </div>
       )}
 
+      {/* TABLE */}
       {towers.length > 0 && (
         <div className="bg-white border rounded-xl overflow-hidden">
           <table className="w-full">
             <thead className="bg-slate-100">
               <tr>
-                <th className="p-3">Tower</th>
-                <th className="p-3">Line</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Progress</th>
-                <th className="p-3">Open</th>
+                <th className="p-3 text-left">Tower</th>
+                <th className="p-3 text-left">Line</th>
+                <th className="p-3 text-left">Status</th>
+                <th className="p-3 text-left">Progress</th>
+                <th className="p-3 text-left">Open</th>
               </tr>
             </thead>
 
@@ -142,10 +131,10 @@ export default function TowersPage() {
                 </tr>
               ))}
             </tbody>
+
           </table>
         </div>
       )}
-
     </div>
   );
 }
