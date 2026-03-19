@@ -22,37 +22,49 @@ export default function TowersPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId || projectId === "undefined") {
+      setLoading(false);
+      return;
+    }
+
     loadTowers();
   }, [projectId]);
 
   async function loadTowers() {
-    try {
-      const supabase = createSupabaseBrowser();
+    setLoading(true);
 
-      const { data, error } = await supabase
-        .from("towers")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("name");
+    const supabase = createSupabaseBrowser();
 
-      if (error) {
-        console.error(error);
-        setLoading(false);
-        return;
-      }
+    const { data, error } = await supabase
+      .from("towers")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("name");
 
-      setTowers(data || []);
+    if (error) {
+      console.error("LOAD TOWERS ERROR:", error);
       setLoading(false);
-    } catch (err) {
-      console.error(err);
-      setLoading(false);
+      return;
     }
+
+    setTowers(data || []);
+    setLoading(false);
   }
 
   const filtered = towers.filter((t) =>
     t.name?.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (!projectId || projectId === "undefined") {
+    return (
+      <div className="p-8">
+        <h2 className="text-xl font-semibold">Invalid project</h2>
+        <p className="text-slate-500">
+          Please go back and open a valid project.
+        </p>
+      </div>
+    );
+  }
 
   if (loading) {
     return <div className="p-8">Loading towers...</div>;
