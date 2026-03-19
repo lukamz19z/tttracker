@@ -2,18 +2,15 @@
 
 import { useState } from "react";
 import Papa from "papaparse";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
 type Row = Record<string, any>;
 
-export default function ImportTowersPage({
-  params,
-}: {
-  params: { projectId: string };
-}) {
-  const projectId = params.projectId;
+export default function ImportTowersPage() {
   const router = useRouter();
+  const params = useParams();
+  const projectId = params.projectId as string;
 
   const [rows, setRows] = useState<Row[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -26,6 +23,8 @@ export default function ImportTowersPage({
       skipEmptyLines: true,
       complete: (res) => {
         const data = res.data;
+
+        console.log("CSV DATA:", data);
 
         if (!data || data.length === 0) {
           alert("CSV contains no rows");
@@ -42,11 +41,13 @@ export default function ImportTowersPage({
     const hasName = Object.values(mapping).includes("name");
 
     if (!hasName) {
-      alert("You must map at least ONE column to Tower Name");
+      alert("Map at least ONE column to Tower Name");
       return;
     }
 
     setLoading(true);
+
+    console.log("IMPORTING FOR PROJECT:", projectId);
 
     const towersToInsert = rows.map((row) => {
       const core: any = {
@@ -74,18 +75,21 @@ export default function ImportTowersPage({
       return core;
     });
 
+    console.log("READY TO INSERT:", towersToInsert);
+
     const supabase = createSupabaseBrowser();
 
     const { error } = await supabase.from("towers").insert(towersToInsert);
 
     if (error) {
-      console.error(error);
+      console.error("INSERT ERROR:", error);
       alert("Error importing towers");
       setLoading(false);
       return;
     }
 
-    alert("Towers imported successfully");
+    alert(`${towersToInsert.length} towers imported`);
+
     router.push(`/project/${projectId}/towers`);
   }
 
@@ -94,7 +98,7 @@ export default function ImportTowersPage({
 
       <h1 className="text-3xl font-bold mb-2">Import Towers</h1>
       <p className="text-slate-500 mb-6">
-        Upload a CSV file and map columns.
+        Upload CSV and map columns
       </p>
 
       <div className="border-2 border-dashed rounded-xl p-10 text-center mb-8 bg-white">
@@ -106,7 +110,6 @@ export default function ImportTowersPage({
             handleFile(e.target.files[0]);
           }}
         />
-        <p className="text-slate-400 mt-2">Upload CSV file</p>
       </div>
 
       {columns.length > 0 && (
@@ -132,7 +135,7 @@ export default function ImportTowersPage({
                 <option value="latitude">Latitude</option>
                 <option value="longitude">Longitude</option>
                 <option value="line">Line</option>
-                <option value={`extra:${col}`}>Save as Extra</option>
+                <option value={`extra:${col}`}>Save Extra</option>
               </select>
             </div>
           ))}
@@ -143,7 +146,7 @@ export default function ImportTowersPage({
         <button
           onClick={handleImport}
           disabled={loading}
-          className="bg-blue-600 text-white px-8 py-3 rounded-xl hover:bg-blue-700"
+          className="bg-blue-600 text-white px-8 py-3 rounded-xl"
         >
           {loading ? "Importing..." : "Import Towers"}
         </button>
