@@ -23,12 +23,16 @@ export default function TowersPage({
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
-  useEffect(() => {
-    loadTowers();
-  }, []);
+useEffect(() => {
+  if (!projectId) return;
+  loadTowers();
+}, [projectId]);
 
-  async function loadTowers() {
+async function loadTowers() {
+  try {
     const supabase = createSupabaseBrowser();
+
+    console.log("Loading towers for project:", projectId);
 
     const { data, error } = await supabase
       .from("towers")
@@ -37,13 +41,18 @@ export default function TowersPage({
       .order("name");
 
     if (error) {
-      console.error(error);
+      console.error("Supabase error:", error);
+      setLoading(false);
       return;
     }
 
     setTowers(data || []);
     setLoading(false);
+  } catch (err) {
+    console.error("Unexpected load error:", err);
+    setLoading(false);
   }
+}
 
   const filtered = towers.filter((t) =>
     t.name?.toLowerCase().includes(search.toLowerCase())
