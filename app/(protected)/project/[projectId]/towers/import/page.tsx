@@ -10,7 +10,12 @@ type Row = Record<string, any>;
 export default function ImportTowersPage() {
   const router = useRouter();
   const params = useParams();
+
+  console.log("PARAMS:", params);
+
   const projectId = params.projectId as string;
+
+  console.log("PROJECT ID:", projectId);
 
   const [rows, setRows] = useState<Row[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -38,6 +43,11 @@ export default function ImportTowersPage() {
   }
 
   async function handleImport() {
+    if (!projectId) {
+      alert("Project ID missing in route");
+      return;
+    }
+
     const hasName = Object.values(mapping).includes("name");
 
     if (!hasName) {
@@ -46,8 +56,6 @@ export default function ImportTowersPage() {
     }
 
     setLoading(true);
-
-    console.log("IMPORTING FOR PROJECT:", projectId);
 
     const towersToInsert = rows.map((row) => {
       const core: any = {
@@ -75,15 +83,17 @@ export default function ImportTowersPage() {
       return core;
     });
 
-    console.log("READY TO INSERT:", towersToInsert);
+    console.log("INSERTING:", towersToInsert);
 
     const supabase = createSupabaseBrowser();
 
-    const { error } = await supabase.from("towers").insert(towersToInsert);
+    const { error } = await supabase
+      .from("towers")
+      .insert(towersToInsert);
 
     if (error) {
-      console.error("INSERT ERROR:", error);
-      alert("Error importing towers");
+      console.error("SUPABASE INSERT ERROR:", error);
+      alert("Error importing towers. Check console.");
       setLoading(false);
       return;
     }
