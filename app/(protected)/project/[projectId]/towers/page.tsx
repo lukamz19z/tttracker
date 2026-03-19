@@ -3,72 +3,137 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { useParams } from "next/navigation";
 
-export default function TowersPage({
-  params,
-}: {
-  params: { projectId: string };
-}) {
-  const projectId = params.projectId;
+type Tower = {
+  id: string;
+  name: string;
+  line?: string;
+  status?: string;
+  progress?: number;
+};
 
+export default function TowersPage() {
+  const params = useParams();
+  const projectId = params.projectId as string;
+
+  const [towers, setTowers] = useState<Tower[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("Starting...");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
-    testLoad();
-  }, []);
+    if (!projectId) return;
+    loadTowers();
+  }, [projectId]);
 
-  async function testLoad() {
+  async function loadTowers() {
     try {
-      console.log("STEP 1 — component mounted");
-      setMessage("Component mounted");
-
       const supabase = createSupabaseBrowser();
-
-      console.log("STEP 2 — supabase client created");
-      setMessage("Supabase client created");
-
-      console.log("PROJECT ID:", projectId);
-      setMessage("Project ID: " + projectId);
 
       const { data, error } = await supabase
         .from("towers")
-        .select("*");
+        .select("*")
+        .eq("project_id", projectId)
+        .order("name");
 
-      console.log("STEP 3 — query finished");
-      console.log("DATA:", data);
-      console.log("ERROR:", error);
+      if (error) {
+        console.error(error);
+        setLoading(false);
+        return;
+      }
 
-      setMessage("Query finished. Check console.");
+      setTowers(data || []);
       setLoading(false);
-
     } catch (err) {
-      console.error("CRASH:", err);
-      setMessage("Crash happened — check console");
+      console.error(err);
       setLoading(false);
     }
   }
 
+  const filtered = towers.filter((t) =>
+    t.name?.toLowerCase().includes(search.toLowerCase())
+  );
+
   if (loading) {
-    return (
-      <div className="p-8">
-        <h1 className="text-2xl font-bold">Debug Towers</h1>
-        <p className="mt-4">{message}</p>
-      </div>
-    );
+    return <div className="p-8">Loading towers...</div>;
   }
 
   return (
-    <div className="p-8">
-      <h1 className="text-2xl font-bold">Finished Debug</h1>
-      <p>{message}</p>
+    <div className="p-8 w-full">
 
-      <Link
-        href={`/project/${projectId}/towers/import`}
-        className="text-blue-600 underline"
-      >
-        Go Import
-      </Link>
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Towers</h1>
+          <p className="text-slate-500">View and manage tower assets</p>
+        </div>
+
+        <Link
+          href={`/project/${projectId}/towers/import`}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+        >
+          Import Towers
+        </Link>
+      </div>
+
+      {towers.length > 0 && (
+        <input
+          className="border rounded-lg p-2 mb-4 w-80"
+          placeholder="Search tower..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      )}
+
+      {towers.length === 0 && (
+        <div className="bg-white border rounded-xl p-14 text-center">
+          <h2 className="text-xl font-semibold mb-2">
+            No towers imported yet
+          </h2>
+
+          <Link
+            href={`/project/${projectId}/towers/import`}
+            className="bg-blue-600 text-white px-6 py-3 rounded-lg"
+          >
+            Import Towers
+          </Link>
+        </div>
+      )}
+
+      {towers.length > 0 && (
+        <div className="bg-white border rounded-xl overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="p-3">Tower</th>
+                <th className="p-3">Line</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Progress</th>
+                <th className="p-3">Open</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.map((tower) => (
+                <tr key={tower.id} className="border-t">
+                  <td className="p-3">{tower.name}</td>
+                  <td className="p-3">{tower.line || "-"}</td>
+                  <td className="p-3">{tower.status || "Not Started"}</td>
+                  <td className="p-3">{tower.progress || 0}%</td>
+                  <td className="p-3">
+                    <Link
+                      href={`/project/${projectId}/tower/${tower.id}`}
+                      className="text-blue-600"
+                    >
+                      Open
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
     </div>
   );
 }
