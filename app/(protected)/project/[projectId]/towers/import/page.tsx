@@ -3,15 +3,16 @@
 import { useState } from "react";
 import Papa from "papaparse";
 import { useRouter } from "next/navigation";
+import { createSupabaseBrowser } from "@/lib/supabase";
 
 type Row = Record<string, any>;
 
 export default function ImportTowersPage({
   params,
 }: {
-  params: { id: string };
+  params: { projectId: string };
 }) {
-  const projectId = params.id;
+  const projectId = params.projectId;
   const router = useRouter();
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -19,7 +20,6 @@ export default function ImportTowersPage({
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
-  // ---------- CSV Upload ----------
   function handleFile(file: File) {
     Papa.parse<Row>(file, {
       header: true,
@@ -32,24 +32,13 @@ export default function ImportTowersPage({
           return;
         }
 
-        const firstRow = data[0];
-
-        if (!firstRow || typeof firstRow !== "object") {
-          alert("Invalid CSV format");
-          return;
-        }
-
         setRows(data);
-        setColumns(Object.keys(firstRow));
+        setColumns(Object.keys(data[0]));
       },
     });
   }
 
-  // ---------- Import Logic ----------
   async function handleImport() {
-    if (!mapping) return;
-
-    // Validate required field
     const hasName = Object.values(mapping).includes("name");
 
     if (!hasName) {
@@ -59,11 +48,11 @@ export default function ImportTowersPage({
 
     setLoading(true);
 
-    // Transform rows into system format
-    const towersToInsert = rows.map((row, index) => {
+    const towersToInsert = rows.map((row) => {
       const core: any = {
         project_id: projectId,
-        status: "Pending",
+        status: "Not Started",
+        progress: 0,
       };
 
       const extra: any = {};
@@ -77,9 +66,7 @@ export default function ImportTowersPage({
         else if (map === "latitude") core.latitude = Number(row[col]);
         else if (map === "longitude") core.longitude = Number(row[col]);
         else if (map === "line") core.line = row[col];
-        else if (map.startsWith("extra:")) {
-          extra[col] = row[col];
-        }
+        else if (map.startsWith("extra:")) extra[col] = row[col];
       });
 
       core.extra_data = extra;
@@ -87,25 +74,29 @@ export default function ImportTowersPage({
       return core;
     });
 
-    console.log("READY TO INSERT:", towersToInsert);
+    const supabase = createSupabaseBrowser();
 
-    // TODO: Supabase insert goes here
+    const { error } = await supabase.from("towers").insert(towersToInsert);
+
+    if (error) {
+      console.error(error);
+      alert("Error importing towers");
+      setLoading(false);
+      return;
+    }
 
     alert("Towers imported successfully");
-
     router.push(`/project/${projectId}/towers`);
   }
 
   return (
     <div className="p-8 max-w-6xl">
 
-      {/* HEADER */}
       <h1 className="text-3xl font-bold mb-2">Import Towers</h1>
       <p className="text-slate-500 mb-6">
-        Upload a CSV file and map the columns to tower fields.
+        Upload a CSV file and map columns.
       </p>
 
-      {/* UPLOAD BOX */}
       <div className="border-2 border-dashed rounded-xl p-10 text-center mb-8 bg-white">
         <input
           type="file"
@@ -118,7 +109,6 @@ export default function ImportTowersPage({
         <p className="text-slate-400 mt-2">Upload CSV file</p>
       </div>
 
-      {/* COLUMN MAPPING */}
       {columns.length > 0 && (
         <div className="mb-10">
           <h2 className="text-xl font-semibold mb-4">Column Mapping</h2>
@@ -142,52 +132,18 @@ export default function ImportTowersPage({
                 <option value="latitude">Latitude</option>
                 <option value="longitude">Longitude</option>
                 <option value="line">Line</option>
-                <option value={`extra:${col}`}>Save as Extra Field</option>
+                <option value={`extra:${col}`}>Save as Extra</option>
               </select>
             </div>
           ))}
         </div>
       )}
 
-      {/* PREVIEW TABLE */}
-      {rows.length > 0 && (
-        <div className="mb-10">
-          <h2 className="text-xl font-semibold mb-3">Preview</h2>
-
-          <div className="border rounded-xl overflow-auto bg-white">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100">
-                <tr>
-                  {columns.map((c) => (
-                    <th key={c} className="p-2 text-left">
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-
-              <tbody>
-                {rows.slice(0, 6).map((row, i) => (
-                  <tr key={i} className="border-t">
-                    {columns.map((c) => (
-                      <td key={c} className="p-2">
-                        {row[c]}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* IMPORT BUTTON */}
       {rows.length > 0 && (
         <button
           onClick={handleImport}
           disabled={loading}
-          className="bg-blue-600 text-white px-8 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50"
+          className="bg-blue-600 text-white px-8 py-3 rounded-xl hover:bg-blue-700"
         >
           {loading ? "Importing..." : "Import Towers"}
         </button>
