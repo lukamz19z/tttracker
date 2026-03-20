@@ -6,73 +6,65 @@ import { usePathname } from "next/navigation";
 export function Sidebar({ projectId }: { projectId?: string }) {
   const pathname = usePathname();
 
-  function isActive(route: string) {
-    if (!projectId) return false;
+function linkStyle(href: string) {
+  const isProjectsRoot =
+    href === "/" && pathname === "/";
 
-    // dashboard
-    if (route === "dashboard") {
-      return pathname === `/project/${projectId}`;
-    }
+  const isExactMatch =
+    pathname === href;
 
-    // towers (includes tower detail pages)
-    if (route === "towers") {
-      return pathname.startsWith(`/project/${projectId}/tower`) ||
-             pathname.startsWith(`/project/${projectId}/towers`);
-    }
+  const isNestedMatch =
+    href !== "/" &&
+    pathname.startsWith(href + "/");
 
-    // map
-    if (route === "map") {
-      return pathname.startsWith(`/project/${projectId}/map`);
-    }
+  const isActive =
+    isProjectsRoot || isExactMatch || isNestedMatch;
 
-    return false;
-  }
-
-  function linkStyle(active: boolean) {
-    return `
-      block p-2 rounded-lg
-      ${active ? "bg-slate-200 font-semibold" : "hover:bg-slate-100"}
-    `;
-  }
+  return `
+    block p-2 rounded-lg transition
+    ${isActive ? "bg-slate-200 font-semibold" : "hover:bg-slate-100"}
+  `;
+}
 
   return (
     <aside className="w-64 bg-white border-r min-h-screen p-4 hidden md:block">
-      <h2 className="text-2xl font-bold mb-6">TTTracker</h2>
-
       <nav className="space-y-2">
 
-        {/* DASHBOARD */}
-        <Link
-          className={linkStyle(isActive("dashboard"))}
-          href={`/project/${projectId}`}
-        >
-          Dashboard
+        <Link className={linkStyle("/")} href="/">
+          Projects
         </Link>
 
-        {/* TOWERS */}
-        <Link
-          className={linkStyle(isActive("towers"))}
-          href={`/project/${projectId}/towers`}
-        >
-          Towers
-        </Link>
+        {projectId && (
+          <>
+            <Link
+              className={linkStyle(`/project/${projectId}`)}
+              href={`/project/${projectId}`}
+            >
+              Dashboard
+            </Link>
 
-        {/* MAP */}
-        <Link
-          className={linkStyle(isActive("map"))}
-          href={`/project/${projectId}/map`}
-        >
-          Map
-        </Link>
+            <Link
+              className={linkStyle(`/project/${projectId}/towers`)}
+              href={`/project/${projectId}/towers`}
+            >
+              Towers
+            </Link>
 
-        {/* ADMIN */}
-        <Link
-          className={linkStyle(pathname.startsWith("/admin"))}
-          href="/admin/users"
-        >
-          Admin
-        </Link>
+            <Link
+              className={linkStyle(`/project/${projectId}/map`)}
+              href={`/project/${projectId}/map`}
+            >
+              Map
+            </Link>
 
+            <Link
+              className={linkStyle("/admin/users")}
+              href="/admin/users"
+            >
+              Admin
+            </Link>
+          </>
+        )}
       </nav>
     </aside>
   );
