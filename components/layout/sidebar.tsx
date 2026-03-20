@@ -7,18 +7,27 @@ export function Sidebar({ projectId }: { projectId?: string }) {
   const pathname = usePathname();
 
 function linkStyle(href: string) {
-  const isProjectsRoot =
-    href === "/" && pathname === "/";
+  let isActive = false;
 
-  const isExactMatch =
-    pathname === href;
+  // Projects root
+  if (href === "/") {
+    isActive = pathname === "/";
+  }
 
-  const isNestedMatch =
-    href !== "/" &&
-    pathname.startsWith(href + "/");
+  // Dashboard (EXACT only)
+  else if (
+    projectId &&
+    href === `/project/${projectId}`
+  ) {
+    isActive = pathname === href;
+  }
 
-  const isActive =
-    isProjectsRoot || isExactMatch || isNestedMatch;
+  // All other project pages allow nested
+  else {
+    isActive =
+      pathname === href ||
+      pathname.startsWith(href + "/");
+  }
 
   return `
     block p-2 rounded-lg transition
