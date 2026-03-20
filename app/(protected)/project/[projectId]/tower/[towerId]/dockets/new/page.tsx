@@ -1,346 +1,276 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-/* ================= TYPES ================= */
-
-type Tower = {
-  id: string;
-  name: string;
-  line?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  status?: string | null;
-  progress?: number | null;
-  extra_data?: Record<string, any> | null;
+type LabourRow = {
+  worker_name: string;
+  hours: string;
 };
 
-type Docket = {
-  id: string;
-  docket_date: string;
-  crew: string | null;
-  leading_hand: string | null;
-  weather_delay_hours: number | null;
-  lightning_delay_hours: number | null;
-  toolbox_delay_hours: number | null;
-  comments: string | null;
-  docket_file_url: string | null;
+type ProgressRow = {
+  section_label: string;
+  progress_percent: string;
 };
 
-type Delivery = {
-  id: string;
-  delivery_date: string | null;
-  delivered_by: string | null;
-  bundle_numbers: string | null;
-  missing_steel: string | null;
-  comments: string | null;
-};
+const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
+  { section_label: "Legs", progress_percent: "" },
+  { section_label: "Body Extensions", progress_percent: "" },
+  { section_label: "Common Body", progress_percent: "" },
+  { section_label: "Superstructure", progress_percent: "" },
+  { section_label: "Crossarms", progress_percent: "" },
+];
 
-type Modification = {
-  id: string;
-  description: string | null;
-  created_at: string;
-};
-
-type Defect = {
-  id: string;
-  defect: string | null;
-  status: string | null;
-  created_at: string;
-};
-
-type Photo = {
-  id: string;
-  file_url: string | null;
-  caption: string | null;
-  created_at: string;
-};
-
-const TABS = [
-  "Overview",
-  "Workpack",
-  "Daily Dockets",
-  "Deliveries",
-  "Modifications",
-  "Defects",
-  "Photos",
-] as const;
-
-type TabName = (typeof TABS)[number];
-
-/* ================= PAGE ================= */
-
-export default function TowerDetailPage() {
+export default function NewDailyDocketPage() {
   const params = useParams();
-  const projectId = params.projectId as string;
+  const router = useRouter();
+
   const towerId = params.towerId as string;
+  const projectId = params.projectId as string;
 
-  const [activeTab, setActiveTab] = useState<TabName>("Overview");
-  const [tower, setTower] = useState<Tower | null>(null);
-  const [dockets, setDockets] = useState<Docket[]>([]);
-  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [modifications, setModifications] = useState<Modification[]>([]);
-  const [defects, setDefects] = useState<Defect[]>([]);
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [docketDate, setDocketDate] = useState("");
+  const [crewName, setCrewName] = useState("");
+  const [leadingHand, setLeadingHand] = useState("");
 
-  useEffect(() => {
-    if (!projectId || !towerId) return;
-    loadData();
-  }, [projectId, towerId]);
+  const [weatherDelayHours, setWeatherDelayHours] = useState("");
+  const [lightningDelayHours, setLightningDelayHours] = useState("");
+  const [toolboxDelayHours, setToolboxDelayHours] = useState("");
+  const [comments, setComments] = useState("");
 
-  async function loadData() {
-    setLoading(true);
-    const supabase = createSupabaseBrowser();
+  const [labourRows, setLabourRows] = useState<LabourRow[]>([
+    { worker_name: "", hours: "" },
+  ]);
 
-    const [
-      towerRes,
-      docketRes,
-      deliveryRes,
-      modificationRes,
-      defectRes,
-      photoRes,
-    ] = await Promise.all([
-      supabase.from("towers").select("*").eq("id", towerId).single(),
-      supabase
-        .from("tower_daily_dockets")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("docket_date", { ascending: false }),
-      supabase
-        .from("tower_deliveries")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("delivery_date", { ascending: false }),
-      supabase
-        .from("tower_modifications")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("tower_defects")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("tower_photos")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("created_at", { ascending: false }),
-    ]);
+  const [progressRows, setProgressRows] =
+    useState<ProgressRow[]>(DEFAULT_PROGRESS_ROWS);
 
-    if (towerRes.error) console.error(towerRes.error);
-    if (docketRes.error) console.error(docketRes.error);
-    if (deliveryRes.error) console.error(deliveryRes.error);
-    if (modificationRes.error) console.error(modificationRes.error);
-    if (defectRes.error) console.error(defectRes.error);
-    if (photoRes.error) console.error(photoRes.error);
+  const [saving, setSaving] = useState(false);
 
-    setTower(towerRes.data);
-    setDockets(docketRes.data || []);
-    setDeliveries(deliveryRes.data || []);
-    setModifications(modificationRes.data || []);
-    setDefects(defectRes.data || []);
-    setPhotos(photoRes.data || []);
-    setLoading(false);
+  function updateProgressRow(i: number, value: string) {
+    setProgressRows((prev) =>
+      prev.map((r, idx) =>
+        idx === i ? { ...r, progress_percent: value } : r
+      )
+    );
   }
 
-  const latestDocket = useMemo(() => dockets[0] || null, [dockets]);
-
-  if (loading) return <div className="p-8">Loading tower...</div>;
-
-  if (!tower)
-    return (
-      <div className="p-8">
-        Tower not found
-        <Link href={`/project/${projectId}/towers`} className="text-blue-600">
-          Back
-        </Link>
-      </div>
+  function updateLabourRow(i: number, key: keyof LabourRow, value: string) {
+    setLabourRows((prev) =>
+      prev.map((r, idx) => (idx === i ? { ...r, [key]: value } : r))
     );
+  }
+
+  function addLabourRow() {
+    setLabourRows((prev) => [...prev, { worker_name: "", hours: "" }]);
+  }
+
+  /* ================= PROGRESS ENGINE ================= */
+
+  function calculateTowerProgress() {
+    const weights: Record<string, number> = {
+      Legs: 40,
+      "Body Extensions": 15,
+      "Common Body": 20,
+      Superstructure: 10,
+      Crossarms: 15,
+    };
+
+    let total = 0;
+
+    progressRows.forEach((row) => {
+      const pct = Number(row.progress_percent || 0);
+      total += (pct / 100) * (weights[row.section_label] || 0);
+    });
+
+    return Math.round(total);
+  }
+
+  function calculateStatus(progress: number) {
+    if (progress >= 100) return "Complete";
+    if (progress > 0) return "In Progress";
+    return "Not Started";
+  }
+
+  /* ================= SUBMIT ================= */
+
+  async function handleSubmit() {
+    if (!docketDate) return alert("Enter docket date");
+    if (!leadingHand) return alert("Enter Leading Hand");
+
+    setSaving(true);
+    const supabase = createSupabaseBrowser();
+
+    const { data: docket, error } = await supabase
+      .from("tower_daily_dockets")
+      .insert({
+        tower_id: towerId,
+        docket_date: docketDate,
+        crew: crewName,
+        leading_hand: leadingHand,
+        weather_delay_hours: Number(weatherDelayHours || 0),
+        lightning_delay_hours: Number(lightningDelayHours || 0),
+        toolbox_delay_hours: Number(toolboxDelayHours || 0),
+        comments,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      alert("Failed to save docket");
+      setSaving(false);
+      return;
+    }
+
+    /* LABOUR */
+    const labourPayload = labourRows
+      .filter((r) => r.worker_name)
+      .map((r) => ({
+        docket_id: docket.id,
+        worker_name: r.worker_name,
+        hours: Number(r.hours || 0),
+      }));
+
+    if (labourPayload.length) {
+      await supabase.from("tower_docket_labour").insert(labourPayload);
+    }
+
+    /* PROGRESS */
+    const progressPayload = progressRows
+      .filter((r) => r.progress_percent !== "")
+      .map((r) => ({
+        docket_id: docket.id,
+        section: r.section_label,
+        erected_qty: Number(r.progress_percent),
+      }));
+
+    if (progressPayload.length) {
+      await supabase.from("tower_docket_progress").insert(progressPayload);
+    }
+
+    /* UPDATE TOWER */
+    const progress = calculateTowerProgress();
+
+    await supabase
+      .from("towers")
+      .update({
+        progress,
+        status: calculateStatus(progress),
+      })
+      .eq("id", towerId);
+
+    router.push(`/project/${projectId}/tower/${towerId}`);
+  }
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-8 space-y-8 max-w-5xl">
 
-      {/* HEADER */}
-      <div className="bg-white border rounded-2xl p-6 flex justify-between">
-        <div>
-          <div className="text-sm text-slate-500">Tower</div>
-          <h1 className="text-3xl font-bold">{tower.name}</h1>
-          <div className="text-slate-600 mt-1">Line: {tower.line || "-"}</div>
-        </div>
+      <h1 className="text-3xl font-bold">New Daily Docket</h1>
 
-        <div className="flex gap-4">
-          <InfoCard label="Status" value={tower.status || "Not Started"} />
-          <InfoCard label="Progress" value={`${tower.progress || 0}%`} />
-          <InfoCard
-            label="Last Docket"
-            value={latestDocket?.docket_date || "-"}
-          />
-        </div>
-      </div>
+      <section className="bg-white border rounded-2xl p-6 space-y-4">
+        <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} />
+        <Input label="Crew" value={crewName} onChange={setCrewName} />
+        <Input label="Leading Hand" value={leadingHand} onChange={setLeadingHand} />
+      </section>
 
-      {/* ACTIONS */}
-      <div className="flex gap-3">
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/dockets/new`}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-        >
-          Add Daily Docket
-        </Link>
-      </div>
+      <section className="bg-white border rounded-2xl p-6">
+        <h2 className="font-semibold mb-3">Section Progress %</h2>
 
-      {/* TABS */}
-      <div className="border-b flex gap-2">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setActiveTab(t)}
-            className={`px-4 py-2 rounded-t-lg border border-b-0 ${
-              activeTab === t
-                ? "bg-white font-semibold"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {t}
-          </button>
+        {progressRows.map((row, i) => (
+          <div key={i} className="flex gap-4 mb-2">
+            <div className="w-48">{row.section_label}</div>
+            <input
+              className="border p-2 rounded w-32"
+              type="number"
+              value={row.progress_percent}
+              onChange={(e) => updateProgressRow(i, e.target.value)}
+            />
+          </div>
         ))}
-      </div>
+      </section>
 
-      {/* TAB CONTENT */}
-      <div className="bg-white border rounded-2xl p-6">
+      <section className="bg-white border rounded-2xl p-6 space-y-3">
+        <h2 className="font-semibold">Labour</h2>
 
-        {activeTab === "Overview" && (
-          <OverviewTab tower={tower} latestDocket={latestDocket} />
-        )}
+        {labourRows.map((row, i) => (
+          <div key={i} className="flex gap-3">
+            <input
+              className="border p-2 rounded"
+              placeholder="Worker"
+              value={row.worker_name}
+              onChange={(e) =>
+                updateLabourRow(i, "worker_name", e.target.value)
+              }
+            />
+            <input
+              className="border p-2 rounded w-24"
+              placeholder="Hours"
+              type="number"
+              value={row.hours}
+              onChange={(e) =>
+                updateLabourRow(i, "hours", e.target.value)
+              }
+            />
+          </div>
+        ))}
 
-        {activeTab === "Daily Dockets" && (
-          <DailyDocketsTab
-            projectId={projectId}
-            towerId={towerId}
-            dockets={dockets}
-          />
-        )}
+        <button
+          onClick={addLabourRow}
+          className="bg-slate-800 text-white px-4 py-2 rounded"
+        >
+          Add Worker
+        </button>
+      </section>
 
-        {activeTab === "Deliveries" && (
-          <DeliveriesTab deliveries={deliveries} />
-        )}
+      <section className="bg-white border rounded-2xl p-6 space-y-3">
+        <Input
+          label="Weather Delay Hours"
+          type="number"
+          value={weatherDelayHours}
+          onChange={setWeatherDelayHours}
+        />
+        <Input
+          label="Lightning Delay Hours"
+          type="number"
+          value={lightningDelayHours}
+          onChange={setLightningDelayHours}
+        />
+        <Input
+          label="Toolbox Delay Hours"
+          type="number"
+          value={toolboxDelayHours}
+          onChange={setToolboxDelayHours}
+        />
+        <Input label="Comments" value={comments} onChange={setComments} />
+      </section>
 
-        {activeTab === "Modifications" && (
-          <ModificationsTab modifications={modifications} />
-        )}
-
-        {activeTab === "Defects" && <DefectsTab defects={defects} />}
-
-        {activeTab === "Photos" && <PhotosTab photos={photos} />}
-
-        {activeTab === "Workpack" && (
-          <div>Workpack ITC system coming next.</div>
-        )}
-      </div>
+      <button
+        onClick={handleSubmit}
+        disabled={saving}
+        className="bg-blue-600 text-white px-6 py-3 rounded-xl"
+      >
+        {saving ? "Saving..." : "Save Daily Docket"}
+      </button>
     </div>
   );
 }
 
-/* ================= TABS ================= */
-
-function OverviewTab({
-  tower,
-  latestDocket,
-}: {
-  tower: Tower;
-  latestDocket: Docket | null;
-}) {
-  return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-semibold">Overview</h2>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <InfoCard label="Latitude" value={tower.latitude?.toString() || "-"} />
-        <InfoCard label="Longitude" value={tower.longitude?.toString() || "-"} />
-      </div>
-
-      <div>
-        <h3 className="font-semibold mb-2">Latest Docket</h3>
-        <div className="grid md:grid-cols-3 gap-4">
-          <InfoCard
-            label="Leading Hand"
-            value={latestDocket?.leading_hand || "-"}
-          />
-          <InfoCard
-            label="Weather Delay"
-            value={`${latestDocket?.weather_delay_hours || 0}h`}
-          />
-          <InfoCard label="Crew" value={latestDocket?.crew || "-"} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DailyDocketsTab({
-  projectId,
-  towerId,
-  dockets,
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
 }: any) {
   return (
-    <div className="space-y-4">
-      <Link
-        href={`/project/${projectId}/tower/${towerId}/dockets/new`}
-        className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-      >
-        Add Daily Docket
-      </Link>
-
-      <table className="w-full border rounded-xl overflow-hidden">
-        <thead className="bg-slate-100">
-          <tr>
-            <th className="p-3">Date</th>
-            <th className="p-3">Crew</th>
-            <th className="p-3">Leading Hand</th>
-            <th className="p-3">Weather Delay</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {dockets.map((d: Docket) => (
-            <tr key={d.id} className="border-t">
-              <td className="p-3">{d.docket_date}</td>
-              <td className="p-3">{d.crew || "-"}</td>
-              <td className="p-3">{d.leading_hand || "-"}</td>
-              <td className="p-3">{d.weather_delay_hours || 0}h</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function DeliveriesTab({ deliveries }: any) {
-  return <div>{deliveries.length} deliveries recorded</div>;
-}
-
-function ModificationsTab({ modifications }: any) {
-  return <div>{modifications.length} modifications</div>;
-}
-
-function DefectsTab({ defects }: any) {
-  return <div>{defects.length} defects</div>;
-}
-
-function PhotosTab({ photos }: any) {
-  return <div>{photos.length} photos</div>;
-}
-
-function InfoCard({ label, value }: any) {
-  return (
-    <div className="bg-slate-100 rounded-xl p-4">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-semibold">{value}</div>
+    <div>
+      <label className="block text-sm mb-1">{label}</label>
+      <input
+        className="border p-2 rounded w-full"
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
     </div>
   );
 }
