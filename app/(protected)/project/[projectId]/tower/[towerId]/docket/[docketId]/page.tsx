@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
 type Docket = {
@@ -42,16 +42,14 @@ type Progress = {
 };
 
 function isSignedDocket(docket: {
-  client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(
-    docket.client_rep_name?.trim() && docket.signed_date && docket.signed_date.trim()
-  );
+  return Boolean(docket.signed_date && docket.signed_date.trim());
 }
 
-export default function CompletedDocketPage() {
+export default function DailyDocketPage() {
   const params = useParams();
+  const supabase = createSupabaseBrowser();
 
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
@@ -61,6 +59,7 @@ export default function CompletedDocketPage() {
   const [labour, setLabour] = useState<Labour[]>([]);
   const [progress, setProgress] = useState<Progress[]>([]);
   const [loading, setLoading] = useState(true);
+  const [signing, setSigning] = useState(false);
 
   useEffect(() => {
     load();
@@ -68,7 +67,6 @@ export default function CompletedDocketPage() {
 
   async function load() {
     setLoading(true);
-    const supabase = createSupabaseBrowser();
 
     const { data: d } = await supabase
       .from("tower_daily_dockets")
@@ -79,8 +77,7 @@ export default function CompletedDocketPage() {
     const { data: l } = await supabase
       .from("tower_docket_labour")
       .select("*")
-      .eq("docket_id", docketId)
-      .order("worker_name");
+      .eq("docket_id", docketId);
 
     const { data: p } = await supabase
       .from("tower_docket_progress")
@@ -93,13 +90,39 @@ export default function CompletedDocketPage() {
     setLoading(false);
   }
 
-  const locked = useMemo(() => {
-    if (!docket) return false;
-    return isSignedDocket(docket);
-  }, [docket]);
+  async function signDocket() {
+    if (!docket) return;
+
+    const confirmed = window.confirm(
+      "Signing this docket will lock it and prevent further editing. Continue?"
+    );
+    if (!confirmed) return;
+
+    setSigning(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { error } = await supabase
+      .from("tower_daily_dockets")
+      .update({
+        signed_date: today,
+      })
+      .eq("id", docketId);
+
+    if (error) {
+      alert("Failed to sign docket.");
+      setSigning(false);
+      return;
+    }
+
+    await load();
+    setSigning(false);
+  }
 
   if (loading) return <div className="p-8">Loading docket...</div>;
   if (!docket) return <div className="p-8">Docket not found.</div>;
+
+  const signed = isSignedDocket(docket);
 
   return (
     <div className="p-8 max-w-6xl space-y-6">
@@ -107,27 +130,44 @@ export default function CompletedDocketPage() {
         <div>
           <p className="text-slate-500 text-sm">Daily Docket</p>
           <h1 className="text-3xl font-bold">{docket.docket_date || "-"}</h1>
-        </div>
 
-        <div className="flex items-center gap-3">
           <span
-            className={`px-3 py-2 rounded-xl text-sm font-semibold ${
-              locked
+            className={`inline-block mt-3 px-3 py-1 rounded-lg text-sm font-semibold ${
+              signed
                 ? "bg-emerald-100 text-emerald-700"
                 : "bg-amber-100 text-amber-700"
             }`}
           >
-            {locked ? "Signed / Locked" : "Draft / Editable"}
+            {signed ? "Signed" : "Draft"}
           </span>
+        </div>
 
-          {!locked && (
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/docket/${docketId}/edit`}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-            >
-              Edit Docket
-            </Link>
+        <div className="flex items-center gap-3">
+          {!signed && (
+            <>
+              <Link
+                href={`/project/${projectId}/tower/${towerId}/docket/${docketId}/edit`}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+              >
+                Edit
+              </Link>
+
+              <button
+                onClick={signDocket}
+                disabled={signing}
+                className="bg-emerald-600 text-white px-4 py-2 rounded-lg"
+              >
+                {signing ? "Signing..." : "Client Sign"}
+              </button>
+            </>
           )}
+
+          <Link
+            href={`/project/${projectId}/tower/${towerId}/dockets`}
+            className="border px-4 py-2 rounded-lg"
+          >
+            Back to Dockets
+          </Link>
 
           <Link
             href={`/project/${projectId}/tower/${towerId}`}
@@ -150,6 +190,7 @@ export default function CompletedDocketPage() {
           label="Total Erection"
           value={docket.erection_percent !== null ? `${docket.erection_percent}%` : "-"}
         />
+        <Info label="Missing Items / Bolts" value={docket.missing_items_bolts} />
       </section>
 
       <section className="bg-white border rounded-2xl p-6">
@@ -184,10 +225,7 @@ export default function CompletedDocketPage() {
       </section>
 
       <section className="bg-white border rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">Labour</h2>
-        </div>
-
+        <h2 className="text-xl font-semibold mb-4">Labour</h2>
         <div className="border rounded-xl overflow-hidden">
           <table className="w-full">
             <thead className="bg-slate-100 text-left">

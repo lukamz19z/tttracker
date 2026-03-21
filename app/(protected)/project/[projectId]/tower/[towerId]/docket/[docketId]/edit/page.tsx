@@ -40,12 +40,9 @@ type ProgressRow = {
 };
 
 function isSignedDocket(docket: {
-  client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(
-    docket.client_rep_name?.trim() && docket.signed_date && docket.signed_date.trim()
-  );
+  return Boolean(docket.signed_date && docket.signed_date.trim());
 }
 
 export default function EditDailyDocketPage() {

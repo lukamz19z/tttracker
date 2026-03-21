@@ -61,12 +61,9 @@ function clampPercent(value: string) {
 }
 
 function isSignedDocket(docket: {
-  client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(
-    docket.client_rep_name?.trim() && docket.signed_date && docket.signed_date.trim()
-  );
+  return Boolean(docket.signed_date && docket.signed_date.trim());
 }
 
 export default function DailyDocketForm({
@@ -89,9 +86,13 @@ export default function DailyDocketForm({
   const router = useRouter();
   const supabase = createSupabaseBrowser();
 
-  const [docketDate, setDocketDate] = useState(toStringValue(initialDocket?.docket_date));
+  const [docketDate, setDocketDate] = useState(
+    toStringValue(initialDocket?.docket_date)
+  );
   const [crewName, setCrewName] = useState(toStringValue(initialDocket?.crew));
-  const [leadingHand, setLeadingHand] = useState(toStringValue(initialDocket?.leading_hand));
+  const [leadingHand, setLeadingHand] = useState(
+    toStringValue(initialDocket?.leading_hand)
+  );
   const [weather, setWeather] = useState(toStringValue(initialDocket?.weather));
   const [weatherDelayHours, setWeatherDelayHours] = useState(
     toStringValue(initialDocket?.weather_delay_hours)
@@ -114,11 +115,15 @@ export default function DailyDocketForm({
   const [delaysComments, setDelaysComments] = useState(
     toStringValue(initialDocket?.delays_comments)
   );
-  const [bcRepName, setBcRepName] = useState(toStringValue(initialDocket?.bc_rep_name));
+  const [bcRepName, setBcRepName] = useState(
+    toStringValue(initialDocket?.bc_rep_name)
+  );
   const [clientRepName, setClientRepName] = useState(
     toStringValue(initialDocket?.client_rep_name)
   );
-  const [signedDate, setSignedDate] = useState(toStringValue(initialDocket?.signed_date));
+  const [signedDate, setSignedDate] = useState(
+    toStringValue(initialDocket?.signed_date)
+  );
   const [docketFile, setDocketFile] = useState<File | null>(null);
   const [existingDocketFileUrl, setExistingDocketFileUrl] = useState(
     toStringValue(initialDocket?.docket_file_url)
@@ -139,8 +144,8 @@ export default function DailyDocketForm({
   const [saving, setSaving] = useState(false);
 
   const locked = useMemo(
-    () => isSignedDocket({ client_rep_name: clientRepName, signed_date: signedDate }),
-    [clientRepName, signedDate]
+    () => isSignedDocket({ signed_date: signedDate }),
+    [signedDate]
   );
 
   const totalAssemblyPercent = useMemo(() => {
@@ -244,7 +249,7 @@ export default function DailyDocketForm({
         missing_items_bolts: missingItemsBolts,
         bc_rep_name: bcRepName,
         client_rep_name: clientRepName,
-        signed_date: signedDate || null,
+        signed_date: null,
         docket_file_url: docketFileUrl,
       })
       .select()
@@ -312,7 +317,7 @@ export default function DailyDocketForm({
 
     const { data: existing, error: existingError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, client_rep_name, signed_date")
+      .select("id, signed_date")
       .eq("id", docketId)
       .single();
 
@@ -344,7 +349,7 @@ export default function DailyDocketForm({
         missing_items_bolts: missingItemsBolts,
         bc_rep_name: bcRepName,
         client_rep_name: clientRepName,
-        signed_date: signedDate || null,
+        signed_date: existing.signed_date,
         docket_file_url: docketFileUrl,
       })
       .eq("id", docketId);
@@ -707,7 +712,7 @@ export default function DailyDocketForm({
             type="date"
             value={signedDate}
             onChange={setSignedDate}
-            disabled={locked}
+            disabled
           />
           <div>
             <label className="block text-sm font-medium mb-1">
@@ -754,7 +759,7 @@ export default function DailyDocketForm({
           type="button"
           onClick={() =>
             mode === "create"
-              ? router.push(`/project/${projectId}/tower/${towerId}`)
+              ? router.push(`/project/${projectId}/tower/${towerId}/dockets`)
               : router.push(
                   `/project/${projectId}/tower/${towerId}/docket/${docketId}`
                 )
