@@ -1,45 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
 type LabourRow = {
   worker_name: string;
-  hours: string;
+  time_in: string;
+  time_out: string;
+  total_hours: string;
 };
 
 type ProgressRow = {
   section_label: string;
-  progress_percent: string;
+  assembled_percent: string;
+  erected_percent: string;
 };
 
 const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
-  { section_label: "Legs", progress_percent: "" },
-  { section_label: "Body Extensions", progress_percent: "" },
-  { section_label: "Common Body", progress_percent: "" },
-  { section_label: "Superstructure", progress_percent: "" },
-  { section_label: "Crossarms", progress_percent: "" },
+  { section_label: "Legs", assembled_percent: "", erected_percent: "" },
+  { section_label: "Body Extensions", assembled_percent: "", erected_percent: "" },
+  { section_label: "Common Body", assembled_percent: "", erected_percent: "" },
+  { section_label: "Superstructure", assembled_percent: "", erected_percent: "" },
+  { section_label: "Crossarms", assembled_percent: "", erected_percent: "" },
 ];
 
 export default function NewDailyDocketPage() {
   const params = useParams();
   const router = useRouter();
 
-  const towerId = params.towerId as string;
   const projectId = params.projectId as string;
+  const towerId = params.towerId as string;
 
   const [docketDate, setDocketDate] = useState("");
   const [crewName, setCrewName] = useState("");
   const [leadingHand, setLeadingHand] = useState("");
+  const [weather, setWeather] = useState("");
 
   const [weatherDelayHours, setWeatherDelayHours] = useState("");
   const [lightningDelayHours, setLightningDelayHours] = useState("");
   const [toolboxDelayHours, setToolboxDelayHours] = useState("");
-  const [comments, setComments] = useState("");
+  const [otherDelayHours, setOtherDelayHours] = useState("");
+  const [otherDelayReason, setOtherDelayReason] = useState("");
+  const [missingItemsBolts, setMissingItemsBolts] = useState("");
+  const [delaysComments, setDelaysComments] = useState("");
+  const [bcRepName, setBcRepName] = useState("");
+  const [clientRepName, setClientRepName] = useState("");
+  const [signedDate, setSignedDate] = useState("");
+  const [docketFile, setDocketFile] = useState<File | null>(null);
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>([
-    { worker_name: "", hours: "" },
+    { worker_name: "", time_in: "", time_out: "", total_hours: "" },
   ]);
 
   const [progressRows, setProgressRows] =
@@ -47,116 +58,57 @@ export default function NewDailyDocketPage() {
 
   const [saving, setSaving] = useState(false);
 
-  function updateProgressRow(i: number, value: string) {
+  const totalAssemblyPercent = useMemo(() => {
+    const total = progressRows.reduce(
+      (sum, r) => sum + Number(r.assembled_percent || 0),
+      0
+    );
+    return Math.min(total, 100);
+  }, [progressRows]);
+
+  const totalErectionPercent = useMemo(() => {
+    const total = progressRows.reduce(
+      (sum, r) => sum + Number(r.erected_percent || 0),
+      0
+    );
+    return Math.min(total, 100);
+  }, [progressRows]);
+
+  const displayProgress = Math.max(
+    totalAssemblyPercent,
+    totalErectionPercent
+  );
+
+  function updateProgressRow(
+    index: number,
+    key: keyof ProgressRow,
+    value: string
+  ) {
     setProgressRows((prev) =>
-      prev.map((r, idx) =>
-        idx === i ? { ...r, progress_percent: value } : r
+      prev.map((row, i) =>
+        i === index ? { ...row, [key]: value } : row
       )
     );
   }
 
-  function updateLabourRow(i: number, key: keyof LabourRow, value: string) {
-    setLabourRows((prev) =>
-      prev.map((r, idx) => (idx === i ? { ...r, [key]: value } : r))
-    );
-  }
-
-  function addLabourRow() {
-    setLabourRows((prev) => [...prev, { worker_name: "", hours: "" }]);
-  }
-
-  /* ================= PROGRESS ENGINE ================= */
-
-  function calculateTowerProgress() {
-    const weights: Record<string, number> = {
-      Legs: 40,
-      "Body Extensions": 15,
-      "Common Body": 20,
-      Superstructure: 10,
-      Crossarms: 15,
-    };
-
-    let total = 0;
-
-    progressRows.forEach((row) => {
-      const pct = Number(row.progress_percent || 0);
-      total += (pct / 100) * (weights[row.section_label] || 0);
-    });
-
-    return Math.round(total);
-  }
-
-  function calculateStatus(progress: number) {
-    if (progress >= 100) return "Complete";
-    if (progress > 0) return "In Progress";
-    return "Not Started";
-  }
-
-  /* ================= SUBMIT ================= */
-
   async function handleSubmit() {
-    if (!docketDate) return alert("Enter docket date");
-    if (!leadingHand) return alert("Enter Leading Hand");
-
-    setSaving(true);
     const supabase = createSupabaseBrowser();
 
-    const { data: docket, error } = await supabase
-      .from("tower_daily_dockets")
-      .insert({
-        tower_id: towerId,
-        docket_date: docketDate,
-        crew: crewName,
-        leading_hand: leadingHand,
-        weather_delay_hours: Number(weatherDelayHours || 0),
-        lightning_delay_hours: Number(lightningDelayHours || 0),
-        toolbox_delay_hours: Number(toolboxDelayHours || 0),
-        comments,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error(error);
-      alert("Failed to save docket");
-      setSaving(false);
-      return;
-    }
-
-    /* LABOUR */
-    const labourPayload = labourRows
-      .filter((r) => r.worker_name)
-      .map((r) => ({
-        docket_id: docket.id,
-        worker_name: r.worker_name,
-        hours: Number(r.hours || 0),
-      }));
-
-    if (labourPayload.length) {
-      await supabase.from("tower_docket_labour").insert(labourPayload);
-    }
-
-    /* PROGRESS */
-    const progressPayload = progressRows
-      .filter((r) => r.progress_percent !== "")
-      .map((r) => ({
-        docket_id: docket.id,
-        section: r.section_label,
-        erected_qty: Number(r.progress_percent),
-      }));
-
-    if (progressPayload.length) {
-      await supabase.from("tower_docket_progress").insert(progressPayload);
-    }
-
-    /* UPDATE TOWER */
-    const progress = calculateTowerProgress();
+    await supabase.from("tower_daily_dockets").insert({
+      project_id: projectId,
+      tower_id: towerId,
+      docket_date: docketDate,
+      crew: crewName,
+      leading_hand: leadingHand,
+      weather,
+      assembly_percent: totalAssemblyPercent,
+      erection_percent: totalErectionPercent,
+    });
 
     await supabase
       .from("towers")
       .update({
-        progress,
-        status: calculateStatus(progress),
+        progress: displayProgress,
       })
       .eq("id", towerId);
 
@@ -164,85 +116,78 @@ export default function NewDailyDocketPage() {
   }
 
   return (
-    <div className="p-8 space-y-8 max-w-5xl">
-
-      <h1 className="text-3xl font-bold">New Daily Docket</h1>
+    <div className="p-8 max-w-6xl space-y-8">
+      <h1 className="text-3xl font-bold">Add Daily Docket</h1>
 
       <section className="bg-white border rounded-2xl p-6 space-y-4">
-        <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} />
-        <Input label="Crew" value={crewName} onChange={setCrewName} />
-        <Input label="Leading Hand" value={leadingHand} onChange={setLeadingHand} />
-      </section>
+        <h2 className="text-xl font-semibold">Section Progress %</h2>
 
-      <section className="bg-white border rounded-2xl p-6">
-        <h2 className="font-semibold mb-3">Section Progress %</h2>
+        <table className="w-full border rounded-xl overflow-hidden">
+          <thead className="bg-slate-100">
+            <tr>
+              <th className="p-3 text-left">Section</th>
+              <th className="p-3 text-left">Assembly %</th>
+              <th className="p-3 text-left">Erection %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {progressRows.map((row, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-3">{row.section_label}</td>
 
-        {progressRows.map((row, i) => (
-          <div key={i} className="flex gap-4 mb-2">
-            <div className="w-48">{row.section_label}</div>
-            <input
-              className="border p-2 rounded w-32"
-              type="number"
-              value={row.progress_percent}
-              onChange={(e) => updateProgressRow(i, e.target.value)}
-            />
+                <td className="p-3">
+                  <input
+                    type="number"
+                    className="border rounded-lg p-2 w-full"
+                    value={row.assembled_percent}
+                    onChange={(e) =>
+                      updateProgressRow(
+                        i,
+                        "assembled_percent",
+                        e.target.value
+                      )
+                    }
+                  />
+                </td>
+
+                <td className="p-3">
+                  <input
+                    type="number"
+                    className="border rounded-lg p-2 w-full"
+                    value={row.erected_percent}
+                    onChange={(e) =>
+                      updateProgressRow(
+                        i,
+                        "erected_percent",
+                        e.target.value
+                      )
+                    }
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="flex justify-end gap-10 bg-slate-50 p-4 rounded-xl">
+          <div>
+            <p className="text-sm text-slate-500">
+              Total Assembly
+            </p>
+            <p className="text-2xl font-bold">
+              {totalAssemblyPercent}%
+            </p>
           </div>
-        ))}
-      </section>
 
-      <section className="bg-white border rounded-2xl p-6 space-y-3">
-        <h2 className="font-semibold">Labour</h2>
-
-        {labourRows.map((row, i) => (
-          <div key={i} className="flex gap-3">
-            <input
-              className="border p-2 rounded"
-              placeholder="Worker"
-              value={row.worker_name}
-              onChange={(e) =>
-                updateLabourRow(i, "worker_name", e.target.value)
-              }
-            />
-            <input
-              className="border p-2 rounded w-24"
-              placeholder="Hours"
-              type="number"
-              value={row.hours}
-              onChange={(e) =>
-                updateLabourRow(i, "hours", e.target.value)
-              }
-            />
+          <div>
+            <p className="text-sm text-slate-500">
+              Total Erection
+            </p>
+            <p className="text-2xl font-bold">
+              {totalErectionPercent}%
+            </p>
           </div>
-        ))}
-
-        <button
-          onClick={addLabourRow}
-          className="bg-slate-800 text-white px-4 py-2 rounded"
-        >
-          Add Worker
-        </button>
-      </section>
-
-      <section className="bg-white border rounded-2xl p-6 space-y-3">
-        <Input
-          label="Weather Delay Hours"
-          type="number"
-          value={weatherDelayHours}
-          onChange={setWeatherDelayHours}
-        />
-        <Input
-          label="Lightning Delay Hours"
-          type="number"
-          value={lightningDelayHours}
-          onChange={setLightningDelayHours}
-        />
-        <Input
-          label="Toolbox Delay Hours"
-          type="number"
-          value={toolboxDelayHours}
-          onChange={setToolboxDelayHours}
-        />
-        <Input label="Comments" value={comments} onChange={setComments} />
+        </div>
       </section>
 
       <button
@@ -252,25 +197,6 @@ export default function NewDailyDocketPage() {
       >
         {saving ? "Saving..." : "Save Daily Docket"}
       </button>
-    </div>
-  );
-}
-
-function Input({
-  label,
-  value,
-  onChange,
-  type = "text",
-}: any) {
-  return (
-    <div>
-      <label className="block text-sm mb-1">{label}</label>
-      <input
-        className="border p-2 rounded w-full"
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
     </div>
   );
 }
