@@ -72,14 +72,7 @@ export default function WorkpackLayout({
           Documents
         </Link>
 
-        <Link
-          className={tabStyle(
-            `/project/${projectId}/tower/${towerId}/workpack/qr`
-          )}
-          href={`/project/${projectId}/tower/${towerId}/workpack/qr`}
-        >
-          QR Access
-        </Link>
+      
       </div>
 
       {children}
