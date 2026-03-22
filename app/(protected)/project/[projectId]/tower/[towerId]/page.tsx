@@ -120,6 +120,12 @@ export default function TowerDetailPage() {
           Daily Dockets
         </Link>
       </div>
+      <Link
+        href={`/project/${projectId}/tower/${towerId}/workpack`}
+        className="px-4 py-2 bg-slate-100 border rounded-t-lg"
+        >
+             Workpack
+            </Link>
 
       {/* ⭐ ADAPTIVE OVERVIEW */}
       <div className="bg-white border rounded-2xl p-6">
