@@ -9,6 +9,8 @@ export default function TowerHeader({
 }: any) {
   return (
     <div className="bg-white border rounded-2xl p-6 mb-6">
+      
+      {/* Top Section */}
       <div className="flex justify-between">
         <div>
           <div className="text-sm text-slate-500">Tower</div>
@@ -31,13 +33,12 @@ export default function TowerHeader({
 
           <div className="bg-slate-100 rounded-xl px-4 py-3">
             <div className="text-xs text-slate-500">Last Docket</div>
-            <div className="font-semibold">
-              {latestDate || "-"}
-            </div>
+            <div className="font-semibold">{latestDate || "-"}</div>
           </div>
         </div>
       </div>
 
+      {/* Action Buttons */}
       <div className="mt-5 flex gap-3">
         <Link
           href={`/project/${projectId}/tower/${tower.id}/dockets/new`}
@@ -46,16 +47,19 @@ export default function TowerHeader({
           Add Daily Docket
         </Link>
 
-        <button className="bg-slate-900 text-white px-4 py-2 rounded-lg">
+        <Link
+          href={`/project/${projectId}/tower/${tower.id}/workpack`}
+          className="bg-slate-900 text-white px-4 py-2 rounded-lg"
+        >
           Open Workpack
-        </button>
+        </Link>
 
         <button className="border px-4 py-2 rounded-lg">
           Upload Photo Later
         </button>
       </div>
 
-      {/* Tabs */}
+      {/* Main Tabs */}
       <div className="border-b mt-6 flex gap-2">
         <Link
           href={`/project/${projectId}/tower/${tower.id}`}
@@ -66,11 +70,19 @@ export default function TowerHeader({
 
         <Link
           href={`/project/${projectId}/tower/${tower.id}/dockets`}
-          className="px-4 py-2 bg-white border rounded-t-lg font-semibold"
+          className="px-4 py-2 bg-white border rounded-t-lg"
         >
           Daily Dockets
         </Link>
+
+        <Link
+          href={`/project/${projectId}/tower/${tower.id}/workpack`}
+          className="px-4 py-2 bg-white border rounded-t-lg"
+        >
+          Workpack
+        </Link>
       </div>
+
     </div>
   );
 }
