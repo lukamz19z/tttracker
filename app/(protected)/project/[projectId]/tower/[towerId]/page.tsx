@@ -9,8 +9,11 @@ type Tower = {
   id: string;
   name: string;
   line?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   status?: string | null;
   progress?: number | null;
+  extra_data?: any;
 };
 
 type Docket = {
@@ -59,13 +62,15 @@ export default function TowerDetailPage() {
   if (loading) return <div className="p-8">Loading...</div>;
   if (!tower) return <div className="p-8">Tower not found</div>;
 
+  const extra = tower.extra_data || {};
+  const keys = Object.keys(extra);
+
   return (
     <div className="p-8 space-y-6">
 
       {/* HEADER */}
       <div className="bg-white border rounded-2xl p-6">
         <div className="flex justify-between">
-
           <div>
             <div className="text-sm text-slate-500">Tower</div>
             <div className="text-3xl font-bold">{tower.name}</div>
@@ -75,26 +80,15 @@ export default function TowerDetailPage() {
           </div>
 
           <div className="flex gap-3">
-            <div className="bg-slate-100 rounded-xl px-4 py-3">
-              <div className="text-xs text-slate-500">Status</div>
-              <div className="font-semibold">{tower.status}</div>
-            </div>
-
-            <div className="bg-slate-100 rounded-xl px-4 py-3">
-              <div className="text-xs text-slate-500">Progress</div>
-              <div className="font-semibold">{tower.progress || 0}%</div>
-            </div>
-
-            <div className="bg-slate-100 rounded-xl px-4 py-3">
-              <div className="text-xs text-slate-500">Last Docket</div>
-              <div className="font-semibold">
-                {latest?.docket_date || "-"}
-              </div>
-            </div>
+            <InfoCard label="Status" value={tower.status} />
+            <InfoCard label="Progress" value={`${tower.progress || 0}%`} />
+            <InfoCard
+              label="Last Docket"
+              value={latest?.docket_date || "-"}
+            />
           </div>
         </div>
 
-        {/* ACTIONS */}
         <div className="mt-5 flex gap-3">
           <Link
             href={`/project/${projectId}/tower/${towerId}/dockets/new`}
@@ -115,74 +109,87 @@ export default function TowerDetailPage() {
 
       {/* TABS */}
       <div className="border-b flex gap-2">
-
         <button className="px-4 py-2 bg-white border rounded-t-lg font-semibold">
           Overview
         </button>
 
-        <button className="px-4 py-2 bg-slate-100 border rounded-t-lg">
-          Workpack
-        </button>
-
-        {/* IMPORTANT — THIS NOW NAVIGATES */}
         <Link
           href={`/project/${projectId}/tower/${towerId}/dockets`}
           className="px-4 py-2 bg-slate-100 border rounded-t-lg"
         >
           Daily Dockets
         </Link>
-
-        <button className="px-4 py-2 bg-slate-100 border rounded-t-lg">
-          Deliveries
-        </button>
-
-        <button className="px-4 py-2 bg-slate-100 border rounded-t-lg">
-          Modifications
-        </button>
-
-        <button className="px-4 py-2 bg-slate-100 border rounded-t-lg">
-          Defects
-        </button>
-
-        <button className="px-4 py-2 bg-slate-100 border rounded-t-lg">
-          Photos
-        </button>
       </div>
 
-      {/* OVERVIEW CONTENT */}
+      {/* ⭐ ADAPTIVE OVERVIEW */}
       <div className="bg-white border rounded-2xl p-6">
-
         <div className="text-xl font-semibold mb-4">
-          Latest Daily Docket Snapshot
+          Tower Information
+        </div>
+
+        {keys.length === 0 ? (
+          <div className="text-slate-500">
+            No additional tower data uploaded
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-4">
+            {keys.map((k) => (
+              <SpecCard
+                key={k}
+                label={formatLabel(k)}
+                value={extra[k]}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ⭐ QUICK ACTIVITY SNAPSHOT */}
+      <div className="bg-white border rounded-2xl p-6">
+        <div className="text-xl font-semibold mb-4">
+          Latest Activity Snapshot
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-
-          <div className="border rounded-xl p-4 bg-slate-50">
-            <div className="text-xs text-slate-500">Assembly %</div>
-            <div className="font-semibold">
-              {latest?.assembly_percent || 0}%
-            </div>
-          </div>
-
-          <div className="border rounded-xl p-4 bg-slate-50">
-            <div className="text-xs text-slate-500">Erection %</div>
-            <div className="font-semibold">
-              {latest?.erection_percent || 0}%
-            </div>
-          </div>
-
-          <div className="border rounded-xl p-4 bg-slate-50">
-            <div className="text-xs text-slate-500">Leading Hand</div>
-            <div className="font-semibold">
-              {latest?.leading_hand || "-"}
-            </div>
-          </div>
-
+          <SpecCard
+            label="Assembly %"
+            value={`${latest?.assembly_percent || 0}%`}
+          />
+          <SpecCard
+            label="Erection %"
+            value={`${latest?.erection_percent || 0}%`}
+          />
+          <SpecCard
+            label="Leading Hand"
+            value={latest?.leading_hand || "-"}
+          />
         </div>
-
       </div>
 
     </div>
   );
+}
+
+function InfoCard({ label, value }: any) {
+  return (
+    <div className="bg-slate-100 rounded-xl px-4 py-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="font-semibold">{value || "-"}</div>
+    </div>
+  );
+}
+
+function SpecCard({ label, value }: any) {
+  return (
+    <div className="border rounded-xl p-4 bg-slate-50">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="font-semibold">{value || "-"}</div>
+    </div>
+  );
+}
+
+function formatLabel(label: string) {
+  return label
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (l) => l.toUpperCase());
 }
