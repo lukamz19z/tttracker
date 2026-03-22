@@ -60,10 +60,13 @@ function clampPercent(value: string) {
   return String(Math.max(0, Math.min(100, n)));
 }
 
-function isSignedDocket(docket: {
+function isClientSignedDocket(docket: {
+  client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(docket.signed_date && docket.signed_date.trim());
+  return Boolean(
+    docket.client_rep_name?.trim() && docket.signed_date?.trim()
+  );
 }
 
 export default function DailyDocketForm({
@@ -144,8 +147,12 @@ export default function DailyDocketForm({
   const [saving, setSaving] = useState(false);
 
   const locked = useMemo(
-    () => isSignedDocket({ signed_date: signedDate }),
-    [signedDate]
+    () =>
+      isClientSignedDocket({
+        client_rep_name: clientRepName,
+        signed_date: signedDate,
+      }),
+    [clientRepName, signedDate]
   );
 
   const totalAssemblyPercent = useMemo(() => {
@@ -175,6 +182,46 @@ export default function DailyDocketForm({
   const displayProgress = useMemo(() => {
     return Math.max(totalAssemblyPercent, totalErectionPercent);
   }, [totalAssemblyPercent, totalErectionPercent]);
+
+  function buildTowerStatus(progress: number) {
+    if (progress >= 100) return "Complete";
+    if (progress > 0) return "In Progress";
+    return "Not Started";
+  }
+
+  async function recalcTowerProgressAndStatus() {
+    const { data, error } = await supabase
+      .from("tower_daily_dockets")
+      .select("assembly_percent, erection_percent")
+      .eq("tower_id", towerId);
+
+    if (error) {
+      throw new Error("Failed to recalculate tower progress.");
+    }
+
+    const maxProgress =
+      data?.reduce((max, d) => {
+        const assembly = Number(d.assembly_percent || 0);
+        const erection = Number(d.erection_percent || 0);
+        const docketProgress = Math.max(assembly, erection);
+        return Math.max(max, docketProgress);
+      }, 0) ?? 0;
+
+    const status = buildTowerStatus(maxProgress);
+
+    const towerUpdateRes = await supabase
+      .from("towers")
+      .update({
+        progress: Math.round(maxProgress),
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", towerId);
+
+    if (towerUpdateRes.error) {
+      throw new Error("Docket saved, but tower status/progress failed to update.");
+    }
+  }
 
   function addLabourRow() {
     setLabourRows((prev) => [
@@ -217,13 +264,6 @@ export default function DailyDocketForm({
 
     const publicUrlRes = supabase.storage.from("tower-files").getPublicUrl(path);
     return publicUrlRes.data.publicUrl;
-  }
-
-  function buildTowerStatus() {
-    if (totalErectionPercent >= 100) return "Complete";
-    if (totalErectionPercent > 0) return "Erection Started";
-    if (totalAssemblyPercent > 0) return "Assembly Started";
-    return "Not Started";
   }
 
   async function handleCreate() {
@@ -294,20 +334,7 @@ export default function DailyDocketForm({
       }
     }
 
-    const towerStatus = buildTowerStatus();
-
-    const towerUpdateRes = await supabase
-      .from("towers")
-      .update({
-        progress: displayProgress,
-        status: towerStatus,
-        last_docket_date: docketDate || null,
-      })
-      .eq("id", towerId);
-
-    if (towerUpdateRes.error) {
-      throw new Error("Docket saved, but tower status/progress failed to update.");
-    }
+    await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/docket/${docket.id}`);
   }
@@ -317,7 +344,7 @@ export default function DailyDocketForm({
 
     const { data: existing, error: existingError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, signed_date")
+      .select("id, client_rep_name, signed_date")
       .eq("id", docketId)
       .single();
 
@@ -325,8 +352,8 @@ export default function DailyDocketForm({
       throw new Error("Could not load docket for editing.");
     }
 
-    if (isSignedDocket(existing)) {
-      throw new Error("This docket is signed and cannot be edited.");
+    if (isClientSignedDocket(existing)) {
+      throw new Error("This docket is client signed and cannot be edited.");
     }
 
     const docketFileUrl = await uploadFileIfNeeded();
@@ -414,20 +441,7 @@ export default function DailyDocketForm({
       }
     }
 
-    const towerStatus = buildTowerStatus();
-
-    const towerUpdateRes = await supabase
-      .from("towers")
-      .update({
-        progress: displayProgress,
-        status: towerStatus,
-        last_docket_date: docketDate || null,
-      })
-      .eq("id", towerId);
-
-    if (towerUpdateRes.error) {
-      throw new Error("Docket updated, but tower status/progress failed to update.");
-    }
+    await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/docket/${docketId}`);
   }
@@ -465,18 +479,32 @@ export default function DailyDocketForm({
 
   return (
     <div className="p-8 max-w-6xl space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold">
-          {mode === "create" ? "Add Daily Docket" : "Edit Daily Docket"}
-        </h1>
-        <p className="text-slate-500 mt-1">
-          Enter labour, section percentages, delays, and upload the scanned docket.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold">
+            {mode === "create" ? "Add Daily Docket" : "Edit Daily Docket"}
+          </h1>
+          <p className="text-slate-500 mt-1">
+            Enter labour, section percentages, delays, and upload the scanned docket.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            mode === "create"
+              ? router.push(`/project/${projectId}/tower/${towerId}/dockets`)
+              : router.push(`/project/${projectId}/tower/${towerId}/docket/${docketId}`)
+          }
+          className="border px-5 py-3 rounded-xl"
+        >
+          ← Back
+        </button>
       </div>
 
       {locked && mode === "edit" && (
         <div className="border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-2xl p-4">
-          This docket has been signed by the client and is now locked.
+          This docket has been client signed and is now locked.
         </div>
       )}
 
@@ -566,6 +594,11 @@ export default function DailyDocketForm({
             <div className="text-right">
               <p className="text-sm text-slate-500">Total Erection</p>
               <p className="text-2xl font-bold">{totalErectionPercent}%</p>
+            </div>
+
+            <div className="text-right">
+              <p className="text-sm text-slate-500">Tower Progress Used</p>
+              <p className="text-2xl font-bold">{displayProgress}%</p>
             </div>
           </div>
         </div>

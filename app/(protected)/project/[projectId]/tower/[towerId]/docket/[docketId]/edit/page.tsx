@@ -39,10 +39,13 @@ type ProgressRow = {
   erected_qty: string;
 };
 
-function isSignedDocket(docket: {
+function isClientSignedDocket(docket: {
+  client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(docket.signed_date && docket.signed_date.trim());
+  return Boolean(
+    docket.client_rep_name?.trim() && docket.signed_date?.trim()
+  );
 }
 
 export default function EditDailyDocketPage() {
@@ -110,11 +113,11 @@ export default function EditDailyDocketPage() {
   if (loading) return <div className="p-8">Loading docket...</div>;
   if (!docket) return <div className="p-8">Docket not found.</div>;
 
-  if (isSignedDocket(docket)) {
+  if (isClientSignedDocket(docket)) {
     return (
       <div className="p-8 max-w-3xl space-y-4">
         <div className="border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-2xl p-4">
-          This docket has already been signed and cannot be edited.
+          This docket has already been client signed and cannot be edited.
         </div>
       </div>
     );

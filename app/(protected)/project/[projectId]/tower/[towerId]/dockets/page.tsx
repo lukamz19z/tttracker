@@ -8,19 +8,24 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 type Docket = {
   id: string;
   docket_date: string;
-  crew: string;
-  leading_hand: string;
+  crew: string | null;
+  leading_hand: string | null;
   assembly_percent: number;
   erection_percent: number;
   weather_delay_hours: number;
-  missing_items_bolts: string;
+  missing_items_bolts: string | null;
+  bc_rep_name: string | null;
   client_rep_name: string | null;
   signed_date: string | null;
   created_at: string;
 };
 
-function isSigned(d: Docket) {
-  return Boolean(d.signed_date);
+function isClientSigned(d: Docket) {
+  return Boolean(d.client_rep_name?.trim() && d.signed_date?.trim());
+}
+
+function isBcSigned(d: Docket) {
+  return Boolean(d.bc_rep_name?.trim());
 }
 
 export default function TowerDocketsPage() {
@@ -86,40 +91,40 @@ export default function TowerDocketsPage() {
             <tr>
               <th className="p-4">Status</th>
               <th className="p-4">Date</th>
-              <th className="p-4">Crew</th>
               <th className="p-4">Leading Hand</th>
+              <th className="p-4">BC Rep</th>
               <th className="p-4">Assembly</th>
               <th className="p-4">Erection</th>
               <th className="p-4">Weather Delay</th>
               <th className="p-4">Missing Steel</th>
-              <th className="p-4">Edit</th>
+              <th className="p-4">Actions</th>
             </tr>
           </thead>
 
           <tbody>
             {dockets.map((d, i) => {
-              const signed = isSigned(d);
+              const clientSigned = isClientSigned(d);
+              const bcSigned = isBcSigned(d);
               const latest = i === 0;
 
               return (
                 <tr
                   key={d.id}
-                  onClick={() =>
-                    router.push(`/project/${projectId}/tower/${towerId}/docket/${d.id}`)
-                  }
-                  className={`border-t cursor-pointer hover:bg-slate-50 ${
+                  className={`border-t hover:bg-slate-50 ${
                     latest ? "bg-blue-50" : ""
                   }`}
                 >
                   <td className="p-4">
                     <span
                       className={`px-3 py-1 rounded-lg text-sm font-semibold ${
-                        signed
+                        clientSigned
                           ? "bg-emerald-100 text-emerald-700"
+                          : bcSigned
+                          ? "bg-blue-100 text-blue-700"
                           : "bg-amber-100 text-amber-700"
                       }`}
                     >
-                      {signed ? "Signed" : "Draft"}
+                      {clientSigned ? "Client Signed" : bcSigned ? "BC Signed" : "Draft"}
                     </span>
                   </td>
 
@@ -130,8 +135,8 @@ export default function TowerDocketsPage() {
                     )}
                   </td>
 
-                  <td className="p-4">{d.crew || "-"}</td>
                   <td className="p-4">{d.leading_hand || "-"}</td>
+                  <td className="p-4">{d.bc_rep_name || "-"}</td>
                   <td className="p-4">
                     <ProgressBar value={d.assembly_percent} />
                   </td>
@@ -142,17 +147,36 @@ export default function TowerDocketsPage() {
                     {d.weather_delay_hours ? `${d.weather_delay_hours}h` : "-"}
                   </td>
                   <td className="p-4">{d.missing_items_bolts || "-"}</td>
-                  <td className="p-4" onClick={(e) => e.stopPropagation()}>
-                    {signed ? (
-                      <span className="text-slate-400">Locked</span>
-                    ) : (
-                      <Link
-                        href={`/project/${projectId}/tower/${towerId}/docket/${d.id}/edit`}
+                  <td className="p-4">
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          router.push(
+                            `/project/${projectId}/tower/${towerId}/docket/${d.id}`
+                          )
+                        }
                         className="text-blue-600 font-semibold"
                       >
-                        Edit
-                      </Link>
-                    )}
+                        View
+                      </button>
+
+                      {clientSigned ? (
+                        <span className="text-slate-400">Locked</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(
+                              `/project/${projectId}/tower/${towerId}/docket/${d.id}/edit`
+                            )
+                          }
+                          className="text-amber-600 font-semibold"
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
