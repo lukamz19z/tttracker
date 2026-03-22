@@ -54,30 +54,7 @@ export default function WorkpackHome() {
         latestDate={latestDate}
       />
 
-      {/* TABS */}
-      <div className="border-b flex gap-2">
-        <Link
-          href={`/project/${projectId}/tower/${towerId}`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Overview
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/dockets`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Daily Dockets
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/workpack`}
-          className="px-4 py-2 bg-white border rounded-t-lg font-semibold"
-        >
-          Workpack
-        </Link>
-      </div>
-
+     
       {/* WORKPACK CONTENT */}
       <div className="text-2xl font-semibold">
         Workpack
