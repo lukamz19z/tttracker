@@ -54,29 +54,7 @@ export default function TowerOverviewPage() {
         latestDate={latestDate}
       />
 
-      {/* TABS */}
-      <div className="border-b flex gap-2">
-        <Link
-          href={`/project/${projectId}/tower/${towerId}`}
-          className="px-4 py-2 bg-white border rounded-t-lg font-semibold"
-        >
-          Overview
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/dockets`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Daily Dockets
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/workpack`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Workpack
-        </Link>
-      </div>
+     
 
       {/* TOWER INFORMATION */}
       <div className="bg-white border rounded-2xl p-6">
