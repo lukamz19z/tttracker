@@ -1,3 +1,5 @@
+import TowerHeader from "@/components/towers/TowerHeader";
+
 export default function LiftStudiesPage() {
   return (
     <div className="bg-white border rounded-2xl p-6">
