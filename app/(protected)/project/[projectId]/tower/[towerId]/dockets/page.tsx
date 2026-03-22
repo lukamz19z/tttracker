@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import TowerHeader from "@/components/towers/TowerHeader";
 
 type Docket = {
   id: string;
@@ -20,12 +21,20 @@ type Docket = {
   created_at: string;
 };
 
+type Tower = {
+  id: string;
+  name: string;
+  line: string | null;
+  status: string | null;
+  progress: number | null;
+};
+
 function isClientSigned(d: Docket) {
-  return Boolean(d.client_rep_name?.trim() && d.signed_date?.trim());
+  return Boolean(d.client_rep_name && d.signed_date);
 }
 
 function isBcSigned(d: Docket) {
-  return Boolean(d.bc_rep_name?.trim());
+  return Boolean(d.bc_rep_name);
 }
 
 export default function TowerDocketsPage() {
@@ -36,6 +45,7 @@ export default function TowerDocketsPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
+  const [tower, setTower] = useState<Tower | null>(null);
   const [dockets, setDockets] = useState<Docket[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,46 +56,43 @@ export default function TowerDocketsPage() {
   async function load() {
     setLoading(true);
 
-    const { data } = await supabase
+    const { data: towerData } = await supabase
+      .from("towers")
+      .select("*")
+      .eq("id", towerId)
+      .single();
+
+    const { data: docketData } = await supabase
       .from("tower_daily_dockets")
       .select("*")
       .eq("tower_id", towerId)
       .order("docket_date", { ascending: false });
 
-    setDockets(data || []);
+    setTower(towerData);
+    setDockets(docketData || []);
     setLoading(false);
   }
 
-  if (loading) return <div className="p-8">Loading dockets...</div>;
+  const latestDate = useMemo(
+    () => (dockets.length ? dockets[0].docket_date : null),
+    [dockets]
+  );
+
+  if (loading || !tower) return <div className="p-8">Loading...</div>;
 
   return (
     <div className="p-8 space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold">Daily Dockets</h1>
-          <p className="text-slate-500 text-sm">
-            All recorded daily site dockets for this tower
-          </p>
-        </div>
 
-        <div className="flex gap-3">
-          <Link
-            href={`/project/${projectId}/tower/${towerId}`}
-            className="border px-5 py-3 rounded-xl"
-          >
-            Back to Tower
-          </Link>
+      {/* ⭐ TOWER HEADER NOW ABOVE TABLE */}
+      <TowerHeader
+        projectId={projectId}
+        tower={tower}
+        latestDate={latestDate}
+      />
 
-          <Link
-            href={`/project/${projectId}/tower/${towerId}/dockets/new`}
-            className="bg-blue-600 text-white px-5 py-3 rounded-xl"
-          >
-            Add Daily Docket
-          </Link>
-        </div>
-      </div>
-
+      {/* TABLE CARD */}
       <div className="bg-white border rounded-2xl overflow-hidden">
+
         <table className="w-full">
           <thead className="bg-slate-100 text-left">
             <tr>
@@ -124,14 +131,20 @@ export default function TowerDocketsPage() {
                           : "bg-amber-100 text-amber-700"
                       }`}
                     >
-                      {clientSigned ? "Client Signed" : bcSigned ? "BC Signed" : "Draft"}
+                      {clientSigned
+                        ? "Client Signed"
+                        : bcSigned
+                        ? "BC Signed"
+                        : "Draft"}
                     </span>
                   </td>
 
                   <td className="p-4 font-semibold">
                     {d.docket_date}
                     {latest && (
-                      <span className="ml-2 text-xs text-blue-600">(Latest)</span>
+                      <span className="ml-2 text-xs text-blue-600">
+                        (Latest)
+                      </span>
                     )}
                   </td>
 
@@ -144,13 +157,14 @@ export default function TowerDocketsPage() {
                     <ProgressBar value={d.erection_percent} />
                   </td>
                   <td className="p-4">
-                    {d.weather_delay_hours ? `${d.weather_delay_hours}h` : "-"}
+                    {d.weather_delay_hours
+                      ? `${d.weather_delay_hours}h`
+                      : "-"}
                   </td>
                   <td className="p-4">{d.missing_items_bolts || "-"}</td>
                   <td className="p-4">
                     <div className="flex gap-3">
                       <button
-                        type="button"
                         onClick={() =>
                           router.push(
                             `/project/${projectId}/tower/${towerId}/docket/${d.id}`
@@ -165,7 +179,6 @@ export default function TowerDocketsPage() {
                         <span className="text-slate-400">Locked</span>
                       ) : (
                         <button
-                          type="button"
                           onClick={() =>
                             router.push(
                               `/project/${projectId}/tower/${towerId}/docket/${d.id}/edit`
