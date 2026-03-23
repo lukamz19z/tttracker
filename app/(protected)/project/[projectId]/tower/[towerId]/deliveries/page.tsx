@@ -122,31 +122,42 @@ export default function DeliveriesPage() {
     ]);
   }
 
-  async function saveRegister() {
-    if (!bundles.length) {
-      alert("No bundles to save");
-      return;
-    }
-
-    const payload = bundles
-      .filter((b) => b.bundle_no.trim() !== "")
-      .map((b) => ({
-        tower_id: towerId,
-        bundle_no: b.bundle_no.trim(),
-        section: b.section || null,
-        qty_required: Number(b.qty_required || 0),
-        total_weight: b.total_weight,
-      }));
-
-    await supabase
-      .from("tower_required_bundles")
-      .upsert(payload, {
-        onConflict: "tower_id,bundle_no",
-      });
-
-    alert("Register saved");
-    load();
+async function saveRegister() {
+  if (!bundles.length) {
+    alert("No bundles to save");
+    return;
   }
+
+  const payload = bundles
+    .filter(b => b.bundle_no.trim() !== "")
+    .map(b => ({
+      tower_id: towerId,
+      bundle_no: b.bundle_no.trim(),
+      section: b.section || null,
+      qty_required: Number(b.qty_required || 0),
+      total_weight: b.total_weight || null
+    }));
+
+  if (!payload.length) {
+    alert("Enter bundle numbers first");
+    return;
+  }
+
+  const { error } = await supabase
+    .from("tower_required_bundles")
+    .upsert(payload, {
+      onConflict: "tower_id,bundle_no"
+    });
+
+  if (error) {
+    console.error(error);
+    alert("SAVE FAILED — check console");
+    return;
+  }
+
+  alert("Register saved successfully");
+  load();
+}
 
   function importCSV(file: File) {
     Papa.parse(file, {
