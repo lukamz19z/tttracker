@@ -4,43 +4,37 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-type TemplateRow = {
+type SectionRow = {
   id: string;
   project_id: string;
-  stage: string;
-  item_no: number | null;
-  sort_order: number | null;
-  description: string;
-  item_type: "check" | "auto" | "numeric" | "document";
-  source_field: string | null;
-  required: boolean;
+  section_name: string;
+  section_order: number | null;
 };
 
-const STAGES = [
-  "Preparation",
-  "Assembly and Erection",
-  "Completion",
-  "Modification",
-  "Incoming Material",
-  "Bolt Torque",
-];
+type ItemRow = {
+  id: string;
+  section_id: string;
+  item_number: number | null;
+  description: string;
+  item_order: number | null;
+};
 
-export default function ProjectItcTemplatePage() {
+export default function AdminItcTemplatePage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const supabase = createSupabaseBrowser();
 
-  const [rows, setRows] = useState<TemplateRow[]>([]);
+  const [sections, setSections] = useState<SectionRow[]>([]);
+  const [items, setItems] = useState<ItemRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [stage, setStage] = useState("Preparation");
-  const [itemNo, setItemNo] = useState("");
-  const [sortOrder, setSortOrder] = useState("");
-  const [description, setDescription] = useState("");
-  const [itemType, setItemType] =
-    useState<"check" | "auto" | "numeric" | "document">("check");
-  const [sourceField, setSourceField] = useState("");
-  const [required, setRequired] = useState(true);
+  const [newSectionName, setNewSectionName] = useState("");
+  const [newSectionOrder, setNewSectionOrder] = useState("");
+
+  const [selectedSectionId, setSelectedSectionId] = useState("");
+  const [newItemNumber, setNewItemNumber] = useState("");
+  const [newItemDescription, setNewItemDescription] = useState("");
+  const [newItemOrder, setNewItemOrder] = useState("");
 
   useEffect(() => {
     load();
@@ -48,200 +42,255 @@ export default function ProjectItcTemplatePage() {
 
   async function load() {
     setLoading(true);
-    const { data } = await supabase
-      .from("project_itc_templates")
+
+    const { data: s } = await supabase
+      .from("itc_template_sections")
       .select("*")
       .eq("project_id", projectId)
-      .order("stage", { ascending: true })
-      .order("sort_order", { ascending: true })
-      .order("item_no", { ascending: true });
+      .order("section_order", { ascending: true });
 
-    setRows((data || []) as TemplateRow[]);
+    const sectionRows = (s || []) as SectionRow[];
+    setSections(sectionRows);
+
+    const sectionIds = sectionRows.map((x) => x.id);
+
+    if (sectionIds.length > 0) {
+      const { data: i } = await supabase
+        .from("itc_template_items")
+        .select("*")
+        .in("section_id", sectionIds)
+        .order("item_order", { ascending: true })
+        .order("item_number", { ascending: true });
+
+      setItems((i || []) as ItemRow[]);
+      if (!selectedSectionId) setSelectedSectionId(sectionIds[0]);
+    } else {
+      setItems([]);
+      setSelectedSectionId("");
+    }
+
     setLoading(false);
   }
 
-  async function addTemplateRow() {
-    if (!description.trim()) {
-      alert("Enter description");
+  async function addSection() {
+    if (!newSectionName.trim()) {
+      alert("Enter section name.");
       return;
     }
 
-    const { error } = await supabase.from("project_itc_templates").insert({
+    const { error } = await supabase.from("itc_template_sections").insert({
       project_id: projectId,
-      stage,
-      item_no: itemNo ? Number(itemNo) : null,
-      sort_order: sortOrder ? Number(sortOrder) : 0,
-      description: description.trim(),
-      item_type: itemType,
-      source_field: itemType === "auto" ? sourceField.trim() || null : null,
-      required,
+      section_name: newSectionName.trim(),
+      section_order: newSectionOrder ? Number(newSectionOrder) : 0,
     });
 
     if (error) {
-      alert("Failed to add template row");
+      alert("Failed to add section.");
       return;
     }
 
-    setStage("Preparation");
-    setItemNo("");
-    setSortOrder("");
-    setDescription("");
-    setItemType("check");
-    setSourceField("");
-    setRequired(true);
-
+    setNewSectionName("");
+    setNewSectionOrder("");
     await load();
   }
 
-  async function deleteTemplateRow(id: string) {
-    const confirmed = window.confirm("Delete this template item?");
+  async function deleteSection(id: string) {
+    const confirmed = window.confirm(
+      "Delete this section and all its items?"
+    );
     if (!confirmed) return;
 
     const { error } = await supabase
-      .from("project_itc_templates")
+      .from("itc_template_sections")
       .delete()
       .eq("id", id);
 
     if (error) {
-      alert("Failed to delete template row");
+      alert("Failed to delete section.");
       return;
     }
 
     await load();
   }
+
+  async function addItem() {
+    if (!selectedSectionId) {
+      alert("Select a section first.");
+      return;
+    }
+
+    if (!newItemDescription.trim()) {
+      alert("Enter item description.");
+      return;
+    }
+
+    const { error } = await supabase.from("itc_template_items").insert({
+      section_id: selectedSectionId,
+      item_number: newItemNumber ? Number(newItemNumber) : null,
+      description: newItemDescription.trim(),
+      item_order: newItemOrder ? Number(newItemOrder) : 0,
+    });
+
+    if (error) {
+      alert("Failed to add item.");
+      return;
+    }
+
+    setNewItemNumber("");
+    setNewItemDescription("");
+    setNewItemOrder("");
+    await load();
+  }
+
+  async function deleteItem(id: string) {
+    const confirmed = window.confirm("Delete this template item?");
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("itc_template_items")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      alert("Failed to delete item.");
+      return;
+    }
+
+    await load();
+  }
+
+  const itemsBySection = sections.map((section) => ({
+    section,
+    rows: items.filter((i) => i.section_id === section.id),
+  }));
 
   if (loading) return <div className="p-8">Loading template...</div>;
 
   return (
     <div className="p-8 space-y-6">
-      <div className="bg-white border rounded-2xl p-6 space-y-5">
+      <div className="bg-white border rounded-2xl p-6 space-y-6">
         <div>
           <h1 className="text-2xl font-bold">ITC Template Builder</h1>
           <p className="text-slate-500 mt-1">
-            Configure project-specific ITC structure for all towers.
+            Add or remove standard ITC sections and items for this project.
           </p>
         </div>
 
         <div className="border rounded-xl p-4 bg-slate-50 space-y-4">
-          <div className="text-lg font-semibold">Add Template Item</div>
-
-          <div className="grid md:grid-cols-7 gap-3">
-            <div>
-              <label className="block text-xs mb-1">Stage</label>
-              <select
-                value={stage}
-                onChange={(e) => setStage(e.target.value)}
-                className="border p-2 rounded w-full bg-white"
-              >
-                {STAGES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs mb-1">Item No.</label>
-              <input
-                value={itemNo}
-                onChange={(e) => setItemNo(e.target.value)}
-                className="border p-2 rounded w-full bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs mb-1">Sort Order</label>
-              <input
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                className="border p-2 rounded w-full bg-white"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-xs mb-1">Description</label>
-              <input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="border p-2 rounded w-full bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs mb-1">Item Type</label>
-              <select
-                value={itemType}
-                onChange={(e) =>
-                  setItemType(
-                    e.target.value as "check" | "auto" | "numeric" | "document"
-                  )
-                }
-                className="border p-2 rounded w-full bg-white"
-              >
-                <option value="check">Check</option>
-                <option value="auto">Auto</option>
-                <option value="numeric">Numeric</option>
-                <option value="document">Document</option>
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <button
-                onClick={addTemplateRow}
-                className="bg-blue-600 text-white rounded px-4 py-2 w-full"
-              >
-                Add
-              </button>
-            </div>
-          </div>
-
-          {itemType === "auto" && (
-            <div className="max-w-sm">
-              <label className="block text-xs mb-1">Daily Docket Source Field</label>
-              <input
-                value={sourceField}
-                onChange={(e) => setSourceField(e.target.value)}
-                className="border p-2 rounded w-full bg-white"
-                placeholder="e.g. missing_items_bolts"
-              />
-            </div>
-          )}
-
-          <label className="flex items-center gap-2 text-sm">
+          <div className="text-lg font-semibold">Add Section</div>
+          <div className="grid md:grid-cols-3 gap-3">
             <input
-              type="checkbox"
-              checked={required}
-              onChange={(e) => setRequired(e.target.checked)}
+              value={newSectionName}
+              onChange={(e) => setNewSectionName(e.target.value)}
+              placeholder="Section Name"
+              className="border p-2 rounded bg-white"
             />
-            Required item
-          </label>
+            <input
+              value={newSectionOrder}
+              onChange={(e) => setNewSectionOrder(e.target.value)}
+              placeholder="Section Order"
+              className="border p-2 rounded bg-white"
+            />
+            <button
+              onClick={addSection}
+              className="bg-blue-600 text-white rounded px-4 py-2"
+            >
+              Add Section
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          {rows.map((row) => (
-            <div
-              key={row.id}
-              className="border rounded-xl p-4 flex justify-between items-start"
+        <div className="border rounded-xl p-4 bg-slate-50 space-y-4">
+          <div className="text-lg font-semibold">Add Item</div>
+          <div className="grid md:grid-cols-4 gap-3">
+            <select
+              value={selectedSectionId}
+              onChange={(e) => setSelectedSectionId(e.target.value)}
+              className="border p-2 rounded bg-white"
             >
-              <div>
-                <div className="font-semibold">
-                  {row.stage} {row.item_no ? `· ${row.item_no}` : ""}
+              <option value="">Select Section</option>
+              {sections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.section_name}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={newItemNumber}
+              onChange={(e) => setNewItemNumber(e.target.value)}
+              placeholder="Item No."
+              className="border p-2 rounded bg-white"
+            />
+
+            <input
+              value={newItemOrder}
+              onChange={(e) => setNewItemOrder(e.target.value)}
+              placeholder="Item Order"
+              className="border p-2 rounded bg-white"
+            />
+
+            <input
+              value={newItemDescription}
+              onChange={(e) => setNewItemDescription(e.target.value)}
+              placeholder="Item Description"
+              className="border p-2 rounded bg-white md:col-span-4"
+            />
+
+            <button
+              onClick={addItem}
+              className="bg-blue-600 text-white rounded px-4 py-2 md:col-span-1"
+            >
+              Add Item
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          {itemsBySection.map(({ section, rows }) => (
+            <div key={section.id} className="border rounded-xl p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <div className="font-semibold text-lg">
+                  {section.section_name}
                 </div>
-                <div className="text-sm text-slate-600">{row.description}</div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Type: {row.item_type}
-                  {row.source_field ? ` · Source: ${row.source_field}` : ""}
-                  {row.required ? " · Required" : " · Optional"}
-                </div>
+
+                <button
+                  onClick={() => deleteSection(section.id)}
+                  className="text-red-600"
+                >
+                  Remove Section
+                </button>
               </div>
 
-              <button
-                onClick={() => deleteTemplateRow(row.id)}
-                className="text-red-600"
-              >
-                Delete
-              </button>
+              {rows.length === 0 ? (
+                <div className="text-slate-500 text-sm">
+                  No items in this section yet.
+                </div>
+              ) : (
+                rows.map((row) => (
+                  <div
+                    key={row.id}
+                    className="border rounded-lg p-3 flex justify-between items-start"
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {row.item_number ? `${row.item_number}. ` : ""}
+                        {row.description}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        Order: {row.item_order ?? 0}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => deleteItem(row.id)}
+                      className="text-red-600"
+                    >
+                      Remove Item
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           ))}
         </div>
