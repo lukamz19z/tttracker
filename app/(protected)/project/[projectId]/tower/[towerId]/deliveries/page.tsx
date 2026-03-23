@@ -9,13 +9,12 @@ import TowerHeader from "@/components/towers/TowerHeader";
 /* ================= TYPES ================= */
 
 type Bundle = {
-  id: string;
+  id?: string;
   tower_id: string;
   bundle_no: string;
   section: string | null;
-  qty_required: number | null;
+  qty_required: number;
   total_weight: number | null;
-  isNew?: boolean;
 };
 
 type DeliveryItem = {
@@ -46,7 +45,7 @@ export default function DeliveriesPage() {
   const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [registerCollapsed, setRegisterCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   const [deliveredBy, setDeliveredBy] = useState("");
   const [vehicle, setVehicle] = useState("");
@@ -54,9 +53,6 @@ export default function DeliveriesPage() {
   const [comments, setComments] = useState("");
 
   const [enteredQty, setEnteredQty] = useState<Record<string, string>>({});
-
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [editingQty, setEditingQty] = useState("");
 
   /* ================= LOAD ================= */
 
@@ -74,7 +70,8 @@ export default function DeliveriesPage() {
     const b = await supabase
       .from("tower_required_bundles")
       .select("*")
-      .eq("tower_id", towerId);
+      .eq("tower_id", towerId)
+      .order("bundle_no");
 
     const d = await supabase
       .from("tower_bundle_deliveries")
@@ -89,81 +86,90 @@ export default function DeliveriesPage() {
 
   /* ================= HELPERS ================= */
 
-  function getRequired(b: Bundle): number {
-    return Number(b.qty_required || 0);
-  }
-
-  function getDelivered(bundleNo: string): number {
+  function deliveredQty(bundleNo: string) {
     let total = 0;
-
-    deliveries.forEach((d) => {
+    deliveries.forEach((d) =>
       d.tower_bundle_delivery_items.forEach((i) => {
-        if (i.bundle_no === bundleNo) {
-          total += Number(i.qty_delivered || 0);
-        }
-      });
-    });
-
+        if (i.bundle_no === bundleNo) total += i.qty_delivered;
+      })
+    );
     return total;
   }
 
-  function getRemaining(b: Bundle): number {
-    return Math.max(getRequired(b) - getDelivered(b.bundle_no), 0);
+  function remainingQty(b: Bundle) {
+    return Math.max(b.qty_required - deliveredQty(b.bundle_no), 0);
   }
 
-  function getStatusColor(b: Bundle): string {
-    const r = getRequired(b);
-    const d = getDelivered(b.bundle_no);
-
+  function statusColor(b: Bundle) {
+    const d = deliveredQty(b.bundle_no);
     if (d === 0) return "bg-slate-400";
-    if (d < r) return "bg-orange-400";
+    if (d < b.qty_required) return "bg-orange-400";
     return "bg-green-500";
   }
 
   /* ================= REGISTER ================= */
 
-  function addBundleRow() {
+  function addRow() {
     setBundles((prev) => [
       ...prev,
       {
-        id: "new-" + Math.random(),
         tower_id: towerId,
         bundle_no: "",
         section: "",
-        qty_required: null,
+        qty_required: 0,
         total_weight: null,
-        isNew: true,
       },
     ]);
   }
 
   async function saveRegister() {
-    const newRows = bundles.filter(
-      (b) => b.isNew && b.bundle_no.trim() !== ""
-    );
-
-    if (!newRows.length) {
-      alert("No new rows to save.");
+    if (!bundles.length) {
+      alert("No bundles to save");
       return;
     }
 
-    await supabase.from("tower_required_bundles").insert(newRows);
+    const payload = bundles
+      .filter((b) => b.bundle_no.trim() !== "")
+      .map((b) => ({
+        tower_id: towerId,
+        bundle_no: b.bundle_no.trim(),
+        section: b.section || null,
+        qty_required: Number(b.qty_required || 0),
+        total_weight: b.total_weight,
+      }));
+
+    await supabase
+      .from("tower_required_bundles")
+      .upsert(payload, {
+        onConflict: "tower_id,bundle_no",
+      });
+
+    alert("Register saved");
     load();
   }
 
   function importCSV(file: File) {
     Papa.parse(file, {
       header: true,
+      skipEmptyLines: true,
       complete: async (res) => {
-        const rows = (res.data as any[]).map((r) => ({
-          tower_id: towerId,
-          bundle_no: r.bundle_no,
-          section: r.section,
-          qty_required: Number(r.qty_required),
-          total_weight: Number(r.total_weight),
-        }));
+        const rows = (res.data as any[])
+          .filter((r) => r.bundle_no)
+          .map((r) => ({
+            tower_id: towerId,
+            bundle_no: String(r.bundle_no).trim(),
+            section: r.section || null,
+            qty_required: Number(r.qty_required) || 0,
+            total_weight: Number(r.total_weight) || null,
+          }));
 
-        await supabase.from("tower_required_bundles").insert(rows);
+        await supabase
+          .from("tower_required_bundles")
+          .upsert(rows, {
+            onConflict: "tower_id,bundle_no",
+          });
+
+        alert("CSV Imported");
         load();
       },
     });
@@ -173,7 +179,7 @@ export default function DeliveriesPage() {
 
   async function saveDelivery() {
     if (!bundles.length) {
-      alert("Create bundle register first.");
+      alert("Create bundle register first");
       return;
     }
 
@@ -185,7 +191,7 @@ export default function DeliveriesPage() {
       .filter((i) => i.qty > 0);
 
     if (!items.length) {
-      alert("Enter quantities.");
+      alert("Enter delivery quantities");
       return;
     }
 
@@ -221,64 +227,48 @@ export default function DeliveriesPage() {
   async function deleteDelivery(id: string) {
     if (!confirm("Delete delivery?")) return;
 
-    await supabase.from("tower_bundle_deliveries").delete().eq("id", id);
-    load();
-  }
-
-  async function deleteItem(id: string) {
-    if (!confirm("Delete item?")) return;
-
-    await supabase.from("tower_bundle_delivery_items").delete().eq("id", id);
-    load();
-  }
-
-  async function updateItem(id: string) {
     await supabase
-      .from("tower_bundle_delivery_items")
-      .update({ qty_delivered: Number(editingQty) })
+      .from("tower_bundle_deliveries")
+      .delete()
       .eq("id", id);
 
-    setEditingItemId(null);
     load();
   }
 
   /* ================= PROGRESS ================= */
 
   const progress = useMemo(() => {
-    let r = 0;
-    let d = 0;
+    let req = 0;
+    let del = 0;
 
     bundles.forEach((b) => {
-      r += getRequired(b);
-      d += getDelivered(b.bundle_no);
+      req += b.qty_required;
+      del += deliveredQty(b.bundle_no);
     });
 
-    return r ? ((d / r) * 100).toFixed(1) : "0";
+    return req ? ((del / req) * 100).toFixed(1) : "0";
   }, [bundles, deliveries]);
 
   /* ================= UI ================= */
 
   return (
     <div className="p-8 space-y-6">
-      {tower && (
-        <TowerHeader projectId={projectId} tower={tower} />
-      )}
+      {tower && <TowerHeader projectId={projectId} tower={tower} />}
 
       <div className="bg-white border rounded-2xl p-6 space-y-6">
         <h1 className="text-2xl font-bold">Steel Deliveries</h1>
-
         <div className="text-lg">Progress: {progress}%</div>
 
         {/* REGISTER */}
         <div className="border rounded-xl">
           <div
             className="bg-slate-100 p-4 cursor-pointer font-semibold"
-            onClick={() => setRegisterCollapsed(!registerCollapsed)}
+            onClick={() => setCollapsed(!collapsed)}
           >
             Bundle Register ({bundles.length})
           </div>
 
-          {!registerCollapsed && (
+          {!collapsed && (
             <div className="p-4 space-y-3">
               <input
                 type="file"
@@ -290,7 +280,7 @@ export default function DeliveriesPage() {
               />
 
               <button
-                onClick={addBundleRow}
+                onClick={addRow}
                 className="bg-slate-200 px-3 py-1 rounded"
               >
                 Add Row
@@ -305,7 +295,7 @@ export default function DeliveriesPage() {
 
               {bundles.map((b, i) => (
                 <div
-                  key={b.id}
+                  key={i}
                   className="grid grid-cols-6 gap-2 border p-2 rounded"
                 >
                   <input
@@ -333,7 +323,7 @@ export default function DeliveriesPage() {
                   <input
                     className="border p-1"
                     placeholder="Qty"
-                    value={b.qty_required || ""}
+                    value={b.qty_required}
                     onChange={(e) => {
                       const copy = [...bundles];
                       copy[i].qty_required = Number(e.target.value);
@@ -341,13 +331,13 @@ export default function DeliveriesPage() {
                     }}
                   />
 
-                  <div>Delivered: {getDelivered(b.bundle_no)}</div>
-                  <div>Remaining: {getRemaining(b)}</div>
+                  <div>Delivered: {deliveredQty(b.bundle_no)}</div>
+                  <div>Remaining: {remainingQty(b)}</div>
 
                   <div
-                    className={`${getStatusColor(
+                    className={`${statusColor(
                       b
-                    )} text-white px-2 py-1 rounded text-xs`}
+                    )} text-white px-2 py-1 text-xs rounded`}
                   >
                     Status
                   </div>
@@ -394,7 +384,7 @@ export default function DeliveriesPage() {
           {bundles.map((b) => (
             <div key={b.bundle_no} className="grid grid-cols-3 gap-2">
               <div>{b.bundle_no}</div>
-              <div>Remaining: {getRemaining(b)}</div>
+              <div>Remaining: {remainingQty(b)}</div>
 
               <input
                 className="border p-1"
@@ -402,7 +392,7 @@ export default function DeliveriesPage() {
                 value={enteredQty[b.bundle_no] || ""}
                 onChange={(e) => {
                   const val = Number(e.target.value);
-                  if (val > getRemaining(b)) {
+                  if (val > remainingQty(b)) {
                     alert("Too many delivered");
                     return;
                   }
@@ -447,54 +437,15 @@ export default function DeliveriesPage() {
               </div>
 
               {d.tower_bundle_delivery_items.map((i) => (
-                <div
-                  key={i.id}
-                  className="flex justify-between mt-2 border-t pt-2"
-                >
+                <div key={i.id} className="flex justify-between mt-2 border-t pt-2">
                   <div>{i.bundle_no}</div>
-
-                  {editingItemId === i.id ? (
-                    <div className="flex gap-2">
-                      <input
-                        className="border p-1"
-                        value={editingQty}
-                        onChange={(e) => setEditingQty(e.target.value)}
-                      />
-
-                      <button
-                        onClick={() => updateItem(i.id)}
-                        className="text-blue-600"
-                      >
-                        Save
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex gap-3">
-                      <div>{i.qty_delivered}</div>
-
-                      <button
-                        className="text-blue-600"
-                        onClick={() => {
-                          setEditingItemId(i.id);
-                          setEditingQty(String(i.qty_delivered));
-                        }}
-                      >
-                        Edit
-                      </button>
-
-                      <button
-                        onClick={() => deleteItem(i.id)}
-                        className="text-red-600"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
+                  <div>{i.qty_delivered}</div>
                 </div>
               ))}
             </div>
           ))}
         </div>
+
       </div>
     </div>
   );
