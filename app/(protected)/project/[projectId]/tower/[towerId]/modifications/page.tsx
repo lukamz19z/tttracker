@@ -263,57 +263,7 @@ export default function TowerModificationsPage() {
         latestDate={latestDate}
       />
 
-      {/* MAIN TABS */}
-      <div className="border-b flex gap-2">
-        <Link
-          href={`/project/${projectId}/tower/${towerId}`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Overview
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/dockets`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Daily Dockets
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/workpack`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Workpack
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/modifications`}
-          className="px-4 py-2 bg-white border rounded-t-lg font-semibold"
-        >
-          Modifications
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/defects`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Defects
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/deliveries`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Deliveries
-        </Link>
-
-        <Link
-          href={`/project/${projectId}/tower/${towerId}/photos`}
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
-        >
-          Photos
-        </Link>
-      </div>
+      
 
       <div className="bg-white border rounded-2xl p-6 space-y-6">
         <div className="flex justify-between items-start gap-4 flex-wrap">
