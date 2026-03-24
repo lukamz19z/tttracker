@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -8,7 +8,6 @@ import TowerHeader from "@/components/towers/TowerHeader";
 
 type Bundle = {
   ui_id: string;
-  id?: string;
   tower_id: string;
   bundle_no: string;
   section: string;
@@ -33,9 +32,9 @@ export default function MaterialsPage() {
   const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [collapsedSegments, setCollapsedSegments] = useState<
-    Record<string, boolean>
-  >({});
+  const [saving, setSaving] = useState(false);
+
+  const saveTimer = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     load();
@@ -58,14 +57,19 @@ export default function MaterialsPage() {
 
     setBundles(
       (b.data || []).map((row: any) => ({
-        ...row,
         ui_id: crypto.randomUUID(),
+        tower_id: towerId,
+        bundle_no: row.bundle_no || "",
         section: row.section || "General",
+        qty_required: Number(row.qty_required || 0),
+        total_weight: row.total_weight,
       }))
     );
 
     setDeliveries(d.data || []);
   }
+
+  /* ================= DELIVERY CALCS ================= */
 
   function deliveredQty(bundleNo: string) {
     let total = 0;
@@ -81,12 +85,49 @@ export default function MaterialsPage() {
     return Math.max(b.qty_required - deliveredQty(b.bundle_no), 0);
   }
 
+  /* ================= AUTO SAVE ================= */
+
+  function scheduleSave(updated: Bundle[]) {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+
+    saveTimer.current = setTimeout(() => {
+      saveRegister(updated);
+    }, 1200);
+  }
+
+  async function saveRegister(data: Bundle[]) {
+    const payload = data
+      .filter((b) => b.bundle_no.trim() !== "")
+      .map((b) => ({
+        tower_id: towerId,
+        bundle_no: b.bundle_no.trim(),
+        section: b.section,
+        qty_required: b.qty_required,
+        total_weight: b.total_weight,
+      }));
+
+    if (!payload.length) return;
+
+    setSaving(true);
+
+    await supabase
+      .from("tower_required_bundles")
+      .upsert(payload, { onConflict: "tower_id,bundle_no" });
+
+    setSaving(false);
+  }
+
+  /* ================= UPDATE ROW ================= */
+
   function updateRow(id: string, field: keyof Bundle, value: any) {
-    setBundles(prev =>
-      prev.map(b =>
+    setBundles((prev) => {
+      const updated = prev.map((b) =>
         b.ui_id === id ? { ...b, [field]: value } : b
-      )
-    );
+      );
+
+      scheduleSave(updated);
+      return updated;
+    });
   }
 
   function addRow() {
@@ -103,30 +144,8 @@ export default function MaterialsPage() {
     ]);
   }
 
-  async function saveRegister() {
-    const payload = bundles
-      .filter((b) => b.bundle_no.trim() !== "")
-      .map((b) => ({
-        tower_id: towerId,
-        bundle_no: b.bundle_no.trim(),
-        section: b.section,
-        qty_required: b.qty_required,
-        total_weight: b.total_weight,
-      }));
-
-    const { error } = await supabase
-      .from("tower_required_bundles")
-      .upsert(payload, {
-        onConflict: "tower_id,bundle_no",
-      });
-
-    if (error) {
-      alert("Save failed");
-      return;
-    }
-
-    alert("Register saved");
-    load();
+  function deleteRow(id: string) {
+    setBundles((prev) => prev.filter((b) => b.ui_id !== id));
   }
 
   function importCSV(file: File) {
@@ -142,28 +161,23 @@ export default function MaterialsPage() {
           total_weight: Number(r.total_weight || 0),
         }));
 
-        await supabase.from("tower_required_bundles").upsert(rows, {
-          onConflict: "tower_id,bundle_no",
-        });
+        await supabase
+          .from("tower_required_bundles")
+          .upsert(rows, { onConflict: "tower_id,bundle_no" });
 
-        alert("CSV Imported");
         load();
       },
     });
   }
 
-  function deleteRow(ui_id: string) {
-    setBundles((prev) => prev.filter((b) => b.ui_id !== ui_id));
-  }
+  /* ================= SEGMENT GROUPING ================= */
 
   const segments = useMemo(() => {
     const map: Record<string, Bundle[]> = {};
-
     bundles.forEach((b) => {
       if (!map[b.section]) map[b.section] = [];
       map[b.section].push(b);
     });
-
     return map;
   }, [bundles]);
 
@@ -180,6 +194,10 @@ export default function MaterialsPage() {
       <div className="bg-white border rounded-2xl p-6 space-y-6">
         <h1 className="text-2xl font-bold">Materials Register</h1>
 
+        {saving && (
+          <div className="text-sm text-blue-600">Auto saving register…</div>
+        )}
+
         <div className="flex gap-6">
           <Stat label="Required" value={totalRequired} />
           <Stat label="Delivered" value={totalDelivered} />
@@ -189,57 +207,86 @@ export default function MaterialsPage() {
         <div className="flex gap-3">
           <input type="file" accept=".csv" onChange={(e)=>{const f=e.target.files?.[0]; if(f) importCSV(f)}} />
           <button onClick={addRow} className="bg-slate-200 px-3 py-1 rounded">Add Row</button>
-          <button onClick={saveRegister} className="bg-blue-600 text-white px-3 py-1 rounded">Save Register</button>
         </div>
 
-        {Object.entries(segments).map(([segment, rows]) => (
-          <div key={segment} className="border rounded-xl">
-            <div className="bg-slate-100 p-3 font-semibold">{segment}</div>
+        {Object.entries(segments).map(([segment, rows]) => {
+          const segReq = rows.reduce((s, b) => s + b.qty_required, 0);
+          const segDel = rows.reduce(
+            (s, b) => s + deliveredQty(b.bundle_no),
+            0
+          );
 
-            <div className="p-3 space-y-3">
-              {rows.map((b) => (
-                <div key={b.ui_id} className="grid grid-cols-5 gap-3 border p-3 rounded-xl">
-                  
-                  <input
-                    className="border p-2 rounded"
-                    placeholder="Bundle Number"
-                    value={b.bundle_no}
-                    onChange={(e)=>updateRow(b.ui_id,"bundle_no",e.target.value)}
+          const progress = segReq ? (segDel / segReq) * 100 : 0;
+
+          return (
+            <div key={segment} className="border rounded-xl">
+              <div className="bg-slate-100 p-3 font-semibold">
+                {segment}
+
+                <div className="mt-2 bg-slate-200 h-2 rounded">
+                  <div
+                    className="bg-green-500 h-2 rounded"
+                    style={{ width: `${progress}%` }}
                   />
-
-                  <input
-                    className="border p-2 rounded"
-                    placeholder="Segment"
-                    value={b.section}
-                    onChange={(e)=>updateRow(b.ui_id,"section",e.target.value)}
-                  />
-
-                  <input
-                    className="border p-2 rounded"
-                    placeholder="Qty Required"
-                    value={b.qty_required}
-                    onChange={(e)=>updateRow(b.ui_id,"qty_required",Number(e.target.value))}
-                  />
-
-                  <div>
-                    Delivered
-                    <div className="font-bold">{deliveredQty(b.bundle_no)}</div>
-                  </div>
-
-                  <div>
-                    Remaining
-                    <div className="font-bold">{remainingQty(b)}</div>
-                  </div>
-
-                  <button onClick={()=>deleteRow(b.ui_id)} className="text-red-600 text-sm col-span-5">
-                    Remove Row
-                  </button>
-
                 </div>
-              ))}
+              </div>
+
+              <div className="p-3 space-y-3">
+                {rows.map((b) => (
+                  <div
+                    key={b.ui_id}
+                    className="grid grid-cols-6 gap-3 border p-3 rounded-xl"
+                  >
+                    <input
+                      className="border p-2 rounded"
+                      placeholder="Bundle Number"
+                      value={b.bundle_no}
+                      onChange={(e)=>updateRow(b.ui_id,"bundle_no",e.target.value)}
+                    />
+
+                    <input
+                      className="border p-2 rounded"
+                      placeholder="Segment"
+                      value={b.section}
+                      onChange={(e)=>updateRow(b.ui_id,"section",e.target.value)}
+                    />
+
+                    <input
+                      className="border p-2 rounded"
+                      placeholder="Qty Required"
+                      value={b.qty_required}
+                      onChange={(e)=>updateRow(b.ui_id,"qty_required",Number(e.target.value))}
+                    />
+
+                    <input
+                      className="border p-2 rounded"
+                      placeholder="Total Weight"
+                      value={b.total_weight || ""}
+                      onChange={(e)=>updateRow(b.ui_id,"total_weight",Number(e.target.value))}
+                    />
+
+                    <div>
+                      Delivered
+                      <div className="font-bold">{deliveredQty(b.bundle_no)}</div>
+                    </div>
+
+                    <div>
+                      Remaining
+                      <div className="font-bold">{remainingQty(b)}</div>
+                    </div>
+
+                    <button
+                      onClick={()=>deleteRow(b.ui_id)}
+                      className="text-red-600 text-sm col-span-6"
+                    >
+                      Remove Row
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
