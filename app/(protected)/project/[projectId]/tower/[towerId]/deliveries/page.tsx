@@ -1,33 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import Papa from "papaparse";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
-/* =========================================================
-   TYPES
-========================================================= */
-
-type DbBundleRow = {
-  id?: string;
-  tower_id: string;
-  bundle_no: string;
-  section: string | null;
-  qty_required: number | null;
-  total_weight: number | null;
-};
-
 type Bundle = {
-  ui_id: string;
-  id?: string;
-  tower_id: string;
   bundle_no: string;
   section: string;
   qty_required: number;
-  total_weight: number | null;
-  group_key: string;
 };
 
 type DeliveryItem = {
@@ -36,48 +17,14 @@ type DeliveryItem = {
 };
 
 type Delivery = {
+  id: string;
+  driver: string;
+  vehicle: string;
+  created_at: string;
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
-type SegmentTotals = {
-  required: number;
-  delivered: number;
-  remaining: number;
-  progress: number;
-};
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function safeString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return fallback;
-  return String(value);
-}
-
-function safeNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function normaliseSection(value: string): string {
-  const trimmed = value.trim();
-  return trimmed === "" ? "General" : trimmed;
-}
-
-function makeUiId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-/* =========================================================
-   PAGE
-========================================================= */
-
-export default function MaterialsPage() {
+export default function DeliveriesPage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
@@ -87,572 +34,227 @@ export default function MaterialsPage() {
   const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [collapsedSegments, setCollapsedSegments] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [latestDate, setLatestDate] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  /* =========================================================
-     LOAD
-  ========================================================= */
+  const [driver, setDriver] = useState("");
+  const [vehicle, setVehicle] = useState("");
+  const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    void load();
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [towerId]);
+    load();
+  }, []);
 
   async function load() {
-    setLoading(true);
+    const t = await supabase.from("towers").select("*").eq("id", towerId).single();
 
-    const [towerRes, bundlesRes, deliveriesRes, docketRes] = await Promise.all([
-      supabase.from("towers").select("*").eq("id", towerId).single(),
-      supabase
-        .from("tower_required_bundles")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("section", { ascending: true })
-        .order("bundle_no", { ascending: true }),
-      supabase
-        .from("tower_bundle_deliveries")
-        .select("tower_bundle_delivery_items(*)")
-        .eq("tower_id", towerId),
-      supabase
-        .from("tower_daily_dockets")
-        .select("docket_date")
-        .eq("tower_id", towerId)
-        .order("docket_date", { ascending: false })
-        .limit(1),
-    ]);
+    const b = await supabase
+      .from("tower_required_bundles")
+      .select("*")
+      .eq("tower_id", towerId);
 
-    if (towerRes.error) console.error("tower load error", towerRes.error);
-    if (bundlesRes.error) console.error("bundles load error", bundlesRes.error);
-    if (deliveriesRes.error) console.error("deliveries load error", deliveriesRes.error);
-    if (docketRes.error) console.error("dockets load error", docketRes.error);
+    const d = await supabase
+      .from("tower_bundle_deliveries")
+      .select("*, tower_bundle_delivery_items(*)")
+      .eq("tower_id", towerId)
+      .order("created_at", { ascending: false });
 
-    setTower(towerRes.data || null);
-    setLatestDate(docketRes.data?.[0]?.docket_date || null);
-
-    const loadedBundles: Bundle[] = ((bundlesRes.data || []) as DbBundleRow[]).map((row) => {
-      const section = normaliseSection(safeString(row.section, "General"));
-      return {
-        ui_id: makeUiId(),
-        id: row.id,
-        tower_id: towerId,
-        bundle_no: safeString(row.bundle_no),
-        section,
-        qty_required: safeNumber(row.qty_required, 0),
-        total_weight:
-          row.total_weight === null || row.total_weight === undefined
-            ? null
-            : safeNumber(row.total_weight, 0),
-        group_key: section,
-      };
-    });
-
-    setBundles(loadedBundles);
-    setDeliveries((deliveriesRes.data || []) as Delivery[]);
-    setLoading(false);
+    setTower(t.data);
+    setBundles(b.data || []);
+    setDeliveries(d.data || []);
   }
 
-  /* =========================================================
-     DELIVERY CALCS
-  ========================================================= */
-
-  function deliveredQty(bundleNo: string): number {
+  function deliveredQty(bundleNo: string) {
     let total = 0;
-
-    deliveries.forEach((delivery) => {
-      delivery.tower_bundle_delivery_items.forEach((item) => {
-        if (item.bundle_no === bundleNo) {
-          total += safeNumber(item.qty_delivered, 0);
-        }
-      });
-    });
-
+    deliveries.forEach((d) =>
+      d.tower_bundle_delivery_items.forEach((i) => {
+        if (i.bundle_no === bundleNo) total += Number(i.qty_delivered);
+      })
+    );
     return total;
   }
 
-  function remainingQty(bundle: Bundle): number {
+  function remaining(bundle: Bundle) {
     return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
   }
 
-  function getSegmentTotals(rows: Bundle[]): SegmentTotals {
-    const required = rows.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0);
-    const delivered = rows.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0);
-    const remaining = Math.max(required - delivered, 0);
-    const progress = required > 0 ? (delivered / required) * 100 : 0;
-
-    return {
-      required,
-      delivered,
-      remaining,
-      progress,
-    };
-  }
-
-  /* =========================================================
-     AUTO SAVE
-  ========================================================= */
-
-  function scheduleAutoSave(nextRows: Bundle[]) {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-
-    saveTimerRef.current = setTimeout(() => {
-      void persistRegister(nextRows);
-    }, 1200);
-  }
-
-  async function persistRegister(rows: Bundle[]) {
-    const payload = rows
-      .filter((row) => row.bundle_no.trim() !== "")
-      .map((row) => ({
-        tower_id: towerId,
-        bundle_no: row.bundle_no.trim(),
-        section: normaliseSection(row.section),
-        qty_required: safeNumber(row.qty_required, 0),
-        total_weight:
-          row.total_weight === null || row.total_weight === undefined
-            ? null
-            : safeNumber(row.total_weight, 0),
+  async function saveDelivery() {
+    const items = Object.entries(qtyMap)
+      .filter(([_, qty]) => qty > 0)
+      .map(([bundle_no, qty]) => ({
+        bundle_no,
+        qty_delivered: qty,
       }));
 
-    if (!payload.length) return;
-
-    setSaving(true);
-
-    const { error } = await supabase
-      .from("tower_required_bundles")
-      .upsert(payload, {
-        onConflict: "tower_id,bundle_no",
-      });
-
-    if (error) {
-      console.error("auto save error", error);
-    }
-
-    setSaving(false);
-  }
-
-  /* =========================================================
-     ROW ACTIONS
-  ========================================================= */
-
-  function addRow() {
-    setBundles((prev) => [
-      ...prev,
-      {
-        ui_id: makeUiId(),
-        tower_id: towerId,
-        bundle_no: "",
-        section: "General",
-        qty_required: 0,
-        total_weight: null,
-        group_key: "General",
-      },
-    ]);
-  }
-
-  function updateRow(ui_id: string, field: keyof Bundle, value: string | number | null) {
-    setBundles((prev) => {
-      const next = prev.map((row) => {
-        if (row.ui_id !== ui_id) return row;
-
-        return {
-          ...row,
-          [field]: value,
-        };
-      });
-
-      scheduleAutoSave(next);
-      return next;
-    });
-  }
-
-  function commitSectionGrouping(ui_id: string) {
-    setBundles((prev) => {
-      const next = prev.map((row) => {
-        if (row.ui_id !== ui_id) return row;
-
-        const finalSection = normaliseSection(row.section);
-        return {
-          ...row,
-          section: finalSection,
-          group_key: finalSection,
-        };
-      });
-
-      scheduleAutoSave(next);
-      return next;
-    });
-  }
-
-  async function deleteRow(row: Bundle) {
-    const confirmed = window.confirm(
-      row.bundle_no.trim()
-        ? `Remove bundle "${row.bundle_no}"?`
-        : "Remove this unsaved row?"
-    );
-
-    if (!confirmed) return;
-
-    setBundles((prev) => prev.filter((b) => b.ui_id !== row.ui_id));
-
-    if (row.bundle_no.trim() === "") return;
-
-    const { error } = await supabase
-      .from("tower_required_bundles")
-      .delete()
-      .eq("tower_id", towerId)
-      .eq("bundle_no", row.bundle_no.trim());
-
-    if (error) {
-      console.error("delete row error", error);
-      alert("Failed to delete row from register.");
+    if (!items.length) {
+      alert("Enter at least one bundle quantity");
       return;
     }
+
+    const { data: delivery } = await supabase
+      .from("tower_bundle_deliveries")
+      .insert({
+        tower_id: towerId,
+        driver,
+        vehicle,
+      })
+      .select()
+      .single();
+
+    const payload = items.map((i) => ({
+      delivery_id: delivery.id,
+      bundle_no: i.bundle_no,
+      qty_delivered: i.qty_delivered,
+    }));
+
+    await supabase.from("tower_bundle_delivery_items").insert(payload);
+
+    alert("Delivery saved");
+
+    setDriver("");
+    setVehicle("");
+    setQtyMap({});
+
+    load();
   }
 
-  async function saveNow() {
-    await persistRegister(bundles);
-    alert("Register saved.");
-    await load();
+  async function deleteDelivery(id: string) {
+    if (!confirm("Delete this delivery?")) return;
+
+    await supabase
+      .from("tower_bundle_delivery_items")
+      .delete()
+      .eq("delivery_id", id);
+
+    await supabase
+      .from("tower_bundle_deliveries")
+      .delete()
+      .eq("id", id);
+
+    load();
   }
 
-  /* =========================================================
-     CSV IMPORT
-  ========================================================= */
-
-  function importCSV(file: File) {
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (res) => {
-        const rows = (res.data as any[])
-          .map((r) => {
-            const bundleNo =
-              r.bundle_no ||
-              r["Bundle No"] ||
-              r.bundle ||
-              r["Bundle Reference"];
-
-            if (!bundleNo) return null;
-
-            return {
-              tower_id: towerId,
-              bundle_no: String(bundleNo).trim(),
-              section: normaliseSection(
-                safeString(r.section || r["Section"] || "General")
-              ),
-              qty_required: safeNumber(r.qty_required || r["Qty/Tower"] || 0, 0),
-              total_weight: (() => {
-                const n = Number(r.total_weight || r["Total Weight"]);
-                return Number.isFinite(n) ? n : null;
-              })(),
-            };
-          })
-          .filter(Boolean);
-
-        if (!rows.length) {
-          alert("No valid rows found in CSV.");
-          return;
-        }
-
-        const { error } = await supabase
-          .from("tower_required_bundles")
-          .upsert(rows, {
-            onConflict: "tower_id,bundle_no",
-          });
-
-        if (error) {
-          console.error("csv import error", error);
-          alert("CSV import failed.");
-          return;
-        }
-
-        await load();
-        alert("CSV imported.");
-      },
-    });
-  }
-
-  /* =========================================================
-     SEGMENTS
-  ========================================================= */
-
-  const segments = useMemo(() => {
-    const map: Record<string, Bundle[]> = {};
-
-    bundles.forEach((row) => {
-      const key = row.group_key || "General";
-      if (!map[key]) map[key] = [];
-      map[key].push(row);
-    });
-
-    return map;
-  }, [bundles]);
-
-  const overallRequired = useMemo(
-    () => bundles.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0),
-    [bundles]
-  );
-
-  const overallDelivered = useMemo(
-    () => bundles.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0),
-    [bundles, deliveries]
-  );
-
-  const overallRemaining = Math.max(overallRequired - overallDelivered, 0);
-  const overallProgress = overallRequired > 0 ? (overallDelivered / overallRequired) * 100 : 0;
-
-  /* =========================================================
-     RENDER
-  ========================================================= */
-
-  if (loading) {
-    return <div className="p-8">Loading materials register...</div>;
-  }
+  const filtered = useMemo(() => {
+    return bundles.filter(
+      (b) =>
+        b.bundle_no.toLowerCase().includes(search.toLowerCase()) ||
+        b.section.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [search, bundles]);
 
   return (
     <div className="p-8 space-y-6">
-      {tower && (
-        <TowerHeader
-          projectId={projectId}
-          tower={tower}
-          latestDate={latestDate}
-        />
-      )}
+      {tower && <TowerHeader projectId={projectId} tower={tower} />}
 
       <div className="bg-white border rounded-2xl p-6 space-y-6">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold">Materials Register</h1>
-            <p className="text-slate-500 mt-1">
-              Permanent steel schedule for this tower. Deliveries deduct from this register.
-            </p>
-          </div>
+        <h1 className="text-2xl font-bold">Truck Delivery Entry</h1>
 
-          <div className="flex items-center gap-4 flex-wrap">
-            {saving && (
-              <div className="text-sm text-blue-600 font-medium">
-                Auto saving register…
-              </div>
-            )}
-          </div>
+        <input
+          className="border p-3 rounded w-full"
+          placeholder="Search bundle or segment..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <input
+            className="border p-3 rounded"
+            placeholder="Driver Name"
+            value={driver}
+            onChange={(e) => setDriver(e.target.value)}
+          />
+
+          <input
+            className="border p-3 rounded"
+            placeholder="Truck Registration"
+            value={vehicle}
+            onChange={(e) => setVehicle(e.target.value)}
+          />
         </div>
 
-        <div className="flex gap-4 flex-wrap">
-          <StatCard label="Required" value={overallRequired} />
-          <StatCard label="Delivered" value={overallDelivered} />
-          <StatCard label="Remaining" value={overallRemaining} />
-          <StatCard label="Progress" value={`${overallProgress.toFixed(1)}%`} />
-        </div>
+        <div className="space-y-3 max-h-[400px] overflow-auto">
+          {filtered.map((b) => {
+            const rem = remaining(b);
 
-        <div className="bg-slate-50 border rounded-xl p-4 space-y-4">
-          <div className="flex items-end gap-3 flex-wrap">
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">
-                Import CSV
-              </label>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) importCSV(file);
-                  e.currentTarget.value = "";
-                }}
-              />
-            </div>
-
-            <button
-              onClick={addRow}
-              className="bg-slate-200 px-4 py-2 rounded-lg"
-            >
-              Add Row
-            </button>
-
-            <button
-              onClick={saveNow}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg"
-            >
-              Save Register
-            </button>
-          </div>
-
-          <div className="text-sm text-slate-500">
-            Tip: Segment changes apply to grouping after you leave the Segment field.
-          </div>
-        </div>
-
-        {Object.entries(segments).map(([segmentName, rows]) => {
-          const totals = getSegmentTotals(rows);
-          const isCollapsed = !!collapsedSegments[segmentName];
-
-          return (
-            <div key={segmentName} className="border rounded-2xl overflow-hidden">
-              <button
-                type="button"
-                onClick={() =>
-                  setCollapsedSegments((prev) => ({
-                    ...prev,
-                    [segmentName]: !prev[segmentName],
-                  }))
-                }
-                className="w-full bg-slate-100 px-4 py-4 text-left flex items-center justify-between"
-              >
+            return (
+              <div key={b.bundle_no} className="border rounded-xl p-4 grid md:grid-cols-5 gap-3 items-center">
                 <div>
-                  <div className="font-semibold">{segmentName}</div>
-                  <div className="text-sm text-slate-500 mt-1">
-                    Required {totals.required} • Delivered {totals.delivered} • Remaining{" "}
-                    {totals.remaining}
-                  </div>
+                  <div className="font-semibold">{b.bundle_no}</div>
+                  <div className="text-xs text-slate-500">{b.section}</div>
                 </div>
 
-                <div className="min-w-[180px]">
-                  <div className="text-right text-sm text-slate-600 mb-1">
-                    {totals.progress.toFixed(1)}%
-                  </div>
-                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-green-500 h-2 rounded-full"
-                      style={{ width: `${Math.min(totals.progress, 100)}%` }}
-                    />
-                  </div>
+                <div>
+                  Required
+                  <div className="font-bold">{b.qty_required}</div>
                 </div>
-              </button>
 
-              {!isCollapsed && (
-                <div className="p-4 space-y-4">
-                  {rows.map((row) => (
-                    <div
-                      key={row.ui_id}
-                      className="grid grid-cols-1 md:grid-cols-6 gap-4 border rounded-xl p-4"
-                    >
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Bundle Number
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={row.bundle_no}
-                          onChange={(e) =>
-                            updateRow(row.ui_id, "bundle_no", e.target.value)
-                          }
-                          placeholder="Enter bundle number"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Segment
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={row.section}
-                          onChange={(e) =>
-                            updateRow(row.ui_id, "section", e.target.value)
-                          }
-                          onBlur={() => commitSectionGrouping(row.ui_id)}
-                          placeholder="Enter segment"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Qty Required
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={row.qty_required}
-                          onChange={(e) =>
-                            updateRow(
-                              row.ui_id,
-                              "qty_required",
-                              safeNumber(e.target.value, 0)
-                            )
-                          }
-                          placeholder="Enter quantity"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Total Weight
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={row.total_weight ?? ""}
-                          onChange={(e) =>
-                            updateRow(
-                              row.ui_id,
-                              "total_weight",
-                              e.target.value === ""
-                                ? null
-                                : safeNumber(e.target.value, 0)
-                            )
-                          }
-                          placeholder="Enter total weight"
-                        />
-                      </div>
-
-                      <div className="flex flex-col justify-end">
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Delivered
-                        </label>
-                        <div className="font-bold text-lg">
-                          {deliveredQty(row.bundle_no)}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col justify-end">
-                        <label className="block text-xs text-slate-500 mb-1">
-                          Remaining
-                        </label>
-                        <div className="font-bold text-lg">
-                          {remainingQty(row)}
-                        </div>
-                      </div>
-
-                      <div className="md:col-span-6">
-                        <button
-                          onClick={() => deleteRow(row)}
-                          className="text-red-600 text-sm"
-                        >
-                          Remove Row
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                <div>
+                  Remaining
+                  <div className="font-bold">{rem}</div>
                 </div>
-              )}
-            </div>
-          );
-        })}
+
+                <input
+                  className="border p-2 rounded"
+                  type="number"
+                  placeholder="Delivered"
+                  value={qtyMap[b.bundle_no] || ""}
+                  onChange={(e) =>
+                    setQtyMap({
+                      ...qtyMap,
+                      [b.bundle_no]: Math.min(
+                        Number(e.target.value),
+                        rem
+                      ),
+                    })
+                  }
+                />
+
+                {qtyMap[b.bundle_no] > rem && (
+                  <div className="text-red-600 text-xs">
+                    Over delivery
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={saveDelivery}
+          className="bg-green-600 text-white px-6 py-3 rounded text-lg"
+        >
+          Save Delivery
+        </button>
       </div>
-    </div>
-  );
-}
 
-/* =========================================================
-   SMALL UI
-========================================================= */
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
+        <h2 className="text-xl font-bold">Delivery Register</h2>
 
-function StatCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="bg-slate-100 rounded-xl px-4 py-3 min-w-[110px]">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-bold">{value}</div>
+        {deliveries.map((d) => (
+          <div key={d.id} className="border rounded-xl p-4">
+            <div className="flex justify-between">
+              <div>
+                <div className="font-semibold">{d.driver}</div>
+                <div className="text-xs text-slate-500">{d.vehicle}</div>
+              </div>
+
+              <button
+                onClick={() => deleteDelivery(d.id)}
+                className="text-red-600"
+              >
+                Delete
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+              {d.tower_bundle_delivery_items.map((i) => (
+                <div key={i.bundle_no} className="bg-slate-100 rounded p-2">
+                  {i.bundle_no} — {i.qty_delivered}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
