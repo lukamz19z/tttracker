@@ -81,6 +81,14 @@ export default function MaterialsPage() {
     return Math.max(b.qty_required - deliveredQty(b.bundle_no), 0);
   }
 
+  function updateRow(id: string, field: keyof Bundle, value: any) {
+    setBundles(prev =>
+      prev.map(b =>
+        b.ui_id === id ? { ...b, [field]: value } : b
+      )
+    );
+  }
+
   function addRow() {
     setBundles((prev) => [
       ...prev,
@@ -148,8 +156,6 @@ export default function MaterialsPage() {
     setBundles((prev) => prev.filter((b) => b.ui_id !== ui_id));
   }
 
-  /* ===== SEGMENTS ===== */
-
   const segments = useMemo(() => {
     const map: Record<string, Bundle[]> = {};
 
@@ -181,139 +187,69 @@ export default function MaterialsPage() {
         </div>
 
         <div className="flex gap-3">
-          <input
-            type="file"
-            accept=".csv"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importCSV(f);
-            }}
-          />
-          <button onClick={addRow} className="bg-slate-200 px-3 py-1 rounded">
-            Add Row
-          </button>
-          <button
-            onClick={saveRegister}
-            className="bg-blue-600 text-white px-3 py-1 rounded"
-          >
-            Save Register
-          </button>
+          <input type="file" accept=".csv" onChange={(e)=>{const f=e.target.files?.[0]; if(f) importCSV(f)}} />
+          <button onClick={addRow} className="bg-slate-200 px-3 py-1 rounded">Add Row</button>
+          <button onClick={saveRegister} className="bg-blue-600 text-white px-3 py-1 rounded">Save Register</button>
         </div>
 
-        {Object.entries(segments).map(([segment, rows]) => {
-          const segReq = rows.reduce((s, b) => s + b.qty_required, 0);
-          const segDel = rows.reduce(
-            (s, b) => s + deliveredQty(b.bundle_no),
-            0
-          );
+        {Object.entries(segments).map(([segment, rows]) => (
+          <div key={segment} className="border rounded-xl">
+            <div className="bg-slate-100 p-3 font-semibold">{segment}</div>
 
-          return (
-            <div key={segment} className="border rounded-xl">
-              <div
-                className="bg-slate-100 p-3 cursor-pointer font-semibold flex justify-between"
-                onClick={() =>
-                  setCollapsedSegments((p) => ({
-                    ...p,
-                    [segment]: !p[segment],
-                  }))
-                }
-              >
-                <div>{segment}</div>
-                <div>
-                  {segDel}/{segReq}
+            <div className="p-3 space-y-3">
+              {rows.map((b) => (
+                <div key={b.ui_id} className="grid grid-cols-5 gap-3 border p-3 rounded-xl">
+                  
+                  <input
+                    className="border p-2 rounded"
+                    placeholder="Bundle Number"
+                    value={b.bundle_no}
+                    onChange={(e)=>updateRow(b.ui_id,"bundle_no",e.target.value)}
+                  />
+
+                  <input
+                    className="border p-2 rounded"
+                    placeholder="Segment"
+                    value={b.section}
+                    onChange={(e)=>updateRow(b.ui_id,"section",e.target.value)}
+                  />
+
+                  <input
+                    className="border p-2 rounded"
+                    placeholder="Qty Required"
+                    value={b.qty_required}
+                    onChange={(e)=>updateRow(b.ui_id,"qty_required",Number(e.target.value))}
+                  />
+
+                  <div>
+                    Delivered
+                    <div className="font-bold">{deliveredQty(b.bundle_no)}</div>
+                  </div>
+
+                  <div>
+                    Remaining
+                    <div className="font-bold">{remainingQty(b)}</div>
+                  </div>
+
+                  <button onClick={()=>deleteRow(b.ui_id)} className="text-red-600 text-sm col-span-5">
+                    Remove Row
+                  </button>
+
                 </div>
-              </div>
-
-              {!collapsedSegments[segment] && (
-                <div className="p-3 space-y-3">
-                  {rows.map((b) => (
-                    <div
-                      key={b.ui_id}
-                      className="grid grid-cols-5 gap-3 border p-3 rounded-xl"
-                    >
-                      <div>
-                        <label className="text-xs text-slate-500">
-                          Bundle Number
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={b.bundle_no}
-                          onChange={(e) => {
-                            const copy = [...bundles];
-                            copy[bundles.indexOf(b)].bundle_no =
-                              e.target.value;
-                            setBundles(copy);
-                          }}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-xs text-slate-500">Segment</label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={b.section}
-                          onChange={(e) => {
-                            const copy = [...bundles];
-                            copy[bundles.indexOf(b)].section =
-                              e.target.value;
-                            setBundles(copy);
-                          }}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-xs text-slate-500">
-                          Qty Required
-                        </label>
-                        <input
-                          className="border p-2 rounded w-full"
-                          value={b.qty_required}
-                          onChange={(e) => {
-                            const copy = [...bundles];
-                            copy[bundles.indexOf(b)].qty_required =
-                              Number(e.target.value);
-                            setBundles(copy);
-                          }}
-                        />
-                      </div>
-
-                      <div className="flex flex-col justify-end">
-                        <div className="text-xs text-slate-500">Delivered</div>
-                        <div className="font-bold">
-                          {deliveredQty(b.bundle_no)}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col justify-end">
-                        <div className="text-xs text-slate-500">Remaining</div>
-                        <div className="font-bold">
-                          {remainingQty(b)}
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => deleteRow(b.ui_id)}
-                        className="text-red-600 text-sm col-span-5"
-                      >
-                        Remove Row
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              ))}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function Stat({ label, value }: any) {
-  return (
+function Stat({label,value}:any){
+  return(
     <div className="bg-slate-100 rounded-xl px-4 py-2">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="font-bold">{value}</div>
     </div>
-  );
+  )
 }
