@@ -5,25 +5,6 @@ import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
-type Bundle = {
-  bundle_no: string;
-  section: string;
-  qty_required: number;
-};
-
-type DeliveryItem = {
-  bundle_no: string;
-  qty_delivered: number;
-};
-
-type Delivery = {
-  id: string;
-  driver: string;
-  vehicle: string;
-  created_at: string;
-  tower_bundle_delivery_items: DeliveryItem[];
-};
-
 export default function DeliveriesPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -32,13 +13,14 @@ export default function DeliveriesPage() {
   const supabase = createSupabaseBrowser();
 
   const [tower, setTower] = useState<any>(null);
-  const [bundles, setBundles] = useState<Bundle[]>([]);
-  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [bundles, setBundles] = useState<any[]>([]);
+  const [deliveries, setDeliveries] = useState<any[]>([]);
   const [search, setSearch] = useState("");
 
   const [driver, setDriver] = useState("");
   const [vehicle, setVehicle] = useState("");
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     load();
@@ -66,18 +48,20 @@ export default function DeliveriesPage() {
   function deliveredQty(bundleNo: string) {
     let total = 0;
     deliveries.forEach((d) =>
-      d.tower_bundle_delivery_items.forEach((i) => {
+      d.tower_bundle_delivery_items.forEach((i: any) => {
         if (i.bundle_no === bundleNo) total += Number(i.qty_delivered);
       })
     );
     return total;
   }
 
-  function remaining(bundle: Bundle) {
-    return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
+  function remaining(b: any) {
+    return Math.max(b.qty_required - deliveredQty(b.bundle_no), 0);
   }
 
   async function saveDelivery() {
+    setSaving(true);
+
     const items = Object.entries(qtyMap)
       .filter(([_, qty]) => qty > 0)
       .map(([bundle_no, qty]) => ({
@@ -86,11 +70,12 @@ export default function DeliveriesPage() {
       }));
 
     if (!items.length) {
-      alert("Enter at least one bundle quantity");
+      alert("Enter bundle quantities");
+      setSaving(false);
       return;
     }
 
-    const { data: delivery } = await supabase
+    const { data: delivery, error } = await supabase
       .from("tower_bundle_deliveries")
       .insert({
         tower_id: towerId,
@@ -100,25 +85,42 @@ export default function DeliveriesPage() {
       .select()
       .single();
 
+    if (error || !delivery) {
+      alert("Failed to create delivery");
+      console.log(error);
+      setSaving(false);
+      return;
+    }
+
     const payload = items.map((i) => ({
       delivery_id: delivery.id,
       bundle_no: i.bundle_no,
       qty_delivered: i.qty_delivered,
     }));
 
-    await supabase.from("tower_bundle_delivery_items").insert(payload);
+    const { error: itemError } = await supabase
+      .from("tower_bundle_delivery_items")
+      .insert(payload);
+
+    if (itemError) {
+      alert("Failed to save delivery items");
+      console.log(itemError);
+      setSaving(false);
+      return;
+    }
 
     alert("Delivery saved");
 
     setDriver("");
     setVehicle("");
     setQtyMap({});
+    setSaving(false);
 
     load();
   }
 
   async function deleteDelivery(id: string) {
-    if (!confirm("Delete this delivery?")) return;
+    if (!confirm("Delete delivery?")) return;
 
     await supabase
       .from("tower_bundle_delivery_items")
@@ -150,7 +152,7 @@ export default function DeliveriesPage() {
 
         <input
           className="border p-3 rounded w-full"
-          placeholder="Search bundle or segment..."
+          placeholder="Search bundle..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -158,14 +160,14 @@ export default function DeliveriesPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <input
             className="border p-3 rounded"
-            placeholder="Driver Name"
+            placeholder="Driver"
             value={driver}
             onChange={(e) => setDriver(e.target.value)}
           />
 
           <input
             className="border p-3 rounded"
-            placeholder="Truck Registration"
+            placeholder="Vehicle"
             value={vehicle}
             onChange={(e) => setVehicle(e.target.value)}
           />
@@ -176,15 +178,10 @@ export default function DeliveriesPage() {
             const rem = remaining(b);
 
             return (
-              <div key={b.bundle_no} className="border rounded-xl p-4 grid md:grid-cols-5 gap-3 items-center">
+              <div key={b.bundle_no} className="border rounded-xl p-4 grid md:grid-cols-4 gap-3 items-center">
                 <div>
                   <div className="font-semibold">{b.bundle_no}</div>
                   <div className="text-xs text-slate-500">{b.section}</div>
-                </div>
-
-                <div>
-                  Required
-                  <div className="font-bold">{b.qty_required}</div>
                 </div>
 
                 <div>
@@ -207,22 +204,17 @@ export default function DeliveriesPage() {
                     })
                   }
                 />
-
-                {qtyMap[b.bundle_no] > rem && (
-                  <div className="text-red-600 text-xs">
-                    Over delivery
-                  </div>
-                )}
               </div>
             );
           })}
         </div>
 
         <button
+          disabled={saving}
           onClick={saveDelivery}
           className="bg-green-600 text-white px-6 py-3 rounded text-lg"
         >
-          Save Delivery
+          {saving ? "Saving..." : "Save Delivery"}
         </button>
       </div>
 
@@ -246,7 +238,7 @@ export default function DeliveriesPage() {
             </div>
 
             <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-              {d.tower_bundle_delivery_items.map((i) => (
+              {d.tower_bundle_delivery_items.map((i: any) => (
                 <div key={i.bundle_no} className="bg-slate-100 rounded p-2">
                   {i.bundle_no} — {i.qty_delivered}
                 </div>
