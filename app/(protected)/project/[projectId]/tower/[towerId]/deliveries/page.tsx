@@ -1,36 +1,83 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import Papa from "papaparse";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
-type Bundle = {
+/* =========================================================
+   TYPES
+========================================================= */
+
+type DbBundleRow = {
   id?: string;
   tower_id: string;
   bundle_no: string;
   section: string | null;
-  qty_required: number;
+  qty_required: number | null;
   total_weight: number | null;
 };
 
+type Bundle = {
+  ui_id: string;
+  id?: string;
+  tower_id: string;
+  bundle_no: string;
+  section: string;
+  qty_required: number;
+  total_weight: number | null;
+  group_key: string;
+};
+
 type DeliveryItem = {
-  id: string;
-  delivery_id: string;
   bundle_no: string;
   qty_delivered: number;
 };
 
 type Delivery = {
-  id: string;
-  delivered_by: string | null;
-  vehicle: string | null;
-  delivery_date: string | null;
-  comments: string | null;
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
-export default function DeliveriesPage() {
+type SegmentTotals = {
+  required: number;
+  delivered: number;
+  remaining: number;
+  progress: number;
+};
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function safeString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return fallback;
+  return String(value);
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normaliseSection(value: string): string {
+  const trimmed = value.trim();
+  return trimmed === "" ? "General" : trimmed;
+}
+
+function makeUiId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/* =========================================================
+   PAGE
+========================================================= */
+
+export default function MaterialsPage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
@@ -38,37 +85,32 @@ export default function DeliveriesPage() {
   const supabase = createSupabaseBrowser();
 
   const [tower, setTower] = useState<any>(null);
-  const [latestDate, setLatestDate] = useState<string | null>(null);
-
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [collapsedSegments, setCollapsedSegments] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [latestDate, setLatestDate] = useState<string | null>(null);
 
-  const [deliveredBy, setDeliveredBy] = useState("");
-  const [vehicle, setVehicle] = useState("");
-  const [date, setDate] = useState("");
-  const [comments, setComments] = useState("");
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [enteredQty, setEnteredQty] = useState<Record<string, string>>({});
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [editingQty, setEditingQty] = useState("");
+  /* =========================================================
+     LOAD
+  ========================================================= */
 
   useEffect(() => {
-    load();
+    void load();
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [towerId]);
 
   async function load() {
     setLoading(true);
 
-    const [towerRes, docketRes, bundleRes, deliveryRes] = await Promise.all([
+    const [towerRes, bundlesRes, deliveriesRes, docketRes] = await Promise.all([
       supabase.from("towers").select("*").eq("id", towerId).single(),
-      supabase
-        .from("tower_daily_dockets")
-        .select("docket_date")
-        .eq("tower_id", towerId)
-        .order("docket_date", { ascending: false })
-        .limit(1),
       supabase
         .from("tower_required_bundles")
         .select("*")
@@ -77,430 +119,540 @@ export default function DeliveriesPage() {
         .order("bundle_no", { ascending: true }),
       supabase
         .from("tower_bundle_deliveries")
-        .select("*, tower_bundle_delivery_items(*)")
+        .select("tower_bundle_delivery_items(*)")
+        .eq("tower_id", towerId),
+      supabase
+        .from("tower_daily_dockets")
+        .select("docket_date")
         .eq("tower_id", towerId)
-        .order("delivery_date", { ascending: false }),
+        .order("docket_date", { ascending: false })
+        .limit(1),
     ]);
+
+    if (towerRes.error) console.error("tower load error", towerRes.error);
+    if (bundlesRes.error) console.error("bundles load error", bundlesRes.error);
+    if (deliveriesRes.error) console.error("deliveries load error", deliveriesRes.error);
+    if (docketRes.error) console.error("dockets load error", docketRes.error);
 
     setTower(towerRes.data || null);
     setLatestDate(docketRes.data?.[0]?.docket_date || null);
-    setBundles(bundleRes.data || []);
-    setDeliveries(deliveryRes.data || []);
+
+    const loadedBundles: Bundle[] = ((bundlesRes.data || []) as DbBundleRow[]).map((row) => {
+      const section = normaliseSection(safeString(row.section, "General"));
+      return {
+        ui_id: makeUiId(),
+        id: row.id,
+        tower_id: towerId,
+        bundle_no: safeString(row.bundle_no),
+        section,
+        qty_required: safeNumber(row.qty_required, 0),
+        total_weight:
+          row.total_weight === null || row.total_weight === undefined
+            ? null
+            : safeNumber(row.total_weight, 0),
+        group_key: section,
+      };
+    });
+
+    setBundles(loadedBundles);
+    setDeliveries((deliveriesRes.data || []) as Delivery[]);
     setLoading(false);
   }
 
+  /* =========================================================
+     DELIVERY CALCS
+  ========================================================= */
+
   function deliveredQty(bundleNo: string): number {
     let total = 0;
-    deliveries.forEach((d) => {
-      d.tower_bundle_delivery_items.forEach((i) => {
-        if (i.bundle_no === bundleNo) total += Number(i.qty_delivered || 0);
+
+    deliveries.forEach((delivery) => {
+      delivery.tower_bundle_delivery_items.forEach((item) => {
+        if (item.bundle_no === bundleNo) {
+          total += safeNumber(item.qty_delivered, 0);
+        }
       });
     });
+
     return total;
   }
 
-  function remainingQty(b: Bundle): number {
-    return Math.max(Number(b.qty_required || 0) - deliveredQty(b.bundle_no), 0);
+  function remainingQty(bundle: Bundle): number {
+    return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
   }
 
-  async function saveDelivery() {
-    if (!bundles.length) {
-      alert("Create the materials register first.");
-      return;
-    }
+  function getSegmentTotals(rows: Bundle[]): SegmentTotals {
+    const required = rows.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0);
+    const delivered = rows.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0);
+    const remaining = Math.max(required - delivered, 0);
+    const progress = required > 0 ? (delivered / required) * 100 : 0;
 
-    const items = bundles
-      .map((b) => ({
-        bundle_no: b.bundle_no,
-        qty: Number(enteredQty[b.bundle_no] || 0),
-      }))
-      .filter((i) => i.qty > 0);
+    return {
+      required,
+      delivered,
+      remaining,
+      progress,
+    };
+  }
 
-    if (!items.length) {
-      alert("Enter at least one delivered quantity.");
-      return;
-    }
+  /* =========================================================
+     AUTO SAVE
+  ========================================================= */
 
-    const { data, error } = await supabase
-      .from("tower_bundle_deliveries")
-      .insert({
+  function scheduleAutoSave(nextRows: Bundle[]) {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    saveTimerRef.current = setTimeout(() => {
+      void persistRegister(nextRows);
+    }, 1200);
+  }
+
+  async function persistRegister(rows: Bundle[]) {
+    const payload = rows
+      .filter((row) => row.bundle_no.trim() !== "")
+      .map((row) => ({
         tower_id: towerId,
-        delivered_by: deliveredBy || null,
-        vehicle: vehicle || null,
-        delivery_date: date || null,
-        comments: comments || null,
-      })
-      .select()
-      .single();
+        bundle_no: row.bundle_no.trim(),
+        section: normaliseSection(row.section),
+        qty_required: safeNumber(row.qty_required, 0),
+        total_weight:
+          row.total_weight === null || row.total_weight === undefined
+            ? null
+            : safeNumber(row.total_weight, 0),
+      }));
 
-    if (error || !data) {
-      console.error(error);
-      alert("Failed to save delivery.");
-      return;
-    }
+    if (!payload.length) return;
 
-    const { error: itemError } = await supabase
-      .from("tower_bundle_delivery_items")
-      .insert(
-        items.map((i) => ({
-          delivery_id: data.id,
-          bundle_no: i.bundle_no,
-          qty_delivered: i.qty,
-        }))
-      );
-
-    if (itemError) {
-      console.error(itemError);
-      alert("Failed to save delivery items.");
-      return;
-    }
-
-    setEnteredQty({});
-    setDeliveredBy("");
-    setVehicle("");
-    setDate("");
-    setComments("");
-
-    await load();
-    alert("Delivery saved.");
-  }
-
-  async function deleteDelivery(id: string) {
-    const ok = window.confirm("Delete this delivery?");
-    if (!ok) return;
+    setSaving(true);
 
     const { error } = await supabase
-      .from("tower_bundle_deliveries")
+      .from("tower_required_bundles")
+      .upsert(payload, {
+        onConflict: "tower_id,bundle_no",
+      });
+
+    if (error) {
+      console.error("auto save error", error);
+    }
+
+    setSaving(false);
+  }
+
+  /* =========================================================
+     ROW ACTIONS
+  ========================================================= */
+
+  function addRow() {
+    setBundles((prev) => [
+      ...prev,
+      {
+        ui_id: makeUiId(),
+        tower_id: towerId,
+        bundle_no: "",
+        section: "General",
+        qty_required: 0,
+        total_weight: null,
+        group_key: "General",
+      },
+    ]);
+  }
+
+  function updateRow(ui_id: string, field: keyof Bundle, value: string | number | null) {
+    setBundles((prev) => {
+      const next = prev.map((row) => {
+        if (row.ui_id !== ui_id) return row;
+
+        return {
+          ...row,
+          [field]: value,
+        };
+      });
+
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
+  function commitSectionGrouping(ui_id: string) {
+    setBundles((prev) => {
+      const next = prev.map((row) => {
+        if (row.ui_id !== ui_id) return row;
+
+        const finalSection = normaliseSection(row.section);
+        return {
+          ...row,
+          section: finalSection,
+          group_key: finalSection,
+        };
+      });
+
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
+  async function deleteRow(row: Bundle) {
+    const confirmed = window.confirm(
+      row.bundle_no.trim()
+        ? `Remove bundle "${row.bundle_no}"?`
+        : "Remove this unsaved row?"
+    );
+
+    if (!confirmed) return;
+
+    setBundles((prev) => prev.filter((b) => b.ui_id !== row.ui_id));
+
+    if (row.bundle_no.trim() === "") return;
+
+    const { error } = await supabase
+      .from("tower_required_bundles")
       .delete()
-      .eq("id", id);
+      .eq("tower_id", towerId)
+      .eq("bundle_no", row.bundle_no.trim());
 
     if (error) {
-      console.error(error);
-      alert("Failed to delete delivery.");
+      console.error("delete row error", error);
+      alert("Failed to delete row from register.");
       return;
     }
+  }
 
+  async function saveNow() {
+    await persistRegister(bundles);
+    alert("Register saved.");
     await load();
   }
 
-  async function deleteItem(id: string) {
-    const ok = window.confirm("Delete this delivery item?");
-    if (!ok) return;
+  /* =========================================================
+     CSV IMPORT
+  ========================================================= */
 
-    const { error } = await supabase
-      .from("tower_bundle_delivery_items")
-      .delete()
-      .eq("id", id);
+  function importCSV(file: File) {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (res) => {
+        const rows = (res.data as any[])
+          .map((r) => {
+            const bundleNo =
+              r.bundle_no ||
+              r["Bundle No"] ||
+              r.bundle ||
+              r["Bundle Reference"];
 
-    if (error) {
-      console.error(error);
-      alert("Failed to delete delivery item.");
-      return;
-    }
+            if (!bundleNo) return null;
 
-    await load();
+            return {
+              tower_id: towerId,
+              bundle_no: String(bundleNo).trim(),
+              section: normaliseSection(
+                safeString(r.section || r["Section"] || "General")
+              ),
+              qty_required: safeNumber(r.qty_required || r["Qty/Tower"] || 0, 0),
+              total_weight: (() => {
+                const n = Number(r.total_weight || r["Total Weight"]);
+                return Number.isFinite(n) ? n : null;
+              })(),
+            };
+          })
+          .filter(Boolean);
+
+        if (!rows.length) {
+          alert("No valid rows found in CSV.");
+          return;
+        }
+
+        const { error } = await supabase
+          .from("tower_required_bundles")
+          .upsert(rows, {
+            onConflict: "tower_id,bundle_no",
+          });
+
+        if (error) {
+          console.error("csv import error", error);
+          alert("CSV import failed.");
+          return;
+        }
+
+        await load();
+        alert("CSV imported.");
+      },
+    });
   }
 
-  function startEditItem(item: DeliveryItem) {
-    setEditingItemId(item.id);
-    setEditingQty(String(item.qty_delivered));
-  }
+  /* =========================================================
+     SEGMENTS
+  ========================================================= */
 
-  function cancelEditItem() {
-    setEditingItemId(null);
-    setEditingQty("");
-  }
+  const segments = useMemo(() => {
+    const map: Record<string, Bundle[]> = {};
 
-  async function saveEditItem(itemId: string) {
-    const qty = Number(editingQty);
-    if (Number.isNaN(qty) || qty < 0) {
-      alert("Enter a valid quantity.");
-      return;
-    }
+    bundles.forEach((row) => {
+      const key = row.group_key || "General";
+      if (!map[key]) map[key] = [];
+      map[key].push(row);
+    });
 
-    const { error } = await supabase
-      .from("tower_bundle_delivery_items")
-      .update({ qty_delivered: qty })
-      .eq("id", itemId);
-
-    if (error) {
-      console.error(error);
-      alert("Failed to update item.");
-      return;
-    }
-
-    cancelEditItem();
-    await load();
-  }
-
-  const totalRequired = useMemo(() => {
-    return bundles.reduce((sum, b) => sum + Number(b.qty_required || 0), 0);
+    return map;
   }, [bundles]);
 
-  const totalDelivered = useMemo(() => {
-    return bundles.reduce((sum, b) => sum + deliveredQty(b.bundle_no), 0);
-  }, [bundles, deliveries]);
+  const overallRequired = useMemo(
+    () => bundles.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0),
+    [bundles]
+  );
 
-  const totalRemaining = Math.max(totalRequired - totalDelivered, 0);
-  const progress = totalRequired > 0 ? ((totalDelivered / totalRequired) * 100).toFixed(1) : "0.0";
+  const overallDelivered = useMemo(
+    () => bundles.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0),
+    [bundles, deliveries]
+  );
+
+  const overallRemaining = Math.max(overallRequired - overallDelivered, 0);
+  const overallProgress = overallRequired > 0 ? (overallDelivered / overallRequired) * 100 : 0;
+
+  /* =========================================================
+     RENDER
+  ========================================================= */
 
   if (loading) {
-    return <div className="p-8">Loading deliveries...</div>;
+    return <div className="p-8">Loading materials register...</div>;
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-6">
+    <div className="p-8 space-y-6">
       {tower && (
-        <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />
+        <TowerHeader
+          projectId={projectId}
+          tower={tower}
+          latestDate={latestDate}
+        />
       )}
 
       <div className="bg-white border rounded-2xl p-6 space-y-6">
-        <div className="flex justify-between gap-4 flex-wrap">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold">Deliveries</h1>
+            <h1 className="text-2xl font-bold">Materials Register</h1>
             <p className="text-slate-500 mt-1">
-              Record truck deliveries against the tower materials register.
+              Permanent steel schedule for this tower. Deliveries deduct from this register.
             </p>
           </div>
 
-          <div className="flex gap-3 flex-wrap">
-            <StatCard label="Required Qty" value={String(totalRequired)} />
-            <StatCard label="Delivered Qty" value={String(totalDelivered)} />
-            <StatCard label="Remaining Qty" value={String(totalRemaining)} />
-            <StatCard label="Progress" value={`${progress}%`} />
+          <div className="flex items-center gap-4 flex-wrap">
+            {saving && (
+              <div className="text-sm text-blue-600 font-medium">
+                Auto saving register…
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="border rounded-2xl p-4 space-y-4">
-          <div>
-            <div className="text-lg font-semibold">New Delivery</div>
-            <div className="text-sm text-slate-500">
-              Enter truck details and quantities delivered for each bundle.
-            </div>
-          </div>
+        <div className="flex gap-4 flex-wrap">
+          <StatCard label="Required" value={overallRequired} />
+          <StatCard label="Delivered" value={overallDelivered} />
+          <StatCard label="Remaining" value={overallRemaining} />
+          <StatCard label="Progress" value={`${overallProgress.toFixed(1)}%`} />
+        </div>
 
-          <div className="grid md:grid-cols-4 gap-3">
+        <div className="bg-slate-50 border rounded-xl p-4 space-y-4">
+          <div className="flex items-end gap-3 flex-wrap">
             <div>
-              <label className="block text-xs mb-1 text-slate-600">Delivered By</label>
+              <label className="block text-xs text-slate-500 mb-1">
+                Import CSV
+              </label>
               <input
-                value={deliveredBy}
-                onChange={(e) => setDeliveredBy(e.target.value)}
-                className="border p-2 rounded w-full"
-                placeholder="Delivered By"
+                type="file"
+                accept=".csv"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) importCSV(file);
+                  e.currentTarget.value = "";
+                }}
               />
             </div>
 
-            <div>
-              <label className="block text-xs mb-1 text-slate-600">Vehicle / Rego</label>
-              <input
-                value={vehicle}
-                onChange={(e) => setVehicle(e.target.value)}
-                className="border p-2 rounded w-full"
-                placeholder="Vehicle / Rego"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs mb-1 text-slate-600">Delivery Date & Time</label>
-              <input
-                type="datetime-local"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="border p-2 rounded w-full"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs mb-1 text-slate-600">Comments</label>
-              <input
-                value={comments}
-                onChange={(e) => setComments(e.target.value)}
-                className="border p-2 rounded w-full"
-                placeholder="Comments"
-              />
-            </div>
-          </div>
-
-          {bundles.length === 0 ? (
-            <div className="bg-yellow-100 border rounded-xl p-4 text-sm">
-              No materials register exists yet. Add the steel schedule in the Materials tab first.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <div className="min-w-[950px]">
-                <div className="grid grid-cols-6 gap-2 px-2 py-2 text-xs font-semibold text-slate-500 bg-slate-50 rounded-t-xl border">
-                  <div>Bundle No</div>
-                  <div>Section</div>
-                  <div>Required</div>
-                  <div>Delivered</div>
-                  <div>Remaining</div>
-                  <div>Deliver Now</div>
-                </div>
-
-                {bundles.map((b) => (
-                  <div
-                    key={b.bundle_no}
-                    className="grid grid-cols-6 gap-2 p-2 border-x border-b items-center"
-                  >
-                    <div>{b.bundle_no}</div>
-                    <div>{b.section || "-"}</div>
-                    <div>{b.qty_required}</div>
-                    <div>{deliveredQty(b.bundle_no)}</div>
-                    <div>{remainingQty(b)}</div>
-
-                    <input
-                      className="border p-2 rounded"
-                      placeholder="0"
-                      value={enteredQty[b.bundle_no] || ""}
-                      onChange={(e) => {
-                        const val = Number(e.target.value || 0);
-                        if (val > remainingQty(b)) {
-                          alert(`Only ${remainingQty(b)} remaining`);
-                          return;
-                        }
-
-                        setEnteredQty((prev) => ({
-                          ...prev,
-                          [b.bundle_no]: e.target.value,
-                        }));
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="flex justify-end">
             <button
-              onClick={saveDelivery}
-              className="bg-green-600 text-white px-6 py-2 rounded"
+              onClick={addRow}
+              className="bg-slate-200 px-4 py-2 rounded-lg"
             >
-              Save Delivery
+              Add Row
+            </button>
+
+            <button
+              onClick={saveNow}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+            >
+              Save Register
             </button>
           </div>
+
+          <div className="text-sm text-slate-500">
+            Tip: Segment changes apply to grouping after you leave the Segment field.
+          </div>
         </div>
 
-        <div className="border rounded-2xl p-4 space-y-4">
-          <div>
-            <div className="text-lg font-semibold">Delivery History</div>
-            <div className="text-sm text-slate-500">
-              Review, edit, and delete previous deliveries.
-            </div>
-          </div>
+        {Object.entries(segments).map(([segmentName, rows]) => {
+          const totals = getSegmentTotals(rows);
+          const isCollapsed = !!collapsedSegments[segmentName];
 
-          {deliveries.length === 0 ? (
-            <div className="text-sm text-slate-500">No deliveries recorded yet.</div>
-          ) : (
-            <div className="space-y-3">
-              {deliveries.map((d) => (
-                <div key={d.id} className="border rounded-xl p-4 space-y-3">
-                  <div className="flex justify-between gap-4 flex-wrap">
-                    <div>
-                      <div className="font-semibold">
-                        {d.delivered_by || "-"} • {d.vehicle || "-"}
-                      </div>
-                      <div className="text-sm text-slate-500">
-                        {d.delivery_date
-                          ? new Date(d.delivery_date).toLocaleString()
-                          : "-"}
-                      </div>
-                      {d.comments && (
-                        <div className="text-sm text-slate-600 mt-1">
-                          {d.comments}
-                        </div>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={() => deleteDelivery(d.id)}
-                      className="text-red-600 text-sm"
-                    >
-                      Delete Delivery
-                    </button>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <div className="min-w-[650px]">
-                      <div className="grid grid-cols-4 gap-2 text-xs font-semibold text-slate-500 pb-2 border-b">
-                        <div>Bundle</div>
-                        <div>Qty Delivered</div>
-                        <div>Edit</div>
-                        <div>Delete</div>
-                      </div>
-
-                      {d.tower_bundle_delivery_items.map((item) => (
-                        <div
-                          key={item.id}
-                          className="grid grid-cols-4 gap-2 py-2 border-b items-center text-sm"
-                        >
-                          <div>{item.bundle_no}</div>
-
-                          <div>
-                            {editingItemId === item.id ? (
-                              <input
-                                value={editingQty}
-                                onChange={(e) => setEditingQty(e.target.value)}
-                                className="border p-2 rounded w-full"
-                              />
-                            ) : (
-                              item.qty_delivered
-                            )}
-                          </div>
-
-                          <div>
-                            {editingItemId === item.id ? (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => saveEditItem(item.id)}
-                                  className="text-blue-600"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={cancelEditItem}
-                                  className="text-slate-600"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => startEditItem(item)}
-                                className="text-blue-600"
-                              >
-                                Edit
-                              </button>
-                            )}
-                          </div>
-
-                          <div>
-                            <button
-                              onClick={() => deleteItem(item.id)}
-                              className="text-red-600"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+          return (
+            <div key={segmentName} className="border rounded-2xl overflow-hidden">
+              <button
+                type="button"
+                onClick={() =>
+                  setCollapsedSegments((prev) => ({
+                    ...prev,
+                    [segmentName]: !prev[segmentName],
+                  }))
+                }
+                className="w-full bg-slate-100 px-4 py-4 text-left flex items-center justify-between"
+              >
+                <div>
+                  <div className="font-semibold">{segmentName}</div>
+                  <div className="text-sm text-slate-500 mt-1">
+                    Required {totals.required} • Delivered {totals.delivered} • Remaining{" "}
+                    {totals.remaining}
                   </div>
                 </div>
-              ))}
+
+                <div className="min-w-[180px]">
+                  <div className="text-right text-sm text-slate-600 mb-1">
+                    {totals.progress.toFixed(1)}%
+                  </div>
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-green-500 h-2 rounded-full"
+                      style={{ width: `${Math.min(totals.progress, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </button>
+
+              {!isCollapsed && (
+                <div className="p-4 space-y-4">
+                  {rows.map((row) => (
+                    <div
+                      key={row.ui_id}
+                      className="grid grid-cols-1 md:grid-cols-6 gap-4 border rounded-xl p-4"
+                    >
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Bundle Number
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={row.bundle_no}
+                          onChange={(e) =>
+                            updateRow(row.ui_id, "bundle_no", e.target.value)
+                          }
+                          placeholder="Enter bundle number"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Segment
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={row.section}
+                          onChange={(e) =>
+                            updateRow(row.ui_id, "section", e.target.value)
+                          }
+                          onBlur={() => commitSectionGrouping(row.ui_id)}
+                          placeholder="Enter segment"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Qty Required
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={row.qty_required}
+                          onChange={(e) =>
+                            updateRow(
+                              row.ui_id,
+                              "qty_required",
+                              safeNumber(e.target.value, 0)
+                            )
+                          }
+                          placeholder="Enter quantity"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Total Weight
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={row.total_weight ?? ""}
+                          onChange={(e) =>
+                            updateRow(
+                              row.ui_id,
+                              "total_weight",
+                              e.target.value === ""
+                                ? null
+                                : safeNumber(e.target.value, 0)
+                            )
+                          }
+                          placeholder="Enter total weight"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-end">
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Delivered
+                        </label>
+                        <div className="font-bold text-lg">
+                          {deliveredQty(row.bundle_no)}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col justify-end">
+                        <label className="block text-xs text-slate-500 mb-1">
+                          Remaining
+                        </label>
+                        <div className="font-bold text-lg">
+                          {remainingQty(row)}
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-6">
+                        <button
+                          onClick={() => deleteRow(row)}
+                          className="text-red-600 text-sm"
+                        >
+                          Remove Row
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+/* =========================================================
+   SMALL UI
+========================================================= */
+
+function StatCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <div className="bg-slate-100 rounded-xl px-4 py-3 min-w-[110px]">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-semibold">{value}</div>
+      <div className="font-bold">{value}</div>
     </div>
   );
 }
