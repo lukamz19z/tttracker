@@ -7,10 +7,11 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
 type Bundle = {
+  ui_id: string;
   id?: string;
   tower_id: string;
   bundle_no: string;
-  section: string | null;
+  section: string;
   qty_required: number;
   total_weight: number | null;
 };
@@ -32,7 +33,9 @@ export default function MaterialsPage() {
   const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [collapsedSegments, setCollapsedSegments] = useState<Record<string, boolean>>({});
+  const [collapsedSegments, setCollapsedSegments] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     load();
@@ -44,9 +47,7 @@ export default function MaterialsPage() {
     const b = await supabase
       .from("tower_required_bundles")
       .select("*")
-      .eq("tower_id", towerId)
-      .order("section")
-      .order("bundle_no");
+      .eq("tower_id", towerId);
 
     const d = await supabase
       .from("tower_bundle_deliveries")
@@ -54,7 +55,15 @@ export default function MaterialsPage() {
       .eq("tower_id", towerId);
 
     setTower(t.data);
-    setBundles(b.data || []);
+
+    setBundles(
+      (b.data || []).map((row: any) => ({
+        ...row,
+        ui_id: crypto.randomUUID(),
+        section: row.section || "General",
+      }))
+    );
+
     setDeliveries(d.data || []);
   }
 
@@ -76,9 +85,10 @@ export default function MaterialsPage() {
     setBundles((prev) => [
       ...prev,
       {
+        ui_id: crypto.randomUUID(),
         tower_id: towerId,
         bundle_no: "",
-        section: "",
+        section: "General",
         qty_required: 0,
         total_weight: null,
       },
@@ -91,14 +101,21 @@ export default function MaterialsPage() {
       .map((b) => ({
         tower_id: towerId,
         bundle_no: b.bundle_no.trim(),
-        section: b.section || "General",
-        qty_required: Number(b.qty_required),
+        section: b.section,
+        qty_required: b.qty_required,
         total_weight: b.total_weight,
       }));
 
-    await supabase.from("tower_required_bundles").upsert(payload, {
-      onConflict: "tower_id,bundle_no",
-    });
+    const { error } = await supabase
+      .from("tower_required_bundles")
+      .upsert(payload, {
+        onConflict: "tower_id,bundle_no",
+      });
+
+    if (error) {
+      alert("Save failed");
+      return;
+    }
 
     alert("Register saved");
     load();
@@ -127,22 +144,28 @@ export default function MaterialsPage() {
     });
   }
 
-  /* ===== SEGMENT GROUPING ===== */
+  function deleteRow(ui_id: string) {
+    setBundles((prev) => prev.filter((b) => b.ui_id !== ui_id));
+  }
+
+  /* ===== SEGMENTS ===== */
 
   const segments = useMemo(() => {
     const map: Record<string, Bundle[]> = {};
 
     bundles.forEach((b) => {
-      const seg = b.section?.trim() || "General";
-      if (!map[seg]) map[seg] = [];
-      map[seg].push(b);
+      if (!map[b.section]) map[b.section] = [];
+      map[b.section].push(b);
     });
 
     return map;
   }, [bundles]);
 
-  const overallRequired = bundles.reduce((s, b) => s + Number(b.qty_required), 0);
-  const overallDelivered = bundles.reduce((s, b) => s + deliveredQty(b.bundle_no), 0);
+  const totalRequired = bundles.reduce((s, b) => s + b.qty_required, 0);
+  const totalDelivered = bundles.reduce(
+    (s, b) => s + deliveredQty(b.bundle_no),
+    0
+  );
 
   return (
     <div className="p-8 space-y-6">
@@ -152,9 +175,9 @@ export default function MaterialsPage() {
         <h1 className="text-2xl font-bold">Materials Register</h1>
 
         <div className="flex gap-6">
-          <Stat label="Required" value={overallRequired} />
-          <Stat label="Delivered" value={overallDelivered} />
-          <Stat label="Remaining" value={overallRequired - overallDelivered} />
+          <Stat label="Required" value={totalRequired} />
+          <Stat label="Delivered" value={totalDelivered} />
+          <Stat label="Remaining" value={totalRequired - totalDelivered} />
         </div>
 
         <div className="flex gap-3">
@@ -169,14 +192,20 @@ export default function MaterialsPage() {
           <button onClick={addRow} className="bg-slate-200 px-3 py-1 rounded">
             Add Row
           </button>
-          <button onClick={saveRegister} className="bg-blue-600 text-white px-3 py-1 rounded">
+          <button
+            onClick={saveRegister}
+            className="bg-blue-600 text-white px-3 py-1 rounded"
+          >
             Save Register
           </button>
         </div>
 
         {Object.entries(segments).map(([segment, rows]) => {
-          const segReq = rows.reduce((s, b) => s + Number(b.qty_required), 0);
-          const segDel = rows.reduce((s, b) => s + deliveredQty(b.bundle_no), 0);
+          const segReq = rows.reduce((s, b) => s + b.qty_required, 0);
+          const segDel = rows.reduce(
+            (s, b) => s + deliveredQty(b.bundle_no),
+            0
+          );
 
           return (
             <div key={segment} className="border rounded-xl">
@@ -196,42 +225,78 @@ export default function MaterialsPage() {
               </div>
 
               {!collapsedSegments[segment] && (
-                <div className="p-3 space-y-2">
-                  {rows.map((b, i) => (
-                    <div key={i} className="grid grid-cols-6 gap-2 border p-2 rounded">
-                      <input
-                        className="border p-1"
-                        value={b.bundle_no}
-                        onChange={(e) => {
-                          const copy = [...bundles];
-                          copy[bundles.indexOf(b)].bundle_no = e.target.value;
-                          setBundles(copy);
-                        }}
-                      />
+                <div className="p-3 space-y-3">
+                  {rows.map((b) => (
+                    <div
+                      key={b.ui_id}
+                      className="grid grid-cols-5 gap-3 border p-3 rounded-xl"
+                    >
+                      <div>
+                        <label className="text-xs text-slate-500">
+                          Bundle Number
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={b.bundle_no}
+                          onChange={(e) => {
+                            const copy = [...bundles];
+                            copy[bundles.indexOf(b)].bundle_no =
+                              e.target.value;
+                            setBundles(copy);
+                          }}
+                        />
+                      </div>
 
-                      <input
-                        className="border p-1"
-                        value={b.section || ""}
-                        onChange={(e) => {
-                          const copy = [...bundles];
-                          copy[bundles.indexOf(b)].section = e.target.value;
-                          setBundles(copy);
-                        }}
-                      />
+                      <div>
+                        <label className="text-xs text-slate-500">Segment</label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={b.section}
+                          onChange={(e) => {
+                            const copy = [...bundles];
+                            copy[bundles.indexOf(b)].section =
+                              e.target.value;
+                            setBundles(copy);
+                          }}
+                        />
+                      </div>
 
-                      <input
-                        className="border p-1"
-                        value={b.qty_required}
-                        onChange={(e) => {
-                          const copy = [...bundles];
-                          copy[bundles.indexOf(b)].qty_required = Number(e.target.value);
-                          setBundles(copy);
-                        }}
-                      />
+                      <div>
+                        <label className="text-xs text-slate-500">
+                          Qty Required
+                        </label>
+                        <input
+                          className="border p-2 rounded w-full"
+                          value={b.qty_required}
+                          onChange={(e) => {
+                            const copy = [...bundles];
+                            copy[bundles.indexOf(b)].qty_required =
+                              Number(e.target.value);
+                            setBundles(copy);
+                          }}
+                        />
+                      </div>
 
-                      <div>Delivered: {deliveredQty(b.bundle_no)}</div>
-                      <div>Remaining: {remainingQty(b)}</div>
-                      <div></div>
+                      <div className="flex flex-col justify-end">
+                        <div className="text-xs text-slate-500">Delivered</div>
+                        <div className="font-bold">
+                          {deliveredQty(b.bundle_no)}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col justify-end">
+                        <div className="text-xs text-slate-500">Remaining</div>
+                        <div className="font-bold">
+                          {remainingQty(b)}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => deleteRow(b.ui_id)}
+                        className="text-red-600 text-sm col-span-5"
+                      >
+                        Remove Row
+                      </button>
                     </div>
                   ))}
                 </div>
