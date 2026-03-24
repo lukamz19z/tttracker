@@ -5,8 +5,9 @@ import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
+/* ================= TYPES ================= */
+
 type Bundle = {
-  id: string;
   bundle_no: string;
   section: string | null;
   qty_required: number;
@@ -25,14 +26,16 @@ type Delivery = {
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
+/* ================= PAGE ================= */
+
 export default function DeliveriesPage() {
   const params = useParams();
-
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
   const supabase = createSupabaseBrowser();
 
+  const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [search, setSearch] = useState("");
@@ -44,38 +47,42 @@ export default function DeliveriesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editQtyMap, setEditQtyMap] = useState<Record<string, number>>({});
 
+  /* ================= LOAD ================= */
+
   useEffect(() => {
     load();
-  }, []);
+  }, [towerId]);
 
   async function load() {
-    const { data: b } = await supabase
-      .from("tower_required_bundles")
-      .select("*")
-      .eq("tower_id", towerId)
-      .order("bundle_no");
+    const [towerRes, bundleRes, deliveryRes] = await Promise.all([
+      supabase.from("towers").select("*").eq("id", towerId).single(),
+      supabase
+        .from("tower_required_bundles")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("section")
+        .order("bundle_no"),
+      supabase
+        .from("tower_bundle_deliveries")
+        .select("*, tower_bundle_delivery_items(*)")
+        .eq("tower_id", towerId)
+        .order("created_at", { ascending: false }),
+    ]);
 
-    const { data: d } = await supabase
-      .from("tower_bundle_deliveries")
-      .select("*, tower_bundle_delivery_items(*)")
-      .eq("tower_id", towerId)
-      .order("created_at", { ascending: false });
-
-    setBundles(b || []);
-    setDeliveries(d || []);
+    setTower(towerRes.data);
+    setBundles(bundleRes.data || []);
+    setDeliveries(deliveryRes.data || []);
   }
 
   /* ================= DELIVERY TOTALS ================= */
 
   const deliveredTotals = useMemo(() => {
     const map: Record<string, number> = {};
-
     deliveries.forEach((d) => {
       d.tower_bundle_delivery_items.forEach((i) => {
         map[i.bundle_no] = (map[i.bundle_no] || 0) + i.qty_delivered;
       });
     });
-
     return map;
   }, [deliveries]);
 
@@ -123,25 +130,22 @@ export default function DeliveriesPage() {
     load();
   }
 
-  /* ================= DELETE DELIVERY ================= */
+  /* ================= DELETE ================= */
 
   async function deleteDelivery(id: string) {
     if (!confirm("Delete delivery?")) return;
-
     await supabase.from("tower_bundle_deliveries").delete().eq("id", id);
     load();
   }
 
-  /* ================= EDIT DELIVERY ================= */
+  /* ================= EDIT ================= */
 
   function startEdit(d: Delivery) {
     setEditingId(d.id);
-
     const map: Record<string, number> = {};
     d.tower_bundle_delivery_items.forEach((i) => {
       map[i.bundle_no] = i.qty_delivered;
     });
-
     setEditQtyMap(map);
   }
 
@@ -166,14 +170,13 @@ export default function DeliveriesPage() {
 
     await supabase.from("tower_bundle_delivery_items").insert(payload);
 
-    setEditingId(null);
-    setEditQtyMap({});
+    cancelEdit();
     load();
   }
 
-  /* ================= FILTER ================= */
+  /* ================= SEARCH ================= */
 
-  const filtered = useMemo(() => {
+  const filteredBundles = useMemo(() => {
     return bundles.filter((b) =>
       b.bundle_no.toLowerCase().includes(search.toLowerCase())
     );
@@ -181,64 +184,51 @@ export default function DeliveriesPage() {
 
   /* ================= PROGRESS ================= */
 
-  const totalRequired = bundles.reduce(
-    (s, b) => s + b.qty_required,
-    0
-  );
+  const totalRequired = bundles.reduce((s, b) => s + b.qty_required, 0);
+  const totalDelivered = Object.values(deliveredTotals).reduce((s, v) => s + v, 0);
+  const progress = totalRequired ? (totalDelivered / totalRequired) * 100 : 0;
 
-  const totalDelivered = Object.values(deliveredTotals).reduce(
-    (s, v) => s + v,
-    0
-  );
-
-  const progress = totalRequired
-    ? Math.round((totalDelivered / totalRequired) * 100)
-    : 0;
+  /* ================= UI ================= */
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-8 space-y-6">
+      {tower && (
+        <TowerHeader projectId={projectId} tower={tower} latestDate={null} />
+      )}
 
-      {/* FIXED HEADER */}
-      <TowerHeader projectId={projectId} towerId={towerId} />
-
-      <div className="bg-white p-6 rounded-2xl shadow space-y-4">
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
         <h1 className="text-2xl font-bold">Steel Deliveries</h1>
 
-        {/* PROGRESS BAR */}
         <div>
-          <div className="text-sm font-semibold">Tower Progress {progress}%</div>
-          <div className="w-full bg-gray-200 h-4 rounded">
+          <div className="text-sm mb-1">
+            Progress {progress.toFixed(1)}%
+          </div>
+          <div className="w-full bg-gray-200 h-3 rounded">
             <div
-              className="bg-green-600 h-4 rounded"
+              className="bg-green-600 h-3 rounded"
               style={{ width: `${progress}%` }}
             />
           </div>
         </div>
 
-        {/* SEARCH */}
         <div>
           <label className="text-sm font-semibold">Search Bundle</label>
           <input
-            className="border p-3 rounded w-full text-lg"
-            placeholder="Type bundle number..."
+            className="border p-3 rounded w-full"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
 
-        {/* BUNDLE ENTRY */}
         <div className="border rounded-xl">
-          {filtered.map((b) => {
+          {filteredBundles.map((b) => {
             const delivered = deliveredTotals[b.bundle_no] || 0;
             const remaining = b.qty_required - delivered;
 
             return (
-              <div
-                key={b.id}
-                className="grid grid-cols-4 gap-4 p-4 border-b items-center"
-              >
+              <div key={b.bundle_no} className="grid grid-cols-4 gap-4 p-4 border-b">
                 <div>
-                  <div className="font-bold text-lg">{b.bundle_no}</div>
+                  <div className="font-bold">{b.bundle_no}</div>
                   <div className="text-xs text-gray-500">{b.section}</div>
                 </div>
 
@@ -271,10 +261,9 @@ export default function DeliveriesPage() {
           })}
         </div>
 
-        {/* DELIVERY META */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-sm font-semibold">Delivered By</label>
+            <label className="text-sm">Delivered By</label>
             <input
               className="border p-3 rounded w-full"
               value={deliveredBy}
@@ -283,7 +272,7 @@ export default function DeliveriesPage() {
           </div>
 
           <div>
-            <label className="text-sm font-semibold">Vehicle</label>
+            <label className="text-sm">Vehicle</label>
             <input
               className="border p-3 rounded w-full"
               value={vehicle}
@@ -294,14 +283,14 @@ export default function DeliveriesPage() {
 
         <button
           onClick={saveDelivery}
-          className="bg-green-600 text-white px-6 py-3 rounded-xl text-lg"
+          className="bg-green-600 text-white px-6 py-3 rounded-xl"
         >
           Save Delivery
         </button>
       </div>
 
-      {/* DELIVERY REGISTER */}
-      <div className="bg-white p-6 rounded-2xl shadow space-y-4">
+      {/* REGISTER */}
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
         <h2 className="text-xl font-bold">Delivery Register</h2>
 
         {deliveries.map((d) => {
@@ -313,34 +302,20 @@ export default function DeliveriesPage() {
                 <div>
                   <div className="font-bold">{d.delivered_by}</div>
                   <div className="text-sm text-gray-500">{d.vehicle}</div>
-                  <div className="text-xs text-gray-400">
-                    {new Date(d.created_at).toLocaleString()}
-                  </div>
                 </div>
 
                 <div className="flex gap-3">
                   {!isEditing && (
-                    <button
-                      onClick={() => startEdit(d)}
-                      className="text-blue-600"
-                    >
+                    <button onClick={() => startEdit(d)} className="text-blue-600">
                       Edit
                     </button>
                   )}
-
                   {isEditing && (
                     <>
-                      <button
-                        onClick={saveEdit}
-                        className="text-green-600"
-                      >
+                      <button onClick={saveEdit} className="text-green-600">
                         Save
                       </button>
-
-                      <button
-                        onClick={cancelEdit}
-                        className="text-gray-500"
-                      >
+                      <button onClick={cancelEdit} className="text-gray-500">
                         Cancel
                       </button>
                     </>
@@ -355,34 +330,27 @@ export default function DeliveriesPage() {
                 </div>
               </div>
 
-              <div className="border rounded">
-                {d.tower_bundle_delivery_items.map((i) => (
-                  <div
-                    key={i.bundle_no}
-                    className="flex justify-between p-2 border-t"
-                  >
-                    <div>{i.bundle_no}</div>
+              {d.tower_bundle_delivery_items.map((i) => (
+                <div key={i.bundle_no} className="flex justify-between border-t pt-2">
+                  <div>{i.bundle_no}</div>
 
-                    {!isEditing ? (
-                      <div className="font-semibold">
-                        {i.qty_delivered}
-                      </div>
-                    ) : (
-                      <input
-                        type="number"
-                        className="border p-1 rounded"
-                        value={editQtyMap[i.bundle_no] || ""}
-                        onChange={(e) =>
-                          setEditQtyMap({
-                            ...editQtyMap,
-                            [i.bundle_no]: Number(e.target.value),
-                          })
-                        }
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
+                  {!isEditing ? (
+                    <div>{i.qty_delivered}</div>
+                  ) : (
+                    <input
+                      type="number"
+                      className="border p-1 rounded"
+                      value={editQtyMap[i.bundle_no] || ""}
+                      onChange={(e) =>
+                        setEditQtyMap({
+                          ...editQtyMap,
+                          [i.bundle_no]: Number(e.target.value),
+                        })
+                      }
+                    />
+                  )}
+                </div>
+              ))}
             </div>
           );
         })}
