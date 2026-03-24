@@ -38,6 +38,7 @@ export default function DeliveriesPage() {
   const [tower, setTower] = useState<any>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+
   const [search, setSearch] = useState("");
 
   const [deliveredBy, setDeliveredBy] = useState("");
@@ -50,7 +51,7 @@ export default function DeliveriesPage() {
   /* ================= LOAD ================= */
 
   useEffect(() => {
-    load();
+    if (towerId) load();
   }, [towerId]);
 
   async function load() {
@@ -74,23 +75,40 @@ export default function DeliveriesPage() {
     setDeliveries(deliveryRes.data || []);
   }
 
-  /* ================= DELIVERY TOTALS ================= */
+  /* ================= TOTALS ================= */
 
   const deliveredTotals = useMemo(() => {
     const map: Record<string, number> = {};
     deliveries.forEach((d) => {
       d.tower_bundle_delivery_items.forEach((i) => {
-        map[i.bundle_no] = (map[i.bundle_no] || 0) + i.qty_delivered;
+        map[i.bundle_no] =
+          (map[i.bundle_no] || 0) + Number(i.qty_delivered);
       });
     });
     return map;
   }, [deliveries]);
 
+  /* ================= PROGRESS ================= */
+
+  const totalRequired = bundles.reduce(
+    (s, b) => s + Number(b.qty_required),
+    0
+  );
+
+  const totalDelivered = Object.values(deliveredTotals).reduce(
+    (s, v) => s + v,
+    0
+  );
+
+  const progress = totalRequired
+    ? (totalDelivered / totalRequired) * 100
+    : 0;
+
   /* ================= SAVE DELIVERY ================= */
 
   async function saveDelivery() {
     const items = Object.entries(qtyMap)
-      .filter(([, v]) => v > 0)
+      .filter(([, qty]) => qty > 0)
       .map(([bundle_no, qty]) => ({
         bundle_no,
         qty_delivered: qty,
@@ -111,8 +129,8 @@ export default function DeliveriesPage() {
       .select()
       .single();
 
-    if (error) {
-      alert(error.message);
+    if (error || !data) {
+      alert(error?.message || "Insert failed");
       return;
     }
 
@@ -122,7 +140,9 @@ export default function DeliveriesPage() {
       qty_delivered: i.qty_delivered,
     }));
 
-    await supabase.from("tower_bundle_delivery_items").insert(payload);
+    await supabase
+      .from("tower_bundle_delivery_items")
+      .insert(payload);
 
     setDeliveredBy("");
     setVehicle("");
@@ -134,7 +154,12 @@ export default function DeliveriesPage() {
 
   async function deleteDelivery(id: string) {
     if (!confirm("Delete delivery?")) return;
-    await supabase.from("tower_bundle_deliveries").delete().eq("id", id);
+
+    await supabase
+      .from("tower_bundle_deliveries")
+      .delete()
+      .eq("id", id);
+
     load();
   }
 
@@ -142,10 +167,12 @@ export default function DeliveriesPage() {
 
   function startEdit(d: Delivery) {
     setEditingId(d.id);
+
     const map: Record<string, number> = {};
     d.tower_bundle_delivery_items.forEach((i) => {
       map[i.bundle_no] = i.qty_delivered;
     });
+
     setEditQtyMap(map);
   }
 
@@ -162,13 +189,17 @@ export default function DeliveriesPage() {
       .delete()
       .eq("delivery_id", editingId);
 
-    const payload = Object.entries(editQtyMap).map(([bundle_no, qty]) => ({
-      delivery_id: editingId,
-      bundle_no,
-      qty_delivered: qty,
-    }));
+    const payload = Object.entries(editQtyMap).map(
+      ([bundle_no, qty]) => ({
+        delivery_id: editingId,
+        bundle_no,
+        qty_delivered: qty,
+      })
+    );
 
-    await supabase.from("tower_bundle_delivery_items").insert(payload);
+    await supabase
+      .from("tower_bundle_delivery_items")
+      .insert(payload);
 
     cancelEdit();
     load();
@@ -182,26 +213,27 @@ export default function DeliveriesPage() {
     );
   }, [bundles, search]);
 
-  /* ================= PROGRESS ================= */
-
-  const totalRequired = bundles.reduce((s, b) => s + b.qty_required, 0);
-  const totalDelivered = Object.values(deliveredTotals).reduce((s, v) => s + v, 0);
-  const progress = totalRequired ? (totalDelivered / totalRequired) * 100 : 0;
-
   /* ================= UI ================= */
 
   return (
     <div className="p-8 space-y-6">
       {tower && (
-        <TowerHeader projectId={projectId} tower={tower} latestDate={null} />
+        <TowerHeader
+          projectId={projectId}
+          tower={tower}
+          latestDate={null}
+        />
       )}
 
-      <div className="bg-white border rounded-2xl p-6 space-y-4">
+      {/* ===== DELIVERY ENTRY ===== */}
+
+      <div className="bg-white border rounded-2xl p-6 space-y-6">
         <h1 className="text-2xl font-bold">Steel Deliveries</h1>
 
+        {/* PROGRESS */}
         <div>
-          <div className="text-sm mb-1">
-            Progress {progress.toFixed(1)}%
+          <div className="text-sm font-semibold mb-1">
+            Delivery Progress {progress.toFixed(1)}%
           </div>
           <div className="w-full bg-gray-200 h-3 rounded">
             <div
@@ -211,48 +243,83 @@ export default function DeliveriesPage() {
           </div>
         </div>
 
+        {/* SEARCH */}
         <div>
-          <label className="text-sm font-semibold">Search Bundle</label>
+          <label className="text-sm font-semibold">
+            Search Bundle Number
+          </label>
           <input
             className="border p-3 rounded w-full"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            placeholder="Type bundle number..."
           />
         </div>
 
+        {/* BUNDLE TABLE */}
         <div className="border rounded-xl">
           {filteredBundles.map((b) => {
-            const delivered = deliveredTotals[b.bundle_no] || 0;
-            const remaining = b.qty_required - delivered;
+            const delivered =
+              deliveredTotals[b.bundle_no] || 0;
+            const remaining =
+              Number(b.qty_required) - delivered;
 
             return (
-              <div key={b.bundle_no} className="grid grid-cols-4 gap-4 p-4 border-b">
+              <div
+                key={b.bundle_no}
+                className="grid grid-cols-5 gap-4 p-4 border-b items-center"
+              >
                 <div>
-                  <div className="font-bold">{b.bundle_no}</div>
-                  <div className="text-xs text-gray-500">{b.section}</div>
+                  <div className="text-xs text-gray-500">
+                    Bundle
+                  </div>
+                  <div className="font-bold">
+                    {b.bundle_no}
+                  </div>
                 </div>
 
                 <div>
-                  <div className="text-xs">Required</div>
-                  <div className="font-bold">{b.qty_required}</div>
+                  <div className="text-xs text-gray-500">
+                    Segment
+                  </div>
+                  <div className="font-semibold">
+                    {b.section || "-"}
+                  </div>
                 </div>
 
                 <div>
-                  <div className="text-xs">Remaining</div>
-                  <div className="font-bold">{remaining}</div>
+                  <div className="text-xs text-gray-500">
+                    Required
+                  </div>
+                  <div className="font-bold">
+                    {b.qty_required}
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-xs">Deliver Qty</label>
+                  <div className="text-xs text-gray-500">
+                    Remaining
+                  </div>
+                  <div className="font-bold text-orange-600">
+                    {remaining}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold">
+                    Deliver Qty
+                  </label>
                   <input
                     type="number"
                     className="border p-2 rounded w-full"
                     value={qtyMap[b.bundle_no] || ""}
                     onChange={(e) =>
-                      setQtyMap({
-                        ...qtyMap,
-                        [b.bundle_no]: Number(e.target.value),
-                      })
+                      setQtyMap((prev) => ({
+                        ...prev,
+                        [b.bundle_no]: Number(
+                          e.target.value
+                        ),
+                      }))
                     }
                   />
                 </div>
@@ -261,96 +328,175 @@ export default function DeliveriesPage() {
           })}
         </div>
 
+        {/* DELIVERY DETAILS */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="text-sm">Delivered By</label>
+            <label className="text-sm font-semibold">
+              Delivered By
+            </label>
             <input
               className="border p-3 rounded w-full"
               value={deliveredBy}
-              onChange={(e) => setDeliveredBy(e.target.value)}
+              onChange={(e) =>
+                setDeliveredBy(e.target.value)
+              }
             />
           </div>
 
           <div>
-            <label className="text-sm">Vehicle</label>
+            <label className="text-sm font-semibold">
+              Vehicle
+            </label>
             <input
               className="border p-3 rounded w-full"
               value={vehicle}
-              onChange={(e) => setVehicle(e.target.value)}
+              onChange={(e) =>
+                setVehicle(e.target.value)
+              }
             />
           </div>
         </div>
 
         <button
           onClick={saveDelivery}
-          className="bg-green-600 text-white px-6 py-3 rounded-xl"
+          className="bg-green-600 text-white px-6 py-3 rounded-xl font-semibold"
         >
           Save Delivery
         </button>
       </div>
 
-      {/* REGISTER */}
+      {/* ===== REGISTER ===== */}
+
       <div className="bg-white border rounded-2xl p-6 space-y-4">
-        <h2 className="text-xl font-bold">Delivery Register</h2>
+        <h2 className="text-xl font-bold">
+          Delivery Register
+        </h2>
 
         {deliveries.map((d) => {
           const isEditing = editingId === d.id;
 
           return (
-            <div key={d.id} className="border rounded-xl p-4 space-y-3">
+            <div
+              key={d.id}
+              className="border rounded-2xl p-5 space-y-4"
+            >
               <div className="flex justify-between">
-                <div>
-                  <div className="font-bold">{d.delivered_by}</div>
-                  <div className="text-sm text-gray-500">{d.vehicle}</div>
+                <div className="space-y-1">
+                  <div>
+                    <div className="text-xs text-gray-500">
+                      Delivered By
+                    </div>
+                    <div className="font-bold">
+                      {d.delivered_by || "-"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-gray-500">
+                      Vehicle
+                    </div>
+                    <div className="font-semibold">
+                      {d.vehicle || "-"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-gray-500">
+                      Date
+                    </div>
+                    <div className="font-semibold">
+                      {new Date(
+                        d.created_at
+                      ).toLocaleString()}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-4">
                   {!isEditing && (
-                    <button onClick={() => startEdit(d)} className="text-blue-600">
+                    <button
+                      onClick={() => startEdit(d)}
+                      className="text-blue-600 font-semibold"
+                    >
                       Edit
                     </button>
                   )}
+
                   {isEditing && (
                     <>
-                      <button onClick={saveEdit} className="text-green-600">
+                      <button
+                        onClick={saveEdit}
+                        className="text-green-600 font-semibold"
+                      >
                         Save
                       </button>
-                      <button onClick={cancelEdit} className="text-gray-500">
+
+                      <button
+                        onClick={cancelEdit}
+                        className="text-gray-500 font-semibold"
+                      >
                         Cancel
                       </button>
                     </>
                   )}
 
                   <button
-                    onClick={() => deleteDelivery(d.id)}
-                    className="text-red-600"
+                    onClick={() =>
+                      deleteDelivery(d.id)
+                    }
+                    className="text-red-600 font-semibold"
                   >
                     Delete
                   </button>
                 </div>
               </div>
 
-              {d.tower_bundle_delivery_items.map((i) => (
-                <div key={i.bundle_no} className="flex justify-between border-t pt-2">
-                  <div>{i.bundle_no}</div>
-
-                  {!isEditing ? (
-                    <div>{i.qty_delivered}</div>
-                  ) : (
-                    <input
-                      type="number"
-                      className="border p-1 rounded"
-                      value={editQtyMap[i.bundle_no] || ""}
-                      onChange={(e) =>
-                        setEditQtyMap({
-                          ...editQtyMap,
-                          [i.bundle_no]: Number(e.target.value),
-                        })
-                      }
-                    />
-                  )}
+              <div className="border rounded-xl overflow-hidden">
+                <div className="grid grid-cols-2 bg-gray-100 p-3 font-semibold text-sm">
+                  <div>Bundle Number</div>
+                  <div>Qty Delivered</div>
                 </div>
-              ))}
+
+                {d.tower_bundle_delivery_items.map(
+                  (i) => (
+                    <div
+                      key={i.bundle_no}
+                      className="grid grid-cols-2 p-3 border-t items-center"
+                    >
+                      <div className="font-medium">
+                        {i.bundle_no}
+                      </div>
+
+                      {!isEditing ? (
+                        <div className="font-bold">
+                          {i.qty_delivered}
+                        </div>
+                      ) : (
+                        <input
+                          type="number"
+                          className="border p-2 rounded w-24"
+                          value={
+                            editQtyMap[
+                              i.bundle_no
+                            ] || ""
+                          }
+                          onChange={(e) =>
+                            setEditQtyMap(
+                              (prev) => ({
+                                ...prev,
+                                [i.bundle_no]:
+                                  Number(
+                                    e.target.value
+                                  ),
+                              })
+                            )
+                          }
+                        />
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
             </div>
           );
         })}
