@@ -544,6 +544,18 @@ export default function TowerPhotosPage() {
     }
   }
 
+  async function removeTowerCover() {
+  const confirmRemove = confirm("Remove tower cover photo?");
+  if (!confirmRemove) return;
+
+  await supabase
+    .from("towers")
+    .update({ cover_photo_path: null })
+    .eq("id", towerId);
+
+  await loadPage();
+}
+
   if (loading) {
     return <div className="p-8">Loading photos...</div>;
   }
@@ -556,18 +568,25 @@ export default function TowerPhotosPage() {
     <div className="p-8 space-y-6">
       <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />
 
-      {coverPhotoUrl && (
-        <div className="bg-white border rounded-2xl p-6 shadow-sm">
-          <div className="text-xl font-semibold mb-4">Tower Cover Photo</div>
-          <div className="rounded-2xl overflow-hidden border bg-slate-100 max-w-3xl">
-            <img
-              src={coverPhotoUrl}
-              alt="Tower cover"
-              className="w-full h-[320px] object-cover"
-            />
-          </div>
-        </div>
-      )}
+{coverPhotoUrl && (
+  <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-4">
+    <div className="text-xl font-semibold">Tower Cover Photo</div>
+
+    <div className="rounded-2xl overflow-hidden border bg-slate-100 max-w-3xl">
+      <img
+        src={coverPhotoUrl}
+        className="w-full h-[320px] object-cover"
+      />
+    </div>
+
+    <button
+      onClick={removeTowerCover}
+      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+    >
+      Remove Cover Photo
+    </button>
+  </div>
+)}
 
       <div className="bg-white border rounded-2xl p-6 space-y-5 shadow-sm">
         <div>
