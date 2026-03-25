@@ -70,13 +70,20 @@ export default function TowerDefectsPage() {
   }
 
   async function uploadPhoto(file: File) {
-    const name = `${Date.now()}_${file.name}`;
+    const filePath = `tower-${towerId}/${Date.now()}-${file.name}`;
 
-    await supabase.storage.from("defect-photos").upload(name, file);
+    const { error } = await supabase.storage
+      .from("defect-photos")
+      .upload(filePath, file);
+
+    if (error) {
+      alert(error.message);
+      return null;
+    }
 
     const { data } = supabase.storage
       .from("defect-photos")
-      .getPublicUrl(name);
+      .getPublicUrl(filePath);
 
     return data.publicUrl;
   }
@@ -84,7 +91,9 @@ export default function TowerDefectsPage() {
   async function saveDefect() {
     let photoUrl = null;
 
-    if (form.photo) photoUrl = await uploadPhoto(form.photo);
+    if (form.photo) {
+      photoUrl = await uploadPhoto(form.photo);
+    }
 
     const { data: auth } = await supabase.auth.getUser();
 
@@ -115,6 +124,7 @@ export default function TowerDefectsPage() {
 
   async function deleteDefect(id: string) {
     if (!confirm("Delete defect?")) return;
+
     await supabase.from("tower_defects").delete().eq("id", id);
     load();
   }
@@ -139,10 +149,10 @@ export default function TowerDefectsPage() {
   }
 
   if (loading) return <div className="p-8">Loading defects...</div>;
-  if (!tower) return <div className="p-8">Tower not found.</div>;
 
   return (
     <div className="p-8 space-y-6">
+
       <TowerHeader projectId={projectId} tower={tower} />
 
       {/* LOG DEFECT */}
@@ -305,9 +315,12 @@ export default function TowerDefectsPage() {
 
       {/* IMAGE MODAL */}
       {preview && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center">
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
           <div className="bg-white p-4 rounded-xl">
-            <img src={preview} className="max-h-[80vh]" />
+            <img
+              src={preview}
+              className="max-h-[80vh] object-contain"
+            />
             <button
               onClick={() => setPreview(null)}
               className="mt-4 bg-slate-800 text-white px-4 py-2 rounded"
@@ -318,54 +331,6 @@ export default function TowerDefectsPage() {
         </div>
       )}
 
-      {/* EDIT MODAL */}
-      {editing && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center">
-          <div className="bg-white p-6 rounded-xl space-y-3 w-[500px]">
-            <div className="text-lg font-semibold">Edit Defect</div>
-
-            <input
-              className="border p-2 w-full"
-              value={editing.member_number}
-              onChange={(e) =>
-                setEditing({ ...editing, member_number: e.target.value })
-              }
-            />
-
-            <input
-              className="border p-2 w-full"
-              value={editing.segment}
-              onChange={(e) =>
-                setEditing({ ...editing, segment: e.target.value })
-              }
-            />
-
-            <textarea
-              className="border p-2 w-full"
-              value={editing.description}
-              onChange={(e) =>
-                setEditing({ ...editing, description: e.target.value })
-              }
-            />
-
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setEditing(null)}
-                className="border px-4 py-2 rounded"
-              >
-                Cancel
-              </button>
-
-              <button
-                onClick={updateDefect}
-                className="bg-blue-600 text-white px-4 py-2 rounded"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
