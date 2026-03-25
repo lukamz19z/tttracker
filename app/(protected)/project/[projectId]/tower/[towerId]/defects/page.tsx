@@ -8,36 +8,39 @@ type Defect = {
   member_number: string;
   segment: string;
   description: string;
+  severity: string;
+  status: string;
   photo_url: string | null;
   uploaded_by: string;
   created_at: string;
+  updated_at: string;
 };
 
-export default function TowerDefectsPage({
+export default function DefectsPage({
   params,
 }: {
-  params: { towerId: string };
+  params: { towerId: string; projectId: string };
 }) {
   const supabase = createSupabaseBrowser();
 
-  const [defects, setDefects] = useState<Defect[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
+  const [rows, setRows] = useState<Defect[]>([]);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState({
     member_number: "",
     segment: "",
     description: "",
+    severity: "Minor",
+    status: "Open",
     photo: null as File | null,
   });
 
   useEffect(() => {
-    loadDefects();
+    load();
   }, []);
 
-  async function loadDefects() {
+  async function load() {
     setLoading(true);
 
     const { data } = await supabase
@@ -46,36 +49,27 @@ export default function TowerDefectsPage({
       .eq("tower_id", params.towerId)
       .order("created_at", { ascending: false });
 
-    if (data) setDefects(data);
+    if (data) setRows(data);
+
     setLoading(false);
   }
 
   async function uploadPhoto(file: File) {
-    const fileName = `${Date.now()}_${file.name}`;
+    const name = `${Date.now()}_${file.name}`;
 
-    const { error } = await supabase.storage
-      .from("defect-photos")
-      .upload(fileName, file);
-
-    if (error) {
-      alert("Photo upload failed");
-      return null;
-    }
+    await supabase.storage.from("defect-photos").upload(name, file);
 
     const { data } = supabase.storage
       .from("defect-photos")
-      .getPublicUrl(fileName);
+      .getPublicUrl(name);
 
     return data.publicUrl;
   }
 
-  async function saveDefect() {
-    if (!form.description) {
-      alert("Enter description");
-      return;
-    }
-
-    setSaving(true);
+  async function save() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
     let photoUrl = null;
 
@@ -83,15 +77,13 @@ export default function TowerDefectsPage({
       photoUrl = await uploadPhoto(form.photo);
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
     await supabase.from("tower_defects").insert({
       tower_id: params.towerId,
       member_number: form.member_number,
       segment: form.segment,
       description: form.description,
+      severity: form.severity,
+      status: form.status,
       photo_url: photoUrl,
       uploaded_by: user?.email,
     });
@@ -100,142 +92,206 @@ export default function TowerDefectsPage({
       member_number: "",
       segment: "",
       description: "",
+      severity: "Minor",
+      status: "Open",
       photo: null,
     });
 
-    await loadDefects();
-    setSaving(false);
+    load();
   }
 
-  async function deleteDefect(id: string) {
+  async function updateField(id: string, field: string, value: any) {
+    await supabase
+      .from("tower_defects")
+      .update({
+        [field]: value,
+        updated_at: new Date(),
+      })
+      .eq("id", id);
+
+    load();
+  }
+
+  async function remove(id: string) {
     if (!confirm("Delete defect?")) return;
-
     await supabase.from("tower_defects").delete().eq("id", id);
-    loadDefects();
+    load();
   }
 
-  const filtered = defects.filter(
-    (d) =>
-      d.member_number?.toLowerCase().includes(search.toLowerCase()) ||
-      d.segment?.toLowerCase().includes(search.toLowerCase()) ||
-      d.description?.toLowerCase().includes(search.toLowerCase())
+  const filtered = rows.filter(
+    (r) =>
+      r.member_number?.toLowerCase().includes(search.toLowerCase()) ||
+      r.segment?.toLowerCase().includes(search.toLowerCase()) ||
+      r.description?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div className="p-6 max-w-6xl">
-      <h1 className="text-3xl font-bold mb-6">Tower Defects</h1>
+    <div className="p-6 max-w-7xl">
+      <h1 className="text-3xl font-bold mb-6">Tower Defects Register</h1>
 
       {/* FORM */}
-      <div className="bg-white border rounded-xl p-6 mb-8 shadow">
-        <h2 className="text-xl font-semibold mb-4">Log New Defect</h2>
+      <div className="bg-white border rounded-xl p-6 shadow mb-8">
+        <h2 className="text-xl font-semibold mb-4">Log Defect</h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-          <div>
-            <label className="font-semibold">Member Number</label>
-            <input
-              className="border p-2 w-full rounded mt-1"
-              value={form.member_number}
-              onChange={(e) =>
-                setForm({ ...form, member_number: e.target.value })
-              }
-            />
-          </div>
-
-          <div>
-            <label className="font-semibold">Segment</label>
-            <input
-              className="border p-2 w-full rounded mt-1"
-              value={form.segment}
-              onChange={(e) =>
-                setForm({ ...form, segment: e.target.value })
-              }
-            />
-          </div>
-
-          <div>
-            <label className="font-semibold">Photo Upload</label>
-            <input
-              type="file"
-              className="border p-2 w-full rounded mt-1"
-              onChange={(e) =>
-                setForm({ ...form, photo: e.target.files?.[0] || null })
-              }
-            />
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <label className="font-semibold">Description</label>
-          <textarea
-            className="border p-2 w-full rounded mt-1"
-            rows={3}
-            value={form.description}
+        <div className="grid md:grid-cols-6 gap-3">
+          <input
+            placeholder="Member"
+            className="border p-2 rounded"
+            value={form.member_number}
             onChange={(e) =>
-              setForm({ ...form, description: e.target.value })
+              setForm({ ...form, member_number: e.target.value })
             }
           />
+
+          <input
+            placeholder="Segment"
+            className="border p-2 rounded"
+            value={form.segment}
+            onChange={(e) =>
+              setForm({ ...form, segment: e.target.value })
+            }
+          />
+
+          <select
+            className="border p-2 rounded"
+            value={form.severity}
+            onChange={(e) =>
+              setForm({ ...form, severity: e.target.value })
+            }
+          >
+            <option>Minor</option>
+            <option>Major</option>
+            <option>Critical</option>
+          </select>
+
+          <select
+            className="border p-2 rounded"
+            value={form.status}
+            onChange={(e) =>
+              setForm({ ...form, status: e.target.value })
+            }
+          >
+            <option>Open</option>
+            <option>In Progress</option>
+            <option>Fixed</option>
+            <option>Closed</option>
+          </select>
+
+          <input
+            type="file"
+            className="border p-2 rounded"
+            onChange={(e) =>
+              setForm({ ...form, photo: e.target.files?.[0] || null })
+            }
+          />
+
+          <button
+            onClick={save}
+            className="bg-red-600 text-white rounded px-4"
+          >
+            Save
+          </button>
         </div>
 
-        <button
-          onClick={saveDefect}
-          disabled={saving}
-          className="bg-red-600 text-white px-6 py-3 rounded-xl text-lg hover:bg-red-700"
-        >
-          {saving ? "Saving..." : "Save Defect"}
-        </button>
+        <textarea
+          placeholder="Description..."
+          className="border p-2 rounded w-full mt-3"
+          value={form.description}
+          onChange={(e) =>
+            setForm({ ...form, description: e.target.value })
+          }
+        />
       </div>
 
       {/* SEARCH */}
       <input
-        placeholder="Search defects..."
+        placeholder="Search..."
         className="border p-3 rounded w-full mb-4"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
 
-      {/* REGISTER */}
+      {/* TABLE */}
       {loading ? (
-        <p>Loading defects...</p>
+        <p>Loading...</p>
       ) : (
-        <div className="space-y-4">
-          {filtered.map((d) => (
-            <div
-              key={d.id}
-              className="border rounded-xl p-4 bg-white shadow"
-            >
-              <div className="flex justify-between">
-                <div>
-                  <p className="font-semibold text-lg">
-                    Member: {d.member_number || "-"}
-                  </p>
-                  <p className="text-sm text-gray-600">
-                    Segment: {d.segment || "-"}
-                  </p>
-                </div>
+        <div className="overflow-x-auto bg-white border rounded-xl shadow">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-3">Member</th>
+                <th className="p-3">Segment</th>
+                <th className="p-3">Description</th>
+                <th className="p-3">Severity</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Photo</th>
+                <th className="p-3">Logged By</th>
+                <th className="p-3">Updated</th>
+                <th className="p-3"></th>
+              </tr>
+            </thead>
 
-                <button
-                  onClick={() => deleteDefect(d.id)}
-                  className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
-                >
-                  Delete
-                </button>
-              </div>
+            <tbody>
+              {filtered.map((r) => (
+                <tr key={r.id} className="border-t">
+                  <td className="p-2">{r.member_number}</td>
+                  <td className="p-2">{r.segment}</td>
+                  <td className="p-2">{r.description}</td>
 
-              <p className="mt-2">{d.description}</p>
+                  <td className="p-2">
+                    <select
+                      value={r.severity}
+                      onChange={(e) =>
+                        updateField(r.id, "severity", e.target.value)
+                      }
+                    >
+                      <option>Minor</option>
+                      <option>Major</option>
+                      <option>Critical</option>
+                    </select>
+                  </td>
 
-              {d.photo_url && (
-                <img
-                  src={d.photo_url}
-                  className="mt-3 rounded max-w-xs border"
-                />
-              )}
+                  <td className="p-2">
+                    <select
+                      value={r.status}
+                      onChange={(e) =>
+                        updateField(r.id, "status", e.target.value)
+                      }
+                    >
+                      <option>Open</option>
+                      <option>In Progress</option>
+                      <option>Fixed</option>
+                      <option>Closed</option>
+                    </select>
+                  </td>
 
-              <p className="text-xs text-gray-500 mt-3">
-                Uploaded by {d.uploaded_by} —{" "}
-                {new Date(d.created_at).toLocaleString()}
-              </p>
-            </div>
-          ))}
+                  <td className="p-2">
+                    {r.photo_url && (
+                      <img
+                        src={r.photo_url}
+                        className="w-16 h-16 object-cover rounded"
+                      />
+                    )}
+                  </td>
+
+                  <td className="p-2">{r.uploaded_by}</td>
+
+                  <td className="p-2">
+                    {new Date(r.updated_at).toLocaleString()}
+                  </td>
+
+                  <td className="p-2">
+                    <button
+                      onClick={() => remove(r.id)}
+                      className="bg-gray-200 px-3 py-1 rounded"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
