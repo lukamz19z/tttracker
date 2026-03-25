@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import TowerHeader from "@/components/towers/TowerHeader";
 
 type Defect = {
   id: string;
@@ -16,16 +18,17 @@ type Defect = {
   updated_at: string;
 };
 
-export default function DefectsPage({
-  params,
-}: {
-  params: { towerId: string; projectId: string };
-}) {
+export default function TowerDefectsPage() {
+  const params = useParams();
+
+  const projectId = params.projectId as string;
+  const towerId = params.towerId as string;
+
   const supabase = createSupabaseBrowser();
 
+  const [tower, setTower] = useState<any>(null);
   const [rows, setRows] = useState<Defect[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
 
   const [form, setForm] = useState({
     member_number: "",
@@ -36,55 +39,50 @@ export default function DefectsPage({
     photo: null as File | null,
   });
 
-  // LOAD DEFECTS
   useEffect(() => {
-    if (!params?.towerId) return;
-    loadDefects();
-  }, [params.towerId]);
+    if (!towerId) return;
+    load();
+  }, [towerId]);
 
-  async function loadDefects() {
+  async function load() {
     setLoading(true);
 
-    const { data, error } = await supabase
+    const towerRes = await supabase
+      .from("towers")
+      .select("*")
+      .eq("id", towerId)
+      .single();
+
+    setTower(towerRes.data);
+
+    const defectRes = await supabase
       .from("tower_defects")
       .select("*")
-      .eq("tower_id", params.towerId)
+      .eq("tower_id", towerId)
       .order("created_at", { ascending: false });
 
-    if (error) {
-      console.log("LOAD ERROR:", error.message);
-      alert(error.message);
-    }
-
-    if (data) setRows(data);
+    setRows(defectRes.data || []);
 
     setLoading(false);
   }
 
-  // PHOTO UPLOAD
   async function uploadPhoto(file: File) {
-    const fileName = `${Date.now()}_${file.name}`;
+    const name = `${Date.now()}_${file.name}`;
 
-    const { error } = await supabase.storage
+    await supabase.storage
       .from("defect-photos")
-      .upload(fileName, file);
-
-    if (error) {
-      alert(error.message);
-      return null;
-    }
+      .upload(name, file);
 
     const { data } = supabase.storage
       .from("defect-photos")
-      .getPublicUrl(fileName);
+      .getPublicUrl(name);
 
     return data.publicUrl;
   }
 
-  // SAVE DEFECT
   async function saveDefect() {
-    if (!form.description) {
-      alert("Enter defect description");
+    if (!towerId) {
+      alert("Tower not loaded yet");
       return;
     }
 
@@ -94,24 +92,21 @@ export default function DefectsPage({
       photoUrl = await uploadPhoto(form.photo);
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { data: auth } = await supabase.auth.getUser();
 
     const { error } = await supabase.from("tower_defects").insert({
-      tower_id: params.towerId,
+      tower_id: towerId,
       member_number: form.member_number,
       segment: form.segment,
       description: form.description,
       severity: form.severity,
       status: form.status,
       photo_url: photoUrl,
-      uploaded_by: user?.email,
+      uploaded_by: auth.user?.email,
     });
 
     if (error) {
       alert(error.message);
-      console.log(error);
       return;
     }
 
@@ -124,52 +119,19 @@ export default function DefectsPage({
       photo: null,
     });
 
-    loadDefects();
+    load();
   }
 
-  // UPDATE FIELD INLINE
-  async function updateField(id: string, field: string, value: any) {
-    const { error } = await supabase
-      .from("tower_defects")
-      .update({
-        [field]: value,
-        updated_at: new Date(),
-      })
-      .eq("id", id);
-
-    if (error) alert(error.message);
-
-    loadDefects();
-  }
-
-  // DELETE
-  async function deleteDefect(id: string) {
-    if (!confirm("Delete defect?")) return;
-
-    const { error } = await supabase
-      .from("tower_defects")
-      .delete()
-      .eq("id", id);
-
-    if (error) alert(error.message);
-
-    loadDefects();
-  }
-
-  const filtered = rows.filter(
-    (r) =>
-      r.member_number?.toLowerCase().includes(search.toLowerCase()) ||
-      r.segment?.toLowerCase().includes(search.toLowerCase()) ||
-      r.description?.toLowerCase().includes(search.toLowerCase())
-  );
+  if (loading) return <div className="p-8">Loading defects...</div>;
+  if (!tower) return <div className="p-8">Tower not found.</div>;
 
   return (
-    <div className="p-6 max-w-7xl">
-      <h1 className="text-3xl font-bold mb-6">Tower Defects Register</h1>
+    <div className="p-8 space-y-6">
 
-      {/* LOG FORM */}
-      <div className="bg-white border rounded-xl p-6 shadow mb-8">
-        <h2 className="text-xl font-semibold mb-4">Log Defect</h2>
+      <TowerHeader projectId={projectId} tower={tower} />
+
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
+        <div className="text-xl font-semibold">Log Defect</div>
 
         <div className="grid md:grid-cols-6 gap-3">
           <input
@@ -232,8 +194,8 @@ export default function DefectsPage({
         </div>
 
         <textarea
-          placeholder="Description..."
-          className="border p-2 rounded w-full mt-3"
+          placeholder="Description"
+          className="border p-2 rounded w-full"
           value={form.description}
           onChange={(e) =>
             setForm({ ...form, description: e.target.value })
@@ -241,97 +203,38 @@ export default function DefectsPage({
         />
       </div>
 
-      {/* SEARCH */}
-      <input
-        placeholder="Search..."
-        className="border p-3 rounded w-full mb-4"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      <div className="bg-white border rounded-2xl p-4">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-100">
+              <th className="p-2">Member</th>
+              <th className="p-2">Segment</th>
+              <th className="p-2">Description</th>
+              <th className="p-2">Severity</th>
+              <th className="p-2">Status</th>
+              <th className="p-2">Photo</th>
+            </tr>
+          </thead>
 
-      {/* TABLE */}
-      {loading ? (
-        <p>Loading defects...</p>
-      ) : (
-        <div className="overflow-x-auto bg-white border rounded-xl shadow">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-3">Member</th>
-                <th className="p-3">Segment</th>
-                <th className="p-3">Description</th>
-                <th className="p-3">Severity</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Photo</th>
-                <th className="p-3">Logged By</th>
-                <th className="p-3">Updated</th>
-                <th className="p-3"></th>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{r.member_number}</td>
+                <td className="p-2">{r.segment}</td>
+                <td className="p-2">{r.description}</td>
+                <td className="p-2">{r.severity}</td>
+                <td className="p-2">{r.status}</td>
+                <td className="p-2">
+                  {r.photo_url && (
+                    <img src={r.photo_url} className="w-16 h-16 object-cover" />
+                  )}
+                </td>
               </tr>
-            </thead>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-            <tbody>
-              {filtered.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <td className="p-2">{r.member_number}</td>
-                  <td className="p-2">{r.segment}</td>
-                  <td className="p-2">{r.description}</td>
-
-                  <td className="p-2">
-                    <select
-                      value={r.severity}
-                      onChange={(e) =>
-                        updateField(r.id, "severity", e.target.value)
-                      }
-                    >
-                      <option>Minor</option>
-                      <option>Major</option>
-                      <option>Critical</option>
-                    </select>
-                  </td>
-
-                  <td className="p-2">
-                    <select
-                      value={r.status}
-                      onChange={(e) =>
-                        updateField(r.id, "status", e.target.value)
-                      }
-                    >
-                      <option>Open</option>
-                      <option>In Progress</option>
-                      <option>Fixed</option>
-                      <option>Closed</option>
-                    </select>
-                  </td>
-
-                  <td className="p-2">
-                    {r.photo_url && (
-                      <img
-                        src={r.photo_url}
-                        className="w-16 h-16 object-cover rounded"
-                      />
-                    )}
-                  </td>
-
-                  <td className="p-2">{r.uploaded_by}</td>
-
-                  <td className="p-2">
-                    {new Date(r.updated_at).toLocaleString()}
-                  </td>
-
-                  <td className="p-2">
-                    <button
-                      onClick={() => deleteDefect(r.id)}
-                      className="bg-gray-200 px-3 py-1 rounded"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
