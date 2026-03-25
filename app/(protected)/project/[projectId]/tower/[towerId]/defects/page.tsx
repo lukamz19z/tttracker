@@ -24,8 +24,8 @@ export default function DefectsPage({
   const supabase = createSupabaseBrowser();
 
   const [rows, setRows] = useState<Defect[]>([]);
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
 
   const [form, setForm] = useState({
     member_number: "",
@@ -36,40 +36,57 @@ export default function DefectsPage({
     photo: null as File | null,
   });
 
+  // LOAD DEFECTS
   useEffect(() => {
-    load();
-  }, []);
+    if (!params?.towerId) return;
+    loadDefects();
+  }, [params.towerId]);
 
-  async function load() {
+  async function loadDefects() {
     setLoading(true);
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("tower_defects")
       .select("*")
       .eq("tower_id", params.towerId)
       .order("created_at", { ascending: false });
+
+    if (error) {
+      console.log("LOAD ERROR:", error.message);
+      alert(error.message);
+    }
 
     if (data) setRows(data);
 
     setLoading(false);
   }
 
+  // PHOTO UPLOAD
   async function uploadPhoto(file: File) {
-    const name = `${Date.now()}_${file.name}`;
+    const fileName = `${Date.now()}_${file.name}`;
 
-    await supabase.storage.from("defect-photos").upload(name, file);
+    const { error } = await supabase.storage
+      .from("defect-photos")
+      .upload(fileName, file);
+
+    if (error) {
+      alert(error.message);
+      return null;
+    }
 
     const { data } = supabase.storage
       .from("defect-photos")
-      .getPublicUrl(name);
+      .getPublicUrl(fileName);
 
     return data.publicUrl;
   }
 
-  async function save() {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  // SAVE DEFECT
+  async function saveDefect() {
+    if (!form.description) {
+      alert("Enter defect description");
+      return;
+    }
 
     let photoUrl = null;
 
@@ -77,7 +94,11 @@ export default function DefectsPage({
       photoUrl = await uploadPhoto(form.photo);
     }
 
-    await supabase.from("tower_defects").insert({
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const { error } = await supabase.from("tower_defects").insert({
       tower_id: params.towerId,
       member_number: form.member_number,
       segment: form.segment,
@@ -88,6 +109,12 @@ export default function DefectsPage({
       uploaded_by: user?.email,
     });
 
+    if (error) {
+      alert(error.message);
+      console.log(error);
+      return;
+    }
+
     setForm({
       member_number: "",
       segment: "",
@@ -97,11 +124,12 @@ export default function DefectsPage({
       photo: null,
     });
 
-    load();
+    loadDefects();
   }
 
+  // UPDATE FIELD INLINE
   async function updateField(id: string, field: string, value: any) {
-    await supabase
+    const { error } = await supabase
       .from("tower_defects")
       .update({
         [field]: value,
@@ -109,13 +137,23 @@ export default function DefectsPage({
       })
       .eq("id", id);
 
-    load();
+    if (error) alert(error.message);
+
+    loadDefects();
   }
 
-  async function remove(id: string) {
+  // DELETE
+  async function deleteDefect(id: string) {
     if (!confirm("Delete defect?")) return;
-    await supabase.from("tower_defects").delete().eq("id", id);
-    load();
+
+    const { error } = await supabase
+      .from("tower_defects")
+      .delete()
+      .eq("id", id);
+
+    if (error) alert(error.message);
+
+    loadDefects();
   }
 
   const filtered = rows.filter(
@@ -129,7 +167,7 @@ export default function DefectsPage({
     <div className="p-6 max-w-7xl">
       <h1 className="text-3xl font-bold mb-6">Tower Defects Register</h1>
 
-      {/* FORM */}
+      {/* LOG FORM */}
       <div className="bg-white border rounded-xl p-6 shadow mb-8">
         <h2 className="text-xl font-semibold mb-4">Log Defect</h2>
 
@@ -186,7 +224,7 @@ export default function DefectsPage({
           />
 
           <button
-            onClick={save}
+            onClick={saveDefect}
             className="bg-red-600 text-white rounded px-4"
           >
             Save
@@ -213,7 +251,7 @@ export default function DefectsPage({
 
       {/* TABLE */}
       {loading ? (
-        <p>Loading...</p>
+        <p>Loading defects...</p>
       ) : (
         <div className="overflow-x-auto bg-white border rounded-xl shadow">
           <table className="w-full text-sm">
@@ -282,7 +320,7 @@ export default function DefectsPage({
 
                   <td className="p-2">
                     <button
-                      onClick={() => remove(r.id)}
+                      onClick={() => deleteDefect(r.id)}
                       className="bg-gray-200 px-3 py-1 rounded"
                     >
                       Delete
