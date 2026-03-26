@@ -70,7 +70,7 @@ export default function TowerHeader({
       {/* ACTION BUTTONS */}
       <div className="flex gap-3 flex-wrap">
         <Link
-          href={`/project/${projectId}/tower/${towerId}/daily-dockets/new`}
+         href={`/project/${projectId}/tower/${towerId}/dockets/new`}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg"
         >
           Add Daily Docket
