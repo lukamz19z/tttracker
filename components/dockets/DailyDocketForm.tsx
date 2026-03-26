@@ -179,9 +179,11 @@ export default function DailyDocketForm({
     return Math.round(total);
   }, [progressRows]);
 
-  const displayProgress = useMemo(() => {
-    return Math.max(totalAssemblyPercent, totalErectionPercent);
-  }, [totalAssemblyPercent, totalErectionPercent]);
+const displayProgress = useMemo(() => {
+  return Math.round(
+    (totalAssemblyPercent * 0.5) + (totalErectionPercent * 0.5)
+  );
+}, [totalAssemblyPercent, totalErectionPercent]);
 
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
