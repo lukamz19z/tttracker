@@ -16,6 +16,7 @@ export default function TowerDocketsPage() {
   const [tower, setTower] = useState<any>(null);
   const [dockets, setDockets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
   useEffect(() => {
     load();
@@ -57,7 +58,7 @@ export default function TowerDocketsPage() {
   function getProgress(d: any) {
     const a = Number(d.assembly_percent || 0);
     const e = Number(d.erection_percent || 0);
-    return Math.max(a, e);
+    return Math.round(a * 0.5 + e * 0.5);
   }
 
   function getProgressColor(progress: number) {
@@ -68,12 +69,13 @@ export default function TowerDocketsPage() {
   }
 
   function getSignedBadge(d: any) {
-    if (d.client_rep_name && d.signed_date)
+    if (d.client_rep_name && d.signed_date) {
       return (
         <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-semibold">
           Client Signed
         </span>
       );
+    }
 
     return (
       <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-semibold">
@@ -113,11 +115,15 @@ export default function TowerDocketsPage() {
         <div className="space-y-4">
           {dockets.map((d) => {
             const progress = getProgress(d);
+            const isOpen = openDocketId === d.id;
 
             return (
               <div
                 key={d.id}
-                className="border rounded-xl p-5 hover:bg-slate-50 transition"
+                onClick={() =>
+                  setOpenDocketId(isOpen ? null : d.id)
+                }
+                className="border rounded-xl p-5 hover:bg-slate-50 transition cursor-pointer"
               >
                 <div className="flex justify-between items-start">
 
@@ -144,13 +150,17 @@ export default function TowerDocketsPage() {
                   <div className="flex gap-2">
                     <Link
                       href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}/edit`}
+                      onClick={(e) => e.stopPropagation()}
                       className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm"
                     >
                       Edit
                     </Link>
 
                     <button
-                      onClick={() => deleteDocket(d.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteDocket(d.id);
+                      }}
                       className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm"
                     >
                       Delete
@@ -159,7 +169,7 @@ export default function TowerDocketsPage() {
 
                 </div>
 
-                {/* PROGRESS BAR */}
+                {/* PROGRESS */}
                 <div className="mt-4">
                   <div className="flex justify-between text-xs text-slate-500 mb-1">
                     <div>Assembly {d.assembly_percent || 0}%</div>
@@ -171,13 +181,66 @@ export default function TowerDocketsPage() {
 
                   <div className="w-full bg-slate-200 rounded-full h-3">
                     <div
-                      className={`${getProgressColor(
-                        progress
-                      )} h-3 rounded-full`}
+                      className={`${getProgressColor(progress)} h-3 rounded-full`}
                       style={{ width: `${progress}%` }}
                     />
                   </div>
                 </div>
+
+                {/* EXPANDED VIEW */}
+                {isOpen && (
+                  <div className="mt-6 border-t pt-4 space-y-4">
+
+                    <div>
+                      <div className="text-sm font-semibold mb-2">Delays</div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div>Weather: {d.weather_delay_hours || 0}h</div>
+                        <div>Lightning: {d.lightning_delay_hours || 0}h</div>
+                        <div>Toolbox: {d.toolbox_delay_hours || 0}h</div>
+                        <div>Other: {d.other_delay_hours || 0}h</div>
+                      </div>
+                    </div>
+
+                    {d.delays_comments && (
+                      <div>
+                        <div className="text-sm font-semibold mb-1">Comments</div>
+                        <div className="text-sm text-slate-600">
+                          {d.delays_comments}
+                        </div>
+                      </div>
+                    )}
+
+                    {d.missing_items_bolts && (
+                      <div>
+                        <div className="text-sm font-semibold mb-1">Missing Items</div>
+                        <div className="text-sm text-slate-600">
+                          {d.missing_items_bolts}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="text-sm font-semibold mb-1">Sign Off</div>
+                      <div className="text-sm">
+                        BC Rep: {d.bc_rep_name || "-"} <br />
+                        Client Rep: {d.client_rep_name || "-"} <br />
+                        Signed Date: {d.signed_date || "-"}
+                      </div>
+                    </div>
+
+                    {d.docket_file_url && (
+                      <a
+                        href={d.docket_file_url}
+                        target="_blank"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-blue-600 text-sm font-semibold"
+                      >
+                        View Uploaded Docket →
+                      </a>
+                    )}
+
+                  </div>
+                )}
 
               </div>
             );
