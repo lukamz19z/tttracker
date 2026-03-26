@@ -169,22 +169,56 @@ export default function TowerDocketsPage() {
 
                 </div>
 
-                {/* PROGRESS */}
-                <div className="mt-4">
-                  <div className="flex justify-between text-xs text-slate-500 mb-1">
-                    <div>Assembly {d.assembly_percent || 0}%</div>
-                    <div>Erection {d.erection_percent || 0}%</div>
-                    <div className="font-semibold text-slate-700">
-                      Used Progress {progress}%
+                {/* 🔥 NEW MULTI PROGRESS BARS */}
+                <div className="mt-4 space-y-2">
+
+                  {/* OVERALL */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-500 mb-1">
+                      <div className="font-semibold text-slate-700">
+                        Overall Progress
+                      </div>
+                      <div>{progress}%</div>
+                    </div>
+
+                    <div className="w-full bg-slate-200 rounded-full h-3">
+                      <div
+                        className={`${getProgressColor(progress)} h-3 rounded-full`}
+                        style={{ width: `${progress}%` }}
+                      />
                     </div>
                   </div>
 
-                  <div className="w-full bg-slate-200 rounded-full h-3">
-                    <div
-                      className={`${getProgressColor(progress)} h-3 rounded-full`}
-                      style={{ width: `${progress}%` }}
-                    />
+                  {/* ASSEMBLY */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                      <div>Assembly</div>
+                      <div>{d.assembly_percent || 0}%</div>
+                    </div>
+
+                    <div className="w-full bg-slate-100 rounded-full h-2">
+                      <div
+                        className="bg-blue-500 h-2 rounded-full"
+                        style={{ width: `${d.assembly_percent || 0}%` }}
+                      />
+                    </div>
                   </div>
+
+                  {/* ERECTION */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                      <div>Erection</div>
+                      <div>{d.erection_percent || 0}%</div>
+                    </div>
+
+                    <div className="w-full bg-slate-100 rounded-full h-2">
+                      <div
+                        className="bg-emerald-500 h-2 rounded-full"
+                        style={{ width: `${d.erection_percent || 0}%` }}
+                      />
+                    </div>
+                  </div>
+
                 </div>
 
                 {/* EXPANDED VIEW */}

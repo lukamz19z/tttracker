@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -18,6 +19,11 @@ export default function TowerHeader({
 
   const towerId = tower?.id;
 
+  const [progress, setProgress] = useState<number>(0);
+  const [totalHours, setTotalHours] = useState<number>(0);
+  const [openDefects, setOpenDefects] = useState<number>(0);
+  const [deliveryProgress, setDeliveryProgress] = useState<number>(0);
+
   const towerLabel =
     tower?.tower_number ||
     tower?.structure_number ||
@@ -26,7 +32,79 @@ export default function TowerHeader({
     "Tower";
 
   const status = tower?.status || "-";
-  const progress = tower?.progress ?? "100%";
+
+  useEffect(() => {
+    if (!towerId) return;
+
+    loadHeaderData();
+  }, [towerId]);
+
+  async function loadHeaderData() {
+    await Promise.all([
+      loadProgress(),
+      loadHours(),
+      loadDefects(),
+      loadDeliveries(),
+    ]);
+  }
+
+  // 🔥 PROGRESS (50/50 from dockets)
+  async function loadProgress() {
+    const { data } = await supabase
+      .from("tower_daily_dockets")
+      .select("assembly_percent, erection_percent")
+      .eq("tower_id", towerId);
+
+    if (!data) return;
+
+    const maxProgress = data.reduce((max, d) => {
+      const a = Number(d.assembly_percent || 0);
+      const e = Number(d.erection_percent || 0);
+
+      const weighted = Math.round(a * 0.5 + e * 0.5);
+      return Math.max(max, weighted);
+    }, 0);
+
+    setProgress(maxProgress);
+  }
+
+  // 🔥 TOTAL HOURS
+  async function loadHours() {
+    const { data } = await supabase
+      .from("tower_docket_labour")
+      .select("total_hours")
+      .eq("tower_id", towerId);
+
+    const sum =
+      data?.reduce((acc, row) => acc + Number(row.total_hours || 0), 0) || 0;
+
+    setTotalHours(Math.round(sum));
+  }
+
+  // 🔥 DEFECTS
+  async function loadDefects() {
+    const { data } = await supabase
+      .from("tower_defects")
+      .select("status")
+      .eq("tower_id", towerId);
+
+    const open = data?.filter((d) => d.status !== "Closed").length || 0;
+    setOpenDefects(open);
+  }
+
+  // 🔥 DELIVERY PROGRESS (simple %)
+  async function loadDeliveries() {
+    const { data } = await supabase
+      .from("tower_deliveries")
+      .select("delivered");
+
+    if (!data || data.length === 0) return;
+
+    const delivered = data.filter((d) => d.delivered === true).length;
+    const percent = Math.round((delivered / data.length) * 100);
+
+    setDeliveryProgress(percent);
+  }
 
   function getCoverUrl() {
     if (!tower?.cover_photo_path) return null;
@@ -40,7 +118,8 @@ export default function TowerHeader({
 
   return (
     <div className="bg-white border rounded-2xl p-6 space-y-6">
-      {/* TOP ROW */}
+
+      {/* TOP */}
       <div className="flex justify-between gap-6 flex-wrap">
         <div>
           <div className="text-sm text-slate-500">Tower</div>
@@ -50,27 +129,28 @@ export default function TowerHeader({
           </div>
         </div>
 
+        {/* KPI CARDS */}
         <div className="flex gap-3 flex-wrap">
           <InfoCard label="Status" value={status} />
-          <InfoCard label="Progress" value={String(progress)} />
+          <InfoCard label="Progress" value={`${progress}%`} />
+          <InfoCard label="Hours" value={`${totalHours}h`} />
+          <InfoCard label="Defects" value={`${openDefects}`} />
+          <InfoCard label="Steel" value={`${deliveryProgress}%`} />
           <InfoCard label="Last Docket" value={latestDate || "-"} />
         </div>
       </div>
 
-      {/* ⭐ COVER PHOTO */}
+      {/* COVER */}
       {coverUrl && (
         <div className="rounded-2xl overflow-hidden border bg-slate-100">
-          <img
-            src={coverUrl}
-            className="w-full h-[260px] object-cover"
-          />
+          <img src={coverUrl} className="w-full h-[260px] object-cover" />
         </div>
       )}
 
-      {/* ACTION BUTTONS */}
+      {/* ACTIONS */}
       <div className="flex gap-3 flex-wrap">
         <Link
-         href={`/project/${projectId}/tower/${towerId}/dockets/new`}
+          href={`/project/${projectId}/tower/${towerId}/dockets/new`}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg"
         >
           Add Daily Docket
@@ -97,48 +177,35 @@ export default function TowerHeader({
           Overview
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/daily-dockets`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/dockets`}>
           Daily Dockets
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/workpack`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/workpack`}>
           Workpack
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/modifications`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/modifications`}>
           Modifications
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/defects`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/defects`}>
           Defects
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/materials`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/materials`}>
           Materials
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/deliveries`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/deliveries`}>
           Deliveries
         </TabLink>
 
-        <TabLink
-          href={`/project/${projectId}/tower/${towerId}/photos`}
-        >
+        <TabLink href={`/project/${projectId}/tower/${towerId}/photos`}>
           Photos
         </TabLink>
       </div>
+
     </div>
   );
 }
