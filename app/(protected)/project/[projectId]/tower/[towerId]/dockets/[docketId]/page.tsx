@@ -63,36 +63,47 @@ export default function DailyDocketPage() {
   const [progress, setProgress] = useState<Progress[]>([]);
   const [loading, setLoading] = useState(true);
   const [signing, setSigning] = useState(false);
+  const [showLabour, setShowLabour] = useState(false);
 
+  // ✅ SAFE EFFECT (no warnings)
   useEffect(() => {
-    load();
+    let isMounted = true;
+
+    const fetchData = async () => {
+      setLoading(true);
+
+      const { data: d } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("id", docketId)
+        .single();
+
+      const { data: l } = await supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      const { data: p } = await supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (!isMounted) return;
+
+      setDocket(d || null);
+      setLabour(l || []);
+      setProgress(p || []);
+      setLoading(false);
+    };
+
+    fetchData();
+
+    return () => {
+      isMounted = false;
+    };
   }, [docketId]);
 
-  async function load() {
-    setLoading(true);
-
-    const { data: d } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("id", docketId)
-      .single();
-
-    const { data: l } = await supabase
-      .from("tower_docket_labour")
-      .select("*")
-      .eq("docket_id", docketId);
-
-    const { data: p } = await supabase
-      .from("tower_docket_progress")
-      .select("*")
-      .eq("docket_id", docketId);
-
-    setDocket(d || null);
-    setLabour(l || []);
-    setProgress(p || []);
-    setLoading(false);
-  }
-
+  // ✅ SIGN FUNCTION
   async function clientSignDocket() {
     if (!docket) return;
 
@@ -112,9 +123,7 @@ export default function DailyDocketPage() {
 
     const { error } = await supabase
       .from("tower_daily_dockets")
-      .update({
-        signed_date: today,
-      })
+      .update({ signed_date: today })
       .eq("id", docketId);
 
     if (error) {
@@ -123,8 +132,8 @@ export default function DailyDocketPage() {
       return;
     }
 
-    await load();
-    setSigning(false);
+    // ✅ reload after signing
+    setTimeout(() => location.reload(), 200);
   }
 
   if (loading) return <div className="p-8">Loading docket...</div>;
@@ -133,8 +142,14 @@ export default function DailyDocketPage() {
   const clientSigned = isClientSignedDocket(docket);
   const bcSigned = Boolean(docket.bc_rep_name?.trim());
 
+  const totalHours = labour.reduce(
+    (sum, row) => sum + (row.total_hours || 0),
+    0
+  );
+
   return (
     <div className="p-8 max-w-6xl space-y-6">
+      {/* HEADER */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-slate-500 text-sm">Daily Docket</p>
@@ -176,163 +191,55 @@ export default function DailyDocketPage() {
           )}
 
           <Link
-            href={`/project/${projectId}/tower/${towerId}/dockets`}
-            className="border px-4 py-2 rounded-lg"
+            href={`/project/${projectId}/tower/${towerId}/dockets/new?prefill=${docketId}`}
+            className="bg-slate-700 text-white px-4 py-2 rounded-lg"
           >
-            Back to Dockets
-          </Link>
-
-          <Link
-            href={`/project/${projectId}/tower/${towerId}`}
-            className="border px-4 py-2 rounded-lg"
-          >
-            Back to Tower
-          </Link>
-
-          <Link
-            href={`/project/${projectId}/towers`}
-            className="border px-4 py-2 rounded-lg"
-          >
-            Back to Tower List
+            Create Next Docket (Prefill)
           </Link>
         </div>
       </div>
 
-      <section className="bg-white border rounded-2xl p-6 grid md:grid-cols-2 gap-4">
-        <Info label="Crew" value={docket.crew} />
-        <Info label="Leading Hand" value={docket.leading_hand} />
-        <Info label="Weather" value={docket.weather} />
-        <Info
-          label="Total Assembly"
-          value={docket.assembly_percent !== null ? `${docket.assembly_percent}%` : "-"}
-        />
-        <Info
-          label="Total Erection"
-          value={docket.erection_percent !== null ? `${docket.erection_percent}%` : "-"}
-        />
-        <Info label="Missing Items / Bolts" value={docket.missing_items_bolts} />
-      </section>
-
+      {/* LABOUR */}
       <section className="bg-white border rounded-2xl p-6">
-        <h2 className="text-xl font-semibold mb-4">Section Progress</h2>
-        <div className="border rounded-xl overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-slate-100 text-left">
-              <tr>
-                <th className="p-3">Section</th>
-                <th className="p-3">Assembly %</th>
-                <th className="p-3">Erection %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {progress.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="p-3">{row.section_label || "-"}</td>
-                  <td className="p-3">{row.assembled_qty ?? 0}%</td>
-                  <td className="p-3">{row.erected_qty ?? 0}%</td>
-                </tr>
-              ))}
-              {progress.length === 0 && (
-                <tr className="border-t">
-                  <td colSpan={3} className="p-4 text-slate-500">
-                    No progress rows saved.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Labour</h2>
+
+          <button
+            onClick={() => setShowLabour(!showLabour)}
+            className="text-sm bg-slate-700 text-white px-3 py-1 rounded-lg"
+          >
+            {showLabour ? "Hide" : "View"}
+          </button>
         </div>
-      </section>
 
-      <section className="bg-white border rounded-2xl p-6">
-        <h2 className="text-xl font-semibold mb-4">Labour</h2>
-        <div className="border rounded-xl overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-slate-100 text-left">
+        <div className="mb-4 text-sm text-slate-600">
+          Total Manhours:{" "}
+          <span className="font-semibold">{totalHours.toFixed(1)} hrs</span>
+        </div>
+
+        {showLabour && (
+          <table className="w-full border rounded-xl overflow-hidden">
+            <thead className="bg-slate-100">
               <tr>
-                <th className="p-3">Worker Name</th>
+                <th className="p-3">Worker</th>
                 <th className="p-3">Time In</th>
                 <th className="p-3">Time Out</th>
-                <th className="p-3">Total Hours</th>
+                <th className="p-3">Hours</th>
               </tr>
             </thead>
             <tbody>
               {labour.map((row) => (
                 <tr key={row.id} className="border-t">
-                  <td className="p-3">{row.worker_name || "-"}</td>
-                  <td className="p-3">{row.time_in || "-"}</td>
-                  <td className="p-3">{row.time_out || "-"}</td>
-                  <td className="p-3">{row.total_hours ?? "-"}</td>
+                  <td className="p-3">{row.worker_name}</td>
+                  <td className="p-3">{row.time_in}</td>
+                  <td className="p-3">{row.time_out}</td>
+                  <td className="p-3">{row.total_hours}</td>
                 </tr>
               ))}
-              {labour.length === 0 && (
-                <tr className="border-t">
-                  <td colSpan={4} className="p-4 text-slate-500">
-                    No labour rows saved.
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
-        </div>
+        )}
       </section>
-
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Delays & Issues</h2>
-
-        <div className="grid md:grid-cols-2 gap-4">
-          <Info label="Weather Delay" value={formatHours(docket.weather_delay_hours)} />
-          <Info label="Lightning Delay" value={formatHours(docket.lightning_delay_hours)} />
-          <Info label="Toolbox Delay" value={formatHours(docket.toolbox_delay_hours)} />
-          <Info label="Other Delay" value={formatHours(docket.other_delay_hours)} />
-          <Info label="Other Delay Reason" value={docket.other_delay_reason} />
-          <Info label="Missing Items / Bolts" value={docket.missing_items_bolts} />
-        </div>
-
-        <div>
-          <p className="text-sm text-slate-500">Delay / Site Comments</p>
-          <p className="font-semibold">{docket.delays_comments || "-"}</p>
-        </div>
-      </section>
-
-      <section className="bg-white border rounded-2xl p-6 grid md:grid-cols-3 gap-4">
-        <Info label="BC Rep Name" value={docket.bc_rep_name} />
-        <Info label="Client Rep Name" value={docket.client_rep_name} />
-        <Info label="Signed Date" value={docket.signed_date} />
-      </section>
-
-      {docket.docket_file_url && (
-        <div>
-          <a
-            href={docket.docket_file_url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block bg-blue-600 text-white px-5 py-3 rounded-xl"
-          >
-            Open Uploaded Docket
-          </a>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatHours(value: number | null) {
-  if (value === null || value === undefined) return "-";
-  return `${value}h`;
-}
-
-function Info({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number | null | undefined;
-}) {
-  return (
-    <div>
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className="font-semibold">{value || "-"}</p>
     </div>
   );
 }
