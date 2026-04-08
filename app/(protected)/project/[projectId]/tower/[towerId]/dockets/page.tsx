@@ -14,12 +14,12 @@ export default function TowerDocketsPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
-  const [tower, setTower] = useState(null);
+  const [tower, setTower] = useState<any>(null);
   const [dockets, setDockets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
-  // ✅ FIXED EFFECT (no warning)
+  // ✅ FIXED EFFECT
   useEffect(() => {
     let isMounted = true;
 
@@ -61,7 +61,6 @@ export default function TowerDocketsPage() {
       .delete()
       .eq("id", id);
 
-    // ✅ update state instead of reload
     setDockets((prev) => prev.filter((d: any) => d.id !== id));
   }
 
@@ -158,6 +157,16 @@ export default function TowerDocketsPage() {
                   </div>
 
                   <div className="flex gap-2">
+                    
+                    {/* 👁 VIEW BUTTON */}
+                    <Link
+                      href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="bg-slate-700 text-white px-3 py-1 rounded-lg text-sm"
+                    >
+                      View
+                    </Link>
+
                     <Link
                       href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}/edit`}
                       onClick={(e) => e.stopPropagation()}
@@ -175,32 +184,84 @@ export default function TowerDocketsPage() {
                     >
                       Delete
                     </button>
+
                   </div>
 
                 </div>
 
-                {/* PROGRESS */}
-                <div className="mt-4">
-                  <div className="flex justify-between text-xs text-slate-500 mb-1">
-                    <div className="font-semibold text-slate-700">
-                      Overall Progress
+                {/* 🔥 FULL PROGRESS SECTION (RESTORED) */}
+                <div className="mt-4 space-y-2">
+
+                  {/* OVERALL */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-500 mb-1">
+                      <div className="font-semibold text-slate-700">
+                        Overall Progress
+                      </div>
+                      <div>{progress}%</div>
                     </div>
-                    <div>{progress}%</div>
+
+                    <div className="w-full bg-slate-200 rounded-full h-3">
+                      <div
+                        className={`${getProgressColor(progress)} h-3 rounded-full`}
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
                   </div>
 
-                  <div className="w-full bg-slate-200 rounded-full h-3">
-                    <div
-                      className={`${getProgressColor(progress)} h-3 rounded-full`}
-                      style={{ width: `${progress}%` }}
-                    />
+                  {/* ASSEMBLY */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                      <div>Assembly</div>
+                      <div>{d.assembly_percent || 0}%</div>
+                    </div>
+
+                    <div className="w-full bg-slate-100 rounded-full h-2">
+                      <div
+                        className="bg-blue-500 h-2 rounded-full"
+                        style={{ width: `${d.assembly_percent || 0}%` }}
+                      />
+                    </div>
                   </div>
+
+                  {/* ERECTION */}
+                  <div>
+                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                      <div>Erection</div>
+                      <div>{d.erection_percent || 0}%</div>
+                    </div>
+
+                    <div className="w-full bg-slate-100 rounded-full h-2">
+                      <div
+                        className="bg-emerald-500 h-2 rounded-full"
+                        style={{ width: `${d.erection_percent || 0}%` }}
+                      />
+                    </div>
+                  </div>
+
                 </div>
 
-                {/* EXPANDED */}
+                {/* EXPANDED VIEW */}
                 {isOpen && (
-                  <div className="mt-6 border-t pt-4 space-y-2 text-sm">
-                    BC Rep: {d.bc_rep_name || "-"} <br />
-                    Client Rep: {d.client_rep_name || "-"}
+                  <div className="mt-6 border-t pt-4 space-y-4">
+
+                    <div className="text-sm">
+                      BC Rep: {d.bc_rep_name || "-"} <br />
+                      Client Rep: {d.client_rep_name || "-"} <br />
+                      Signed Date: {d.signed_date || "-"}
+                    </div>
+
+                    {d.docket_file_url && (
+                      <a
+                        href={d.docket_file_url}
+                        target="_blank"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-blue-600 text-sm font-semibold"
+                      >
+                        View Uploaded Docket →
+                      </a>
+                    )}
+
                   </div>
                 )}
 
