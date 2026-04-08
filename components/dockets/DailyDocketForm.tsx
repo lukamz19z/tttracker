@@ -32,12 +32,18 @@ export default function DailyDocketForm({
   projectId,
   towerId,
   docketId,
+  initialDocket,
+  initialLabourRows,
+  initialProgressRows,
 }: {
   mode: "create" | "edit" | "view";
   projectId: string;
   towerId: string;
   docketId?: string;
-}) {
+  initialDocket?: any;              // ✅ ADDED
+  initialLabourRows?: any[];        // ✅ ADDED
+  initialProgressRows?: any[];      // ✅ ADDED
+}){
   const isView = mode === "view";
   const router = useRouter();
   const supabase = createSupabaseBrowser();
@@ -61,65 +67,98 @@ export default function DailyDocketForm({
   const [saving, setSaving] = useState(false);
 
   // 🔥 LOAD EXISTING DOCKET (VIEW / EDIT)
-  useEffect(() => {
-    if (!docketId) return;
+ useEffect(() => {
+  if (!docketId && !initialDocket) return;
 
-    async function loadDocket() {
-      try {
-        const { data } = await supabase
-          .from("tower_daily_dockets")
-          .select("*")
-          .eq("id", docketId)
-          .single();
+  async function loadDocket() {
 
-        if (!data) return;
+    // ✅ ADD THIS BLOCK RIGHT HERE
+    if (initialDocket) {
+      setDocketDate(initialDocket.docket_date || "");
+      setCrewName(initialDocket.crew || "");
+      setLeadingHand(initialDocket.leading_hand || "");
+      setWeather(initialDocket.weather || "");
 
-        setDocketDate(data.docket_date || "");
-        setCrewName(data.crew || "");
-        setLeadingHand(data.leading_hand || "");
-        setWeather(data.weather || "");
+      setBcRepName(initialDocket.bc_rep_name || "");
+      setClientRepName(initialDocket.client_rep_name || "");
+      setSignedDate(initialDocket.signed_date || "");
 
-        setBcRepName(data.bc_rep_name || "");
-        setClientRepName(data.client_rep_name || "");
-        setSignedDate(data.signed_date || "");
-
-        const { data: labour } = await supabase
-          .from("tower_docket_labour")
-          .select("*")
-          .eq("docket_id", docketId);
-
-        if (labour?.length) {
-          setLabourRows(
-            labour.map((r) => ({
-              worker_name: r.worker_name || "",
-              time_in: r.time_in || "",
-              time_out: r.time_out || "",
-              total_hours: String(r.total_hours || ""),
-            }))
-          );
-        }
-
-        const { data: progress } = await supabase
-          .from("tower_docket_progress")
-          .select("*")
-          .eq("docket_id", docketId);
-
-        if (progress?.length) {
-          setProgressRows(
-            progress.map((r) => ({
-              section_label: r.section_label,
-              assembled_qty: String(r.assembled_qty || ""),
-              erected_qty: String(r.erected_qty || ""),
-            }))
-          );
-        }
-      } catch (err) {
-        console.error(err);
+      if (initialLabourRows?.length) {
+        setLabourRows(
+          initialLabourRows.map((r) => ({
+            worker_name: r.worker_name || "",
+            time_in: r.time_in || "",
+            time_out: r.time_out || "",
+            total_hours: String(r.total_hours || ""),
+          }))
+        );
       }
+
+      if (initialProgressRows?.length) {
+        setProgressRows(
+          initialProgressRows.map((r) => ({
+            section_label: r.section_label,
+            assembled_qty: String(r.assembled_qty || ""),
+            erected_qty: String(r.erected_qty || ""),
+          }))
+        );
+      }
+
+      return; // 🚨 VERY IMPORTANT (stops duplicate fetch)
     }
 
-    loadDocket();
-  }, [docketId]);
+    // 🔽 YOUR EXISTING CODE CONTINUES (DO NOT REMOVE)
+    const { data } = await supabase
+      .from("tower_daily_dockets")
+      .select("*")
+      .eq("id", docketId)
+      .single();
+
+    if (!data) return;
+
+    setDocketDate(data.docket_date || "");
+    setCrewName(data.crew || "");
+    setLeadingHand(data.leading_hand || "");
+    setWeather(data.weather || "");
+
+    setBcRepName(data.bc_rep_name || "");
+    setClientRepName(data.client_rep_name || "");
+    setSignedDate(data.signed_date || "");
+
+    const { data: labour } = await supabase
+      .from("tower_docket_labour")
+      .select("*")
+      .eq("docket_id", docketId);
+
+    if (labour?.length) {
+      setLabourRows(
+        labour.map((r) => ({
+          worker_name: r.worker_name || "",
+          time_in: r.time_in || "",
+          time_out: r.time_out || "",
+          total_hours: String(r.total_hours || ""),
+        }))
+      );
+    }
+
+    const { data: progress } = await supabase
+      .from("tower_docket_progress")
+      .select("*")
+      .eq("docket_id", docketId);
+
+    if (progress?.length) {
+      setProgressRows(
+        progress.map((r) => ({
+          section_label: r.section_label,
+          assembled_qty: String(r.assembled_qty || ""),
+          erected_qty: String(r.erected_qty || ""),
+        }))
+      );
+    }
+  }
+
+  loadDocket();
+}, [docketId, initialDocket]);
 
   // 🔥 PREFILL (WITH DATE INCREMENT)
   async function prefillFromLastDocket() {
