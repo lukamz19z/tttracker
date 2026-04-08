@@ -563,7 +563,7 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
     await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
-    router.refresh();
+ 
   }
 
   async function handleUpdate() {
