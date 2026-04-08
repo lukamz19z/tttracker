@@ -19,7 +19,6 @@ export default function TowerDocketsPage() {
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
-  // ✅ FIXED EFFECT
   useEffect(() => {
     let isMounted = true;
 
@@ -50,16 +49,13 @@ export default function TowerDocketsPage() {
     return () => {
       isMounted = false;
     };
-  }, [towerId]);
+  }, [towerId, supabase]);
 
   async function deleteDocket(id: string) {
     const confirmDelete = confirm("Delete this docket?");
     if (!confirmDelete) return;
 
-    await supabase
-      .from("tower_daily_dockets")
-      .delete()
-      .eq("id", id);
+    await supabase.from("tower_daily_dockets").delete().eq("id", id);
 
     setDockets((prev) => prev.filter((d: any) => d.id !== id));
   }
@@ -78,10 +74,21 @@ export default function TowerDocketsPage() {
   }
 
   function getSignedBadge(d: any) {
-    if (d.client_rep_name && d.signed_date) {
+    const bcSigned = !!d.bc_rep_name;
+    const clientSigned = !!d.client_rep_name && !!d.signed_date;
+
+    if (clientSigned) {
       return (
         <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-semibold">
-          Client Signed
+          Closed
+        </span>
+      );
+    }
+
+    if (bcSigned) {
+      return (
+        <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold">
+          BC Signed
         </span>
       );
     }
@@ -97,15 +104,11 @@ export default function TowerDocketsPage() {
 
   return (
     <div className="p-8 space-y-6">
-
       <TowerHeader projectId={projectId} tower={tower} />
 
       <div className="bg-white border rounded-2xl p-6 shadow-sm">
-
         <div className="flex justify-between items-center mb-6">
-          <div className="text-xl font-semibold">
-            Daily Dockets Register
-          </div>
+          <div className="text-xl font-semibold">Daily Dockets Register</div>
 
           <Link
             href={`/project/${projectId}/tower/${towerId}/dockets/new`}
@@ -129,20 +132,13 @@ export default function TowerDocketsPage() {
             return (
               <div
                 key={d.id}
-                onClick={() =>
-                  setOpenDocketId(isOpen ? null : d.id)
-                }
+                onClick={() => setOpenDocketId(isOpen ? null : d.id)}
                 className="border rounded-xl p-5 hover:bg-slate-50 transition cursor-pointer"
               >
                 <div className="flex justify-between items-start">
-
                   <div className="space-y-2">
-
                     <div className="flex items-center gap-3">
-                      <div className="text-lg font-semibold">
-                        {d.docket_date}
-                      </div>
-
+                      <div className="text-lg font-semibold">{d.docket_date}</div>
                       {getSignedBadge(d)}
                     </div>
 
@@ -153,14 +149,11 @@ export default function TowerDocketsPage() {
                     <div className="text-sm text-slate-500">
                       Weather: {d.weather || "-"}
                     </div>
-
                   </div>
 
                   <div className="flex gap-2">
-                    
-                    {/* 👁 VIEW BUTTON */}
                     <Link
-                      href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}`}
+                      href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}?mode=view`}
                       onClick={(e) => e.stopPropagation()}
                       className="bg-slate-700 text-white px-3 py-1 rounded-lg text-sm"
                     >
@@ -184,15 +177,10 @@ export default function TowerDocketsPage() {
                     >
                       Delete
                     </button>
-
                   </div>
-
                 </div>
 
-                {/* 🔥 FULL PROGRESS SECTION (RESTORED) */}
                 <div className="mt-4 space-y-2">
-
-                  {/* OVERALL */}
                   <div>
                     <div className="flex justify-between text-xs text-slate-500 mb-1">
                       <div className="font-semibold text-slate-700">
@@ -209,7 +197,6 @@ export default function TowerDocketsPage() {
                     </div>
                   </div>
 
-                  {/* ASSEMBLY */}
                   <div>
                     <div className="flex justify-between text-xs text-slate-400 mb-1">
                       <div>Assembly</div>
@@ -224,7 +211,6 @@ export default function TowerDocketsPage() {
                     </div>
                   </div>
 
-                  {/* ERECTION */}
                   <div>
                     <div className="flex justify-between text-xs text-slate-400 mb-1">
                       <div>Erection</div>
@@ -238,13 +224,10 @@ export default function TowerDocketsPage() {
                       />
                     </div>
                   </div>
-
                 </div>
 
-                {/* EXPANDED VIEW */}
                 {isOpen && (
                   <div className="mt-6 border-t pt-4 space-y-4">
-
                     <div className="text-sm">
                       BC Rep: {d.bc_rep_name || "-"} <br />
                       Client Rep: {d.client_rep_name || "-"} <br />
@@ -255,21 +238,19 @@ export default function TowerDocketsPage() {
                       <a
                         href={d.docket_file_url}
                         target="_blank"
+                        rel="noreferrer"
                         onClick={(e) => e.stopPropagation()}
                         className="text-blue-600 text-sm font-semibold"
                       >
                         View Uploaded Docket →
                       </a>
                     )}
-
                   </div>
                 )}
-
               </div>
             );
           })}
         </div>
-
       </div>
     </div>
   );
