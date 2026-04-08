@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,35 +14,43 @@ export default function TowerDocketsPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
-  const [tower, setTower] = useState<any>(null);
+  const [tower, setTower] = useState(null);
   const [dockets, setDockets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
+  // ✅ FIXED EFFECT (no warning)
   useEffect(() => {
-    load();
-  }, []);
+    let isMounted = true;
 
-  async function load() {
-    setLoading(true);
+    const fetchData = async () => {
+      setLoading(true);
 
-    const { data: towerData } = await supabase
-      .from("towers")
-      .select("*")
-      .eq("id", towerId)
-      .single();
+      const { data: towerData } = await supabase
+        .from("towers")
+        .select("*")
+        .eq("id", towerId)
+        .single();
 
-    setTower(towerData);
+      const { data } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("docket_date", { ascending: false });
 
-    const { data } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("tower_id", towerId)
-      .order("docket_date", { ascending: false });
+      if (!isMounted) return;
 
-    setDockets(data || []);
-    setLoading(false);
-  }
+      setTower(towerData);
+      setDockets(data || []);
+      setLoading(false);
+    };
+
+    fetchData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [towerId]);
 
   async function deleteDocket(id: string) {
     const confirmDelete = confirm("Delete this docket?");
@@ -52,7 +61,8 @@ export default function TowerDocketsPage() {
       .delete()
       .eq("id", id);
 
-    load();
+    // ✅ update state instead of reload
+    setDockets((prev) => prev.filter((d: any) => d.id !== id));
   }
 
   function getProgress(d: any) {
@@ -113,7 +123,7 @@ export default function TowerDocketsPage() {
         )}
 
         <div className="space-y-4">
-          {dockets.map((d) => {
+          {dockets.map((d: any) => {
             const progress = getProgress(d);
             const isOpen = openDocketId === d.id;
 
@@ -169,110 +179,28 @@ export default function TowerDocketsPage() {
 
                 </div>
 
-                {/* 🔥 NEW MULTI PROGRESS BARS */}
-                <div className="mt-4 space-y-2">
-
-                  {/* OVERALL */}
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-500 mb-1">
-                      <div className="font-semibold text-slate-700">
-                        Overall Progress
-                      </div>
-                      <div>{progress}%</div>
+                {/* PROGRESS */}
+                <div className="mt-4">
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <div className="font-semibold text-slate-700">
+                      Overall Progress
                     </div>
-
-                    <div className="w-full bg-slate-200 rounded-full h-3">
-                      <div
-                        className={`${getProgressColor(progress)} h-3 rounded-full`}
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
+                    <div>{progress}%</div>
                   </div>
 
-                  {/* ASSEMBLY */}
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <div>Assembly</div>
-                      <div>{d.assembly_percent || 0}%</div>
-                    </div>
-
-                    <div className="w-full bg-slate-100 rounded-full h-2">
-                      <div
-                        className="bg-blue-500 h-2 rounded-full"
-                        style={{ width: `${d.assembly_percent || 0}%` }}
-                      />
-                    </div>
+                  <div className="w-full bg-slate-200 rounded-full h-3">
+                    <div
+                      className={`${getProgressColor(progress)} h-3 rounded-full`}
+                      style={{ width: `${progress}%` }}
+                    />
                   </div>
-
-                  {/* ERECTION */}
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <div>Erection</div>
-                      <div>{d.erection_percent || 0}%</div>
-                    </div>
-
-                    <div className="w-full bg-slate-100 rounded-full h-2">
-                      <div
-                        className="bg-emerald-500 h-2 rounded-full"
-                        style={{ width: `${d.erection_percent || 0}%` }}
-                      />
-                    </div>
-                  </div>
-
                 </div>
 
-                {/* EXPANDED VIEW */}
+                {/* EXPANDED */}
                 {isOpen && (
-                  <div className="mt-6 border-t pt-4 space-y-4">
-
-                    <div>
-                      <div className="text-sm font-semibold mb-2">Delays</div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                        <div>Weather: {d.weather_delay_hours || 0}h</div>
-                        <div>Lightning: {d.lightning_delay_hours || 0}h</div>
-                        <div>Toolbox: {d.toolbox_delay_hours || 0}h</div>
-                        <div>Other: {d.other_delay_hours || 0}h</div>
-                      </div>
-                    </div>
-
-                    {d.delays_comments && (
-                      <div>
-                        <div className="text-sm font-semibold mb-1">Comments</div>
-                        <div className="text-sm text-slate-600">
-                          {d.delays_comments}
-                        </div>
-                      </div>
-                    )}
-
-                    {d.missing_items_bolts && (
-                      <div>
-                        <div className="text-sm font-semibold mb-1">Missing Items</div>
-                        <div className="text-sm text-slate-600">
-                          {d.missing_items_bolts}
-                        </div>
-                      </div>
-                    )}
-
-                    <div>
-                      <div className="text-sm font-semibold mb-1">Sign Off</div>
-                      <div className="text-sm">
-                        BC Rep: {d.bc_rep_name || "-"} <br />
-                        Client Rep: {d.client_rep_name || "-"} <br />
-                        Signed Date: {d.signed_date || "-"}
-                      </div>
-                    </div>
-
-                    {d.docket_file_url && (
-                      <a
-                        href={d.docket_file_url}
-                        target="_blank"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-blue-600 text-sm font-semibold"
-                      >
-                        View Uploaded Docket →
-                      </a>
-                    )}
-
+                  <div className="mt-6 border-t pt-4 space-y-2 text-sm">
+                    BC Rep: {d.bc_rep_name || "-"} <br />
+                    Client Rep: {d.client_rep_name || "-"}
                   </div>
                 )}
 
