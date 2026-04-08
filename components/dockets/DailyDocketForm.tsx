@@ -40,10 +40,10 @@ export default function DailyDocketForm({
   projectId: string;
   towerId: string;
   docketId?: string;
-  initialDocket?: any;              // ✅ ADDED
-  initialLabourRows?: any[];        // ✅ ADDED
-  initialProgressRows?: any[];      // ✅ ADDED
-}){
+  initialDocket?: any;
+  initialLabourRows?: any[];
+  initialProgressRows?: any[];
+}) {
   const isView = mode === "view";
   const router = useRouter();
   const supabase = createSupabaseBrowser();
@@ -66,26 +66,75 @@ export default function DailyDocketForm({
 
   const [saving, setSaving] = useState(false);
 
-  // 🔥 LOAD EXISTING DOCKET (VIEW / EDIT)
- useEffect(() => {
-  if (!docketId && !initialDocket) return;
+  const totalLabourHours = useMemo(() => {
+    return labourRows.reduce((sum, row) => {
+      return sum + (Number(row.total_hours) || 0);
+    }, 0);
+  }, [labourRows]);
 
-  async function loadDocket() {
+  useEffect(() => {
+    if (!docketId && !initialDocket) return;
 
-    // ✅ ADD THIS BLOCK RIGHT HERE
-    if (initialDocket) {
-      setDocketDate(initialDocket.docket_date || "");
-      setCrewName(initialDocket.crew || "");
-      setLeadingHand(initialDocket.leading_hand || "");
-      setWeather(initialDocket.weather || "");
+    async function loadDocket() {
+      if (initialDocket) {
+        setDocketDate(initialDocket.docket_date || "");
+        setCrewName(initialDocket.crew || "");
+        setLeadingHand(initialDocket.leading_hand || "");
+        setWeather(initialDocket.weather || "");
 
-      setBcRepName(initialDocket.bc_rep_name || "");
-      setClientRepName(initialDocket.client_rep_name || "");
-      setSignedDate(initialDocket.signed_date || "");
+        setBcRepName(initialDocket.bc_rep_name || "");
+        setClientRepName(initialDocket.client_rep_name || "");
+        setSignedDate(initialDocket.signed_date || "");
 
-      if (initialLabourRows?.length) {
+        if (initialLabourRows?.length) {
+          setLabourRows(
+            initialLabourRows.map((r) => ({
+              worker_name: r.worker_name || "",
+              time_in: r.time_in || "",
+              time_out: r.time_out || "",
+              total_hours: String(r.total_hours || ""),
+            }))
+          );
+        }
+
+        if (initialProgressRows?.length) {
+          setProgressRows(
+            initialProgressRows.map((r) => ({
+              section_label: r.section_label,
+              assembled_qty: String(r.assembled_qty || ""),
+              erected_qty: String(r.erected_qty || ""),
+            }))
+          );
+        }
+
+        return;
+      }
+
+      const { data } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("id", docketId)
+        .single();
+
+      if (!data) return;
+
+      setDocketDate(data.docket_date || "");
+      setCrewName(data.crew || "");
+      setLeadingHand(data.leading_hand || "");
+      setWeather(data.weather || "");
+
+      setBcRepName(data.bc_rep_name || "");
+      setClientRepName(data.client_rep_name || "");
+      setSignedDate(data.signed_date || "");
+
+      const { data: labour } = await supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (labour?.length) {
         setLabourRows(
-          initialLabourRows.map((r) => ({
+          labour.map((r) => ({
             worker_name: r.worker_name || "",
             time_in: r.time_in || "",
             time_out: r.time_out || "",
@@ -94,73 +143,31 @@ export default function DailyDocketForm({
         );
       }
 
-      if (initialProgressRows?.length) {
+      const { data: progress } = await supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (progress?.length) {
         setProgressRows(
-          initialProgressRows.map((r) => ({
+          progress.map((r) => ({
             section_label: r.section_label,
             assembled_qty: String(r.assembled_qty || ""),
             erected_qty: String(r.erected_qty || ""),
           }))
         );
       }
-
-      return; // 🚨 VERY IMPORTANT (stops duplicate fetch)
     }
 
-    // 🔽 YOUR EXISTING CODE CONTINUES (DO NOT REMOVE)
-    const { data } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("id", docketId)
-      .single();
+    loadDocket();
+  }, [
+    docketId,
+    initialDocket,
+    initialLabourRows,
+    initialProgressRows,
+    supabase,
+  ]);
 
-    if (!data) return;
-
-    setDocketDate(data.docket_date || "");
-    setCrewName(data.crew || "");
-    setLeadingHand(data.leading_hand || "");
-    setWeather(data.weather || "");
-
-    setBcRepName(data.bc_rep_name || "");
-    setClientRepName(data.client_rep_name || "");
-    setSignedDate(data.signed_date || "");
-
-    const { data: labour } = await supabase
-      .from("tower_docket_labour")
-      .select("*")
-      .eq("docket_id", docketId);
-
-    if (labour?.length) {
-      setLabourRows(
-        labour.map((r) => ({
-          worker_name: r.worker_name || "",
-          time_in: r.time_in || "",
-          time_out: r.time_out || "",
-          total_hours: String(r.total_hours || ""),
-        }))
-      );
-    }
-
-    const { data: progress } = await supabase
-      .from("tower_docket_progress")
-      .select("*")
-      .eq("docket_id", docketId);
-
-    if (progress?.length) {
-      setProgressRows(
-        progress.map((r) => ({
-          section_label: r.section_label,
-          assembled_qty: String(r.assembled_qty || ""),
-          erected_qty: String(r.erected_qty || ""),
-        }))
-      );
-    }
-  }
-
-  loadDocket();
-}, [docketId, initialDocket]);
-
-  // 🔥 PREFILL (WITH DATE INCREMENT)
   async function prefillFromLastDocket() {
     try {
       const { data: lastDocket } = await supabase
@@ -219,17 +226,94 @@ export default function DailyDocketForm({
       }
     } catch (err) {
       console.error(err);
+      alert("Failed to prefill docket");
     }
+  }
+
+  function handleLabourKeyDown(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    nextId?: string
+  ) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (!nextId) return;
+      const nextEl = document.getElementById(nextId) as HTMLInputElement | null;
+      nextEl?.focus();
+      nextEl?.select?.();
+    }
+  }
+
+  function calculateHours(timeIn: string, timeOut: string) {
+    if (!timeIn || !timeOut) return "";
+
+    const [h1, m1] = timeIn.split(":").map(Number);
+    const [h2, m2] = timeOut.split(":").map(Number);
+
+    if (
+      Number.isNaN(h1) ||
+      Number.isNaN(m1) ||
+      Number.isNaN(h2) ||
+      Number.isNaN(m2)
+    ) {
+      return "";
+    }
+
+    let diffMinutes = h2 * 60 + m2 - (h1 * 60 + m1);
+    if (diffMinutes < 0) diffMinutes += 24 * 60;
+
+    return (diffMinutes / 60).toFixed(2);
+  }
+
+  function ensureBlankLastLabourRow(rows: LabourRow[]) {
+    const last = rows[rows.length - 1];
+
+    if (
+      last &&
+      last.worker_name.trim() &&
+      last.time_in.trim() &&
+      last.time_out.trim() &&
+      last.total_hours.trim()
+    ) {
+      return [
+        ...rows,
+        { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+      ];
+    }
+
+    return rows;
   }
 
   function updateLabourRow(index: number, key: keyof LabourRow, value: string) {
     if (isView) return;
-    setLabourRows((prev) =>
-      prev.map((r, i) => (i === index ? { ...r, [key]: value } : r))
-    );
+
+    setLabourRows((prev) => {
+      const updated = prev.map((r, i) =>
+        i === index ? { ...r, [key]: value } : r
+      );
+
+      const current = updated[index];
+
+      if (key === "time_in" || key === "time_out") {
+        const calculated = calculateHours(current.time_in, current.time_out);
+        if (calculated !== "") {
+          current.total_hours = calculated;
+        } else if (
+          key === "time_in" ||
+          key === "time_out"
+        ) {
+          current.total_hours = current.total_hours || "";
+        }
+      }
+
+      return ensureBlankLastLabourRow(updated);
+    });
   }
 
-  function updateProgressRow(index: number, key: keyof ProgressRow, value: string) {
+  function updateProgressRow(
+    index: number,
+    key: keyof ProgressRow,
+    value: string
+  ) {
     if (isView) return;
     setProgressRows((prev) =>
       prev.map((r, i) => (i === index ? { ...r, [key]: value } : r))
@@ -259,7 +343,6 @@ export default function DailyDocketForm({
 
   return (
     <div className="p-8 max-w-6xl space-y-8">
-
       <div className="flex items-start justify-between">
         <h1 className="text-3xl font-bold">
           {isView ? "View Daily Docket" : "Add Daily Docket"}
@@ -267,7 +350,10 @@ export default function DailyDocketForm({
 
         <div className="flex gap-2">
           {!isView && (
-            <button onClick={prefillFromLastDocket} className="bg-slate-700 text-white px-4 py-2 rounded-xl">
+            <button
+              onClick={prefillFromLastDocket}
+              className="bg-slate-700 text-white px-4 py-2 rounded-xl"
+            >
               Prefill Yesterday
             </button>
           )}
@@ -285,10 +371,31 @@ export default function DailyDocketForm({
 
       {/* BASIC */}
       <section className="bg-white border p-6 rounded-2xl grid md:grid-cols-2 gap-4">
-        <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} disabled={isView} />
-        <Input label="Crew" value={crewName} onChange={setCrewName} disabled={isView} />
-        <Input label="Leading Hand" value={leadingHand} onChange={setLeadingHand} disabled={isView} />
-        <Input label="Weather" value={weather} onChange={setWeather} disabled={isView} />
+        <Input
+          label="Date"
+          type="date"
+          value={docketDate}
+          onChange={setDocketDate}
+          disabled={isView}
+        />
+        <Input
+          label="Crew"
+          value={crewName}
+          onChange={setCrewName}
+          disabled={isView}
+        />
+        <Input
+          label="Leading Hand"
+          value={leadingHand}
+          onChange={setLeadingHand}
+          disabled={isView}
+        />
+        <Input
+          label="Weather"
+          value={weather}
+          onChange={setWeather}
+          disabled={isView}
+        />
       </section>
 
       {/* PROGRESS */}
@@ -297,48 +404,102 @@ export default function DailyDocketForm({
         {progressRows.map((row, i) => (
           <div key={i} className="grid grid-cols-3 gap-3 mb-2">
             <div>{row.section_label}</div>
-            <input disabled={isView} value={row.assembled_qty}
-              onChange={(e) => updateProgressRow(i, "assembled_qty", e.target.value)}
-              className="border p-2 rounded" />
-            <input disabled={isView} value={row.erected_qty}
-              onChange={(e) => updateProgressRow(i, "erected_qty", e.target.value)}
-              className="border p-2 rounded" />
+            <input
+              disabled={isView}
+              value={row.assembled_qty}
+              onChange={(e) =>
+                updateProgressRow(i, "assembled_qty", e.target.value)
+              }
+              className="border p-2 rounded"
+            />
+            <input
+              disabled={isView}
+              value={row.erected_qty}
+              onChange={(e) =>
+                updateProgressRow(i, "erected_qty", e.target.value)
+              }
+              className="border p-2 rounded"
+            />
           </div>
         ))}
       </section>
 
       {/* LABOUR */}
       <section className="bg-white border p-6 rounded-2xl">
-        <h2 className="text-xl font-semibold mb-4">Labour</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Labour</h2>
+          <div className="text-right">
+            <p className="text-sm text-slate-500">Total Labour Hours</p>
+            <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
+          </div>
+        </div>
+
         {labourRows.map((row, i) => (
           <div key={i} className="grid grid-cols-4 gap-3 mb-2">
-            <input disabled={isView} value={row.worker_name}
-              onChange={(e) => updateLabourRow(i, "worker_name", e.target.value)}
-              className="border p-2 rounded" />
-            <input disabled={isView} value={row.time_in}
+            <input
+              id={`labour-name-${i}`}
+              disabled={isView}
+              value={row.worker_name}
+              placeholder="Name"
+              onKeyDown={(e) => handleLabourKeyDown(e, `labour-timein-${i}`)}
+              onChange={(e) =>
+                updateLabourRow(i, "worker_name", e.target.value)
+              }
+              className="border p-2 rounded"
+            />
+            <input
+              id={`labour-timein-${i}`}
+              disabled={isView}
+              value={row.time_in}
+              onKeyDown={(e) => handleLabourKeyDown(e, `labour-timeout-${i}`)}
               onChange={(e) => updateLabourRow(i, "time_in", e.target.value)}
-              type="time" className="border p-2 rounded" />
-            <input disabled={isView} value={row.time_out}
+              type="time"
+              className="border p-2 rounded"
+            />
+            <input
+              id={`labour-timeout-${i}`}
+              disabled={isView}
+              value={row.time_out}
+              onKeyDown={(e) => handleLabourKeyDown(e, `labour-hours-${i}`)}
               onChange={(e) => updateLabourRow(i, "time_out", e.target.value)}
-              type="time" className="border p-2 rounded" />
-            <input disabled={isView} value={row.total_hours}
+              type="time"
+              className="border p-2 rounded"
+            />
+            <input
+              id={`labour-hours-${i}`}
+              disabled={isView}
+              value={row.total_hours}
+              placeholder="Hours"
+              onKeyDown={(e) =>
+                handleLabourKeyDown(e, `labour-name-${i + 1}`)
+              }
               onChange={(e) => updateLabourRow(i, "total_hours", e.target.value)}
-              type="number" className="border p-2 rounded" />
+              type="number"
+              className="border p-2 rounded"
+            />
           </div>
         ))}
       </section>
 
       {!isView && (
-        <button onClick={handleSubmit} className="bg-blue-600 text-white px-6 py-3 rounded-xl">
+        <button
+          onClick={handleSubmit}
+          className="bg-blue-600 text-white px-6 py-3 rounded-xl"
+        >
           {saving ? "Saving..." : "Save Docket"}
         </button>
       )}
-
     </div>
   );
 }
 
-function Input({ label, value, onChange, type = "text", disabled = false }: any) {
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+  disabled = false,
+}: any) {
   return (
     <div>
       <label className="block text-sm mb-1">{label}</label>
