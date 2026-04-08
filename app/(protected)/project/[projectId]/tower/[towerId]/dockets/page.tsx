@@ -19,6 +19,9 @@ export default function TowerDocketsPage() {
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
+  // 🔥 NEW STATE (LABOUR TOTALS)
+  const [labourTotals, setLabourTotals] = useState<Record<string, number>>({});
+
   useEffect(() => {
     let isMounted = true;
 
@@ -41,6 +44,26 @@ export default function TowerDocketsPage() {
 
       setTower(towerData);
       setDockets(data || []);
+
+      // 🔥 NEW: FETCH LABOUR TOTALS
+      if (data && data.length > 0) {
+        const docketIds = data.map((d: any) => d.id);
+
+        const { data: labour } = await supabase
+          .from("tower_docket_labour")
+          .select("docket_id, total_hours")
+          .in("docket_id", docketIds);
+
+        const totals: Record<string, number> = {};
+
+        labour?.forEach((row: any) => {
+          totals[row.docket_id] =
+            (totals[row.docket_id] || 0) + Number(row.total_hours || 0);
+        });
+
+        setLabourTotals(totals);
+      }
+
       setLoading(false);
     };
 
@@ -105,6 +128,49 @@ export default function TowerDocketsPage() {
   return (
     <div className="p-8 space-y-6">
       <TowerHeader projectId={projectId} tower={tower} />
+
+      {/* 🔥 NEW SUMMARY DASHBOARD */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <SummaryCard
+          label="Total Manhours"
+          value={dockets.reduce(
+            (sum, d) => sum + (labourTotals[d.id] || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Weather Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.weather_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Lightning Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.lightning_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Toolbox Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.toolbox_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Other Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.other_delay_hours || 0),
+            0
+          )}
+        />
+      </div>
 
       <div className="bg-white border rounded-2xl p-6 shadow-sm">
         <div className="flex justify-between items-center mb-6">
@@ -181,6 +247,13 @@ export default function TowerDocketsPage() {
                 </div>
 
                 <div className="mt-4 space-y-2">
+
+                  {/* 🔥 NEW LABOUR HOURS DISPLAY */}
+                  <div className="flex justify-between text-sm font-semibold text-slate-700">
+                    <div>Labour Hours</div>
+                    <div>{(labourTotals[d.id] || 0).toFixed(1)} hrs</div>
+                  </div>
+
                   <div>
                     <div className="flex justify-between text-xs text-slate-500 mb-1">
                       <div className="font-semibold text-slate-700">
@@ -252,6 +325,16 @@ export default function TowerDocketsPage() {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// 🔥 NEW COMPONENT
+function SummaryCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-white border rounded-xl p-4 text-center">
+      <div className="text-sm text-slate-500">{label}</div>
+      <div className="text-2xl font-bold">{value.toFixed(1)}</div>
     </div>
   );
 }
