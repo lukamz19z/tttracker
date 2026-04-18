@@ -66,9 +66,7 @@ function isClientSignedDocket(docket: {
   client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(
-    docket.client_rep_name?.trim() && docket.signed_date?.trim()
-  );
+  return Boolean(docket.client_rep_name?.trim() && docket.signed_date?.trim());
 }
 
 function calculateHours(timeIn: string, timeOut: string) {
@@ -90,6 +88,33 @@ function calculateHours(timeIn: string, timeOut: string) {
   if (diffMinutes < 0) diffMinutes += 24 * 60;
 
   return (diffMinutes / 60).toFixed(2);
+}
+
+function normalizeWorkerName(name: string) {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getDuplicateWorkerIndexes(rows: LabourRow[]) {
+  const seen = new Map<string, number[]>();
+
+  rows.forEach((row, index) => {
+    const key = normalizeWorkerName(row.worker_name);
+    if (!key) return;
+
+    const existing = seen.get(key) || [];
+    existing.push(index);
+    seen.set(key, existing);
+  });
+
+  const duplicateIndexes = new Set<number>();
+
+  seen.forEach((indexes) => {
+    if (indexes.length > 1) {
+      indexes.forEach((i) => duplicateIndexes.add(i));
+    }
+  });
+
+  return duplicateIndexes;
 }
 
 export default function DailyDocketForm({
@@ -157,7 +182,7 @@ export default function DailyDocketForm({
     toStringValue(initialDocket?.docket_file_url)
   );
   const [bulkTimeIn, setBulkTimeIn] = useState("");
-const [bulkTimeOut, setBulkTimeOut] = useState("");
+  const [bulkTimeOut, setBulkTimeOut] = useState("");
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
     initialLabourRows && initialLabourRows.length > 0
@@ -306,6 +331,12 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
       }),
     [clientRepName, signedDate]
   );
+
+  const duplicateWorkerIndexes = useMemo(() => {
+    return getDuplicateWorkerIndexes(labourRows);
+  }, [labourRows]);
+
+  const hasDuplicateWorkers = duplicateWorkerIndexes.size > 0;
 
   const totalAssemblyPercent = useMemo(() => {
     if (progressRows.length === 0) return 0;
@@ -529,7 +560,7 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
       .filter((row) => row.worker_name.trim())
       .map((row) => ({
         docket_id: docket.id,
-        worker_name: row.worker_name,
+        worker_name: row.worker_name.trim(),
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
@@ -563,7 +594,6 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
     await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
- 
   }
 
   async function handleUpdate() {
@@ -634,7 +664,7 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
       .filter((row) => row.worker_name.trim())
       .map((row) => ({
         docket_id: docketId,
-        worker_name: row.worker_name,
+        worker_name: row.worker_name.trim(),
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
@@ -687,6 +717,11 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
 
     if (!leadingHand.trim()) {
       alert("Please enter leading hand name");
+      return;
+    }
+
+    if (hasDuplicateWorkers) {
+      alert("Duplicate worker names found. Each worker can only appear once in a daily docket.");
       return;
     }
 
@@ -758,13 +793,25 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
       setExistingDocketFileUrl("");
 
       if (labour && labour.length > 0) {
+        const mappedLabour = labour.map((r) => ({
+          worker_name: toStringValue(r.worker_name),
+          time_in: toStringValue(r.time_in),
+          time_out: toStringValue(r.time_out),
+          total_hours: toStringValue(r.total_hours),
+        }));
+
+        const dedupedLabour: LabourRow[] = [];
+        const seen = new Set<string>();
+
+        mappedLabour.forEach((row) => {
+          const key = normalizeWorkerName(row.worker_name);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          dedupedLabour.push(row);
+        });
+
         setLabourRows([
-          ...labour.map((r) => ({
-            worker_name: toStringValue(r.worker_name),
-            time_in: toStringValue(r.time_in),
-            time_out: toStringValue(r.time_out),
-            total_hours: toStringValue(r.total_hours),
-          })),
+          ...dedupedLabour,
           { worker_name: "", time_in: "", time_out: "", total_hours: "" },
         ]);
       } else {
@@ -789,28 +836,24 @@ const [bulkTimeOut, setBulkTimeOut] = useState("");
       alert("Failed to prefill docket");
     }
   }
-// 🔥 ADD THIS HERE (above return)
 
-function applyBulkTimes() {
-  setLabourRows((prev) =>
-    prev.map((row) => {
-      const time_in = bulkTimeIn || row.time_in;
-      const time_out = bulkTimeOut || row.time_out;
+  function applyBulkTimes() {
+    setLabourRows((prev) =>
+      prev.map((row) => {
+        const time_in = bulkTimeIn || row.time_in;
+        const time_out = bulkTimeOut || row.time_out;
 
-      return {
-        ...row,
-        time_in,
-        time_out,
-        total_hours: calculateHours(time_in, time_out) || row.total_hours,
-      };
-    })
-  );
-}
+        return {
+          ...row,
+          time_in,
+          time_out,
+          total_hours: calculateHours(time_in, time_out) || row.total_hours,
+        };
+      })
+    );
+  }
 
-// ⬇️ your existing return starts here
-return (
-
-
+  return (
     <div className="p-8 max-w-6xl space-y-8">
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -852,6 +895,12 @@ return (
       {locked && mode === "edit" && (
         <div className="border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-2xl p-4">
           This docket has been client signed and is now locked.
+        </div>
+      )}
+
+      {hasDuplicateWorkers && !locked && !isView && (
+        <div className="border border-red-200 bg-red-50 text-red-700 rounded-2xl p-4">
+          Duplicate worker names detected. Each worker can only appear once in this daily docket.
         </div>
       )}
 
@@ -1009,151 +1058,160 @@ return (
         </div>
       </section>
 
-<section className="bg-white border rounded-2xl p-6 space-y-4">
+      <section className="bg-white border rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Labour</h2>
 
-  <div className="flex items-center justify-between">
-    <h2 className="text-xl font-semibold">Labour</h2>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-sm text-slate-500">Total Labour Hours</p>
+              <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
+            </div>
 
-    <div className="flex items-center gap-4">
-      <div className="text-right">
-        <p className="text-sm text-slate-500">Total Labour Hours</p>
-        <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
-      </div>
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={addLabourRow}
+                className="bg-slate-900 text-white px-4 py-2 rounded-lg"
+              >
+                Add Worker
+              </button>
+            )}
+          </div>
+        </div>
 
-      {!locked && !isView && (
-        <button
-          type="button"
-          onClick={addLabourRow}
-          className="bg-slate-900 text-white px-4 py-2 rounded-lg"
-        >
-          Add Worker
-        </button>
-      )}
-    </div>
-  </div>
+        {!locked && !isView && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+            <input
+              type="time"
+              value={bulkTimeIn}
+              onChange={(e) => setBulkTimeIn(e.target.value)}
+              className="border p-2 rounded text-sm"
+            />
 
-  {/* 🔥 ADD BULK TIME SECTION HERE */}
-  {!locked && !isView && (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
-      <input
-        type="time"
-        value={bulkTimeIn}
-        onChange={(e) => setBulkTimeIn(e.target.value)}
-        className="border p-2 rounded text-sm"
-      />
+            <input
+              type="time"
+              value={bulkTimeOut}
+              onChange={(e) => setBulkTimeOut(e.target.value)}
+              className="border p-2 rounded text-sm"
+            />
 
-      <input
-        type="time"
-        value={bulkTimeOut}
-        onChange={(e) => setBulkTimeOut(e.target.value)}
-        className="border p-2 rounded text-sm"
-      />
-
-      <button
-        type="button"
-        onClick={applyBulkTimes}
-        className="bg-slate-800 text-white rounded p-2 text-sm"
-      >
-        Apply to All
-      </button>
-    </div>
-  )}
-
-  {/* 👇 EXISTING LABOUR ROWS (DO NOT TOUCH) */}
-
-
+            <button
+              type="button"
+              onClick={applyBulkTimes}
+              className="bg-slate-800 text-white rounded p-2 text-sm"
+            >
+              Apply to All
+            </button>
+          </div>
+        )}
 
         <div className="space-y-4">
-          {labourRows.map((row, index) => (
-            <div
-              key={index}
-             className="grid grid-cols-2 md:grid-cols-5 gap-2 items-end border rounded-xl p-3"
-            >
-              <div>
-                <label className="block text-sm font-medium mb-1">Worker Name</label>
-                <input
-                  id={`labour-name-${index}`}
-                 className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
-                  value={row.worker_name}
-                  disabled={locked || isView}
-                  placeholder="Name"
-                  onKeyDown={(e) =>
-                    handleLabourKeyDown(e, `labour-timein-${index}`)
-                  }
-                  onChange={(e) =>
-                    updateLabourRow(index, "worker_name", e.target.value)
-                  }
-                />
-              </div>
+          {labourRows.map((row, index) => {
+            const isDuplicate = duplicateWorkerIndexes.has(index);
 
-              <div>
-                <label className="block text-sm font-medium mb-1">Time In</label>
-                <input
-                  id={`labour-timein-${index}`}
-                  className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
-                  type="time"
-                  value={row.time_in}
-                  disabled={locked || isView}
-                  onKeyDown={(e) =>
-                    handleLabourKeyDown(e, `labour-timeout-${index}`)
-                  }
-                  onChange={(e) =>
-                    updateLabourRow(index, "time_in", e.target.value)
-                  }
-                />
-              </div>
+            return (
+              <div
+                key={index}
+                className={`grid grid-cols-2 md:grid-cols-5 gap-2 items-end border rounded-xl p-3 ${
+                  isDuplicate ? "border-red-300 bg-red-50" : ""
+                }`}
+              >
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Worker Name
+                  </label>
+                  <input
+                    id={`labour-name-${index}`}
+                    className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
+                      isDuplicate ? "border-red-500 bg-white" : ""
+                    }`}
+                    value={row.worker_name}
+                    disabled={locked || isView}
+                    placeholder="Name"
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-timein-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "worker_name", e.target.value)
+                    }
+                  />
+                  {isDuplicate && row.worker_name.trim() && (
+                    <p className="text-xs text-red-600 mt-1">
+                      This worker name is already entered in this docket.
+                    </p>
+                  )}
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-1">Time Out</label>
-                <input
-                  id={`labour-timeout-${index}`}
-                  className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
-                  type="time"
-                  value={row.time_out}
-                  disabled={locked || isView}
-                  onKeyDown={(e) =>
-                    handleLabourKeyDown(e, `labour-hours-${index}`)
-                  }
-                  onChange={(e) =>
-                    updateLabourRow(index, "time_out", e.target.value)
-                  }
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Time In</label>
+                  <input
+                    id={`labour-timein-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="time"
+                    value={row.time_in}
+                    disabled={locked || isView}
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-timeout-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "time_in", e.target.value)
+                    }
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-1">Total Hours</label>
-                <input
-                  id={`labour-hours-${index}`}
-                  className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
-                  type="number"
-                  step="0.01"
-                  value={row.total_hours}
-                  disabled={locked || isView}
-                  placeholder="Hours"
-                  onKeyDown={(e) =>
-                    handleLabourKeyDown(e, `labour-name-${index + 1}`)
-                  }
-                  onChange={(e) =>
-                    updateLabourRow(index, "total_hours", e.target.value)
-                  }
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Time Out</label>
+                  <input
+                    id={`labour-timeout-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="time"
+                    value={row.time_out}
+                    disabled={locked || isView}
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-hours-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "time_out", e.target.value)
+                    }
+                  />
+                </div>
 
-              {!locked && !isView ? (
-                <button
-                  type="button"
-                  onClick={() => removeLabourRow(index)}
-                  className="border px-4 py-2 rounded-lg h-10"
-                >
-                  Remove
-                </button>
-              ) : (
-                <div />
-              )}
-            </div>
-          ))}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Total Hours</label>
+                  <input
+                    id={`labour-hours-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="number"
+                    step="0.01"
+                    value={row.total_hours}
+                    disabled={locked || isView}
+                    placeholder="Hours"
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-name-${index + 1}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "total_hours", e.target.value)
+                    }
+                  />
+                </div>
+
+                {!locked && !isView ? (
+                  <button
+                    type="button"
+                    onClick={() => removeLabourRow(index)}
+                    className="border px-4 py-2 rounded-lg h-10"
+                  >
+                    Remove
+                  </button>
+                ) : (
+                  <div />
+                )}
+              </div>
+            );
+          })}
         </div>
-     </section>
+      </section>
 
       <section className="bg-white border rounded-2xl p-6 space-y-4">
         <h2 className="text-xl font-semibold">Sign-Off & Upload</h2>
