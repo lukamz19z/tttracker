@@ -684,32 +684,20 @@ export default function TowerOverviewPage() {
           <div className="text-slate-500">No tower extra data available.</div>
         ) : (
           <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {extraDataEntries.map(([key, value]) => {
-              const isWeight = isWeightKey(key);
-
-              return (
-                <div
-                  key={key}
-                  className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 ${
-                    isWeight
-                      ? "border-blue-200 bg-blue-50"
-                      : "border-slate-200 bg-slate-50"
-                  }`}
-                >
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                    {formatLabel(key)}
-                  </div>
-
-                  <div
-                    className={`text-sm font-semibold text-right ${
-                      isWeight ? "text-blue-700" : "text-slate-900"
-                    }`}
-                  >
-                    {formatValue(value)}
-                  </div>
+            {extraDataEntries.map(([key, value]) => (
+              <div
+                key={key}
+                className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  {formatLabel(key)}
                 </div>
-              );
-            })}
+
+                <div className="text-sm font-semibold text-right text-slate-900">
+                  {formatValue(value)}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
