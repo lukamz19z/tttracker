@@ -98,7 +98,9 @@ function isWeightKey(key: string) {
     normalized === "mass" ||
     normalized === "steel weight" ||
     normalized === "total weight" ||
-    normalized === "total_weight"
+    normalized === "total_weight" ||
+    normalized === "tower weight (t)" ||
+    normalized === "tower_weight_(t)"
   );
 }
 
@@ -222,7 +224,8 @@ export default function TowerOverviewPage() {
         }
       }
 
-      const latestDate = dockets.length > 0 ? dockets[0].docket_date ?? null : null;
+      const latestDate =
+        dockets.length > 0 ? (dockets[0].docket_date ?? null) : null;
 
       const totalHours = labourRows.reduce(
         (sum, row) => sum + Number(row.total_hours || 0),
@@ -323,7 +326,6 @@ export default function TowerOverviewPage() {
 
   const extraDataEntries = useMemo(() => {
     if (!tower?.extra_data) return [];
-
     return Object.entries(tower.extra_data).sort(([a], [b]) =>
       a.localeCompare(b)
     );
@@ -441,10 +443,7 @@ export default function TowerOverviewPage() {
       </div>
 
       <div className="grid xl:grid-cols-3 gap-6">
-        <ChartCard
-          title="Overall Progress"
-          subtitle="Completed vs remaining"
-        >
+        <ChartCard title="Overall Progress" subtitle="Completed vs remaining">
           <div className="flex flex-col items-center gap-4">
             <DonutChart
               percent={stats.computedProgress}
@@ -455,8 +454,16 @@ export default function TowerOverviewPage() {
             />
 
             <div className="w-full space-y-3">
-              <LegendRow label="Completed" value={`${stats.computedProgress}%`} colorClass="bg-blue-600" />
-              <LegendRow label="Remaining" value={`${stats.remainingProgress}%`} colorClass="bg-slate-300" />
+              <LegendRow
+                label="Completed"
+                value={`${stats.computedProgress}%`}
+                colorClass="bg-blue-600"
+              />
+              <LegendRow
+                label="Remaining"
+                value={`${stats.remainingProgress}%`}
+                colorClass="bg-slate-300"
+              />
               <ProgressBar
                 label="Tower Progress"
                 value={stats.computedProgress}
@@ -466,10 +473,7 @@ export default function TowerOverviewPage() {
           </div>
         </ChartCard>
 
-        <ChartCard
-          title="Steel Delivery"
-          subtitle="Delivered vs outstanding"
-        >
+        <ChartCard title="Steel Delivery" subtitle="Delivered vs outstanding">
           <div className="flex flex-col items-center gap-4">
             <DonutChart
               percent={stats.deliveryPercent}
@@ -499,15 +503,14 @@ export default function TowerOverviewPage() {
           </div>
         </ChartCard>
 
-        <ChartCard
-          title="Defects Status"
-          subtitle="Open vs closed"
-        >
+        <ChartCard title="Defects Status" subtitle="Open vs closed">
           <div className="flex flex-col items-center gap-4">
             <DonutChart
               percent={
                 stats.defectCount > 0
-                  ? Math.round((stats.closedDefectCount / stats.defectCount) * 100)
+                  ? Math.round(
+                      (stats.closedDefectCount / stats.defectCount) * 100
+                    )
                   : 100
               }
               color="#16a34a"
@@ -528,8 +531,28 @@ export default function TowerOverviewPage() {
                 colorClass="bg-red-600"
               />
               <div className="grid grid-cols-2 gap-3">
-                <SmallStat label="Open Rate" value={`${stats.defectCount > 0 ? Math.round((stats.openDefectCount / stats.defectCount) * 100) : 0}%`} tone="red" />
-                <SmallStat label="Closed Rate" value={`${stats.defectCount > 0 ? Math.round((stats.closedDefectCount / stats.defectCount) * 100) : 0}%`} tone="green" />
+                <SmallStat
+                  label="Open Rate"
+                  value={`${
+                    stats.defectCount > 0
+                      ? Math.round(
+                          (stats.openDefectCount / stats.defectCount) * 100
+                        )
+                      : 0
+                  }%`}
+                  tone="red"
+                />
+                <SmallStat
+                  label="Closed Rate"
+                  value={`${
+                    stats.defectCount > 0
+                      ? Math.round(
+                          (stats.closedDefectCount / stats.defectCount) * 100
+                        )
+                      : 0
+                  }%`}
+                  tone="green"
+                />
               </div>
             </div>
           </div>
@@ -537,17 +560,44 @@ export default function TowerOverviewPage() {
       </div>
 
       <div className="grid xl:grid-cols-3 gap-6">
-        <PanelCard title="Operations Summary" subtitle="Field productivity and logged activity">
+        <PanelCard
+          title="Operations Summary"
+          subtitle="Field productivity and logged activity"
+        >
           <div className="space-y-3">
-            <MetricRow label="Current Status" value={stats.computedStatus} tone={stats.computedStatus === "Complete" ? "green" : stats.computedStatus === "In Progress" ? "blue" : "slate"} />
-            <MetricRow label="Daily Dockets Logged" value={String(stats.docketCount)} />
-            <MetricRow label="Total Manhours" value={`${stats.totalHours}h`} tone="blue" />
+            <MetricRow
+              label="Current Status"
+              value={stats.computedStatus}
+              tone={
+                stats.computedStatus === "Complete"
+                  ? "green"
+                  : stats.computedStatus === "In Progress"
+                  ? "blue"
+                  : "slate"
+              }
+            />
+            <MetricRow
+              label="Daily Dockets Logged"
+              value={String(stats.docketCount)}
+            />
+            <MetricRow
+              label="Total Manhours"
+              value={`${stats.totalHours}h`}
+              tone="blue"
+            />
             <MetricRow label="Last Docket Date" value={stats.latestDate || "-"} />
-            <MetricRow label="Modifications Logged" value={String(stats.modificationCount)} tone="slate" />
+            <MetricRow
+              label="Modifications Logged"
+              value={String(stats.modificationCount)}
+              tone="slate"
+            />
           </div>
         </PanelCard>
 
-        <PanelCard title="Delay Breakdown" subtitle="Highlighting productivity losses">
+        <PanelCard
+          title="Delay Breakdown"
+          subtitle="Highlighting productivity losses"
+        >
           <div className="space-y-4">
             <DelayBar
               label="Weather"
@@ -574,50 +624,92 @@ export default function TowerOverviewPage() {
               barClass="bg-slate-500"
             />
             <div className="pt-2 border-t">
-              <MetricRow label="Total Delay Hours" value={`${stats.totalDelayHours}h`} tone={stats.totalDelayHours > 0 ? "orange" : "green"} />
+              <MetricRow
+                label="Total Delay Hours"
+                value={`${stats.totalDelayHours}h`}
+                tone={stats.totalDelayHours > 0 ? "orange" : "green"}
+              />
             </div>
           </div>
         </PanelCard>
 
-        <PanelCard title="Quality & Steel Snapshot" subtitle="Quick action-needed overview">
+        <PanelCard
+          title="Quality & Steel Snapshot"
+          subtitle="Quick action-needed overview"
+        >
           <div className="grid grid-cols-2 gap-3">
-            <SmallStat label="Open Defects" value={String(stats.openDefectCount)} tone={stats.openDefectCount > 0 ? "red" : "green"} />
-            <SmallStat label="Total Defects" value={String(stats.defectCount)} tone="slate" />
-            <SmallStat label="Bundles" value={String(stats.totalRequiredBundles)} tone="blue" />
-            <SmallStat label="Required Qty" value={String(stats.totalRequiredQty)} tone="slate" />
-            <SmallStat label="Delivered Qty" value={String(stats.deliveredQty)} tone="green" />
-            <SmallStat label="Outstanding Qty" value={String(stats.outstandingQty)} tone={stats.outstandingQty > 0 ? "orange" : "green"} />
+            <SmallStat
+              label="Open Defects"
+              value={String(stats.openDefectCount)}
+              tone={stats.openDefectCount > 0 ? "red" : "green"}
+            />
+            <SmallStat
+              label="Total Defects"
+              value={String(stats.defectCount)}
+              tone="slate"
+            />
+            <SmallStat
+              label="Bundles"
+              value={String(stats.totalRequiredBundles)}
+              tone="blue"
+            />
+            <SmallStat
+              label="Required Qty"
+              value={String(stats.totalRequiredQty)}
+              tone="slate"
+            />
+            <SmallStat
+              label="Delivered Qty"
+              value={String(stats.deliveredQty)}
+              tone="green"
+            />
+            <SmallStat
+              label="Outstanding Qty"
+              value={String(stats.outstandingQty)}
+              tone={stats.outstandingQty > 0 ? "orange" : "green"}
+            />
           </div>
         </PanelCard>
       </div>
 
       <div className="bg-white border rounded-2xl p-6">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div>
-            <div className="text-xl font-semibold">Tower Information</div>
-            <div className="text-sm text-slate-500 mt-1">
-              Imported tower properties and project-specific fields from the CSV.
-            </div>
-          </div>
-
-          <div className="text-sm text-slate-500">
-            Weight should ideally be imported with the CSV into{" "}
-            <span className="font-medium">extra_data</span>.
+        <div className="mb-5">
+          <div className="text-xl font-semibold">Tower Information</div>
+          <div className="text-sm text-slate-500 mt-1">
+            Imported tower properties and project-specific fields from the CSV.
           </div>
         </div>
 
         {extraDataEntries.length === 0 ? (
           <div className="text-slate-500">No tower extra data available.</div>
         ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {extraDataEntries.map(([key, value]) => (
-              <InfoTile
-                key={key}
-                label={formatLabel(key)}
-                value={formatValue(value)}
-                tone={isWeightKey(key) ? "blue" : "slate"}
-              />
-            ))}
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {extraDataEntries.map(([key, value]) => {
+              const isWeight = isWeightKey(key);
+
+              return (
+                <div
+                  key={key}
+                  className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 ${
+                    isWeight
+                      ? "border-blue-200 bg-blue-50"
+                      : "border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    {formatLabel(key)}
+                  </div>
+
+                  <div
+                    className={`text-sm font-semibold text-right ${
+                      isWeight ? "text-blue-700" : "text-slate-900"
+                    }`}
+                  >
+                    {formatValue(value)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -831,30 +923,6 @@ function SmallStat({
     <div className={`border rounded-xl p-4 ${classes[tone]}`}>
       <div className="text-xs opacity-70">{label}</div>
       <div className="text-xl font-bold mt-1">{value}</div>
-    </div>
-  );
-}
-
-function InfoTile({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "blue" | "slate";
-}) {
-  const classes =
-    tone === "blue"
-      ? "border-blue-200 bg-blue-50"
-      : "border-slate-200 bg-slate-50";
-
-  return (
-    <div className={`border rounded-xl p-4 ${classes}`}>
-      <div className="text-xs text-slate-500 uppercase tracking-wide">
-        {label}
-      </div>
-      <div className="font-semibold mt-1 break-words">{value}</div>
     </div>
   );
 }
