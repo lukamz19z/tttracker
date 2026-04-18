@@ -70,11 +70,15 @@ type OverviewStats = {
   totalDelayHours: number;
   defectCount: number;
   openDefectCount: number;
+  closedDefectCount: number;
   modificationCount: number;
   totalRequiredBundles: number;
   totalRequiredQty: number;
+  deliveredQty: number;
+  outstandingQty: number;
   deliveryPercent: number;
   computedProgress: number;
+  remainingProgress: number;
   computedStatus: string;
 };
 
@@ -125,6 +129,10 @@ function getStatusFromProgress(progress: number) {
   if (progress >= 100) return "Complete";
   if (progress > 0) return "In Progress";
   return "Not Started";
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
 }
 
 export default function TowerOverviewPage() {
@@ -245,6 +253,7 @@ export default function TowerOverviewPage() {
         totalOtherDelay;
 
       const computedProgress = getProgressFromDockets(dockets);
+      const remainingProgress = Math.max(0, 100 - computedProgress);
       const computedStatus = getStatusFromProgress(computedProgress);
 
       const totalRequiredBundles = requiredBundles.length;
@@ -260,16 +269,21 @@ export default function TowerOverviewPage() {
           Number(item.qty_delivered || 0);
       });
 
-      const cappedDelivered = requiredBundles.reduce((sum, bundle) => {
+      const deliveredQty = requiredBundles.reduce((sum, bundle) => {
         const required = Number(bundle.qty_required || 0);
         const delivered = deliveredByBundle[bundle.bundle_no] || 0;
         return sum + Math.min(required, delivered);
       }, 0);
 
+      const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
+
       const deliveryPercent =
         totalRequiredQty > 0
-          ? Math.round((cappedDelivered / totalRequiredQty) * 100)
+          ? Math.round((deliveredQty / totalRequiredQty) * 100)
           : 0;
+
+      const openDefectCount = getOpenDefectCount(defects);
+      const closedDefectCount = Math.max(0, defects.length - openDefectCount);
 
       const nextStats: OverviewStats = {
         latestDate,
@@ -281,12 +295,16 @@ export default function TowerOverviewPage() {
         totalOtherDelay: Math.round(totalOtherDelay * 100) / 100,
         totalDelayHours: Math.round(totalDelayHours * 100) / 100,
         defectCount: defects.length,
-        openDefectCount: getOpenDefectCount(defects),
+        openDefectCount,
+        closedDefectCount,
         modificationCount: modifications.length,
         totalRequiredBundles,
         totalRequiredQty,
+        deliveredQty,
+        outstandingQty,
         deliveryPercent,
         computedProgress,
+        remainingProgress,
         computedStatus,
       };
 
@@ -333,145 +351,246 @@ export default function TowerOverviewPage() {
         latestDate={stats.latestDate}
       />
 
-      {/* QUICK SUMMARY */}
       <div className="bg-white border rounded-2xl p-6">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
           <div>
-            <div className="text-xl font-semibold">Tower Overview Summary</div>
+            <div className="text-2xl font-bold">Tower Dashboard</div>
             <div className="text-sm text-slate-500 mt-1">
-              Complete snapshot of this tower’s current status, field activity and steel delivery.
+              Power-BI style overview of progress, steel, labour, delays, defects and tower metadata.
             </div>
           </div>
 
           <div className="flex gap-2 flex-wrap">
             <Link
               href={`/project/${projectId}/tower/${towerId}/dockets`}
-              className="border px-4 py-2 rounded-lg"
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
             >
               View Dockets
             </Link>
             <Link
               href={`/project/${projectId}/tower/${towerId}/defects`}
-              className="border px-4 py-2 rounded-lg"
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
             >
               View Defects
             </Link>
             <Link
               href={`/project/${projectId}/tower/${towerId}/deliveries`}
-              className="border px-4 py-2 rounded-lg"
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
             >
               View Deliveries
+            </Link>
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/modifications`}
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+            >
+              View Mods
             </Link>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-4">
-          <SummaryCard label="Computed Progress" value={`${stats.computedProgress}%`} />
-          <SummaryCard label="Computed Status" value={stats.computedStatus} />
-          <SummaryCard label="Daily Dockets" value={String(stats.docketCount)} />
-          <SummaryCard label="Total Manhours" value={`${stats.totalHours}h`} />
-          <SummaryCard label="Steel Delivery" value={`${stats.deliveryPercent}%`} />
-          <SummaryCard label="Last Docket" value={stats.latestDate || "-"} />
-
-          <SummaryCard label="Defects Total" value={String(stats.defectCount)} />
-          <SummaryCard label="Defects Open" value={String(stats.openDefectCount)} />
-          <SummaryCard label="Modifications" value={String(stats.modificationCount)} />
-          <SummaryCard label="Required Bundles" value={String(stats.totalRequiredBundles)} />
-          <SummaryCard label="Required Qty" value={String(stats.totalRequiredQty)} />
-          <SummaryCard
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
+          <KpiCard
+            label="Progress"
+            value={`${stats.computedProgress}%`}
+            tone="blue"
+            subtext={stats.computedStatus}
+          />
+          <KpiCard
+            label="Steel Delivery"
+            value={`${stats.deliveryPercent}%`}
+            tone="green"
+            subtext={`${stats.deliveredQty}/${stats.totalRequiredQty}`}
+          />
+          <KpiCard
+            label="Total Hours"
+            value={`${stats.totalHours}h`}
+            tone="blue"
+            subtext={`${stats.docketCount} dockets`}
+          />
+          <KpiCard
+            label="Open Defects"
+            value={String(stats.openDefectCount)}
+            tone={stats.openDefectCount > 0 ? "red" : "green"}
+            subtext={`${stats.defectCount} total`}
+          />
+          <KpiCard
+            label="Mods"
+            value={String(stats.modificationCount)}
+            tone="slate"
+            subtext="Logged items"
+          />
+          <KpiCard
+            label="Delay Hours"
+            value={`${stats.totalDelayHours}h`}
+            tone={stats.totalDelayHours > 0 ? "orange" : "green"}
+            subtext="All causes"
+          />
+          <KpiCard
+            label="Last Docket"
+            value={stats.latestDate || "-"}
+            tone="slate"
+            subtext="Latest activity"
+          />
+          <KpiCard
             label="Tower Weight"
             value={weightValue !== null ? formatValue(weightValue) : "-"}
+            tone="slate"
+            subtext="From CSV import"
           />
         </div>
       </div>
 
-      {/* PROGRESS + DELIVERY + DELAYS */}
       <div className="grid xl:grid-cols-3 gap-6">
-        <div className="bg-white border rounded-2xl p-6">
-          <div className="text-lg font-semibold mb-4">Progress Snapshot</div>
+        <ChartCard
+          title="Overall Progress"
+          subtitle="Completed vs remaining"
+        >
+          <div className="flex flex-col items-center gap-4">
+            <DonutChart
+              percent={stats.computedProgress}
+              color="#2563eb"
+              remainderColor="#e2e8f0"
+              centerTop={`${stats.computedProgress}%`}
+              centerBottom="Complete"
+            />
 
-          <div className="space-y-4">
-            <MetricRow label="Current Progress" value={`${stats.computedProgress}%`} />
-            <MetricRow label="Current Status" value={stats.computedStatus} />
-            <MetricRow label="Tower Table Progress" value={`${tower.progress || 0}%`} />
-            <MetricRow label="Tower Table Status" value={tower.status || "-"} />
+            <div className="w-full space-y-3">
+              <LegendRow label="Completed" value={`${stats.computedProgress}%`} colorClass="bg-blue-600" />
+              <LegendRow label="Remaining" value={`${stats.remainingProgress}%`} colorClass="bg-slate-300" />
+              <ProgressBar
+                label="Tower Progress"
+                value={stats.computedProgress}
+                barClass="bg-blue-600"
+              />
+            </div>
+          </div>
+        </ChartCard>
 
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-slate-500">Progress Bar</span>
-                <span className="font-medium">{stats.computedProgress}%</span>
-              </div>
-              <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
-                <div
-                  className="h-3 bg-blue-600 rounded-full"
-                  style={{ width: `${Math.min(stats.computedProgress, 100)}%` }}
-                />
+        <ChartCard
+          title="Steel Delivery"
+          subtitle="Delivered vs outstanding"
+        >
+          <div className="flex flex-col items-center gap-4">
+            <DonutChart
+              percent={stats.deliveryPercent}
+              color="#16a34a"
+              remainderColor="#e2e8f0"
+              centerTop={`${stats.deliveryPercent}%`}
+              centerBottom="Delivered"
+            />
+
+            <div className="w-full space-y-3">
+              <LegendRow
+                label="Delivered Qty"
+                value={String(stats.deliveredQty)}
+                colorClass="bg-green-600"
+              />
+              <LegendRow
+                label="Outstanding Qty"
+                value={String(stats.outstandingQty)}
+                colorClass="bg-slate-300"
+              />
+              <ProgressBar
+                label="Steel Completion"
+                value={stats.deliveryPercent}
+                barClass="bg-green-600"
+              />
+            </div>
+          </div>
+        </ChartCard>
+
+        <ChartCard
+          title="Defects Status"
+          subtitle="Open vs closed"
+        >
+          <div className="flex flex-col items-center gap-4">
+            <DonutChart
+              percent={
+                stats.defectCount > 0
+                  ? Math.round((stats.closedDefectCount / stats.defectCount) * 100)
+                  : 100
+              }
+              color="#16a34a"
+              remainderColor="#dc2626"
+              centerTop={String(stats.defectCount)}
+              centerBottom="Total"
+            />
+
+            <div className="w-full space-y-3">
+              <LegendRow
+                label="Closed"
+                value={String(stats.closedDefectCount)}
+                colorClass="bg-green-600"
+              />
+              <LegendRow
+                label="Open"
+                value={String(stats.openDefectCount)}
+                colorClass="bg-red-600"
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <SmallStat label="Open Rate" value={`${stats.defectCount > 0 ? Math.round((stats.openDefectCount / stats.defectCount) * 100) : 0}%`} tone="red" />
+                <SmallStat label="Closed Rate" value={`${stats.defectCount > 0 ? Math.round((stats.closedDefectCount / stats.defectCount) * 100) : 0}%`} tone="green" />
               </div>
             </div>
           </div>
-        </div>
+        </ChartCard>
+      </div>
 
-        <div className="bg-white border rounded-2xl p-6">
-          <div className="text-lg font-semibold mb-4">Steel Delivery Snapshot</div>
+      <div className="grid xl:grid-cols-3 gap-6">
+        <PanelCard title="Operations Summary" subtitle="Field productivity and logged activity">
+          <div className="space-y-3">
+            <MetricRow label="Current Status" value={stats.computedStatus} tone={stats.computedStatus === "Complete" ? "green" : stats.computedStatus === "In Progress" ? "blue" : "slate"} />
+            <MetricRow label="Daily Dockets Logged" value={String(stats.docketCount)} />
+            <MetricRow label="Total Manhours" value={`${stats.totalHours}h`} tone="blue" />
+            <MetricRow label="Last Docket Date" value={stats.latestDate || "-"} />
+            <MetricRow label="Modifications Logged" value={String(stats.modificationCount)} tone="slate" />
+          </div>
+        </PanelCard>
 
+        <PanelCard title="Delay Breakdown" subtitle="Highlighting productivity losses">
           <div className="space-y-4">
-            <MetricRow label="Steel Delivery" value={`${stats.deliveryPercent}%`} />
-            <MetricRow label="Required Bundles" value={String(stats.totalRequiredBundles)} />
-            <MetricRow label="Required Quantity" value={String(stats.totalRequiredQty)} />
-
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-slate-500">Delivery Bar</span>
-                <span className="font-medium">{stats.deliveryPercent}%</span>
-              </div>
-              <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
-                <div
-                  className="h-3 bg-emerald-600 rounded-full"
-                  style={{ width: `${Math.min(stats.deliveryPercent, 100)}%` }}
-                />
-              </div>
+            <DelayBar
+              label="Weather"
+              value={stats.totalWeatherDelay}
+              total={stats.totalDelayHours}
+              barClass="bg-orange-500"
+            />
+            <DelayBar
+              label="Lightning"
+              value={stats.totalLightningDelay}
+              total={stats.totalDelayHours}
+              barClass="bg-red-500"
+            />
+            <DelayBar
+              label="Toolbox"
+              value={stats.totalToolboxDelay}
+              total={stats.totalDelayHours}
+              barClass="bg-amber-500"
+            />
+            <DelayBar
+              label="Other"
+              value={stats.totalOtherDelay}
+              total={stats.totalDelayHours}
+              barClass="bg-slate-500"
+            />
+            <div className="pt-2 border-t">
+              <MetricRow label="Total Delay Hours" value={`${stats.totalDelayHours}h`} tone={stats.totalDelayHours > 0 ? "orange" : "green"} />
             </div>
           </div>
-        </div>
+        </PanelCard>
 
-        <div className="bg-white border rounded-2xl p-6">
-          <div className="text-lg font-semibold mb-4">Labour & Delay Snapshot</div>
-
-          <div className="space-y-3">
-            <MetricRow label="Total Manhours" value={`${stats.totalHours}h`} />
-            <MetricRow label="Weather Delay" value={`${stats.totalWeatherDelay}h`} />
-            <MetricRow label="Lightning Delay" value={`${stats.totalLightningDelay}h`} />
-            <MetricRow label="Toolbox Delay" value={`${stats.totalToolboxDelay}h`} />
-            <MetricRow label="Other Delay" value={`${stats.totalOtherDelay}h`} />
-            <MetricRow label="Total Delay Hours" value={`${stats.totalDelayHours}h`} />
+        <PanelCard title="Quality & Steel Snapshot" subtitle="Quick action-needed overview">
+          <div className="grid grid-cols-2 gap-3">
+            <SmallStat label="Open Defects" value={String(stats.openDefectCount)} tone={stats.openDefectCount > 0 ? "red" : "green"} />
+            <SmallStat label="Total Defects" value={String(stats.defectCount)} tone="slate" />
+            <SmallStat label="Bundles" value={String(stats.totalRequiredBundles)} tone="blue" />
+            <SmallStat label="Required Qty" value={String(stats.totalRequiredQty)} tone="slate" />
+            <SmallStat label="Delivered Qty" value={String(stats.deliveredQty)} tone="green" />
+            <SmallStat label="Outstanding Qty" value={String(stats.outstandingQty)} tone={stats.outstandingQty > 0 ? "orange" : "green"} />
           </div>
-        </div>
+        </PanelCard>
       </div>
 
-      {/* DEFECTS + MODS + ACTIVITY */}
-      <div className="grid xl:grid-cols-3 gap-6">
-        <div className="bg-white border rounded-2xl p-6">
-          <div className="text-lg font-semibold mb-4">Quality Snapshot</div>
-          <div className="space-y-3">
-            <MetricRow label="Total Defects" value={String(stats.defectCount)} />
-            <MetricRow label="Open Defects" value={String(stats.openDefectCount)} />
-            <MetricRow label="Modifications Logged" value={String(stats.modificationCount)} />
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-6 xl:col-span-2">
-          <div className="text-lg font-semibold mb-4">Latest Activity Snapshot</div>
-
-          <div className="grid md:grid-cols-4 gap-4">
-            <SnapshotCard label="Last Docket Date" value={stats.latestDate || "-"} />
-            <SnapshotCard label="Daily Dockets Logged" value={String(stats.docketCount)} />
-            <SnapshotCard label="Total Manhours" value={`${stats.totalHours}h`} />
-            <SnapshotCard label="Steel Delivery" value={`${stats.deliveryPercent}%`} />
-          </div>
-        </div>
-      </div>
-
-      {/* TOWER INFORMATION */}
       <div className="bg-white border rounded-2xl p-6">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
           <div>
@@ -482,7 +601,8 @@ export default function TowerOverviewPage() {
           </div>
 
           <div className="text-sm text-slate-500">
-            Weight should ideally be imported with the CSV into <span className="font-medium">extra_data</span>.
+            Weight should ideally be imported with the CSV into{" "}
+            <span className="font-medium">extra_data</span>.
           </div>
         </div>
 
@@ -491,17 +611,12 @@ export default function TowerOverviewPage() {
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {extraDataEntries.map(([key, value]) => (
-              <div
+              <InfoTile
                 key={key}
-                className="border rounded-xl p-4 bg-slate-50"
-              >
-                <div className="text-xs text-slate-500 uppercase tracking-wide">
-                  {formatLabel(key)}
-                </div>
-                <div className="font-semibold mt-1 break-words">
-                  {formatValue(value)}
-                </div>
-              </div>
+                label={formatLabel(key)}
+                value={formatValue(value)}
+                tone={isWeightKey(key) ? "blue" : "slate"}
+              />
             ))}
           </div>
         )}
@@ -510,32 +625,236 @@ export default function TowerOverviewPage() {
   );
 }
 
-function SummaryCard({
+function KpiCard({
   label,
   value,
+  subtext,
+  tone,
 }: {
   label: string;
   value: string;
+  subtext?: string;
+  tone: "blue" | "green" | "orange" | "red" | "slate";
 }) {
+  const toneClasses: Record<typeof tone, string> = {
+    blue: "border-blue-200 bg-blue-50 text-blue-900",
+    green: "border-green-200 bg-green-50 text-green-900",
+    orange: "border-orange-200 bg-orange-50 text-orange-900",
+    red: "border-red-200 bg-red-50 text-red-900",
+    slate: "border-slate-200 bg-slate-50 text-slate-900",
+  };
+
+  const topBarClasses: Record<typeof tone, string> = {
+    blue: "bg-blue-600",
+    green: "bg-green-600",
+    orange: "bg-orange-500",
+    red: "bg-red-600",
+    slate: "bg-slate-500",
+  };
+
   return (
-    <div className="border rounded-xl p-4 bg-slate-50">
-      <div className="text-xs text-slate-500 uppercase tracking-wide">{label}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
+    <div className={`border rounded-2xl overflow-hidden ${toneClasses[tone]}`}>
+      <div className={`h-1.5 ${topBarClasses[tone]}`} />
+      <div className="p-4">
+        <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
+        <div className="text-2xl font-bold mt-1 break-words">{value}</div>
+        <div className="text-xs mt-1 opacity-70">{subtext || "\u00A0"}</div>
+      </div>
     </div>
   );
 }
 
-function SnapshotCard({
+function ChartCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white border rounded-2xl p-6">
+      <div className="mb-5">
+        <div className="text-lg font-semibold">{title}</div>
+        <div className="text-sm text-slate-500 mt-1">{subtitle}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PanelCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white border rounded-2xl p-6">
+      <div className="mb-4">
+        <div className="text-lg font-semibold">{title}</div>
+        <div className="text-sm text-slate-500 mt-1">{subtitle}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function DonutChart({
+  percent,
+  color,
+  remainderColor,
+  centerTop,
+  centerBottom,
+}: {
+  percent: number;
+  color: string;
+  remainderColor: string;
+  centerTop: string;
+  centerBottom: string;
+}) {
+  const safePercent = clampPercent(percent);
+
+  return (
+    <div
+      className="relative h-44 w-44 rounded-full"
+      style={{
+        background: `conic-gradient(${color} 0% ${safePercent}%, ${remainderColor} ${safePercent}% 100%)`,
+      }}
+    >
+      <div className="absolute inset-5 rounded-full bg-white border flex flex-col items-center justify-center text-center">
+        <div className="text-2xl font-bold">{centerTop}</div>
+        <div className="text-xs text-slate-500 mt-1">{centerBottom}</div>
+      </div>
+    </div>
+  );
+}
+
+function LegendRow({
   label,
   value,
+  colorClass,
 }: {
   label: string;
   value: string;
+  colorClass: string;
 }) {
   return (
-    <div className="border rounded-xl p-4 bg-slate-50">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-semibold text-lg mt-1">{value}</div>
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`h-3 w-3 rounded-full ${colorClass}`} />
+        <span className="text-sm text-slate-600">{label}</span>
+      </div>
+      <span className="font-semibold">{value}</span>
+    </div>
+  );
+}
+
+function ProgressBar({
+  label,
+  value,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  barClass: string;
+}) {
+  const safeValue = clampPercent(value);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 text-sm mb-1">
+        <span className="text-slate-500">{label}</span>
+        <span className="font-medium">{safeValue}%</span>
+      </div>
+      <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
+        <div
+          className={`h-3 rounded-full ${barClass}`}
+          style={{ width: `${safeValue}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DelayBar({
+  label,
+  value,
+  total,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  barClass: string;
+}) {
+  const percent = total > 0 ? (value / total) * 100 : 0;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 text-sm mb-1">
+        <span className="text-slate-600">{label}</span>
+        <span className="font-medium">{value}h</span>
+      </div>
+      <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
+        <div
+          className={`h-3 rounded-full ${barClass}`}
+          style={{ width: `${clampPercent(percent)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SmallStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "blue" | "green" | "orange" | "red" | "slate";
+}) {
+  const classes: Record<typeof tone, string> = {
+    blue: "border-blue-200 bg-blue-50 text-blue-900",
+    green: "border-green-200 bg-green-50 text-green-900",
+    orange: "border-orange-200 bg-orange-50 text-orange-900",
+    red: "border-red-200 bg-red-50 text-red-900",
+    slate: "border-slate-200 bg-slate-50 text-slate-900",
+  };
+
+  return (
+    <div className={`border rounded-xl p-4 ${classes[tone]}`}>
+      <div className="text-xs opacity-70">{label}</div>
+      <div className="text-xl font-bold mt-1">{value}</div>
+    </div>
+  );
+}
+
+function InfoTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "blue" | "slate";
+}) {
+  const classes =
+    tone === "blue"
+      ? "border-blue-200 bg-blue-50"
+      : "border-slate-200 bg-slate-50";
+
+  return (
+    <div className={`border rounded-xl p-4 ${classes}`}>
+      <div className="text-xs text-slate-500 uppercase tracking-wide">
+        {label}
+      </div>
+      <div className="font-semibold mt-1 break-words">{value}</div>
     </div>
   );
 }
@@ -543,14 +862,26 @@ function SnapshotCard({
 function MetricRow({
   label,
   value,
+  tone = "slate",
 }: {
   label: string;
   value: string;
+  tone?: "blue" | "green" | "orange" | "red" | "slate";
 }) {
+  const valueClasses: Record<typeof tone, string> = {
+    blue: "text-blue-700",
+    green: "text-green-700",
+    orange: "text-orange-700",
+    red: "text-red-700",
+    slate: "text-slate-900",
+  };
+
   return (
     <div className="flex items-center justify-between gap-4 border-b last:border-b-0 pb-2 last:pb-0">
       <div className="text-slate-500 text-sm">{label}</div>
-      <div className="font-semibold text-right">{value}</div>
+      <div className={`font-semibold text-right ${valueClasses[tone]}`}>
+        {value}
+      </div>
     </div>
   );
 }
