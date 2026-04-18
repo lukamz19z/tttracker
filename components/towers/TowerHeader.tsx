@@ -250,16 +250,16 @@ export default function TowerHeader({
       </div>
 
       {coverUrl && (
-        <div className="rounded-2xl overflow-hidden border bg-slate-100 w-full max-w-5xl">
-          <div className="relative w-full aspect-[16/7]">
-            <img
-              src={coverUrl}
-              alt={`${towerLabel} cover`}
-              className="absolute inset-0 h-full w-full object-cover object-center"
-            />
-          </div>
-        </div>
-      )}
+  <div className="rounded-2xl overflow-hidden border bg-slate-100 w-full max-w-[420px]">
+    <div className="relative w-full aspect-video">
+      <img
+        src={coverUrl}
+        alt={`${towerLabel} cover`}
+        className="absolute inset-0 h-full w-full object-cover object-center"
+      />
+    </div>
+  </div>
+)}
 
       <div className="flex gap-3 flex-wrap">
         <Link
