@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { getUserRole } from "@/lib/roles";
 
 type Tower = {
   id: string;
@@ -18,6 +19,7 @@ type Tower = {
 };
 
 type StatusFilter = "All" | "Not Started" | "In Progress" | "Complete";
+type UserRole = "admin" | "editor" | "viewer" | string | null;
 
 function getTowerLabel(tower: Tower) {
   return (
@@ -37,19 +39,6 @@ function normalizeStatus(status?: string | null): Exclude<StatusFilter, "All"> {
   return "Not Started";
 }
 
-function formatLabel(key: string) {
-  return key
-    .replace(/_/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "-";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  return String(value);
-}
-
 function getStatusBadgeClasses(status: string) {
   if (status === "Complete") {
     return "bg-green-50 text-green-700 border-green-200";
@@ -58,6 +47,24 @@ function getStatusBadgeClasses(status: string) {
     return "bg-blue-50 text-blue-700 border-blue-200";
   }
   return "bg-slate-50 text-slate-700 border-slate-200";
+}
+
+function getTowerType(tower: Tower) {
+  const extra = tower.extra_data || {};
+
+  const candidates = [
+    extra["type"],
+    extra["Type"],
+    extra["tower_type"],
+    extra["Tower Type"],
+    extra["tower type"],
+  ];
+
+  const found = candidates.find(
+    (value) => value !== null && value !== undefined && String(value).trim() !== ""
+  );
+
+  return found ? String(found) : "-";
 }
 
 export default function TowersPage() {
@@ -70,6 +77,27 @@ export default function TowersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
+  const [role, setRole] = useState<UserRole>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const canManageTowers = role === "admin" || role === "editor";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRole() {
+      const userRole = await getUserRole();
+      if (!cancelled) {
+        setRole(userRole);
+      }
+    }
+
+    loadRole();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
@@ -133,24 +161,6 @@ export default function TowersPage() {
     };
   }, [towers]);
 
-  const dynamicColumns = useMemo(() => {
-    const counts = new Map<string, number>();
-
-    towers.forEach((tower) => {
-      const extra = tower.extra_data;
-      if (!extra) return;
-
-      Object.keys(extra).forEach((key) => {
-        counts.set(key, (counts.get(key) || 0) + 1);
-      });
-    });
-
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([key]) => key);
-  }, [towers]);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
@@ -163,23 +173,47 @@ export default function TowersPage() {
 
       if (!q) return true;
 
-      const baseFields = [
+      const searchableFields = [
         getTowerLabel(tower),
         tower.name || "",
         tower.line || "",
         status,
         String(tower.progress || 0),
+        getTowerType(tower),
       ];
 
-      const extraFields = tower.extra_data
-        ? Object.values(tower.extra_data).map((v) => formatValue(v))
-        : [];
-
-      return [...baseFields, ...extraFields].some((value) =>
+      return searchableFields.some((value) =>
         value.toLowerCase().includes(q)
       );
     });
   }, [towers, search, statusFilter]);
+
+  async function handleDeleteTower(tower: Tower) {
+    const label = getTowerLabel(tower);
+
+    const confirmed = window.confirm(
+      `Delete tower "${label}"?\n\nThis may also remove related records depending on your database relationships.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(tower.id);
+
+    try {
+      const { error } = await supabase.from("towers").delete().eq("id", tower.id);
+
+      if (error) {
+        throw error;
+      }
+
+      setTowers((prev) => prev.filter((t) => t.id !== tower.id));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to delete tower.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   if (loading) {
     return <div className="p-8">Loading towers...</div>;
@@ -196,7 +230,16 @@ export default function TowersPage() {
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          {towers.length > 0 && (
+          {canManageTowers && towers.length > 0 && (
+            <Link
+              href={`/project/${projectId}/towers/new`}
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+            >
+              Add Tower
+            </Link>
+          )}
+
+          {canManageTowers && towers.length > 0 && (
             <Link
               href={`/project/${projectId}/towers/import`}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg"
@@ -232,8 +275,8 @@ export default function TowersPage() {
         <div className="bg-white border rounded-2xl p-4 md:p-5 space-y-4">
           <div className="flex gap-3 flex-wrap items-center">
             <input
-              className="border rounded-lg px-3 py-2 w-full md:w-80"
-              placeholder="Search tower, line, status, imported fields..."
+              className="border rounded-lg px-3 py-2 w-full md:w-96"
+              placeholder="Search tower, line, status or type..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -265,12 +308,28 @@ export default function TowersPage() {
             dockets and deliveries.
           </p>
 
-          <Link
-            href={`/project/${projectId}/towers/import`}
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg"
-          >
-            Import Towers
-          </Link>
+          <div className="flex justify-center gap-3 flex-wrap">
+            {canManageTowers ? (
+              <>
+                <Link
+                  href={`/project/${projectId}/towers/new`}
+                  className="border px-6 py-3 rounded-lg hover:bg-slate-50"
+                >
+                  Add Tower Manually
+                </Link>
+                <Link
+                  href={`/project/${projectId}/towers/import`}
+                  className="bg-blue-600 text-white px-6 py-3 rounded-lg"
+                >
+                  Import Towers
+                </Link>
+              </>
+            ) : (
+              <div className="text-slate-500">
+                No towers available for this project yet.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -281,15 +340,14 @@ export default function TowersPage() {
               <thead className="bg-slate-100">
                 <tr>
                   <th className="p-3 text-left">Tower</th>
+                  <th className="p-3 text-left">Type</th>
                   <th className="p-3 text-left">Line</th>
                   <th className="p-3 text-left">Status</th>
                   <th className="p-3 text-left">Progress</th>
-                  {dynamicColumns.map((column) => (
-                    <th key={column} className="p-3 text-left">
-                      {formatLabel(column)}
-                    </th>
-                  ))}
                   <th className="p-3 text-left">Open</th>
+                  {canManageTowers && (
+                    <th className="p-3 text-left">Delete</th>
+                  )}
                 </tr>
               </thead>
 
@@ -297,6 +355,7 @@ export default function TowersPage() {
                 {filtered.map((tower) => {
                   const status = normalizeStatus(tower.status);
                   const progress = Number(tower.progress || 0);
+                  const label = getTowerLabel(tower);
 
                   return (
                     <tr
@@ -304,13 +363,15 @@ export default function TowersPage() {
                       className="border-t hover:bg-slate-50 transition-colors"
                     >
                       <td className="p-3">
-                        <div className="font-semibold">{getTowerLabel(tower)}</div>
-                        {tower.name && tower.name !== getTowerLabel(tower) && (
+                        <div className="font-semibold">{label}</div>
+                        {tower.name && tower.name !== label && (
                           <div className="text-xs text-slate-500 mt-1">
                             {tower.name}
                           </div>
                         )}
                       </td>
+
+                      <td className="p-3">{getTowerType(tower)}</td>
 
                       <td className="p-3">{tower.line || "-"}</td>
 
@@ -338,16 +399,12 @@ export default function TowersPage() {
                                 ? "bg-blue-600"
                                 : "bg-slate-300"
                             }`}
-                            style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+                            style={{
+                              width: `${Math.max(0, Math.min(100, progress))}%`,
+                            }}
                           />
                         </div>
                       </td>
-
-                      {dynamicColumns.map((column) => (
-                        <td key={column} className="p-3">
-                          {formatValue(tower.extra_data?.[column])}
-                        </td>
-                      ))}
 
                       <td className="p-3">
                         <Link
@@ -357,6 +414,19 @@ export default function TowersPage() {
                           Open
                         </Link>
                       </td>
+
+                      {canManageTowers && (
+                        <td className="p-3">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTower(tower)}
+                            disabled={deletingId === tower.id}
+                            className="inline-flex items-center rounded-lg border border-red-200 bg-red-50 text-red-700 px-4 py-2 text-sm font-medium hover:bg-red-100 disabled:opacity-60"
+                          >
+                            {deletingId === tower.id ? "Deleting..." : "Delete"}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -364,7 +434,7 @@ export default function TowersPage() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5 + dynamicColumns.length}
+                      colSpan={canManageTowers ? 7 : 6}
                       className="p-10 text-center text-slate-500"
                     >
                       No towers match your search or filter.
