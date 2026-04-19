@@ -1,10 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
+
+type Tower = {
+  id: string;
+  name?: string | null;
+  line?: string | null;
+  status?: string | null;
+  progress?: number | null;
+  tower_number?: string | null;
+  structure_number?: string | null;
+  tower_no?: string | null;
+  extra_data?: Record<string, unknown> | null;
+  cover_photo_path?: string | null;
+};
 
 type SafetyDoc = {
   id: string;
@@ -15,19 +28,53 @@ type SafetyDoc = {
   date_to: string | null;
   file_url: string | null;
   closed_out: boolean | null;
-  created_at?: string;
+  created_at?: string | null;
 };
+
+type StatusFilter = "All" | "Active" | "Expired" | "Upcoming" | "Closed";
+
+function getDocStatus(doc: SafetyDoc): Exclude<StatusFilter, "All"> {
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (doc.closed_out) return "Closed";
+  if (doc.date_to && today > doc.date_to) return "Expired";
+  if (doc.date_from && today < doc.date_from) return "Upcoming";
+  return "Active";
+}
+
+function getStatusClasses(status: Exclude<StatusFilter, "All">) {
+  if (status === "Active") {
+    return "bg-green-100 text-green-700 border-green-200";
+  }
+  if (status === "Expired") {
+    return "bg-red-100 text-red-700 border-red-200";
+  }
+  if (status === "Closed") {
+    return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+  return "bg-amber-100 text-amber-700 border-amber-200";
+}
+
+function formatDateRange(from: string | null, to: string | null) {
+  if (!from && !to) return "-";
+  return `${from || "-"} → ${to || "-"}`;
+}
 
 export default function SafetyRegisterPage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
-  const supabase = createSupabaseBrowser();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [tower, setTower] = useState<any>(null);
+  const [tower, setTower] = useState<Tower | null>(null);
   const [latestDate, setLatestDate] = useState<string | null>(null);
   const [docs, setDocs] = useState<SafetyDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
 
   const [label, setLabel] = useState("");
   const [lh, setLh] = useState("");
@@ -42,35 +89,96 @@ export default function SafetyRegisterPage() {
   const [editTo, setEditTo] = useState("");
   const [editFile, setEditFile] = useState<File | null>(null);
 
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
-    load();
-  }, [towerId]);
+    if (!towerId) return;
 
-  async function load() {
-    const { data: towerData } = await supabase
-      .from("towers")
-      .select("*")
-      .eq("id", towerId)
-      .single();
+    let cancelled = false;
 
-    setTower(towerData);
+    async function run() {
+      setLoading(true);
 
-    const { data: dockets } = await supabase
-      .from("tower_daily_dockets")
-      .select("docket_date")
-      .eq("tower_id", towerId)
-      .order("docket_date", { ascending: false })
-      .limit(1);
+      const [towerRes, docketsRes, safetyDocsRes] = await Promise.all([
+        supabase.from("towers").select("*").eq("id", towerId).single(),
+        supabase
+          .from("tower_daily_dockets")
+          .select("docket_date")
+          .eq("tower_id", towerId)
+          .order("docket_date", { ascending: false })
+          .limit(1),
+        supabase
+          .from("tower_safety_register")
+          .select("*")
+          .eq("tower_id", towerId)
+          .order("created_at", { ascending: false }),
+      ]);
 
-    if (dockets?.length) setLatestDate(dockets[0].docket_date);
+      if (cancelled) return;
 
-    const { data: safetyDocs } = await supabase
-      .from("tower_safety_register")
-      .select("*")
-      .eq("tower_id", towerId)
-      .order("created_at", { ascending: false });
+      setTower((towerRes.data as Tower | null) ?? null);
 
-    setDocs((safetyDocs || []) as SafetyDoc[]);
+      const docketRows =
+        (docketsRes.data as { docket_date: string | null }[] | null) ?? [];
+      setLatestDate(docketRows.length > 0 ? docketRows[0].docket_date : null);
+
+      setDocs((safetyDocsRes.data as SafetyDoc[] | null) ?? []);
+      setLoading(false);
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [towerId, supabase, reloadKey]);
+
+  const summary = useMemo(() => {
+    const active = docs.filter((d) => getDocStatus(d) === "Active").length;
+    const expired = docs.filter((d) => getDocStatus(d) === "Expired").length;
+    const upcoming = docs.filter((d) => getDocStatus(d) === "Upcoming").length;
+    const closed = docs.filter((d) => getDocStatus(d) === "Closed").length;
+    const latestUpload = docs[0]?.created_at || null;
+
+    return {
+      total: docs.length,
+      active,
+      expired,
+      upcoming,
+      closed,
+      latestUpload,
+    };
+  }, [docs]);
+
+  const filteredDocs = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return docs.filter((doc) => {
+      const status = getDocStatus(doc);
+
+      if (statusFilter !== "All" && status !== statusFilter) {
+        return false;
+      }
+
+      if (!q) return true;
+
+      const haystack = [
+        doc.document_label || "",
+        doc.leading_hand || "",
+        doc.date_from || "",
+        doc.date_to || "",
+        status,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(q);
+    });
+  }, [docs, search, statusFilter]);
+
+  function fileHref(path: string) {
+    const { data } = supabase.storage.from("safety_docs").getPublicUrl(path);
+    return data.publicUrl;
   }
 
   async function addDoc() {
@@ -79,45 +187,52 @@ export default function SafetyRegisterPage() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("tower_safety_register")
-      .insert({
-        tower_id: towerId,
-        document_label: label.trim(),
-        leading_hand: lh.trim() || null,
-        date_from: from || null,
-        date_to: to || null,
-      })
-      .select()
-      .single();
+    setSaving(true);
 
-    if (error || !data) {
-      alert("Failed to add safety document");
-      return;
-    }
+    try {
+      const { data, error } = await supabase
+        .from("tower_safety_register")
+        .insert({
+          tower_id: towerId,
+          document_label: label.trim(),
+          leading_hand: lh.trim() || null,
+          date_from: from || null,
+          date_to: to || null,
+        })
+        .select()
+        .single();
 
-    if (file) {
-      const uploadRes = await supabase.storage
-        .from("safety_docs")
-        .upload(`${data.id}/${Date.now()}_${file.name}`, file, {
-          upsert: true,
-        });
-
-      if (!uploadRes.error) {
-        await supabase
-          .from("tower_safety_register")
-          .update({ file_url: uploadRes.data.path })
-          .eq("id", data.id);
+      if (error || !data) {
+        throw new Error("Failed to add safety document");
       }
+
+      if (file) {
+        const uploadRes = await supabase.storage
+          .from("safety_docs")
+          .upload(`${data.id}/${Date.now()}_${file.name}`, file, {
+            upsert: true,
+          });
+
+        if (!uploadRes.error) {
+          await supabase
+            .from("tower_safety_register")
+            .update({ file_url: uploadRes.data.path })
+            .eq("id", data.id);
+        }
+      }
+
+      setLabel("");
+      setLh("");
+      setFrom("");
+      setTo("");
+      setFile(null);
+      setReloadKey((v) => v + 1);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to add document");
+    } finally {
+      setSaving(false);
     }
-
-    setLabel("");
-    setLh("");
-    setFrom("");
-    setTo("");
-    setFile(null);
-
-    await load();
   }
 
   function startEdit(doc: SafetyDoc) {
@@ -144,40 +259,48 @@ export default function SafetyRegisterPage() {
       return;
     }
 
-    const updatePayload: Partial<SafetyDoc> = {
-      document_label: editLabel.trim(),
-      leading_hand: editLh.trim() || null,
-      date_from: editFrom || null,
-      date_to: editTo || null,
-    };
+    setSaving(true);
 
-    const { error } = await supabase
-      .from("tower_safety_register")
-      .update(updatePayload)
-      .eq("id", doc.id);
+    try {
+      const updatePayload: Partial<SafetyDoc> = {
+        document_label: editLabel.trim(),
+        leading_hand: editLh.trim() || null,
+        date_from: editFrom || null,
+        date_to: editTo || null,
+      };
 
-    if (error) {
-      alert("Failed to update safety document");
-      return;
-    }
+      const { error } = await supabase
+        .from("tower_safety_register")
+        .update(updatePayload)
+        .eq("id", doc.id);
 
-    if (editFile) {
-      const uploadRes = await supabase.storage
-        .from("safety_docs")
-        .upload(`${doc.id}/${Date.now()}_${editFile.name}`, editFile, {
-          upsert: true,
-        });
-
-      if (!uploadRes.error) {
-        await supabase
-          .from("tower_safety_register")
-          .update({ file_url: uploadRes.data.path })
-          .eq("id", doc.id);
+      if (error) {
+        throw new Error("Failed to update safety document");
       }
-    }
 
-    cancelEdit();
-    await load();
+      if (editFile) {
+        const uploadRes = await supabase.storage
+          .from("safety_docs")
+          .upload(`${doc.id}/${Date.now()}_${editFile.name}`, editFile, {
+            upsert: true,
+          });
+
+        if (!uploadRes.error) {
+          await supabase
+            .from("tower_safety_register")
+            .update({ file_url: uploadRes.data.path })
+            .eq("id", doc.id);
+        }
+      }
+
+      cancelEdit();
+      setReloadKey((v) => v + 1);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to update document");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function closeOut(docId: string) {
@@ -186,24 +309,12 @@ export default function SafetyRegisterPage() {
       .update({ closed_out: true })
       .eq("id", docId);
 
-    await load();
+    setReloadKey((v) => v + 1);
   }
 
-  function status(doc: SafetyDoc) {
-    const today = new Date().toISOString().slice(0, 10);
-
-    if (doc.closed_out) return "Closed";
-    if (doc.date_to && today > doc.date_to) return "Expired";
-    if (doc.date_from && today < doc.date_from) return "Upcoming";
-    return "Active";
+  if (loading || !tower) {
+    return <div className="p-8">Loading...</div>;
   }
-
-  function fileHref(path: string) {
-    const { data } = supabase.storage.from("safety_docs").getPublicUrl(path);
-    return data.publicUrl;
-  }
-
-  if (!tower) return <div className="p-8">Loading...</div>;
 
   return (
     <div className="p-8 space-y-6">
@@ -213,250 +324,357 @@ export default function SafetyRegisterPage() {
         latestDate={latestDate}
       />
 
-      <div className="flex gap-2 border-b pb-2">
+      <div className="flex gap-2 border-b pb-2 overflow-x-auto">
         <Link
-          className="px-4 py-2 bg-white border rounded-t-lg font-semibold"
+          className="px-4 py-2 bg-white border rounded-t-lg font-semibold whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/safety`}
         >
           Safety
         </Link>
 
         <Link
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
         >
           ITCs
         </Link>
 
         <Link
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/permits`}
         >
           Permits
         </Link>
 
         <Link
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/lifts`}
         >
           Lift Studies
         </Link>
 
         <Link
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg"
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/documents`}
         >
           Documents
         </Link>
       </div>
 
-      <div className="bg-white border rounded-2xl p-6 space-y-5">
-        <div className="text-2xl font-bold">Safety Register</div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <SummaryCard label="Total Docs" value={String(summary.total)} tone="slate" />
+        <SummaryCard label="Active" value={String(summary.active)} tone="green" />
+        <SummaryCard label="Expired" value={String(summary.expired)} tone="red" />
+        <SummaryCard label="Upcoming" value={String(summary.upcoming)} tone="amber" />
+        <SummaryCard
+          label="Closed"
+          value={String(summary.closed)}
+          tone="slate"
+        />
+      </div>
 
-        <div className="grid grid-cols-6 gap-3 items-end">
-          <div>
-            <label className="block text-xs mb-1">Document Label</label>
+      <div className="bg-white border rounded-2xl p-6 space-y-5">
+        <div>
+          <div className="text-2xl font-bold">Safety Register</div>
+          <div className="text-sm text-slate-500 mt-1">
+            Upload scanned sign-ons, permits, SWMS, work instructions and related safety documents.
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-6 gap-3 items-end">
+          <div className="lg:col-span-2">
+            <label className="block text-xs mb-1 font-medium">Document Label</label>
             <input
-              placeholder="Document Label"
+              placeholder="e.g. Daily Sign On / SWMS / Permit"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              className="border p-2 rounded w-full"
+              className="border p-2.5 rounded-lg w-full"
             />
           </div>
 
           <div>
-            <label className="block text-xs mb-1">Leading Hand</label>
+            <label className="block text-xs mb-1 font-medium">Leading Hand</label>
             <input
               placeholder="Leading Hand"
               value={lh}
               onChange={(e) => setLh(e.target.value)}
-              className="border p-2 rounded w-full"
+              className="border p-2.5 rounded-lg w-full"
             />
           </div>
 
           <div>
-            <label className="block text-xs mb-1">Date From</label>
+            <label className="block text-xs mb-1 font-medium">Date From</label>
             <input
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              className="border p-2 rounded w-full"
+              className="border p-2.5 rounded-lg w-full"
             />
           </div>
 
           <div>
-            <label className="block text-xs mb-1">Date To</label>
+            <label className="block text-xs mb-1 font-medium">Date To</label>
             <input
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
-              className="border p-2 rounded w-full"
+              className="border p-2.5 rounded-lg w-full"
             />
           </div>
 
           <div>
-            <label className="block text-xs mb-1">Attach File</label>
+            <label className="block text-xs mb-1 font-medium">Attach File</label>
             <input
               type="file"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
-              className="border p-2 rounded w-full"
+              className="border p-2 rounded-lg w-full"
             />
           </div>
-
-          <button
-            onClick={addDoc}
-            className="bg-blue-600 text-white rounded h-[42px]"
-          >
-            Add
-          </button>
         </div>
 
-        {docs.map((d) => {
-          const isEditing = editingId === d.id;
-
-          return (
-            <div
-              key={d.id}
-              className="border rounded-xl p-4 flex justify-between items-start"
-            >
-              {!isEditing ? (
-                <>
-                  <div>
-                    <div className="font-semibold">{d.document_label}</div>
-                    <div className="text-sm text-slate-500">
-                      LH: {d.leading_hand || "-"}
-                    </div>
-                    <div className="text-sm text-slate-500">
-                      {d.date_from || "-"} → {d.date_to || "-"}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 items-center flex-wrap justify-end">
-                    {d.file_url && (
-                      <a
-                        href={fileHref(d.file_url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-600"
-                      >
-                        View
-                      </a>
-                    )}
-
-                    <button
-                      onClick={() => startEdit(d)}
-                      className="text-orange-600"
-                    >
-                      Edit
-                    </button>
-
-                    {status(d) === "Expired" && !d.closed_out && (
-                      <button
-                        onClick={() => closeOut(d.id)}
-                        className="bg-red-500 text-white px-3 py-1 rounded"
-                      >
-                        Close Out
-                      </button>
-                    )}
-
-                    <div
-                      className={`px-3 py-1 rounded-full text-sm ${
-                        status(d) === "Active"
-                          ? "bg-green-100 text-green-700"
-                          : status(d) === "Expired"
-                          ? "bg-red-100 text-red-700"
-                          : status(d) === "Closed"
-                          ? "bg-slate-200 text-slate-600"
-                          : "bg-yellow-100 text-yellow-700"
-                      }`}
-                    >
-                      {status(d)}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="w-full space-y-4">
-                  <div className="grid grid-cols-5 gap-3 items-end">
-                    <div>
-                      <label className="block text-xs mb-1">Document Label</label>
-                      <input
-                        value={editLabel}
-                        onChange={(e) => setEditLabel(e.target.value)}
-                        className="border p-2 rounded w-full"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs mb-1">Leading Hand</label>
-                      <input
-                        value={editLh}
-                        onChange={(e) => setEditLh(e.target.value)}
-                        className="border p-2 rounded w-full"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs mb-1">Date From</label>
-                      <input
-                        type="date"
-                        value={editFrom}
-                        onChange={(e) => setEditFrom(e.target.value)}
-                        className="border p-2 rounded w-full"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs mb-1">Date To</label>
-                      <input
-                        type="date"
-                        value={editTo}
-                        onChange={(e) => setEditTo(e.target.value)}
-                        className="border p-2 rounded w-full"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs mb-1">Replace File</label>
-                      <input
-                        type="file"
-                        onChange={(e) => setEditFile(e.target.files?.[0] || null)}
-                        className="border p-2 rounded w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 justify-end">
-                    {d.file_url && (
-                      <a
-                        href={fileHref(d.file_url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-600"
-                      >
-                        View
-                      </a>
-                    )}
-
-                    <button
-                      onClick={cancelEdit}
-                      className="border px-4 py-2 rounded"
-                    >
-                      Cancel
-                    </button>
-
-                    <button
-                      onClick={() => saveEdit(d)}
-                      className="bg-blue-600 text-white px-4 py-2 rounded"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <div className="flex justify-end">
+          <button
+            onClick={addDoc}
+            disabled={saving}
+            className="bg-blue-600 text-white rounded-xl px-5 py-2.5 disabled:opacity-60"
+          >
+            {saving ? "Saving..." : "Add Safety Record"}
+          </button>
+        </div>
       </div>
+
+      <div className="bg-white border rounded-2xl p-4 md:p-5 space-y-4">
+        <div className="flex gap-3 flex-wrap items-center">
+          <input
+            className="border rounded-lg px-3 py-2 w-full md:w-80"
+            placeholder="Search label, leading hand or date..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+
+          <select
+            className="border rounded-lg px-3 py-2"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          >
+            <option value="All">All Statuses</option>
+            <option value="Active">Active</option>
+            <option value="Expired">Expired</option>
+            <option value="Upcoming">Upcoming</option>
+            <option value="Closed">Closed</option>
+          </select>
+
+          <div className="text-sm text-slate-500 md:ml-auto">
+            Showing <span className="font-medium">{filteredDocs.length}</span> of{" "}
+            <span className="font-medium">{docs.length}</span> records
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {filteredDocs.length === 0 ? (
+          <div className="bg-white border rounded-2xl p-10 text-center text-slate-500">
+            No safety documents match your search or filter.
+          </div>
+        ) : (
+          filteredDocs.map((doc) => {
+            const isEditing = editingId === doc.id;
+            const currentStatus = getDocStatus(doc);
+
+            return (
+              <div
+                key={doc.id}
+                className="bg-white border rounded-2xl p-5"
+              >
+                {!isEditing ? (
+                  <div className="flex justify-between items-start gap-4 flex-wrap">
+                    <div className="space-y-2 min-w-[260px]">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <div className="text-lg font-semibold">
+                          {doc.document_label}
+                        </div>
+
+                        <div
+                          className={`px-3 py-1 rounded-full text-sm border ${getStatusClasses(
+                            currentStatus
+                          )}`}
+                        >
+                          {currentStatus}
+                        </div>
+                      </div>
+
+                      <div className="grid sm:grid-cols-3 gap-3 text-sm">
+                        <InfoMini label="Leading Hand" value={doc.leading_hand || "-"} />
+                        <InfoMini label="Date Range" value={formatDateRange(doc.date_from, doc.date_to)} />
+                        <InfoMini label="Uploaded" value={doc.created_at ? doc.created_at.slice(0, 10) : "-"} />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 items-center flex-wrap justify-end">
+                      {doc.file_url && (
+                        <a
+                          href={fileHref(doc.file_url)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                        >
+                          View
+                        </a>
+                      )}
+
+                      <button
+                        onClick={() => startEdit(doc)}
+                        className="border px-4 py-2 rounded-lg hover:bg-slate-50 text-orange-700"
+                      >
+                        Edit
+                      </button>
+
+                      {currentStatus === "Expired" && !doc.closed_out && (
+                        <button
+                          onClick={() => closeOut(doc.id)}
+                          className="bg-red-600 text-white px-4 py-2 rounded-lg"
+                        >
+                          Close Out
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid lg:grid-cols-5 gap-3 items-end">
+                      <div className="lg:col-span-2">
+                        <label className="block text-xs mb-1 font-medium">
+                          Document Label
+                        </label>
+                        <input
+                          value={editLabel}
+                          onChange={(e) => setEditLabel(e.target.value)}
+                          className="border p-2.5 rounded-lg w-full"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs mb-1 font-medium">
+                          Leading Hand
+                        </label>
+                        <input
+                          value={editLh}
+                          onChange={(e) => setEditLh(e.target.value)}
+                          className="border p-2.5 rounded-lg w-full"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs mb-1 font-medium">
+                          Date From
+                        </label>
+                        <input
+                          type="date"
+                          value={editFrom}
+                          onChange={(e) => setEditFrom(e.target.value)}
+                          className="border p-2.5 rounded-lg w-full"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs mb-1 font-medium">
+                          Date To
+                        </label>
+                        <input
+                          type="date"
+                          value={editTo}
+                          onChange={(e) => setEditTo(e.target.value)}
+                          className="border p-2.5 rounded-lg w-full"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid lg:grid-cols-[1fr_auto] gap-3 items-end">
+                      <div>
+                        <label className="block text-xs mb-1 font-medium">
+                          Replace File
+                        </label>
+                        <input
+                          type="file"
+                          onChange={(e) => setEditFile(e.target.files?.[0] || null)}
+                          className="border p-2 rounded-lg w-full"
+                        />
+                      </div>
+
+                      <div className="flex gap-2 justify-end flex-wrap">
+                        {doc.file_url && (
+                          <a
+                            href={fileHref(doc.file_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                          >
+                            View
+                          </a>
+                        )}
+
+                        <button
+                          onClick={cancelEdit}
+                          className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                        >
+                          Cancel
+                        </button>
+
+                        <button
+                          onClick={() => saveEdit(doc)}
+                          disabled={saving}
+                          className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-60"
+                        >
+                          {saving ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "green" | "red" | "amber" | "slate";
+}) {
+  const classes: Record<typeof tone, string> = {
+    green: "border-green-200 bg-green-50 text-green-900",
+    red: "border-red-200 bg-red-50 text-red-900",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    slate: "border-slate-200 bg-slate-50 text-slate-900",
+  };
+
+  return (
+    <div className={`border rounded-2xl p-4 ${classes[tone]}`}>
+      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
+      <div className="text-2xl font-bold mt-1">{value}</div>
+    </div>
+  );
+}
+
+function InfoMini({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border bg-slate-50 px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="font-medium mt-0.5">{value}</div>
     </div>
   );
 }
