@@ -80,6 +80,24 @@ function getDisplayNameFromUser(user: {
   return typeof found === "string" ? found : "Unknown User";
 }
 
+function hasAttachment(doc: SafetyDoc) {
+  return Boolean(doc.file_url && doc.file_url.trim() !== "");
+}
+
+function getAttachmentHref(
+  supabase: ReturnType<typeof createSupabaseBrowser>,
+  fileUrl: string | null
+) {
+  if (!fileUrl || fileUrl.trim() === "") return null;
+
+  if (fileUrl.startsWith("http://") || fileUrl.startsWith("https://")) {
+    return fileUrl;
+  }
+
+  const { data } = supabase.storage.from("safety_docs").getPublicUrl(fileUrl);
+  return data.publicUrl;
+}
+
 export default function SafetyRegisterPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -224,11 +242,6 @@ export default function SafetyRegisterPage() {
       return haystack.includes(q);
     });
   }, [docs, search, statusFilter]);
-
-  function fileHref(path: string) {
-    const { data } = supabase.storage.from("safety_docs").getPublicUrl(path);
-    return data.publicUrl;
-  }
 
   async function addDoc() {
     if (!label.trim()) {
@@ -528,12 +541,10 @@ export default function SafetyRegisterPage() {
           filteredDocs.map((doc) => {
             const isEditing = editingId === doc.id;
             const currentStatus = getDocStatus(doc);
+            const attachmentHref = getAttachmentHref(supabase, doc.file_url);
 
             return (
-              <div
-                key={doc.id}
-                className="bg-white border rounded-2xl p-5"
-              >
+              <div key={doc.id} className="bg-white border rounded-2xl p-5">
                 {!isEditing ? (
                   <div className="space-y-4">
                     <div className="flex justify-between items-start gap-4 flex-wrap">
@@ -554,15 +565,23 @@ export default function SafetyRegisterPage() {
                       </div>
 
                       <div className="flex gap-2 items-center flex-wrap justify-end">
-                        {doc.file_url && (
+                        {attachmentHref ? (
                           <a
-                            href={fileHref(doc.file_url)}
+                            href={attachmentHref}
                             target="_blank"
                             rel="noreferrer"
                             className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800"
                           >
                             View Attachment
                           </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            className="bg-slate-200 text-slate-500 px-4 py-2 rounded-lg cursor-not-allowed"
+                          >
+                            No Attachment
+                          </button>
                         )}
 
                         <button
@@ -583,14 +602,30 @@ export default function SafetyRegisterPage() {
                       </div>
                     </div>
 
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-                      <InfoMini label="Uploaded By" value={doc.leading_hand || "-"} />
-                      <InfoMini label="Valid From" value={formatDate(doc.date_from)} />
-                      <InfoMini label="Valid To" value={formatDate(doc.date_to)} />
-                      <InfoMini
-                        label="Uploaded"
-                        value={doc.created_at ? doc.created_at.slice(0, 10) : "-"}
-                      />
+                    <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
+                      <div className="rounded-xl border bg-slate-50 px-4 py-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                          Uploaded By
+                        </div>
+                        <div className="text-base font-semibold mt-1 break-all">
+                          {doc.leading_hand || "-"}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <InfoMiniCompact
+                          label="Valid From"
+                          value={formatDate(doc.date_from)}
+                        />
+                        <InfoMiniCompact
+                          label="Valid To"
+                          value={formatDate(doc.date_to)}
+                        />
+                        <InfoMiniCompact
+                          label="Uploaded"
+                          value={doc.created_at ? doc.created_at.slice(0, 10) : "-"}
+                        />
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -656,15 +691,23 @@ export default function SafetyRegisterPage() {
                       </div>
 
                       <div className="flex gap-2 justify-end flex-wrap">
-                        {doc.file_url && (
+                        {attachmentHref ? (
                           <a
-                            href={fileHref(doc.file_url)}
+                            href={attachmentHref}
                             target="_blank"
                             rel="noreferrer"
                             className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800"
                           >
                             View Attachment
                           </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            className="bg-slate-200 text-slate-500 px-4 py-2 rounded-lg cursor-not-allowed"
+                          >
+                            No Attachment
+                          </button>
                         )}
 
                         <button
@@ -718,7 +761,7 @@ function SummaryCard({
   );
 }
 
-function InfoMini({
+function InfoMiniCompact({
   label,
   value,
 }: {
@@ -726,9 +769,9 @@ function InfoMini({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border bg-slate-50 px-3 py-3">
+    <div className="rounded-xl border bg-slate-50 px-4 py-3">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-medium mt-1">{value}</div>
+      <div className="font-semibold mt-1">{value}</div>
     </div>
   );
 }
