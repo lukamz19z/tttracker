@@ -59,6 +59,27 @@ function formatDate(value: string | null) {
   return value || "-";
 }
 
+function getDisplayNameFromUser(user: {
+  email?: string | null;
+  user_metadata?: Record<string, unknown>;
+}) {
+  const meta = user.user_metadata || {};
+
+  const candidates = [
+    meta.full_name,
+    meta.name,
+    meta.display_name,
+    meta.preferred_name,
+    user.email,
+  ];
+
+  const found = candidates.find(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+
+  return typeof found === "string" ? found : "Unknown User";
+}
+
 export default function SafetyRegisterPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -72,11 +93,12 @@ export default function SafetyRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const [currentUploader, setCurrentUploader] = useState("");
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
 
   const [label, setLabel] = useState("");
-  const [lh, setLh] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -89,6 +111,35 @@ export default function SafetyRegisterPage() {
   const [editFile, setEditFile] = useState<File | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrentUser() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (cancelled) return;
+
+      if (user) {
+        setCurrentUploader(
+          getDisplayNameFromUser({
+            email: user.email,
+            user_metadata: user.user_metadata,
+          })
+        );
+      } else {
+        setCurrentUploader("");
+      }
+    }
+
+    loadCurrentUser();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (!towerId) return;
@@ -185,6 +236,11 @@ export default function SafetyRegisterPage() {
       return;
     }
 
+    if (!currentUploader.trim()) {
+      alert("Could not determine logged-in user.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -193,7 +249,7 @@ export default function SafetyRegisterPage() {
         .insert({
           tower_id: towerId,
           document_label: label.trim(),
-          leading_hand: lh.trim() || null,
+          leading_hand: currentUploader,
           date_from: from || null,
           date_to: to || null,
         })
@@ -220,7 +276,6 @@ export default function SafetyRegisterPage() {
       }
 
       setLabel("");
-      setLh("");
       setFrom("");
       setTo("");
       setFile(null);
@@ -387,12 +442,11 @@ export default function SafetyRegisterPage() {
           </div>
 
           <div>
-            <label className="block text-xs mb-1 font-medium">Leading Hand</label>
+            <label className="block text-xs mb-1 font-medium">Uploader</label>
             <input
-              placeholder="Leading Hand"
-              value={lh}
-              onChange={(e) => setLh(e.target.value)}
-              className="border p-2.5 rounded-lg w-full"
+              value={currentUploader}
+              readOnly
+              className="border p-2.5 rounded-lg w-full bg-slate-50 text-slate-600"
             />
           </div>
 
@@ -441,7 +495,7 @@ export default function SafetyRegisterPage() {
         <div className="flex gap-3 flex-wrap items-center">
           <input
             className="border rounded-lg px-3 py-2 w-full md:w-80"
-            placeholder="Search label, leading hand or date..."
+            placeholder="Search label, uploader or date..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -505,9 +559,9 @@ export default function SafetyRegisterPage() {
                             href={fileHref(doc.file_url)}
                             target="_blank"
                             rel="noreferrer"
-                            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                            className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800"
                           >
-                            View
+                            View Attachment
                           </a>
                         )}
 
@@ -530,7 +584,7 @@ export default function SafetyRegisterPage() {
                     </div>
 
                     <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-                      <InfoMini label="Leading Hand" value={doc.leading_hand || "-"} />
+                      <InfoMini label="Uploaded By" value={doc.leading_hand || "-"} />
                       <InfoMini label="Valid From" value={formatDate(doc.date_from)} />
                       <InfoMini label="Valid To" value={formatDate(doc.date_to)} />
                       <InfoMini
@@ -555,12 +609,12 @@ export default function SafetyRegisterPage() {
 
                       <div>
                         <label className="block text-xs mb-1 font-medium">
-                          Leading Hand
+                          Uploaded By
                         </label>
                         <input
                           value={editLh}
-                          onChange={(e) => setEditLh(e.target.value)}
-                          className="border p-2.5 rounded-lg w-full"
+                          readOnly
+                          className="border p-2.5 rounded-lg w-full bg-slate-50 text-slate-600"
                         />
                       </div>
 
@@ -607,9 +661,9 @@ export default function SafetyRegisterPage() {
                             href={fileHref(doc.file_url)}
                             target="_blank"
                             rel="noreferrer"
-                            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                            className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800"
                           >
-                            View
+                            View Attachment
                           </a>
                         )}
 
