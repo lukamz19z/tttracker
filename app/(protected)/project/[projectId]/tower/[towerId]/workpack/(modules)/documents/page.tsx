@@ -33,6 +33,7 @@ type WorkpackDocument = {
 };
 
 type StatusFilter = "All" | "Active" | "Superseded" | "Archived";
+type DocumentStatus = Exclude<StatusFilter, "All">;
 
 function getDisplayNameFromUser(user: {
   email?: string | null;
@@ -76,7 +77,7 @@ function formatDate(value: string | null) {
   return value ? value.slice(0, 10) : "-";
 }
 
-function normalizeStatus(status?: string | null): Exclude<StatusFilter, "All"> {
+function normalizeStatus(status?: string | null): DocumentStatus {
   const value = (status || "").trim().toLowerCase();
 
   if (value === "superseded") return "Superseded";
@@ -84,7 +85,7 @@ function normalizeStatus(status?: string | null): Exclude<StatusFilter, "All"> {
   return "Active";
 }
 
-function getStatusClasses(status: Exclude<StatusFilter, "All">) {
+function getStatusClasses(status: DocumentStatus) {
   if (status === "Superseded") {
     return "bg-amber-50 text-amber-700 border-amber-200";
   }
@@ -107,6 +108,7 @@ export default function WorkpackDocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [statusSavingId, setStatusSavingId] = useState<string | null>(null);
 
   const [currentUploader, setCurrentUploader] = useState("");
 
@@ -299,6 +301,32 @@ export default function WorkpackDocumentsPage() {
     }
   }
 
+  async function updateDocumentStatus(docId: string, nextStatus: DocumentStatus) {
+    setStatusSavingId(docId);
+
+    try {
+      const { error } = await supabase
+        .from("tower_workpack_documents")
+        .update({ status: nextStatus })
+        .eq("id", docId);
+
+      if (error) {
+        throw new Error(error.message || "Failed to update status");
+      }
+
+      setDocs((prev) =>
+        prev.map((doc) =>
+          doc.id === docId ? { ...doc, status: nextStatus } : doc
+        )
+      );
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to update status");
+    } finally {
+      setStatusSavingId(null);
+    }
+  }
+
   async function deleteDoc(doc: WorkpackDocument) {
     const confirmed = window.confirm(
       `Delete document "${doc.document_name}"?\n\nThis will remove the record.`
@@ -327,7 +355,7 @@ export default function WorkpackDocumentsPage() {
         throw new Error(error.message || "Failed to delete document");
       }
 
-      setReloadKey((v) => v + 1);
+      setDocs((prev) => prev.filter((d) => d.id !== doc.id));
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Failed to delete document");
@@ -376,17 +404,19 @@ export default function WorkpackDocumentsPage() {
         >
           Lift Studies
         </Link>
-<Link
-  className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
-  href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
->
-  Drawings
-</Link>
+
         <Link
           className="px-4 py-2 bg-white border rounded-t-lg font-semibold whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/documents`}
         >
           Documents
+        </Link>
+
+        <Link
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
+          href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
+        >
+          Drawings
         </Link>
       </div>
 
@@ -579,10 +609,36 @@ export default function WorkpackDocumentsPage() {
                     </div>
                   </div>
 
-                  <div className="grid lg:grid-cols-[1fr_1fr_1fr] gap-6 items-start">
+                  <div className="grid lg:grid-cols-4 gap-6 items-start">
                     <MetaLine label="Stage" value={doc.stage || "-"} />
                     <MetaLine label="Uploaded By" value={doc.uploaded_by || "-"} />
                     <MetaLine label="Uploaded" value={formatDate(doc.created_at)} />
+
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+                        Status
+                      </div>
+                      <select
+                        value={status}
+                        onChange={(e) =>
+                          updateDocumentStatus(
+                            doc.id,
+                            e.target.value as DocumentStatus
+                          )
+                        }
+                        disabled={statusSavingId === doc.id}
+                        className="border rounded-lg px-3 py-2 w-full"
+                      >
+                        <option value="Active">Active</option>
+                        <option value="Superseded">Superseded</option>
+                        <option value="Archived">Archived</option>
+                      </select>
+                      {statusSavingId === doc.id && (
+                        <div className="text-xs text-slate-500 mt-1">
+                          Saving status...
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {doc.notes && (
