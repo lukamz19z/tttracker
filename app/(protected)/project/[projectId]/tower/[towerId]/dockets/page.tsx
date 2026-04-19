@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useEffect, useState } from "react";
@@ -18,41 +19,68 @@ export default function TowerDocketsPage() {
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
 
+  // 🔥 NEW STATE (LABOUR TOTALS)
+  const [labourTotals, setLabourTotals] = useState<Record<string, number>>({});
+
   useEffect(() => {
-    load();
-  }, []);
+    let isMounted = true;
 
-  async function load() {
-    setLoading(true);
+    const fetchData = async () => {
+      setLoading(true);
 
-    const { data: towerData } = await supabase
-      .from("towers")
-      .select("*")
-      .eq("id", towerId)
-      .single();
+      const { data: towerData } = await supabase
+        .from("towers")
+        .select("*")
+        .eq("id", towerId)
+        .single();
 
-    setTower(towerData);
+      const { data } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("docket_date", { ascending: false });
 
-    const { data } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("tower_id", towerId)
-      .order("docket_date", { ascending: false });
+      if (!isMounted) return;
 
-    setDockets(data || []);
-    setLoading(false);
-  }
+      setTower(towerData);
+      setDockets(data || []);
+
+      // 🔥 NEW: FETCH LABOUR TOTALS
+      if (data && data.length > 0) {
+        const docketIds = data.map((d: any) => d.id);
+
+        const { data: labour } = await supabase
+          .from("tower_docket_labour")
+          .select("docket_id, total_hours")
+          .in("docket_id", docketIds);
+
+        const totals: Record<string, number> = {};
+
+        labour?.forEach((row: any) => {
+          totals[row.docket_id] =
+            (totals[row.docket_id] || 0) + Number(row.total_hours || 0);
+        });
+
+        setLabourTotals(totals);
+      }
+
+      setLoading(false);
+    };
+
+    fetchData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [towerId, supabase]);
 
   async function deleteDocket(id: string) {
     const confirmDelete = confirm("Delete this docket?");
     if (!confirmDelete) return;
 
-    await supabase
-      .from("tower_daily_dockets")
-      .delete()
-      .eq("id", id);
+    await supabase.from("tower_daily_dockets").delete().eq("id", id);
 
-    load();
+    setDockets((prev) => prev.filter((d: any) => d.id !== id));
   }
 
   function getProgress(d: any) {
@@ -69,10 +97,21 @@ export default function TowerDocketsPage() {
   }
 
   function getSignedBadge(d: any) {
-    if (d.client_rep_name && d.signed_date) {
+    const bcSigned = !!d.bc_rep_name;
+    const clientSigned = !!d.client_rep_name && !!d.signed_date;
+
+    if (clientSigned) {
       return (
         <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-semibold">
-          Client Signed
+          Closed
+        </span>
+      );
+    }
+
+    if (bcSigned) {
+      return (
+        <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold">
+          BC Signed
         </span>
       );
     }
@@ -88,15 +127,54 @@ export default function TowerDocketsPage() {
 
   return (
     <div className="p-8 space-y-6">
-
       <TowerHeader projectId={projectId} tower={tower} />
 
-      <div className="bg-white border rounded-2xl p-6 shadow-sm">
+      {/* 🔥 NEW SUMMARY DASHBOARD */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <SummaryCard
+          label="Total Manhours"
+          value={dockets.reduce(
+            (sum, d) => sum + (labourTotals[d.id] || 0),
+            0
+          )}
+        />
 
+        <SummaryCard
+          label="Weather Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.weather_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Lightning Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.lightning_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Toolbox Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.toolbox_delay_hours || 0),
+            0
+          )}
+        />
+
+        <SummaryCard
+          label="Other Delay"
+          value={dockets.reduce(
+            (sum, d) => sum + Number(d.other_delay_hours || 0),
+            0
+          )}
+        />
+      </div>
+
+      <div className="bg-white border rounded-2xl p-6 shadow-sm">
         <div className="flex justify-between items-center mb-6">
-          <div className="text-xl font-semibold">
-            Daily Dockets Register
-          </div>
+          <div className="text-xl font-semibold">Daily Dockets Register</div>
 
           <Link
             href={`/project/${projectId}/tower/${towerId}/dockets/new`}
@@ -113,27 +191,20 @@ export default function TowerDocketsPage() {
         )}
 
         <div className="space-y-4">
-          {dockets.map((d) => {
+          {dockets.map((d: any) => {
             const progress = getProgress(d);
             const isOpen = openDocketId === d.id;
 
             return (
               <div
                 key={d.id}
-                onClick={() =>
-                  setOpenDocketId(isOpen ? null : d.id)
-                }
+                onClick={() => setOpenDocketId(isOpen ? null : d.id)}
                 className="border rounded-xl p-5 hover:bg-slate-50 transition cursor-pointer"
               >
                 <div className="flex justify-between items-start">
-
                   <div className="space-y-2">
-
                     <div className="flex items-center gap-3">
-                      <div className="text-lg font-semibold">
-                        {d.docket_date}
-                      </div>
-
+                      <div className="text-lg font-semibold">{d.docket_date}</div>
                       {getSignedBadge(d)}
                     </div>
 
@@ -144,10 +215,17 @@ export default function TowerDocketsPage() {
                     <div className="text-sm text-slate-500">
                       Weather: {d.weather || "-"}
                     </div>
-
                   </div>
 
                   <div className="flex gap-2">
+                    <Link
+                      href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}?mode=view`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="bg-slate-700 text-white px-3 py-1 rounded-lg text-sm"
+                    >
+                      View
+                    </Link>
+
                     <Link
                       href={`/project/${projectId}/tower/${towerId}/dockets/${d.id}/edit`}
                       onClick={(e) => e.stopPropagation()}
@@ -166,13 +244,16 @@ export default function TowerDocketsPage() {
                       Delete
                     </button>
                   </div>
-
                 </div>
 
-                {/* 🔥 NEW MULTI PROGRESS BARS */}
                 <div className="mt-4 space-y-2">
 
-                  {/* OVERALL */}
+                  {/* 🔥 NEW LABOUR HOURS DISPLAY */}
+                  <div className="flex justify-between text-sm font-semibold text-slate-700">
+                    <div>Labour Hours</div>
+                    <div>{(labourTotals[d.id] || 0).toFixed(1)} hrs</div>
+                  </div>
+
                   <div>
                     <div className="flex justify-between text-xs text-slate-500 mb-1">
                       <div className="font-semibold text-slate-700">
@@ -189,7 +270,6 @@ export default function TowerDocketsPage() {
                     </div>
                   </div>
 
-                  {/* ASSEMBLY */}
                   <div>
                     <div className="flex justify-between text-xs text-slate-400 mb-1">
                       <div>Assembly</div>
@@ -204,7 +284,6 @@ export default function TowerDocketsPage() {
                     </div>
                   </div>
 
-                  {/* ERECTION */}
                   <div>
                     <div className="flex justify-between text-xs text-slate-400 mb-1">
                       <div>Erection</div>
@@ -218,70 +297,44 @@ export default function TowerDocketsPage() {
                       />
                     </div>
                   </div>
-
                 </div>
 
-                {/* EXPANDED VIEW */}
                 {isOpen && (
                   <div className="mt-6 border-t pt-4 space-y-4">
-
-                    <div>
-                      <div className="text-sm font-semibold mb-2">Delays</div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                        <div>Weather: {d.weather_delay_hours || 0}h</div>
-                        <div>Lightning: {d.lightning_delay_hours || 0}h</div>
-                        <div>Toolbox: {d.toolbox_delay_hours || 0}h</div>
-                        <div>Other: {d.other_delay_hours || 0}h</div>
-                      </div>
-                    </div>
-
-                    {d.delays_comments && (
-                      <div>
-                        <div className="text-sm font-semibold mb-1">Comments</div>
-                        <div className="text-sm text-slate-600">
-                          {d.delays_comments}
-                        </div>
-                      </div>
-                    )}
-
-                    {d.missing_items_bolts && (
-                      <div>
-                        <div className="text-sm font-semibold mb-1">Missing Items</div>
-                        <div className="text-sm text-slate-600">
-                          {d.missing_items_bolts}
-                        </div>
-                      </div>
-                    )}
-
-                    <div>
-                      <div className="text-sm font-semibold mb-1">Sign Off</div>
-                      <div className="text-sm">
-                        BC Rep: {d.bc_rep_name || "-"} <br />
-                        Client Rep: {d.client_rep_name || "-"} <br />
-                        Signed Date: {d.signed_date || "-"}
-                      </div>
+                    <div className="text-sm">
+                      BC Rep: {d.bc_rep_name || "-"} <br />
+                      Client Rep: {d.client_rep_name || "-"} <br />
+                      Signed Date: {d.signed_date || "-"}
                     </div>
 
                     {d.docket_file_url && (
                       <a
                         href={d.docket_file_url}
                         target="_blank"
+                        rel="noreferrer"
                         onClick={(e) => e.stopPropagation()}
                         className="text-blue-600 text-sm font-semibold"
                       >
                         View Uploaded Docket →
                       </a>
                     )}
-
                   </div>
                 )}
-
               </div>
             );
           })}
         </div>
-
       </div>
+    </div>
+  );
+}
+
+// 🔥 NEW COMPONENT
+function SummaryCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-white border rounded-xl p-4 text-center">
+      <div className="text-sm text-slate-500">{label}</div>
+      <div className="text-2xl font-bold">{value.toFixed(1)}</div>
     </div>
   );
 }

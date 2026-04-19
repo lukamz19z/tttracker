@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -64,9 +66,55 @@ function isClientSignedDocket(docket: {
   client_rep_name?: string | null;
   signed_date?: string | null;
 }) {
-  return Boolean(
-    docket.client_rep_name?.trim() && docket.signed_date?.trim()
-  );
+  return Boolean(docket.client_rep_name?.trim() && docket.signed_date?.trim());
+}
+
+function calculateHours(timeIn: string, timeOut: string) {
+  if (!timeIn || !timeOut) return "";
+
+  const [h1, m1] = timeIn.split(":").map(Number);
+  const [h2, m2] = timeOut.split(":").map(Number);
+
+  if (
+    Number.isNaN(h1) ||
+    Number.isNaN(m1) ||
+    Number.isNaN(h2) ||
+    Number.isNaN(m2)
+  ) {
+    return "";
+  }
+
+  let diffMinutes = h2 * 60 + m2 - (h1 * 60 + m1);
+  if (diffMinutes < 0) diffMinutes += 24 * 60;
+
+  return (diffMinutes / 60).toFixed(2);
+}
+
+function normalizeWorkerName(name: string) {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getDuplicateWorkerIndexes(rows: LabourRow[]) {
+  const seen = new Map<string, number[]>();
+
+  rows.forEach((row, index) => {
+    const key = normalizeWorkerName(row.worker_name);
+    if (!key) return;
+
+    const existing = seen.get(key) || [];
+    existing.push(index);
+    seen.set(key, existing);
+  });
+
+  const duplicateIndexes = new Set<number>();
+
+  seen.forEach((indexes) => {
+    if (indexes.length > 1) {
+      indexes.forEach((i) => duplicateIndexes.add(i));
+    }
+  });
+
+  return duplicateIndexes;
 }
 
 export default function DailyDocketForm({
@@ -78,7 +126,7 @@ export default function DailyDocketForm({
   initialLabourRows,
   initialProgressRows,
 }: {
-  mode: "create" | "edit";
+  mode: "create" | "edit" | "view";
   projectId: string;
   towerId: string;
   docketId?: string;
@@ -88,6 +136,8 @@ export default function DailyDocketForm({
 }) {
   const router = useRouter();
   const supabase = createSupabaseBrowser();
+
+  const isView = mode === "view";
 
   const [docketDate, setDocketDate] = useState(
     toStringValue(initialDocket?.docket_date)
@@ -131,20 +181,147 @@ export default function DailyDocketForm({
   const [existingDocketFileUrl, setExistingDocketFileUrl] = useState(
     toStringValue(initialDocket?.docket_file_url)
   );
+  const [bulkTimeIn, setBulkTimeIn] = useState("");
+  const [bulkTimeOut, setBulkTimeOut] = useState("");
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
     initialLabourRows && initialLabourRows.length > 0
-      ? initialLabourRows
+      ? initialLabourRows.map((r) => ({
+          worker_name: toStringValue(r.worker_name),
+          time_in: toStringValue(r.time_in),
+          time_out: toStringValue(r.time_out),
+          total_hours: toStringValue(r.total_hours),
+        }))
       : [{ worker_name: "", time_in: "", time_out: "", total_hours: "" }]
   );
 
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
     initialProgressRows && initialProgressRows.length > 0
-      ? initialProgressRows
+      ? initialProgressRows.map((r) => ({
+          section_label: toStringValue(r.section_label),
+          assembled_qty: toStringValue(r.assembled_qty),
+          erected_qty: toStringValue(r.erected_qty),
+        }))
       : DEFAULT_PROGRESS_ROWS
   );
 
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!docketId && !initialDocket) return;
+
+    async function loadDocket() {
+      if (initialDocket) {
+        setDocketDate(toStringValue(initialDocket.docket_date));
+        setCrewName(toStringValue(initialDocket.crew));
+        setLeadingHand(toStringValue(initialDocket.leading_hand));
+        setWeather(toStringValue(initialDocket.weather));
+
+        setWeatherDelayHours(toStringValue(initialDocket.weather_delay_hours));
+        setLightningDelayHours(
+          toStringValue(initialDocket.lightning_delay_hours)
+        );
+        setToolboxDelayHours(toStringValue(initialDocket.toolbox_delay_hours));
+        setOtherDelayHours(toStringValue(initialDocket.other_delay_hours));
+        setOtherDelayReason(toStringValue(initialDocket.other_delay_reason));
+        setMissingItemsBolts(toStringValue(initialDocket.missing_items_bolts));
+        setDelaysComments(toStringValue(initialDocket.delays_comments));
+
+        setBcRepName(toStringValue(initialDocket.bc_rep_name));
+        setClientRepName(toStringValue(initialDocket.client_rep_name));
+        setSignedDate(toStringValue(initialDocket.signed_date));
+        setExistingDocketFileUrl(toStringValue(initialDocket.docket_file_url));
+
+        if (initialLabourRows?.length) {
+          setLabourRows(
+            initialLabourRows.map((r) => ({
+              worker_name: toStringValue(r.worker_name),
+              time_in: toStringValue(r.time_in),
+              time_out: toStringValue(r.time_out),
+              total_hours: toStringValue(r.total_hours),
+            }))
+          );
+        }
+
+        if (initialProgressRows?.length) {
+          setProgressRows(
+            initialProgressRows.map((r) => ({
+              section_label: toStringValue(r.section_label),
+              assembled_qty: toStringValue(r.assembled_qty),
+              erected_qty: toStringValue(r.erected_qty),
+            }))
+          );
+        }
+
+        return;
+      }
+
+      const { data } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("id", docketId)
+        .single();
+
+      if (!data) return;
+
+      setDocketDate(toStringValue(data.docket_date));
+      setCrewName(toStringValue(data.crew));
+      setLeadingHand(toStringValue(data.leading_hand));
+      setWeather(toStringValue(data.weather));
+
+      setWeatherDelayHours(toStringValue(data.weather_delay_hours));
+      setLightningDelayHours(toStringValue(data.lightning_delay_hours));
+      setToolboxDelayHours(toStringValue(data.toolbox_delay_hours));
+      setOtherDelayHours(toStringValue(data.other_delay_hours));
+      setOtherDelayReason(toStringValue(data.other_delay_reason));
+      setMissingItemsBolts(toStringValue(data.missing_items_bolts));
+      setDelaysComments(toStringValue(data.delays_comments));
+
+      setBcRepName(toStringValue(data.bc_rep_name));
+      setClientRepName(toStringValue(data.client_rep_name));
+      setSignedDate(toStringValue(data.signed_date));
+      setExistingDocketFileUrl(toStringValue(data.docket_file_url));
+
+      const { data: labour } = await supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (labour && labour.length > 0) {
+        setLabourRows(
+          labour.map((r) => ({
+            worker_name: toStringValue(r.worker_name),
+            time_in: toStringValue(r.time_in),
+            time_out: toStringValue(r.time_out),
+            total_hours: toStringValue(r.total_hours),
+          }))
+        );
+      }
+
+      const { data: progress } = await supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (progress && progress.length > 0) {
+        setProgressRows(
+          progress.map((r) => ({
+            section_label: toStringValue(r.section_label),
+            assembled_qty: toStringValue(r.assembled_qty),
+            erected_qty: toStringValue(r.erected_qty),
+          }))
+        );
+      }
+    }
+
+    loadDocket();
+  }, [
+    docketId,
+    initialDocket,
+    initialLabourRows,
+    initialProgressRows,
+    supabase,
+  ]);
 
   const locked = useMemo(
     () =>
@@ -155,12 +332,21 @@ export default function DailyDocketForm({
     [clientRepName, signedDate]
   );
 
+  const duplicateWorkerIndexes = useMemo(() => {
+    return getDuplicateWorkerIndexes(labourRows);
+  }, [labourRows]);
+
+  const hasDuplicateWorkers = duplicateWorkerIndexes.size > 0;
+
   const totalAssemblyPercent = useMemo(() => {
     if (progressRows.length === 0) return 0;
     const weight = 100 / progressRows.length;
 
     const total = progressRows.reduce((sum, row) => {
-      const rowPercent = Math.max(0, Math.min(100, Number(row.assembled_qty || 0)));
+      const rowPercent = Math.max(
+        0,
+        Math.min(100, Number(row.assembled_qty || 0))
+      );
       return sum + (rowPercent / 100) * weight;
     }, 0);
 
@@ -172,18 +358,25 @@ export default function DailyDocketForm({
     const weight = 100 / progressRows.length;
 
     const total = progressRows.reduce((sum, row) => {
-      const rowPercent = Math.max(0, Math.min(100, Number(row.erected_qty || 0)));
+      const rowPercent = Math.max(
+        0,
+        Math.min(100, Number(row.erected_qty || 0))
+      );
       return sum + (rowPercent / 100) * weight;
     }, 0);
 
     return Math.round(total);
   }, [progressRows]);
 
-const displayProgress = useMemo(() => {
-  return Math.round(
-    (totalAssemblyPercent * 0.5) + (totalErectionPercent * 0.5)
-  );
-}, [totalAssemblyPercent, totalErectionPercent]);
+  const displayProgress = useMemo(() => {
+    return Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5);
+  }, [totalAssemblyPercent, totalErectionPercent]);
+
+  const totalLabourHours = useMemo(() => {
+    return labourRows.reduce((sum, row) => {
+      return sum + (Number(row.total_hours) || 0);
+    }, 0);
+  }, [labourRows]);
 
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
@@ -232,17 +425,79 @@ const displayProgress = useMemo(() => {
     ]);
   }
 
-  function updateLabourRow(index: number, key: keyof LabourRow, value: string) {
-    setLabourRows((prev) =>
-      prev.map((row, i) => (i === index ? { ...row, [key]: value } : row))
-    );
+  function removeLabourRow(index: number) {
+    setLabourRows((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0
+        ? next
+        : [{ worker_name: "", time_in: "", time_out: "", total_hours: "" }];
+    });
   }
 
-  function removeLabourRow(index: number) {
-    setLabourRows((prev) => prev.filter((_, i) => i !== index));
+  function focusById(id?: string) {
+    if (!id) return;
+    window.setTimeout(() => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      el?.focus();
+      el?.select?.();
+    }, 0);
+  }
+
+  function handleLabourKeyDown(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    nextId?: string
+  ) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    focusById(nextId);
+  }
+
+  function updateLabourRow(index: number, key: keyof LabourRow, value: string) {
+    if (isView || locked) return;
+
+    setLabourRows((prev) => {
+      const updated = prev.map((row, i) =>
+        i === index ? { ...row, [key]: value } : row
+      );
+
+      const current = updated[index];
+
+      if (key === "time_in" || key === "time_out") {
+        const autoHours = calculateHours(current.time_in, current.time_out);
+        current.total_hours = autoHours || current.total_hours;
+      }
+
+      const last = updated[updated.length - 1];
+      const hasBlankRow = updated.some(
+        (row, i) =>
+          i !== updated.length - 1 &&
+          !row.worker_name &&
+          !row.time_in &&
+          !row.time_out &&
+          !row.total_hours
+      );
+
+      if (
+        last.worker_name.trim() &&
+        last.time_in.trim() &&
+        last.time_out.trim() &&
+        last.total_hours.trim() &&
+        !hasBlankRow
+      ) {
+        updated.push({
+          worker_name: "",
+          time_in: "",
+          time_out: "",
+          total_hours: "",
+        });
+      }
+
+      return updated;
+    });
   }
 
   function updateProgressRow(index: number, key: keyof ProgressRow, value: string) {
+    if (isView || locked) return;
     const nextValue = key === "section_label" ? value : clampPercent(value);
 
     setProgressRows((prev) =>
@@ -305,7 +560,7 @@ const displayProgress = useMemo(() => {
       .filter((row) => row.worker_name.trim())
       .map((row) => ({
         docket_id: docket.id,
-        worker_name: row.worker_name,
+        worker_name: row.worker_name.trim(),
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
@@ -339,7 +594,6 @@ const displayProgress = useMemo(() => {
     await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
-    router.refresh();
   }
 
   async function handleUpdate() {
@@ -410,7 +664,7 @@ const displayProgress = useMemo(() => {
       .filter((row) => row.worker_name.trim())
       .map((row) => ({
         docket_id: docketId,
-        worker_name: row.worker_name,
+        worker_name: row.worker_name.trim(),
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
@@ -466,12 +720,17 @@ const displayProgress = useMemo(() => {
       return;
     }
 
+    if (hasDuplicateWorkers) {
+      alert("Duplicate worker names found. Each worker can only appear once in a daily docket.");
+      return;
+    }
+
     setSaving(true);
 
     try {
       if (mode === "create") {
         await handleCreate();
-      } else {
+      } else if (mode === "edit") {
         await handleUpdate();
       }
     } catch (error) {
@@ -481,32 +740,167 @@ const displayProgress = useMemo(() => {
     }
   }
 
+  async function prefillFromLastDocket() {
+    try {
+      const { data: lastDocket } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("docket_date", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!lastDocket) {
+        alert("No previous docket found");
+        return;
+      }
+
+      const { data: labour } = await supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", lastDocket.id);
+
+      const { data: progress } = await supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", lastDocket.id);
+
+      const nextDate = lastDocket.docket_date
+        ? (() => {
+            const d = new Date(lastDocket.docket_date);
+            d.setDate(d.getDate() + 1);
+            return d.toISOString().slice(0, 10);
+          })()
+        : "";
+
+      setDocketDate(nextDate);
+      setCrewName(toStringValue(lastDocket.crew));
+      setLeadingHand(toStringValue(lastDocket.leading_hand));
+      setWeather(toStringValue(lastDocket.weather));
+
+      setWeatherDelayHours(toStringValue(lastDocket.weather_delay_hours));
+      setLightningDelayHours(toStringValue(lastDocket.lightning_delay_hours));
+      setToolboxDelayHours(toStringValue(lastDocket.toolbox_delay_hours));
+      setOtherDelayHours(toStringValue(lastDocket.other_delay_hours));
+      setOtherDelayReason(toStringValue(lastDocket.other_delay_reason));
+      setMissingItemsBolts(toStringValue(lastDocket.missing_items_bolts));
+      setDelaysComments(toStringValue(lastDocket.delays_comments));
+
+      setBcRepName("");
+      setClientRepName("");
+      setSignedDate("");
+      setDocketFile(null);
+      setExistingDocketFileUrl("");
+
+      if (labour && labour.length > 0) {
+        const mappedLabour = labour.map((r) => ({
+          worker_name: toStringValue(r.worker_name),
+          time_in: toStringValue(r.time_in),
+          time_out: toStringValue(r.time_out),
+          total_hours: toStringValue(r.total_hours),
+        }));
+
+        const dedupedLabour: LabourRow[] = [];
+        const seen = new Set<string>();
+
+        mappedLabour.forEach((row) => {
+          const key = normalizeWorkerName(row.worker_name);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          dedupedLabour.push(row);
+        });
+
+        setLabourRows([
+          ...dedupedLabour,
+          { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+        ]);
+      } else {
+        setLabourRows([
+          { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+        ]);
+      }
+
+      if (progress && progress.length > 0) {
+        setProgressRows(
+          progress.map((r) => ({
+            section_label: toStringValue(r.section_label),
+            assembled_qty: toStringValue(r.assembled_qty),
+            erected_qty: toStringValue(r.erected_qty),
+          }))
+        );
+      } else {
+        setProgressRows(DEFAULT_PROGRESS_ROWS);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to prefill docket");
+    }
+  }
+
+  function applyBulkTimes() {
+    setLabourRows((prev) =>
+      prev.map((row) => {
+        const time_in = bulkTimeIn || row.time_in;
+        const time_out = bulkTimeOut || row.time_out;
+
+        return {
+          ...row,
+          time_in,
+          time_out,
+          total_hours: calculateHours(time_in, time_out) || row.total_hours,
+        };
+      })
+    );
+  }
+
   return (
     <div className="p-8 max-w-6xl space-y-8">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">
-            {mode === "create" ? "Add Daily Docket" : "Edit Daily Docket"}
+            {mode === "create"
+              ? "Add Daily Docket"
+              : mode === "edit"
+              ? "Edit Daily Docket"
+              : "View Daily Docket"}
           </h1>
           <p className="text-slate-500 mt-1">
             Enter labour, section percentages, delays, and upload the scanned docket.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() =>
-            router.push(`/project/${projectId}/tower/${towerId}/dockets`)
-          }
-          className="border px-5 py-3 rounded-xl"
-        >
-          ← Back
-        </button>
+        <div className="flex gap-2">
+          {mode === "create" && !isView && !locked && (
+            <button
+              type="button"
+              onClick={prefillFromLastDocket}
+              className="bg-slate-700 text-white px-5 py-3 rounded-xl"
+            >
+              Prefill Yesterday
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() =>
+              router.push(`/project/${projectId}/tower/${towerId}/dockets`)
+            }
+            className="border px-5 py-3 rounded-xl"
+          >
+            ← Back
+          </button>
+        </div>
       </div>
 
       {locked && mode === "edit" && (
         <div className="border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-2xl p-4">
           This docket has been client signed and is now locked.
+        </div>
+      )}
+
+      {hasDuplicateWorkers && !locked && !isView && (
+        <div className="border border-red-200 bg-red-50 text-red-700 rounded-2xl p-4">
+          Duplicate worker names detected. Each worker can only appear once in this daily docket.
         </div>
       )}
 
@@ -518,25 +912,25 @@ const displayProgress = useMemo(() => {
             type="date"
             value={docketDate}
             onChange={setDocketDate}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Crew Name"
             value={crewName}
             onChange={setCrewName}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Leading Hand Name"
             value={leadingHand}
             onChange={setLeadingHand}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Weather"
             value={weather}
             onChange={setWeather}
-            disabled={locked}
+            disabled={locked || isView}
           />
         </div>
       </section>
@@ -563,7 +957,7 @@ const displayProgress = useMemo(() => {
                       min="0"
                       max="100"
                       value={row.assembled_qty}
-                      disabled={locked}
+                      disabled={locked || isView}
                       onChange={(e) =>
                         updateProgressRow(index, "assembled_qty", e.target.value)
                       }
@@ -576,7 +970,7 @@ const displayProgress = useMemo(() => {
                       min="0"
                       max="100"
                       value={row.erected_qty}
-                      disabled={locked}
+                      disabled={locked || isView}
                       onChange={(e) =>
                         updateProgressRow(index, "erected_qty", e.target.value)
                       }
@@ -614,40 +1008,40 @@ const displayProgress = useMemo(() => {
             type="number"
             value={weatherDelayHours}
             onChange={setWeatherDelayHours}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Lightning Delay Hours"
             type="number"
             value={lightningDelayHours}
             onChange={setLightningDelayHours}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Toolbox Delay Hours"
             type="number"
             value={toolboxDelayHours}
             onChange={setToolboxDelayHours}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Other Delay Hours"
             type="number"
             value={otherDelayHours}
             onChange={setOtherDelayHours}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Other Delay Reason"
             value={otherDelayReason}
             onChange={setOtherDelayReason}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Missing Items / Bolts"
             value={missingItemsBolts}
             onChange={setMissingItemsBolts}
-            disabled={locked}
+            disabled={locked || isView}
           />
         </div>
 
@@ -658,7 +1052,7 @@ const displayProgress = useMemo(() => {
           <textarea
             className="border rounded-lg p-3 w-full min-h-28 disabled:bg-slate-100"
             value={delaysComments}
-            disabled={locked}
+            disabled={locked || isView}
             onChange={(e) => setDelaysComments(e.target.value)}
           />
         </div>
@@ -667,63 +1061,155 @@ const displayProgress = useMemo(() => {
       <section className="bg-white border rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">Labour</h2>
-          {!locked && (
-            <button
-              type="button"
-              onClick={addLabourRow}
-              className="bg-slate-900 text-white px-4 py-2 rounded-lg"
-            >
-              Add Worker
-            </button>
-          )}
+
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-sm text-slate-500">Total Labour Hours</p>
+              <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
+            </div>
+
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={addLabourRow}
+                className="bg-slate-900 text-white px-4 py-2 rounded-lg"
+              >
+                Add Worker
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="space-y-4">
-          {labourRows.map((row, index) => (
-            <div
-              key={index}
-              className="grid md:grid-cols-5 gap-3 items-end border rounded-xl p-4"
+        {!locked && !isView && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+            <input
+              type="time"
+              value={bulkTimeIn}
+              onChange={(e) => setBulkTimeIn(e.target.value)}
+              className="border p-2 rounded text-sm"
+            />
+
+            <input
+              type="time"
+              value={bulkTimeOut}
+              onChange={(e) => setBulkTimeOut(e.target.value)}
+              className="border p-2 rounded text-sm"
+            />
+
+            <button
+              type="button"
+              onClick={applyBulkTimes}
+              className="bg-slate-800 text-white rounded p-2 text-sm"
             >
-              <Input
-                label="Worker Name"
-                value={row.worker_name}
-                disabled={locked}
-                onChange={(value) => updateLabourRow(index, "worker_name", value)}
-              />
-              <Input
-                label="Time In"
-                type="time"
-                value={row.time_in}
-                disabled={locked}
-                onChange={(value) => updateLabourRow(index, "time_in", value)}
-              />
-              <Input
-                label="Time Out"
-                type="time"
-                value={row.time_out}
-                disabled={locked}
-                onChange={(value) => updateLabourRow(index, "time_out", value)}
-              />
-              <Input
-                label="Total Hours"
-                type="number"
-                value={row.total_hours}
-                disabled={locked}
-                onChange={(value) => updateLabourRow(index, "total_hours", value)}
-              />
-              {!locked ? (
-                <button
-                  type="button"
-                  onClick={() => removeLabourRow(index)}
-                  className="border px-4 py-2 rounded-lg h-10"
-                >
-                  Remove
-                </button>
-              ) : (
-                <div />
-              )}
-            </div>
-          ))}
+              Apply to All
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {labourRows.map((row, index) => {
+            const isDuplicate = duplicateWorkerIndexes.has(index);
+
+            return (
+              <div
+                key={index}
+                className={`grid grid-cols-2 md:grid-cols-5 gap-2 items-end border rounded-xl p-3 ${
+                  isDuplicate ? "border-red-300 bg-red-50" : ""
+                }`}
+              >
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Worker Name
+                  </label>
+                  <input
+                    id={`labour-name-${index}`}
+                    className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
+                      isDuplicate ? "border-red-500 bg-white" : ""
+                    }`}
+                    value={row.worker_name}
+                    disabled={locked || isView}
+                    placeholder="Name"
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-timein-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "worker_name", e.target.value)
+                    }
+                  />
+                  {isDuplicate && row.worker_name.trim() && (
+                    <p className="text-xs text-red-600 mt-1">
+                      This worker name is already entered in this docket.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Time In</label>
+                  <input
+                    id={`labour-timein-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="time"
+                    value={row.time_in}
+                    disabled={locked || isView}
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-timeout-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "time_in", e.target.value)
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Time Out</label>
+                  <input
+                    id={`labour-timeout-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="time"
+                    value={row.time_out}
+                    disabled={locked || isView}
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-hours-${index}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "time_out", e.target.value)
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Total Hours</label>
+                  <input
+                    id={`labour-hours-${index}`}
+                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+                    type="number"
+                    step="0.01"
+                    value={row.total_hours}
+                    disabled={locked || isView}
+                    placeholder="Hours"
+                    onKeyDown={(e) =>
+                      handleLabourKeyDown(e, `labour-name-${index + 1}`)
+                    }
+                    onChange={(e) =>
+                      updateLabourRow(index, "total_hours", e.target.value)
+                    }
+                  />
+                </div>
+
+                {!locked && !isView ? (
+                  <button
+                    type="button"
+                    onClick={() => removeLabourRow(index)}
+                    className="border px-4 py-2 rounded-lg h-10"
+                  >
+                    Remove
+                  </button>
+                ) : (
+                  <div />
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -734,13 +1220,13 @@ const displayProgress = useMemo(() => {
             label="BC Rep Name"
             value={bcRepName}
             onChange={setBcRepName}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Client Rep Name"
             value={clientRepName}
             onChange={setClientRepName}
-            disabled={locked}
+            disabled={locked || isView}
           />
           <Input
             label="Signed Date"
@@ -755,7 +1241,7 @@ const displayProgress = useMemo(() => {
             </label>
             <input
               type="file"
-              disabled={locked}
+              disabled={locked || isView}
               onChange={(e) => setDocketFile(e.target.files?.[0] || null)}
               className="border rounded-lg p-2 w-full disabled:bg-slate-100"
             />
@@ -774,7 +1260,7 @@ const displayProgress = useMemo(() => {
       </section>
 
       <div className="flex gap-3">
-        {!locked && (
+        {!locked && !isView && (
           <button
             onClick={handleSubmit}
             disabled={saving}
@@ -797,7 +1283,7 @@ const displayProgress = useMemo(() => {
           }
           className="border px-6 py-3 rounded-xl"
         >
-          {locked ? "Back" : "Cancel"}
+          {locked || isView ? "Back" : "Cancel"}
         </button>
       </div>
     </div>
