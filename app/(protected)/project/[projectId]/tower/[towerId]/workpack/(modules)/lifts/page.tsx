@@ -132,6 +132,8 @@ export default function LiftStudiesPage() {
           .limit(1),
       ]);
 
+      console.log("Lift study query result:", liftRes);
+
       if (cancelled) return;
 
       setTower((towerRes.data as Tower | null) ?? null);
@@ -189,6 +191,7 @@ export default function LiftStudiesPage() {
         }
 
         recordId = data.id;
+        console.log("Created lift study record:", data);
       } else {
         const { error } = await supabase
           .from("tower_lift_studies")
@@ -200,6 +203,8 @@ export default function LiftStudiesPage() {
         if (error) {
           throw new Error(error.message || "Failed to update lift study record");
         }
+
+        console.log("Updated existing lift study record:", recordId);
       }
 
       const uploadRes = await supabase.storage
@@ -211,6 +216,8 @@ export default function LiftStudiesPage() {
       if (uploadRes.error) {
         throw new Error(uploadRes.error.message);
       }
+
+      console.log("Uploaded file:", uploadRes.data.path);
 
       const { error: fileUpdateError } = await supabase
         .from("tower_lift_studies")
@@ -224,13 +231,28 @@ export default function LiftStudiesPage() {
         throw new Error(fileUpdateError.message);
       }
 
+      console.log("Updated record with file path");
+
+      const { data: refreshedRows, error: refreshError } = await supabase
+        .from("tower_lift_studies")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (refreshError) {
+        throw new Error(refreshError.message);
+      }
+
+      const refreshedRow =
+        ((refreshedRows as LiftStudy[] | null) ?? [])[0] ?? null;
+
+      setLiftStudy(refreshedRow);
       setFile(null);
       setReloadKey((v) => v + 1);
     } catch (error) {
-      console.error(error);
-      alert(
-        error instanceof Error ? error.message : "Failed to save lift study"
-      );
+      console.error("Lift study save error:", error);
+      alert(error instanceof Error ? error.message : "Failed to save lift study");
     } finally {
       setSaving(false);
     }
@@ -248,7 +270,13 @@ export default function LiftStudiesPage() {
 
     try {
       if (liftStudy.file_url) {
-        await supabase.storage.from("lift_studies").remove([liftStudy.file_url]);
+        const removeRes = await supabase.storage
+          .from("lift_studies")
+          .remove([liftStudy.file_url]);
+
+        if (removeRes.error) {
+          throw new Error(removeRes.error.message);
+        }
       }
 
       const { error } = await supabase
@@ -260,6 +288,7 @@ export default function LiftStudiesPage() {
         throw new Error(error.message || "Failed to delete lift study");
       }
 
+      setLiftStudy(null);
       setReloadKey((v) => v + 1);
     } catch (error) {
       console.error(error);
