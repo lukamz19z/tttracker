@@ -407,7 +407,7 @@ export default function SafetyRegisterPage() {
 
         <Link
           className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
-          href={`/project/${projectId}/tower/${towerId}/workpack/permits`}
+          href={`/project/${projectId}/tower/${towerId}/workpack`}
         >
           Permits
         </Link>
@@ -439,7 +439,7 @@ export default function SafetyRegisterPage() {
         <div>
           <div className="text-2xl font-bold">Safety Register</div>
           <div className="text-sm text-slate-500 mt-1">
-            Upload scanned sign-ons, permits, SWMS, work instructions and related safety documents.
+            Upload scanned sign-ons, SWMS, work instructions and related safety documents.
           </div>
         </div>
 
@@ -447,7 +447,7 @@ export default function SafetyRegisterPage() {
           <div className="lg:col-span-2">
             <label className="block text-xs mb-1 font-medium">Document Label</label>
             <input
-              placeholder="e.g. Daily Sign On / SWMS / Permit"
+              placeholder="e.g. Daily Sign On / SWMS"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               className="border p-2.5 rounded-lg w-full"
