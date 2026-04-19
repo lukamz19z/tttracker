@@ -26,14 +26,11 @@ type DrawingRow = {
   title: string | null;
   revision: string | null;
   stage: string | null;
-  status: string | null;
   notes: string | null;
   file_url: string | null;
   uploaded_by: string | null;
   created_at: string | null;
 };
-
-type StatusFilter = "All" | "Active" | "Superseded" | "Archived";
 
 function getDisplayNameFromUser(user: {
   email?: string | null;
@@ -73,31 +70,12 @@ function getAttachmentHref(
   return data.publicUrl;
 }
 
-function normalizeStatus(status?: string | null): Exclude<StatusFilter, "All"> {
-  const value = (status || "").trim().toLowerCase();
-
-  if (value === "superseded") return "Superseded";
-  if (value === "archived") return "Archived";
-  return "Active";
-}
-
-function getStatusClasses(status: Exclude<StatusFilter, "All">) {
-  if (status === "Superseded") {
-    return "bg-amber-50 text-amber-700 border-amber-200";
-  }
-  if (status === "Archived") {
-    return "bg-slate-100 text-slate-700 border-slate-200";
-  }
-  return "bg-blue-50 text-blue-700 border-blue-200";
-}
-
 function formatDate(value: string | null) {
   return value ? value.slice(0, 10) : "-";
 }
 
 function parseDrawingFilename(filename: string) {
   const withoutPdf = filename.replace(/\.pdf$/i, "").trim();
-
   const parts = withoutPdf.split(".");
 
   let drawingNo = "";
@@ -108,6 +86,7 @@ function parseDrawingFilename(filename: string) {
   if (parts.length >= 3) {
     drawingNo = parts[0].trim();
     revision = parts[1].trim();
+
     const afterStage = parts.slice(2).join(".").trim();
 
     if (afterStage.toUpperCase().startsWith("IFC")) {
@@ -118,6 +97,7 @@ function parseDrawingFilename(filename: string) {
     }
   } else {
     const ifcMatch = withoutPdf.match(/^(.*?)(?:\s+|\.)(IFC)\s+(.*)$/i);
+
     if (ifcMatch) {
       drawingNo = ifcMatch[1].trim();
       stage = "IFC";
@@ -158,7 +138,6 @@ export default function DrawingRegisterPage() {
   const [reloadKey, setReloadKey] = useState(0);
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
 
   useEffect(() => {
     let cancelled = false;
@@ -231,31 +210,10 @@ export default function DrawingRegisterPage() {
     };
   }, [towerId, supabase, reloadKey]);
 
-  const summary = useMemo(() => {
-    const total = drawings.length;
-    const active = drawings.filter(
-      (d) => normalizeStatus(d.status) === "Active"
-    ).length;
-    const superseded = drawings.filter(
-      (d) => normalizeStatus(d.status) === "Superseded"
-    ).length;
-    const archived = drawings.filter(
-      (d) => normalizeStatus(d.status) === "Archived"
-    ).length;
-
-    return { total, active, superseded, archived };
-  }, [drawings]);
-
   const filteredDrawings = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return drawings.filter((drawing) => {
-      const status = normalizeStatus(drawing.status);
-
-      if (statusFilter !== "All" && status !== statusFilter) {
-        return false;
-      }
-
       if (!q) return true;
 
       const haystack = [
@@ -265,14 +223,13 @@ export default function DrawingRegisterPage() {
         drawing.stage || "",
         drawing.uploaded_by || "",
         drawing.notes || "",
-        status,
       ]
         .join(" ")
         .toLowerCase();
 
       return haystack.includes(q);
     });
-  }, [drawings, search, statusFilter]);
+  }, [drawings, search]);
 
   async function uploadDrawings() {
     if (files.length === 0) {
@@ -305,7 +262,6 @@ export default function DrawingRegisterPage() {
             title: parsed.title || null,
             revision: parsed.revision,
             stage: "IFC",
-            status: "Active",
             uploaded_by: currentUploader,
           })
           .select()
@@ -428,12 +384,7 @@ export default function DrawingRegisterPage() {
         >
           Lift Studies
         </Link>
-<Link
-  className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
-  href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
->
-  Drawings
-</Link>
+
         <Link
           className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/documents`}
@@ -441,21 +392,12 @@ export default function DrawingRegisterPage() {
           Documents
         </Link>
 
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SummaryCard label="Total Drawings" value={String(summary.total)} tone="slate" />
-        <SummaryCard label="Active" value={String(summary.active)} tone="blue" />
-        <SummaryCard
-          label="Superseded"
-          value={String(summary.superseded)}
-          tone="amber"
-        />
-        <SummaryCard
-          label="Archived"
-          value={String(summary.archived)}
-          tone="slate"
-        />
+        <Link
+          className="px-4 py-2 bg-white border rounded-t-lg font-semibold whitespace-nowrap"
+          href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
+        >
+          Drawings
+        </Link>
       </div>
 
       <div className="bg-white border rounded-2xl p-6 space-y-5">
@@ -529,7 +471,7 @@ export default function DrawingRegisterPage() {
         </div>
       </div>
 
-      <div className="bg-white border rounded-2xl p-4 md:p-5 space-y-4">
+      <div className="bg-white border rounded-2xl p-4 md:p-5">
         <div className="flex gap-3 flex-wrap items-center">
           <input
             className="border rounded-lg px-3 py-2 w-full md:w-96"
@@ -537,17 +479,6 @@ export default function DrawingRegisterPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-
-          <select
-            className="border rounded-lg px-3 py-2"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          >
-            <option value="All">All Statuses</option>
-            <option value="Active">Active</option>
-            <option value="Superseded">Superseded</option>
-            <option value="Archived">Archived</option>
-          </select>
 
           <div className="text-sm text-slate-500 md:ml-auto">
             Showing <span className="font-medium">{filteredDrawings.length}</span> of{" "}
@@ -559,11 +490,10 @@ export default function DrawingRegisterPage() {
       <div className="space-y-4">
         {filteredDrawings.length === 0 ? (
           <div className="bg-white border rounded-2xl p-10 text-center text-slate-500">
-            No drawings match your search or filter.
+            No drawings match your search.
           </div>
         ) : (
           filteredDrawings.map((drawing) => {
-            const status = normalizeStatus(drawing.status);
             const attachmentHref = getAttachmentHref(supabase, drawing.file_url);
 
             return (
@@ -574,18 +504,8 @@ export default function DrawingRegisterPage() {
                 <div className="space-y-5">
                   <div className="flex justify-between items-start gap-4 flex-wrap">
                     <div className="space-y-2">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="text-2xl font-semibold tracking-tight text-slate-900">
-                          {drawing.drawing_no}
-                        </div>
-
-                        <div
-                          className={`px-3 py-1 rounded-full text-sm border ${getStatusClasses(
-                            status
-                          )}`}
-                        >
-                          {status}
-                        </div>
+                      <div className="text-2xl font-semibold tracking-tight text-slate-900">
+                        {drawing.drawing_no}
                       </div>
 
                       <div className="text-base text-slate-700">
@@ -650,29 +570,6 @@ export default function DrawingRegisterPage() {
           })
         )}
       </div>
-    </div>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "blue" | "amber" | "slate";
-}) {
-  const classes: Record<typeof tone, string> = {
-    blue: "border-blue-200 bg-blue-50 text-blue-900",
-    amber: "border-amber-200 bg-amber-50 text-amber-900",
-    slate: "border-slate-200 bg-slate-50 text-slate-900",
-  };
-
-  return (
-    <div className={`border rounded-2xl p-4 ${classes[tone]}`}>
-      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
     </div>
   );
 }
