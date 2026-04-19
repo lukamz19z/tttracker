@@ -48,15 +48,15 @@ function getPermitStatus(doc: PermitDoc): Exclude<StatusFilter, "All"> {
 
 function getStatusClasses(status: Exclude<StatusFilter, "All">) {
   if (status === "Active") {
-    return "bg-green-100 text-green-700 border-green-200";
+    return "bg-emerald-50 text-emerald-700 border-emerald-200";
   }
   if (status === "Expired") {
-    return "bg-red-100 text-red-700 border-red-200";
+    return "bg-red-50 text-red-700 border-red-200";
   }
   if (status === "Closed") {
     return "bg-slate-100 text-slate-700 border-slate-200";
   }
-  return "bg-amber-100 text-amber-700 border-amber-200";
+  return "bg-amber-50 text-amber-700 border-amber-200";
 }
 
 function formatDate(value: string | null) {
@@ -114,6 +114,7 @@ export default function PermitsPage() {
   const [docs, setDocs] = useState<PermitDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [currentUploader, setCurrentUploader] = useState("");
 
@@ -289,7 +290,7 @@ export default function PermitsPage() {
         .single();
 
       if (error || !data) {
-        throw new Error("Failed to add permit");
+        throw new Error(error?.message || "Failed to add permit");
       }
 
       if (file) {
@@ -380,7 +381,7 @@ export default function PermitsPage() {
         .eq("id", doc.id);
 
       if (error) {
-        throw new Error("Failed to update permit");
+        throw new Error(error.message || "Failed to update permit");
       }
 
       if (editFile) {
@@ -421,6 +422,37 @@ export default function PermitsPage() {
       .eq("id", docId);
 
     setReloadKey((v) => v + 1);
+  }
+
+  async function deletePermit(doc: PermitDoc) {
+    const confirmed = window.confirm(
+      `Delete permit "${doc.document_label}"?\n\nThis will remove the permit record.`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(doc.id);
+
+    try {
+      const { error } = await supabase
+        .from("tower_permits")
+        .delete()
+        .eq("id", doc.id);
+
+      if (error) {
+        throw new Error(error.message || "Failed to delete permit");
+      }
+
+      if (doc.file_url) {
+        await supabase.storage.from("permit_docs").remove([doc.file_url]);
+      }
+
+      setReloadKey((v) => v + 1);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to delete permit");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   if (loading || !tower) {
@@ -631,13 +663,16 @@ export default function PermitsPage() {
             const attachmentHref = getAttachmentHref(supabase, doc.file_url);
 
             return (
-              <div key={doc.id} className="bg-white border rounded-2xl p-5">
+              <div
+                key={doc.id}
+                className="bg-white border rounded-2xl p-6 shadow-sm"
+              >
                 {!isEditing ? (
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     <div className="flex justify-between items-start gap-4 flex-wrap">
-                      <div className="space-y-2 min-w-[260px]">
+                      <div className="space-y-2">
                         <div className="flex items-center gap-3 flex-wrap">
-                          <div className="text-lg font-semibold">
+                          <div className="text-2xl font-semibold tracking-tight text-slate-900">
                             {doc.document_label}
                           </div>
 
@@ -650,8 +685,9 @@ export default function PermitsPage() {
                           </div>
                         </div>
 
-                        <div className="text-sm text-slate-500">
-                          {doc.permit_type || "-"} {doc.permit_number ? `• ${doc.permit_number}` : ""}
+                        <div className="text-sm text-slate-500 font-medium">
+                          {doc.permit_type || "-"}
+                          {doc.permit_number ? ` • ${doc.permit_number}` : ""}
                         </div>
                       </div>
 
@@ -677,9 +713,17 @@ export default function PermitsPage() {
 
                         <button
                           onClick={() => startEdit(doc)}
-                          className="border px-4 py-2 rounded-lg hover:bg-slate-50 text-orange-700"
+                          className="border border-orange-300 text-orange-700 px-4 py-2 rounded-lg hover:bg-orange-50"
                         >
                           Edit
+                        </button>
+
+                        <button
+                          onClick={() => deletePermit(doc)}
+                          disabled={deletingId === doc.id}
+                          className="border border-red-300 text-red-700 px-4 py-2 rounded-lg hover:bg-red-50 disabled:opacity-60"
+                        >
+                          {deletingId === doc.id ? "Deleting..." : "Delete"}
                         </button>
 
                         {currentStatus === "Expired" && !doc.closed_out && (
@@ -693,45 +737,42 @@ export default function PermitsPage() {
                       </div>
                     </div>
 
-                    <div className="grid gap-3 lg:grid-cols-[1.2fr_1.2fr_1fr]">
-                      <div className="rounded-xl border bg-slate-50 px-4 py-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
-                          Issued / Uploaded
+                    <div className="grid lg:grid-cols-[1.1fr_1.2fr_1fr] gap-6 items-start">
+                      <div className="space-y-4">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+                            Issued By
+                          </div>
+                          <div className="text-lg font-medium text-slate-900">
+                            {doc.issued_by || "-"}
+                          </div>
                         </div>
-                        <div className="mt-2 space-y-1">
-                          <div className="text-sm text-slate-500">Issued By</div>
-                          <div className="font-semibold">{doc.issued_by || "-"}</div>
-                          <div className="text-sm text-slate-500 mt-2">Uploaded By</div>
-                          <div className="font-semibold break-all">
+
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+                            Uploaded By
+                          </div>
+                          <div className="text-base font-medium text-slate-900 break-all">
                             {doc.uploaded_by || "-"}
                           </div>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <InfoMiniCompact
-                          label="Valid From"
-                          value={formatDate(doc.date_from)}
-                        />
-                        <InfoMiniCompact
-                          label="Valid To"
-                          value={formatDate(doc.date_to)}
-                        />
-                        <InfoMiniCompact
+                      <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4">
+                        <MetaLine label="Valid From" value={formatDate(doc.date_from)} />
+                        <MetaLine label="Valid To" value={formatDate(doc.date_to)} />
+                        <MetaLine
                           label="Uploaded"
                           value={doc.created_at ? doc.created_at.slice(0, 10) : "-"}
                         />
-                        <InfoMiniCompact
-                          label="Permit No."
-                          value={doc.permit_number || "-"}
-                        />
+                        <MetaLine label="Permit No." value={doc.permit_number || "-"} />
                       </div>
 
-                      <div className="rounded-xl border bg-slate-50 px-4 py-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
                           Notes
                         </div>
-                        <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">
+                        <div className="text-sm text-slate-700 whitespace-pre-wrap leading-6">
                           {doc.notes || "-"}
                         </div>
                       </div>
@@ -912,7 +953,7 @@ function SummaryCard({
   );
 }
 
-function InfoMiniCompact({
+function MetaLine({
   label,
   value,
 }: {
@@ -920,9 +961,11 @@ function InfoMiniCompact({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border bg-slate-50 px-4 py-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-semibold mt-1">{value}</div>
+    <div>
+      <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+        {label}
+      </div>
+      <div className="text-base font-medium text-slate-900">{value}</div>
     </div>
   );
 }
