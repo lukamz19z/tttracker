@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { getUserRole } from "@/lib/roles";
 import TowerHeader from "@/components/towers/TowerHeader";
 
 type Tower = {
@@ -82,26 +83,13 @@ type OverviewStats = {
   computedStatus: string;
 };
 
+type UserRole = "admin" | "editor" | "viewer" | string | null;
+
 function formatLabel(key: string) {
   return key
     .replace(/_/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function isWeightKey(key: string) {
-  const normalized = key.trim().toLowerCase();
-  return (
-    normalized === "weight" ||
-    normalized === "tower weight" ||
-    normalized === "tower_weight" ||
-    normalized === "mass" ||
-    normalized === "steel weight" ||
-    normalized === "total weight" ||
-    normalized === "total_weight" ||
-    normalized === "tower weight (t)" ||
-    normalized === "tower_weight_(t)"
-  );
 }
 
 function formatValue(value: unknown) {
@@ -147,6 +135,26 @@ export default function TowerOverviewPage() {
   const [tower, setTower] = useState<Tower | null>(null);
   const [stats, setStats] = useState<OverviewStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<UserRole>(null);
+
+  const canEditTower = role === "admin" || role === "editor";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRole() {
+      const userRole = await getUserRole();
+      if (!cancelled) {
+        setRole(userRole);
+      }
+    }
+
+    loadRole();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!towerId) return;
@@ -332,14 +340,11 @@ export default function TowerOverviewPage() {
   }, [tower]);
 
   const weightValue = useMemo(() => {
-    if (!tower?.extra_data) return null;
-
-    const entry = Object.entries(tower.extra_data).find(([key]) =>
-      isWeightKey(key)
+    const weightEntry = extraDataEntries.find(([key]) =>
+      key.toLowerCase().includes("weight")
     );
-
-    return entry ? entry[1] : null;
-  }, [tower]);
+    return weightEntry ? weightEntry[1] : null;
+  }, [extraDataEntries]);
 
   if (loading || !tower || !stats) {
     return <div className="p-8">Loading...</div>;
@@ -363,6 +368,15 @@ export default function TowerOverviewPage() {
           </div>
 
           <div className="flex gap-2 flex-wrap">
+            {canEditTower && (
+              <Link
+                href={`/project/${projectId}/tower/${towerId}/edit`}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Edit Tower
+              </Link>
+            )}
+
             <Link
               href={`/project/${projectId}/tower/${towerId}/dockets`}
               className="border px-4 py-2 rounded-lg hover:bg-slate-50"
