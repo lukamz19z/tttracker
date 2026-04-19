@@ -55,9 +55,8 @@ function getStatusClasses(status: Exclude<StatusFilter, "All">) {
   return "bg-amber-100 text-amber-700 border-amber-200";
 }
 
-function formatDateRange(from: string | null, to: string | null) {
-  if (!from && !to) return "-";
-  return `${from || "-"} → ${to || "-"}`;
+function formatDate(value: string | null) {
+  return value || "-";
 }
 
 export default function SafetyRegisterPage() {
@@ -138,7 +137,6 @@ export default function SafetyRegisterPage() {
     const expired = docs.filter((d) => getDocStatus(d) === "Expired").length;
     const upcoming = docs.filter((d) => getDocStatus(d) === "Upcoming").length;
     const closed = docs.filter((d) => getDocStatus(d) === "Closed").length;
-    const latestUpload = docs[0]?.created_at || null;
 
     return {
       total: docs.length,
@@ -146,7 +144,6 @@ export default function SafetyRegisterPage() {
       expired,
       upcoming,
       closed,
-      latestUpload,
     };
   }, [docs]);
 
@@ -167,6 +164,7 @@ export default function SafetyRegisterPage() {
         doc.leading_hand || "",
         doc.date_from || "",
         doc.date_to || "",
+        doc.created_at || "",
         status,
       ]
         .join(" ")
@@ -366,11 +364,7 @@ export default function SafetyRegisterPage() {
         <SummaryCard label="Active" value={String(summary.active)} tone="green" />
         <SummaryCard label="Expired" value={String(summary.expired)} tone="red" />
         <SummaryCard label="Upcoming" value={String(summary.upcoming)} tone="amber" />
-        <SummaryCard
-          label="Closed"
-          value={String(summary.closed)}
-          tone="slate"
-        />
+        <SummaryCard label="Closed" value={String(summary.closed)} tone="slate" />
       </div>
 
       <div className="bg-white border rounded-2xl p-6 space-y-5">
@@ -403,7 +397,7 @@ export default function SafetyRegisterPage() {
           </div>
 
           <div>
-            <label className="block text-xs mb-1 font-medium">Date From</label>
+            <label className="block text-xs mb-1 font-medium">Valid From</label>
             <input
               type="date"
               value={from}
@@ -413,7 +407,7 @@ export default function SafetyRegisterPage() {
           </div>
 
           <div>
-            <label className="block text-xs mb-1 font-medium">Date To</label>
+            <label className="block text-xs mb-1 font-medium">Valid To</label>
             <input
               type="date"
               value={to}
@@ -487,56 +481,62 @@ export default function SafetyRegisterPage() {
                 className="bg-white border rounded-2xl p-5"
               >
                 {!isEditing ? (
-                  <div className="flex justify-between items-start gap-4 flex-wrap">
-                    <div className="space-y-2 min-w-[260px]">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="text-lg font-semibold">
-                          {doc.document_label}
-                        </div>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-start gap-4 flex-wrap">
+                      <div className="space-y-2 min-w-[260px]">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <div className="text-lg font-semibold">
+                            {doc.document_label}
+                          </div>
 
-                        <div
-                          className={`px-3 py-1 rounded-full text-sm border ${getStatusClasses(
-                            currentStatus
-                          )}`}
-                        >
-                          {currentStatus}
+                          <div
+                            className={`px-3 py-1 rounded-full text-sm border ${getStatusClasses(
+                              currentStatus
+                            )}`}
+                          >
+                            {currentStatus}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="grid sm:grid-cols-3 gap-3 text-sm">
-                        <InfoMini label="Leading Hand" value={doc.leading_hand || "-"} />
-                        <InfoMini label="Date Range" value={formatDateRange(doc.date_from, doc.date_to)} />
-                        <InfoMini label="Uploaded" value={doc.created_at ? doc.created_at.slice(0, 10) : "-"} />
+                      <div className="flex gap-2 items-center flex-wrap justify-end">
+                        {doc.file_url && (
+                          <a
+                            href={fileHref(doc.file_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                          >
+                            View
+                          </a>
+                        )}
+
+                        <button
+                          onClick={() => startEdit(doc)}
+                          className="border px-4 py-2 rounded-lg hover:bg-slate-50 text-orange-700"
+                        >
+                          Edit
+                        </button>
+
+                        {currentStatus === "Expired" && !doc.closed_out && (
+                          <button
+                            onClick={() => closeOut(doc.id)}
+                            className="bg-red-600 text-white px-4 py-2 rounded-lg"
+                          >
+                            Close Out
+                          </button>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex gap-2 items-center flex-wrap justify-end">
-                      {doc.file_url && (
-                        <a
-                          href={fileHref(doc.file_url)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-                        >
-                          View
-                        </a>
-                      )}
-
-                      <button
-                        onClick={() => startEdit(doc)}
-                        className="border px-4 py-2 rounded-lg hover:bg-slate-50 text-orange-700"
-                      >
-                        Edit
-                      </button>
-
-                      {currentStatus === "Expired" && !doc.closed_out && (
-                        <button
-                          onClick={() => closeOut(doc.id)}
-                          className="bg-red-600 text-white px-4 py-2 rounded-lg"
-                        >
-                          Close Out
-                        </button>
-                      )}
+                    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                      <InfoMini label="Leading Hand" value={doc.leading_hand || "-"} />
+                      <InfoMini label="Valid From" value={formatDate(doc.date_from)} />
+                      <InfoMini label="Valid To" value={formatDate(doc.date_to)} />
+                      <InfoMini
+                        label="Uploaded"
+                        value={doc.created_at ? doc.created_at.slice(0, 10) : "-"}
+                      />
                     </div>
                   </div>
                 ) : (
@@ -566,7 +566,7 @@ export default function SafetyRegisterPage() {
 
                       <div>
                         <label className="block text-xs mb-1 font-medium">
-                          Date From
+                          Valid From
                         </label>
                         <input
                           type="date"
@@ -578,7 +578,7 @@ export default function SafetyRegisterPage() {
 
                       <div>
                         <label className="block text-xs mb-1 font-medium">
-                          Date To
+                          Valid To
                         </label>
                         <input
                           type="date"
@@ -672,9 +672,9 @@ function InfoMini({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border bg-slate-50 px-3 py-2">
+    <div className="rounded-xl border bg-slate-50 px-3 py-3">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-medium mt-0.5">{value}</div>
+      <div className="font-medium mt-1">{value}</div>
     </div>
   );
 }
