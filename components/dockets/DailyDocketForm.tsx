@@ -50,6 +50,8 @@ const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
   { section_label: "Crossarms", assembled_qty: "", erected_qty: "" },
 ];
 
+const BODY_EXTENSION_LABEL = "Body Extensions";
+
 function toStringValue(value: string | number | null | undefined) {
   if (value === null || value === undefined) return "";
   return String(value);
@@ -115,6 +117,10 @@ function getDuplicateWorkerIndexes(rows: LabourRow[]) {
   });
 
   return duplicateIndexes;
+}
+
+function isBodyExtensionRow(row: ProgressRow) {
+  return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
 }
 
 export default function DailyDocketForm({
@@ -205,6 +211,7 @@ export default function DailyDocketForm({
       : DEFAULT_PROGRESS_ROWS
   );
 
+  const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -244,12 +251,15 @@ export default function DailyDocketForm({
         }
 
         if (initialProgressRows?.length) {
-          setProgressRows(
-            initialProgressRows.map((r) => ({
-              section_label: toStringValue(r.section_label),
-              assembled_qty: toStringValue(r.assembled_qty),
-              erected_qty: toStringValue(r.erected_qty),
-            }))
+          const mappedRows = initialProgressRows.map((r) => ({
+            section_label: toStringValue(r.section_label),
+            assembled_qty: toStringValue(r.assembled_qty),
+            erected_qty: toStringValue(r.erected_qty),
+          }));
+
+          setProgressRows(mappedRows);
+          setHasBodyExtension(
+            mappedRows.some((row) => isBodyExtensionRow(row))
           );
         }
 
@@ -304,12 +314,15 @@ export default function DailyDocketForm({
         .eq("docket_id", docketId);
 
       if (progress && progress.length > 0) {
-        setProgressRows(
-          progress.map((r) => ({
-            section_label: toStringValue(r.section_label),
-            assembled_qty: toStringValue(r.assembled_qty),
-            erected_qty: toStringValue(r.erected_qty),
-          }))
+        const mappedRows = progress.map((r) => ({
+          section_label: toStringValue(r.section_label),
+          assembled_qty: toStringValue(r.assembled_qty),
+          erected_qty: toStringValue(r.erected_qty),
+        }));
+
+        setProgressRows(mappedRows);
+        setHasBodyExtension(
+          mappedRows.some((row) => isBodyExtensionRow(row))
         );
       }
     }
@@ -338,11 +351,18 @@ export default function DailyDocketForm({
 
   const hasDuplicateWorkers = duplicateWorkerIndexes.size > 0;
 
-  const totalAssemblyPercent = useMemo(() => {
-    if (progressRows.length === 0) return 0;
-    const weight = 100 / progressRows.length;
+  const visibleProgressRows = useMemo(() => {
+    return progressRows.filter((row) => {
+      if (!hasBodyExtension && isBodyExtensionRow(row)) return false;
+      return true;
+    });
+  }, [progressRows, hasBodyExtension]);
 
-    const total = progressRows.reduce((sum, row) => {
+  const totalAssemblyPercent = useMemo(() => {
+    if (visibleProgressRows.length === 0) return 0;
+    const weight = 100 / visibleProgressRows.length;
+
+    const total = visibleProgressRows.reduce((sum, row) => {
       const rowPercent = Math.max(
         0,
         Math.min(100, Number(row.assembled_qty || 0))
@@ -351,13 +371,13 @@ export default function DailyDocketForm({
     }, 0);
 
     return Math.round(total);
-  }, [progressRows]);
+  }, [visibleProgressRows]);
 
   const totalErectionPercent = useMemo(() => {
-    if (progressRows.length === 0) return 0;
-    const weight = 100 / progressRows.length;
+    if (visibleProgressRows.length === 0) return 0;
+    const weight = 100 / visibleProgressRows.length;
 
-    const total = progressRows.reduce((sum, row) => {
+    const total = visibleProgressRows.reduce((sum, row) => {
       const rowPercent = Math.max(
         0,
         Math.min(100, Number(row.erected_qty || 0))
@@ -366,7 +386,7 @@ export default function DailyDocketForm({
     }, 0);
 
     return Math.round(total);
-  }, [progressRows]);
+  }, [visibleProgressRows]);
 
   const displayProgress = useMemo(() => {
     return Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5);
@@ -505,6 +525,22 @@ export default function DailyDocketForm({
     );
   }
 
+  function handleBodyExtensionToggle(checked: boolean) {
+    if (isView || locked) return;
+
+    setHasBodyExtension(checked);
+
+    if (!checked) {
+      setProgressRows((prev) =>
+        prev.map((row) =>
+          isBodyExtensionRow(row)
+            ? { ...row, assembled_qty: "", erected_qty: "" }
+            : row
+        )
+      );
+    }
+  }
+
   async function uploadFileIfNeeded() {
     if (!docketFile) return existingDocketFileUrl || null;
 
@@ -577,8 +613,14 @@ export default function DailyDocketForm({
       docket_id: docket.id,
       section: row.section_label,
       section_label: row.section_label,
-      assembled_qty: Number(row.assembled_qty || 0),
-      erected_qty: Number(row.erected_qty || 0),
+      assembled_qty:
+        !hasBodyExtension && isBodyExtensionRow(row)
+          ? 0
+          : Number(row.assembled_qty || 0),
+      erected_qty:
+        !hasBodyExtension && isBodyExtensionRow(row)
+          ? 0
+          : Number(row.erected_qty || 0),
     }));
 
     if (progressPayload.length > 0) {
@@ -684,8 +726,14 @@ export default function DailyDocketForm({
       docket_id: docketId,
       section: row.section_label,
       section_label: row.section_label,
-      assembled_qty: Number(row.assembled_qty || 0),
-      erected_qty: Number(row.erected_qty || 0),
+      assembled_qty:
+        !hasBodyExtension && isBodyExtensionRow(row)
+          ? 0
+          : Number(row.assembled_qty || 0),
+      erected_qty:
+        !hasBodyExtension && isBodyExtensionRow(row)
+          ? 0
+          : Number(row.erected_qty || 0),
     }));
 
     if (progressPayload.length > 0) {
@@ -821,15 +869,19 @@ export default function DailyDocketForm({
       }
 
       if (progress && progress.length > 0) {
-        setProgressRows(
-          progress.map((r) => ({
-            section_label: toStringValue(r.section_label),
-            assembled_qty: toStringValue(r.assembled_qty),
-            erected_qty: toStringValue(r.erected_qty),
-          }))
+        const mappedRows = progress.map((r) => ({
+          section_label: toStringValue(r.section_label),
+          assembled_qty: toStringValue(r.assembled_qty),
+          erected_qty: toStringValue(r.erected_qty),
+        }));
+
+        setProgressRows(mappedRows);
+        setHasBodyExtension(
+          mappedRows.some((row) => isBodyExtensionRow(row))
         );
       } else {
         setProgressRows(DEFAULT_PROGRESS_ROWS);
+        setHasBodyExtension(true);
       }
     } catch (err) {
       console.error(err);
@@ -936,7 +988,27 @@ export default function DailyDocketForm({
       </section>
 
       <section className="bg-white border rounded-2xl p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Section Quantities</h2>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h2 className="text-xl font-semibold">Section Quantities</h2>
+
+          <label className="inline-flex items-center gap-3 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={hasBodyExtension}
+              disabled={locked || isView}
+              onChange={(e) => handleBodyExtensionToggle(e.target.checked)}
+              className="h-4 w-4"
+            />
+            This tower has body extensions
+          </label>
+        </div>
+
+        {!hasBodyExtension && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+            Body Extensions are excluded from the progress calculation for this docket.
+          </div>
+        )}
+
         <div className="border rounded-xl overflow-hidden">
           <table className="w-full">
             <thead className="bg-slate-100 text-left">
@@ -947,37 +1019,43 @@ export default function DailyDocketForm({
               </tr>
             </thead>
             <tbody>
-              {progressRows.map((row, index) => (
-                <tr key={index} className="border-t">
-                  <td className="p-3">{row.section_label}</td>
-                  <td className="p-3">
-                    <input
-                      className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={row.assembled_qty}
-                      disabled={locked || isView}
-                      onChange={(e) =>
-                        updateProgressRow(index, "assembled_qty", e.target.value)
-                      }
-                    />
-                  </td>
-                  <td className="p-3">
-                    <input
-                      className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={row.erected_qty}
-                      disabled={locked || isView}
-                      onChange={(e) =>
-                        updateProgressRow(index, "erected_qty", e.target.value)
-                      }
-                    />
-                  </td>
-                </tr>
-              ))}
+              {visibleProgressRows.map((row) => {
+                const actualIndex = progressRows.findIndex(
+                  (r) => r.section_label === row.section_label
+                );
+
+                return (
+                  <tr key={row.section_label} className="border-t">
+                    <td className="p-3">{row.section_label}</td>
+                    <td className="p-3">
+                      <input
+                        className="border rounded-lg p-2 w-full disabled:bg-slate-100"
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={row.assembled_qty}
+                        disabled={locked || isView}
+                        onChange={(e) =>
+                          updateProgressRow(actualIndex, "assembled_qty", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td className="p-3">
+                      <input
+                        className="border rounded-lg p-2 w-full disabled:bg-slate-100"
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={row.erected_qty}
+                        disabled={locked || isView}
+                        onChange={(e) =>
+                          updateProgressRow(actualIndex, "erected_qty", e.target.value)
+                        }
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
@@ -1062,21 +1140,9 @@ export default function DailyDocketForm({
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">Labour</h2>
 
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <p className="text-sm text-slate-500">Total Labour Hours</p>
-              <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
-            </div>
-
-            {!locked && !isView && (
-              <button
-                type="button"
-                onClick={addLabourRow}
-                className="bg-slate-900 text-white px-4 py-2 rounded-lg"
-              >
-                Add Worker
-              </button>
-            )}
+          <div className="text-right">
+            <p className="text-sm text-slate-500">Total Labour Hours</p>
+            <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
           </div>
         </div>
 
@@ -1211,6 +1277,18 @@ export default function DailyDocketForm({
             );
           })}
         </div>
+
+        {!locked && !isView && (
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={addLabourRow}
+              className="bg-slate-900 text-white px-4 py-2 rounded-lg"
+            >
+              Add Worker
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="bg-white border rounded-2xl p-6 space-y-4">
