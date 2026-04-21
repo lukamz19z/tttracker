@@ -926,12 +926,12 @@ export default function ItcPage() {
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
           <tbody>
             <tr>
-              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">Sub-contractor Representative</td>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">BC Representative</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.subcontractor_name || "-"}</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.subcontractor_signed_at || "-"}</td>
             </tr>
             <tr>
-              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">UGL Supervisor</td>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">Supervisor</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.ugl_supervisor_name || "-"}</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.ugl_supervisor_signed_at || "-"}</td>
             </tr>
@@ -941,7 +941,7 @@ export default function ItcPage() {
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.project_engineer_signed_at || "-"}</td>
             </tr>
             <tr>
-              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">TransGrid Representative</td>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">PC Representative</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.transgrid_rep_name || "-"}</td>
               <td style="border:1px solid #ccc; padding:8px;">${itcDoc.transgrid_rep_signed_at || "-"}</td>
             </tr>
