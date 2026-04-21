@@ -148,6 +148,55 @@ function extractNumericValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null) {
+  if (!extraData) return null;
+
+  const entries = Object.entries(extraData);
+
+  const exactTowerWeightEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return (
+      k === "tower weight" ||
+      k === "tower weight (t)" ||
+      k === "tower_weight" ||
+      k === "towerweight"
+    );
+  });
+
+  if (exactTowerWeightEntry) {
+    return extractNumericValue(exactTowerWeightEntry[1]);
+  }
+
+  const towerWeightLikeEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return k.includes("tower") && k.includes("weight");
+  });
+
+  if (towerWeightLikeEntry) {
+    return extractNumericValue(towerWeightLikeEntry[1]);
+  }
+
+  const genericWeightEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return k.includes("weight");
+  });
+
+  if (genericWeightEntry) {
+    return extractNumericValue(genericWeightEntry[1]);
+  }
+
+  const massEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return k.includes("mass");
+  });
+
+  if (massEntry) {
+    return extractNumericValue(massEntry[1]);
+  }
+
+  return null;
+}
+
 function getOpenDefectCount(defects: DefectRow[]) {
   return defects.filter((d) => {
     const status = (d.status || "").trim().toLowerCase();
@@ -175,12 +224,7 @@ function clampPercent(value: number) {
 }
 
 function isSafetyDocument(doc: GenericDocumentRow) {
-  const values = [
-    doc.category,
-    doc.type,
-    doc.document_type,
-    doc.status,
-  ]
+  const values = [doc.category, doc.type, doc.document_type, doc.status]
     .filter(Boolean)
     .map((v) => String(v).toLowerCase());
 
@@ -470,18 +514,7 @@ export default function TowerOverviewPage() {
       const openDefectCount = getOpenDefectCount(defects);
       const closedDefectCount = Math.max(0, defects.length - openDefectCount);
 
-      const weightSources = [
-        nextTower?.extra_data?.weight,
-        nextTower?.extra_data?.tower_weight,
-        nextTower?.extra_data?.mass,
-        nextTower?.extra_data?.tower_mass,
-        nextTower?.extra_data?.Weight,
-        nextTower?.extra_data?.["Tower Weight"],
-        nextTower?.extra_data?.Mass,
-      ];
-
-      const towerWeightTonnes =
-        weightSources.map(extractNumericValue).find((v) => v !== null) ?? null;
+      const towerWeightTonnes = getTowerWeightFromExtraData(nextTower?.extra_data);
 
       const completedTonnes =
         towerWeightTonnes !== null
