@@ -75,11 +75,51 @@ type GenericDocumentRow = {
   is_active?: boolean | null;
 };
 
+type ItcDocumentRow = {
+  id: string;
+  tower_id: string;
+  status?: string | null;
+  itc_mode?: "BC" | "Client" | string | null;
+  revision?: string | null;
+};
+
+type ItcItemRow = {
+  id: string;
+  itc_id: string;
+  validation?: "" | "Y" | "N" | "NA" | null;
+};
+
+type ItcTorqueRow = {
+  id: string;
+  itc_id: string;
+  torque_achieved?: string | null;
+};
+
+type ItcClientUploadRow = {
+  id: string;
+  tower_id: string;
+};
+
 type DocumentMetrics = {
   totalSafetyDocs: number;
   activeSafetyDocs: number;
   expiredSafetyDocs: number;
   expiringSoonSafetyDocs: number;
+};
+
+type ItcMetrics = {
+  hasItc: boolean;
+  itcMode: string;
+  itcStatus: string;
+  revision: string;
+  checklistTotal: number;
+  checklistComplete: number;
+  checklistFailed: number;
+  checklistPending: number;
+  torqueTotal: number;
+  torqueComplete: number;
+  clientUploadCount: number;
+  overallReady: boolean;
 };
 
 type OverviewStats = {
@@ -159,7 +199,9 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
       k === "tower weight" ||
       k === "tower weight (t)" ||
       k === "tower_weight" ||
-      k === "towerweight"
+      k === "towerweight" ||
+      k === "structure total weights" ||
+      k === "structure total weight"
     );
   });
 
@@ -169,7 +211,10 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 
   const towerWeightLikeEntry = entries.find(([key]) => {
     const k = key.trim().toLowerCase();
-    return k.includes("tower") && k.includes("weight");
+    return (
+      (k.includes("tower") || k.includes("structure")) &&
+      k.includes("weight")
+    );
   });
 
   if (towerWeightLikeEntry) {
@@ -244,7 +289,7 @@ function isSafetyDocument(doc: GenericDocumentRow) {
       "wms",
       "jsea",
       "jsa",
-    ].some((keyword) => value.includes(keyword))
+    ].some((keyword) => value.includes(keyword)),
   );
 }
 
@@ -263,83 +308,105 @@ function isDocumentExpired(expiryDate: string | null, today: Date) {
   return expiryOnly < todayOnly;
 }
 
-function isDocumentExpiringSoon(expiryDate: string | null, today: Date, days = 30) {
+function isDocumentExpiringSoon(expiryDate: string | null, today: Date) {
   if (!expiryDate) return false;
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
   const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const soonDate = new Date(todayOnly);
-  soonDate.setDate(soonDate.getDate() + days);
+  const soon = new Date(todayOnly);
+  soon.setDate(soon.getDate() + 14);
 
   const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
 
-  return expiryOnly >= todayOnly && expiryOnly <= soonDate;
+  return expiryOnly >= todayOnly && expiryOnly <= soon;
 }
 
-async function loadDocumentMetrics(
-  supabase: ReturnType<typeof createSupabaseBrowser>,
-  towerId: string
-): Promise<DocumentMetrics> {
-  const candidateTables = [
-    "tower_workpack_documents",
-    "tower_documents",
-    "workpack_documents",
-  ];
+function getDocumentMetrics(documents: GenericDocumentRow[]): DocumentMetrics {
+  const today = new Date();
+  const safetyDocs = documents.filter(isSafetyDocument);
 
-  const emptyMetrics: DocumentMetrics = {
-    totalSafetyDocs: 0,
-    activeSafetyDocs: 0,
-    expiredSafetyDocs: 0,
-    expiringSoonSafetyDocs: 0,
+  const expiredSafetyDocs = safetyDocs.filter((doc) =>
+    isDocumentExpired(getDocumentExpiryDate(doc), today),
+  ).length;
+
+  const expiringSoonSafetyDocs = safetyDocs.filter((doc) =>
+    isDocumentExpiringSoon(getDocumentExpiryDate(doc), today),
+  ).length;
+
+  const activeSafetyDocs = safetyDocs.filter((doc) => {
+    if (doc.is_active === true) return true;
+    const status = (doc.status || "").toLowerCase();
+    return !["expired", "inactive", "superseded"].includes(status);
+  }).length;
+
+  return {
+    totalSafetyDocs: safetyDocs.length,
+    activeSafetyDocs,
+    expiredSafetyDocs,
+    expiringSoonSafetyDocs,
   };
+}
 
-  for (const tableName of candidateTables) {
-    try {
-      const res = await supabase
-        .from(tableName)
-        .select(
-          "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active"
-        )
-        .eq("tower_id", towerId);
-
-      if (res.error) continue;
-
-      const rows = ((res.data as GenericDocumentRow[] | null) ?? []).filter(isSafetyDocument);
-      const today = new Date();
-
-      const expiredSafetyDocs = rows.filter((doc) =>
-        isDocumentExpired(getDocumentExpiryDate(doc), today)
-      ).length;
-
-      const expiringSoonSafetyDocs = rows.filter((doc) =>
-        isDocumentExpiringSoon(getDocumentExpiryDate(doc), today, 30)
-      ).length;
-
-      const activeSafetyDocs = rows.filter((doc) => {
-        const status = String(doc.status || "").toLowerCase();
-        const expiry = getDocumentExpiryDate(doc);
-
-        if (doc.is_active === true) return true;
-        if (status.includes("active") || status.includes("current") || status.includes("valid")) {
-          return !isDocumentExpired(expiry, today);
-        }
-
-        return !isDocumentExpired(expiry, today);
-      }).length;
-
-      return {
-        totalSafetyDocs: rows.length,
-        activeSafetyDocs,
-        expiredSafetyDocs,
-        expiringSoonSafetyDocs,
-      };
-    } catch {
-      continue;
-    }
+function getBadgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
+  switch (kind) {
+    case "green":
+      return "bg-green-100 text-green-700 border-green-200";
+    case "yellow":
+      return "bg-yellow-100 text-yellow-800 border-yellow-200";
+    case "red":
+      return "bg-red-100 text-red-700 border-red-200";
+    case "blue":
+      return "bg-blue-100 text-blue-700 border-blue-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
   }
+}
 
-  return emptyMetrics;
+function getStatusKind(status: string) {
+  const s = status.trim().toLowerCase();
+  if (s === "complete" || s === "completed" || s === "closed") return "green";
+  if (s === "in progress") return "yellow";
+  return "slate";
+}
+
+function getItcStatusKind(status: string) {
+  const s = status.trim().toLowerCase();
+  if (s === "approved" || s === "closed" || s === "submitted") return "green";
+  if (s === "draft") return "yellow";
+  return "slate";
+}
+
+async function safeSelect<T>(
+  supabase: ReturnType<typeof createSupabaseBrowser>,
+  table: string,
+  select: string,
+  filters?: Array<{ column: string; value: string }>,
+) {
+  try {
+    let query = supabase.from(table).select(select);
+    for (const filter of filters || []) {
+      query = query.eq(filter.column, filter.value);
+    }
+    const { data, error } = await query;
+    if (error) return [] as T[];
+    return (data as T[] | null) ?? [];
+  } catch {
+    return [] as T[];
+  }
+}
+
+async function safeSelectFirstExisting<T>(
+  supabase: ReturnType<typeof createSupabaseBrowser>,
+  tables: string[],
+  select: string,
+  filters?: Array<{ column: string; value: string }>,
+) {
+  for (const table of tables) {
+    const rows = await safeSelect<T>(supabase, table, select, filters);
+    if (rows.length > 0) return rows;
+  }
+  return [] as T[];
 }
 
 export default function TowerOverviewPage() {
@@ -347,246 +414,338 @@ export default function TowerOverviewPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
 
-  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const supabase = createSupabaseBrowser();
 
   const [tower, setTower] = useState<Tower | null>(null);
-  const [stats, setStats] = useState<OverviewStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [latestDate, setLatestDate] = useState<string | null>(null);
+  const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole>(null);
 
-  const canEditTower = role === "admin" || role === "editor";
+  const [dockets, setDockets] = useState<DocketRow[]>([]);
+  const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
+  const [defects, setDefects] = useState<DefectRow[]>([]);
+  const [modifications, setModifications] = useState<ModificationRow[]>([]);
+  const [bundles, setBundles] = useState<BundleRow[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+  const [deliveryItems, setDeliveryItems] = useState<DeliveryItemRow[]>([]);
+  const [documents, setDocuments] = useState<GenericDocumentRow[]>([]);
+  const [itcMetrics, setItcMetrics] = useState<ItcMetrics>({
+    hasItc: false,
+    itcMode: "-",
+    itcStatus: "-",
+    revision: "-",
+    checklistTotal: 0,
+    checklistComplete: 0,
+    checklistFailed: 0,
+    checklistPending: 0,
+    torqueTotal: 0,
+    torqueComplete: 0,
+    clientUploadCount: 0,
+    overallReady: false,
+  });
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [towerId]);
 
-    async function loadRole() {
-      const userRole = await getUserRole();
-      if (!cancelled) {
-        setRole(userRole);
-      }
+  async function load() {
+    setLoading(true);
+
+    const [towerRes, roleRes] = await Promise.all([
+      supabase.from("towers").select("*").eq("id", towerId).single(),
+      getUserRole(),
+    ]);
+
+    const towerData = (towerRes.data as Tower | null) ?? null;
+    setTower(towerData);
+    setRole(roleRes);
+
+    if (towerData?.cover_photo_path) {
+      const { data } = supabase.storage
+        .from("tower-photos")
+        .getPublicUrl(towerData.cover_photo_path);
+      setCoverPhotoUrl(data.publicUrl);
+    } else {
+      setCoverPhotoUrl(null);
     }
 
-    loadRole();
+    const docketData = await safeSelect<DocketRow>(
+      supabase,
+      "tower_daily_dockets",
+      "id, docket_date, assembly_percent, erection_percent, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours",
+      [{ column: "tower_id", value: towerId }],
+    );
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    docketData.sort((a, b) => {
+      const aDate = a.docket_date ? new Date(a.docket_date).getTime() : 0;
+      const bDate = b.docket_date ? new Date(b.docket_date).getTime() : 0;
+      return bDate - aDate;
+    });
 
-  useEffect(() => {
-    if (!towerId) return;
+    setDockets(docketData);
+    setLatestDate(docketData[0]?.docket_date ?? null);
 
-    let cancelled = false;
+    const docketIds = docketData.map((d) => d.id).filter(Boolean);
 
-    async function run() {
-      setLoading(true);
+    let labourData: LabourRow[] = [];
+    if (docketIds.length > 0) {
+      labourData = await safeSelectFirstExisting<LabourRow>(
+        supabase,
+        ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
+        "docket_id, total_hours",
+      );
 
-      const [
-        towerRes,
-        docketsRes,
-        defectsRes,
-        modsRes,
-        requiredBundlesRes,
-        deliveriesRes,
-        documentMetrics,
-      ] = await Promise.all([
-        supabase.from("towers").select("*").eq("id", towerId).single(),
-        supabase
-          .from("tower_daily_dockets")
-          .select(
-            "id, docket_date, assembly_percent, erection_percent, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours"
-          )
-          .eq("tower_id", towerId)
-          .order("docket_date", { ascending: false }),
-        supabase.from("tower_defects").select("id, status").eq("tower_id", towerId),
-        supabase.from("tower_modifications").select("id").eq("tower_id", towerId),
-        supabase
-          .from("tower_required_bundles")
-          .select("bundle_no, qty_required")
-          .eq("tower_id", towerId),
-        supabase
-          .from("tower_bundle_deliveries")
-          .select("id")
-          .eq("tower_id", towerId),
-        loadDocumentMetrics(supabase, towerId),
+      labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
+    }
+
+    const [
+      defectsData,
+      modificationsData,
+      bundlesData,
+      deliveriesData,
+      deliveryItemsData,
+      documentsData,
+    ] = await Promise.all([
+      safeSelect<DefectRow>(supabase, "tower_defects", "id, status", [
+        { column: "tower_id", value: towerId },
+      ]),
+      safeSelect<ModificationRow>(supabase, "tower_modifications", "id", [
+        { column: "tower_id", value: towerId },
+      ]),
+      safeSelectFirstExisting<BundleRow>(
+        supabase,
+        ["tower_bundle_register", "tower_bundles", "tower_delivery_bundles"],
+        "bundle_no, qty_required",
+        [{ column: "tower_id", value: towerId }],
+      ),
+      safeSelect<DeliveryRow>(supabase, "tower_deliveries", "id", [
+        { column: "tower_id", value: towerId },
+      ]),
+      safeSelectFirstExisting<DeliveryItemRow>(
+        supabase,
+        ["tower_delivery_items", "tower_delivered_items"],
+        "delivery_id, bundle_no, qty_delivered",
+      ),
+      safeSelectFirstExisting<GenericDocumentRow>(
+        supabase,
+        ["tower_workpack_documents", "tower_documents", "tower_safety_documents"],
+        "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active",
+        [{ column: "tower_id", value: towerId }],
+      ),
+    ]);
+
+    setLabourRows(labourData);
+    setDefects(defectsData);
+    setModifications(modificationsData);
+    setBundles(bundlesData);
+    setDeliveries(deliveriesData);
+    setDeliveryItems(deliveryItemsData);
+    setDocuments(documentsData);
+
+    const itcDocs = await safeSelect<ItcDocumentRow>(
+      supabase,
+      "tower_itc_documents",
+      "id, tower_id, status, itc_mode, revision",
+      [{ column: "tower_id", value: towerId }],
+    );
+
+    itcDocs.sort((a, b) => 0);
+    const latestItc = itcDocs[0] ?? null;
+
+    if (!latestItc) {
+      setItcMetrics({
+        hasItc: false,
+        itcMode: "-",
+        itcStatus: "-",
+        revision: "-",
+        checklistTotal: 0,
+        checklistComplete: 0,
+        checklistFailed: 0,
+        checklistPending: 0,
+        torqueTotal: 0,
+        torqueComplete: 0,
+        clientUploadCount: 0,
+        overallReady: false,
+      });
+    } else {
+      const [itcItems, torqueRows, clientUploads] = await Promise.all([
+        safeSelect<ItcItemRow>(
+          supabase,
+          "tower_itc_items",
+          "id, itc_id, validation",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcTorqueRow>(
+          supabase,
+          "tower_itc_torque",
+          "id, itc_id, torque_achieved",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcClientUploadRow>(
+          supabase,
+          "tower_itc_client_uploads",
+          "id, tower_id",
+          [{ column: "tower_id", value: towerId }],
+        ),
       ]);
 
-      if (cancelled) return;
+      const checklistTotal = itcItems.length;
+      const checklistComplete = itcItems.filter(
+        (item) => item.validation === "Y" || item.validation === "NA",
+      ).length;
+      const checklistFailed = itcItems.filter(
+        (item) => item.validation === "N",
+      ).length;
+const checklistPending = itcItems.filter(
+  (item) => item.validation == null,
+).length;
 
-      const nextTower = (towerRes.data as Tower | null) ?? null;
-      setTower(nextTower);
+      const torqueTotal = torqueRows.length;
+      const torqueComplete = torqueRows.filter(
+        (row) => String(row.torque_achieved || "").trim() !== "",
+      ).length;
 
-      const dockets = (docketsRes.data as DocketRow[] | null) ?? [];
-      const defects = (defectsRes.data as DefectRow[] | null) ?? [];
-      const modifications = (modsRes.data as ModificationRow[] | null) ?? [];
-      const requiredBundles = (requiredBundlesRes.data as BundleRow[] | null) ?? [];
-      const deliveries = (deliveriesRes.data as DeliveryRow[] | null) ?? [];
+      const mode = latestItc.itc_mode || "BC";
 
-      let labourRows: LabourRow[] = [];
-      if (dockets.length > 0) {
-        const docketIds = dockets.map((d) => d.id);
+      const overallReady =
+        mode === "Client"
+          ? clientUploads.length > 0
+          : checklistTotal > 0 &&
+            checklistFailed === 0 &&
+            checklistPending === 0 &&
+            torqueTotal > 0 &&
+            torqueComplete === torqueTotal;
 
-        const labourRes = await supabase
-          .from("tower_docket_labour")
-          .select("docket_id, total_hours")
-          .in("docket_id", docketIds);
-
-        if (!cancelled && labourRes.data) {
-          labourRows = labourRes.data as LabourRow[];
-        }
-      }
-
-      let deliveryItems: DeliveryItemRow[] = [];
-      if (deliveries.length > 0) {
-        const deliveryIds = deliveries.map((d) => d.id);
-
-        const itemsRes = await supabase
-          .from("tower_bundle_delivery_items")
-          .select("delivery_id, bundle_no, qty_delivered")
-          .in("delivery_id", deliveryIds);
-
-        if (!cancelled && itemsRes.data) {
-          deliveryItems = itemsRes.data as DeliveryItemRow[];
-        }
-      }
-
-      const latestDate =
-        dockets.length > 0 ? (dockets[0].docket_date ?? null) : null;
-
-      const totalHours = labourRows.reduce(
-        (sum, row) => sum + Number(row.total_hours || 0),
-        0
-      );
-
-      const totalWeatherDelay = dockets.reduce(
-        (sum, d) => sum + Number(d.weather_delay_hours || 0),
-        0
-      );
-      const totalLightningDelay = dockets.reduce(
-        (sum, d) => sum + Number(d.lightning_delay_hours || 0),
-        0
-      );
-      const totalToolboxDelay = dockets.reduce(
-        (sum, d) => sum + Number(d.toolbox_delay_hours || 0),
-        0
-      );
-      const totalOtherDelay = dockets.reduce(
-        (sum, d) => sum + Number(d.other_delay_hours || 0),
-        0
-      );
-
-      const totalDelayHours =
-        totalWeatherDelay +
-        totalLightningDelay +
-        totalToolboxDelay +
-        totalOtherDelay;
-
-      const computedProgress = getProgressFromDockets(dockets);
-      const remainingProgress = Math.max(0, 100 - computedProgress);
-      const computedStatus = getStatusFromProgress(computedProgress);
-
-      const totalRequiredBundles = requiredBundles.length;
-      const totalRequiredQty = requiredBundles.reduce(
-        (sum, row) => sum + Number(row.qty_required || 0),
-        0
-      );
-
-      const deliveredByBundle: Record<string, number> = {};
-      deliveryItems.forEach((item) => {
-        deliveredByBundle[item.bundle_no] =
-          (deliveredByBundle[item.bundle_no] || 0) +
-          Number(item.qty_delivered || 0);
+      setItcMetrics({
+        hasItc: true,
+        itcMode: mode,
+        itcStatus: latestItc.status || "Draft",
+        revision: latestItc.revision || "-",
+        checklistTotal,
+        checklistComplete,
+        checklistFailed,
+        checklistPending,
+        torqueTotal,
+        torqueComplete,
+        clientUploadCount: clientUploads.length,
+        overallReady,
       });
-
-      const deliveredQty = requiredBundles.reduce((sum, bundle) => {
-        const required = Number(bundle.qty_required || 0);
-        const delivered = deliveredByBundle[bundle.bundle_no] || 0;
-        return sum + Math.min(required, delivered);
-      }, 0);
-
-      const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-
-      const deliveryPercent =
-        totalRequiredQty > 0
-          ? Math.round((deliveredQty / totalRequiredQty) * 100)
-          : 0;
-
-      const openDefectCount = getOpenDefectCount(defects);
-      const closedDefectCount = Math.max(0, defects.length - openDefectCount);
-
-      const towerWeightTonnes = getTowerWeightFromExtraData(nextTower?.extra_data);
-
-      const completedTonnes =
-        towerWeightTonnes !== null
-          ? towerWeightTonnes * (computedProgress / 100)
-          : null;
-
-      const manhoursPerTonne =
-        completedTonnes !== null && completedTonnes > 0
-          ? totalHours / completedTonnes
-          : null;
-
-      const nextStats: OverviewStats = {
-        latestDate,
-        docketCount: dockets.length,
-        totalHours: Math.round(totalHours * 100) / 100,
-        totalWeatherDelay: Math.round(totalWeatherDelay * 100) / 100,
-        totalLightningDelay: Math.round(totalLightningDelay * 100) / 100,
-        totalToolboxDelay: Math.round(totalToolboxDelay * 100) / 100,
-        totalOtherDelay: Math.round(totalOtherDelay * 100) / 100,
-        totalDelayHours: Math.round(totalDelayHours * 100) / 100,
-        defectCount: defects.length,
-        openDefectCount,
-        closedDefectCount,
-        modificationCount: modifications.length,
-        totalRequiredBundles,
-        totalRequiredQty,
-        deliveredQty,
-        outstandingQty,
-        deliveryPercent,
-        computedProgress,
-        remainingProgress,
-        computedStatus,
-        totalSafetyDocs: documentMetrics.totalSafetyDocs,
-        activeSafetyDocs: documentMetrics.activeSafetyDocs,
-        expiredSafetyDocs: documentMetrics.expiredSafetyDocs,
-        expiringSoonSafetyDocs: documentMetrics.expiringSoonSafetyDocs,
-        towerWeightTonnes:
-          towerWeightTonnes !== null
-            ? Math.round(towerWeightTonnes * 1000) / 1000
-            : null,
-        completedTonnes:
-          completedTonnes !== null
-            ? Math.round(completedTonnes * 1000) / 1000
-            : null,
-        manhoursPerTonne:
-          manhoursPerTonne !== null
-            ? Math.round(manhoursPerTonne * 100) / 100
-            : null,
-      };
-
-      if (!cancelled) {
-        setStats(nextStats);
-        setLoading(false);
-      }
     }
 
-    run();
+    setLoading(false);
+  }
 
-    return () => {
-      cancelled = true;
-    };
-  }, [towerId, supabase]);
-
-  const extraDataEntries = useMemo(() => {
-    if (!tower?.extra_data) return [];
-    return Object.entries(tower.extra_data).sort(([a], [b]) =>
-      a.localeCompare(b)
+  const stats = useMemo<OverviewStats>(() => {
+    const totalHours = labourRows.reduce(
+      (sum, row) => sum + Number(row.total_hours || 0),
+      0,
     );
-  }, [tower]);
 
-  if (loading || !tower || !stats) {
-    return <div className="p-8">Loading...</div>;
+    const totalWeatherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.weather_delay_hours || 0),
+      0,
+    );
+    const totalLightningDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.lightning_delay_hours || 0),
+      0,
+    );
+    const totalToolboxDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.toolbox_delay_hours || 0),
+      0,
+    );
+    const totalOtherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.other_delay_hours || 0),
+      0,
+    );
+    const totalDelayHours =
+      totalWeatherDelay +
+      totalLightningDelay +
+      totalToolboxDelay +
+      totalOtherDelay;
+
+    const defectCount = defects.length;
+    const openDefectCount = getOpenDefectCount(defects);
+    const closedDefectCount = defectCount - openDefectCount;
+    const modificationCount = modifications.length;
+
+    const totalRequiredBundles = bundles.length;
+    const totalRequiredQty = bundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
+
+    const deliveredQty = deliveryItems.reduce(
+      (sum, row) => sum + Number(row.qty_delivered || 0),
+      0,
+    );
+    const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
+    const deliveryPercent =
+      totalRequiredQty > 0
+        ? clampPercent((deliveredQty / totalRequiredQty) * 100)
+        : 0;
+
+    const computedProgress = getProgressFromDockets(dockets);
+    const remainingProgress = Math.max(0, 100 - computedProgress);
+    const computedStatus = getStatusFromProgress(computedProgress);
+
+    const documentMetrics = getDocumentMetrics(documents);
+
+    const towerWeightTonnes = getTowerWeightFromExtraData(tower?.extra_data);
+    const completedTonnes =
+      towerWeightTonnes !== null ? towerWeightTonnes * (computedProgress / 100) : null;
+    const manhoursPerTonne =
+      completedTonnes && completedTonnes > 0 ? totalHours / completedTonnes : null;
+
+    return {
+      latestDate,
+      docketCount: dockets.length,
+      totalHours,
+      totalWeatherDelay,
+      totalLightningDelay,
+      totalToolboxDelay,
+      totalOtherDelay,
+      totalDelayHours,
+      defectCount,
+      openDefectCount,
+      closedDefectCount,
+      modificationCount,
+      totalRequiredBundles,
+      totalRequiredQty,
+      deliveredQty,
+      outstandingQty,
+      deliveryPercent,
+      computedProgress,
+      remainingProgress,
+      computedStatus,
+      totalSafetyDocs: documentMetrics.totalSafetyDocs,
+      activeSafetyDocs: documentMetrics.activeSafetyDocs,
+      expiredSafetyDocs: documentMetrics.expiredSafetyDocs,
+      expiringSoonSafetyDocs: documentMetrics.expiringSoonSafetyDocs,
+      towerWeightTonnes,
+      completedTonnes,
+      manhoursPerTonne,
+    };
+  }, [
+    labourRows,
+    dockets,
+    defects,
+    modifications,
+    bundles,
+    deliveryItems,
+    documents,
+    tower?.extra_data,
+    latestDate,
+  ]);
+
+  const extraFields = useMemo(() => {
+    const extra = tower?.extra_data || {};
+    return Object.entries(extra).sort(([a], [b]) => a.localeCompare(b));
+  }, [tower?.extra_data]);
+
+  if (loading || !tower) {
+    return <div className="p-8">Loading tower overview...</div>;
   }
 
   return (
@@ -597,720 +756,410 @@ export default function TowerOverviewPage() {
         latestDate={stats.latestDate}
       />
 
-      <div className="bg-white border rounded-2xl p-6">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
+      {(coverPhotoUrl || tower.cover_photo_path) && (
+        <div className="bg-white border rounded-2xl overflow-hidden">
+          {coverPhotoUrl ? (
+            <img
+              src={coverPhotoUrl}
+              alt="Tower cover"
+              className="w-full h-64 object-cover"
+            />
+          ) : null}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="text-sm text-slate-500">Tower Progress</div>
+          <div className="mt-2 text-3xl font-bold">
+            {stats.computedProgress}%
+          </div>
+          <div className="mt-3 h-3 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full bg-blue-600"
+              style={{ width: `${stats.computedProgress}%` }}
+            />
+          </div>
+          <div className="mt-3">
+            <span
+              className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
+                getStatusKind(stats.computedStatus),
+              )}`}
+            >
+              {stats.computedStatus}
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="text-sm text-slate-500">Manhours</div>
+          <div className="mt-2 text-3xl font-bold">
+            {formatDecimal(stats.totalHours, 1)}
+          </div>
+          <div className="mt-2 text-sm text-slate-600">
+            Dockets: {stats.docketCount}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">
+            Last docket: {stats.latestDate || "-"}
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="text-sm text-slate-500">Delivery Progress</div>
+          <div className="mt-2 text-3xl font-bold">
+            {formatDecimal(stats.deliveryPercent, 0)}%
+          </div>
+          <div className="mt-3 h-3 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full bg-emerald-600"
+              style={{ width: `${stats.deliveryPercent}%` }}
+            />
+          </div>
+          <div className="mt-2 text-sm text-slate-600">
+            Delivered qty: {formatDecimal(stats.deliveredQty, 0)}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">
+            Outstanding qty: {formatDecimal(stats.outstandingQty, 0)}
+          </div>
+        </div>
+
+        <div className="bg-white border rounded-2xl p-5">
+          <div className="text-sm text-slate-500">Manhours / Tonne</div>
+          <div className="mt-2 text-3xl font-bold">
+            {formatDecimal(stats.manhoursPerTonne, 2)}
+          </div>
+          <div className="mt-2 text-sm text-slate-600">
+            Tower weight:{" "}
+            {stats.towerWeightTonnes !== null
+              ? `${formatDecimal(stats.towerWeightTonnes, 2)} t`
+              : "-"}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">
+            Completed tonnes:{" "}
+            {stats.completedTonnes !== null
+              ? `${formatDecimal(stats.completedTonnes, 2)} t`
+              : "-"}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <div className="text-2xl font-bold">Tower Dashboard</div>
-            <div className="text-sm text-slate-500 mt-1">
-              Power-BI style overview of progress, steel, labour, delays, defects and tower metadata.
-            </div>
+            <h2 className="text-xl font-bold">ITC Overview</h2>
+            <p className="text-sm text-slate-600">
+              Latest ITC status and completion summary for this tower.
+            </p>
           </div>
 
-          <div className="flex gap-2 flex-wrap">
-            {canEditTower && (
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/edit`}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
-              >
-                Edit Tower
-              </Link>
-            )}
+          <Link
+            href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
+            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+          >
+            Open ITC
+          </Link>
+        </div>
 
+        {!itcMetrics.hasItc ? (
+          <div className="text-slate-500">
+            No ITC has been created for this tower yet.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Mode</div>
+                <div className="text-lg font-semibold mt-1">{itcMetrics.itcMode}</div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Status</div>
+                <div className="mt-2">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
+                      getItcStatusKind(itcMetrics.itcStatus),
+                    )}`}
+                  >
+                    {itcMetrics.itcStatus}
+                  </span>
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Revision</div>
+                <div className="text-lg font-semibold mt-1">
+                  {itcMetrics.revision}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Checklist</div>
+                <div className="text-lg font-semibold mt-1">
+                  {itcMetrics.checklistComplete}/{itcMetrics.checklistTotal}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Torque</div>
+                <div className="text-lg font-semibold mt-1">
+                  {itcMetrics.torqueComplete}/{itcMetrics.torqueTotal}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Ready</div>
+                <div className="mt-2">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
+                      itcMetrics.overallReady
+                        ? "bg-green-100 text-green-700 border-green-200"
+                        : "bg-yellow-100 text-yellow-800 border-yellow-200"
+                    }`}
+                  >
+                    {itcMetrics.overallReady ? "Ready" : "Pending"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Checklist Passed</div>
+                <div className="text-2xl font-bold mt-1">
+                  {itcMetrics.checklistComplete}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Checklist Failed</div>
+                <div className="text-2xl font-bold mt-1">
+                  {itcMetrics.checklistFailed}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Checklist Pending</div>
+                <div className="text-2xl font-bold mt-1">
+                  {itcMetrics.checklistPending}
+                </div>
+              </div>
+
+              <div className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">Client Uploads</div>
+                <div className="text-2xl font-bold mt-1">
+                  {itcMetrics.clientUploadCount}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="bg-white border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-xl font-bold">Construction Summary</h2>
             <Link
               href={`/project/${projectId}/tower/${towerId}/dockets`}
               className="border px-4 py-2 rounded-lg hover:bg-slate-50"
             >
-              View Dockets
-            </Link>
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/defects`}
-              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-            >
-              View Defects
-            </Link>
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/deliveries`}
-              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-            >
-              View Deliveries
-            </Link>
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/modifications`}
-              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-            >
-              View Mods
+              Open Daily Dockets
             </Link>
           </div>
-        </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-          <KpiCard
-            label="Progress"
-            value={`${stats.computedProgress}%`}
-            tone="blue"
-            subtext={stats.computedStatus}
-          />
-          <KpiCard
-            label="Steel Delivery"
-            value={`${stats.deliveryPercent}%`}
-            tone="green"
-            subtext={`${stats.deliveredQty}/${stats.totalRequiredQty}`}
-          />
-          <KpiCard
-            label="Total Hours"
-            value={`${stats.totalHours}h`}
-            tone="blue"
-            subtext={`${stats.docketCount} dockets`}
-          />
-          <KpiCard
-            label="MH / Tonne"
-            value={
-              stats.manhoursPerTonne !== null
-                ? `${formatDecimal(stats.manhoursPerTonne, 2)}`
-                : "-"
-            }
-            tone="orange"
-            subtext={
-              stats.completedTonnes !== null && stats.completedTonnes > 0
-                ? `${formatDecimal(stats.completedTonnes, 2)} t complete`
-                : "Needs progress"
-            }
-          />
-          <KpiCard
-            label="Open Defects"
-            value={String(stats.openDefectCount)}
-            tone={stats.openDefectCount > 0 ? "red" : "green"}
-            subtext={`${stats.defectCount} total`}
-          />
-
-          <KpiCard
-            label="Safety Docs"
-            value={String(stats.totalSafetyDocs)}
-            tone="slate"
-            subtext="Tracked"
-          />
-          <KpiCard
-            label="Active Docs"
-            value={String(stats.activeSafetyDocs)}
-            tone={stats.activeSafetyDocs > 0 ? "green" : "slate"}
-            subtext="Current"
-          />
-          <KpiCard
-            label="Expiring Soon"
-            value={String(stats.expiringSoonSafetyDocs)}
-            tone={stats.expiringSoonSafetyDocs > 0 ? "orange" : "green"}
-            subtext="30 days"
-          />
-          <KpiCard
-            label="Expired Docs"
-            value={String(stats.expiredSafetyDocs)}
-            tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
-            subtext="Need action"
-          />
-          <KpiCard
-            label="Tower Weight"
-            value={
-              stats.towerWeightTonnes !== null
-                ? `${formatDecimal(stats.towerWeightTonnes, 2)} t`
-                : "-"
-            }
-            tone="slate"
-            subtext="From CSV import"
-          />
-        </div>
-      </div>
-
-      <div className="grid xl:grid-cols-4 gap-6">
-        <ChartCard title="Overall Progress" subtitle="Completed vs remaining">
-          <div className="flex flex-col items-center gap-4">
-            <DonutChart
-              percent={stats.computedProgress}
-              color="#2563eb"
-              remainderColor="#e2e8f0"
-              centerTop={`${stats.computedProgress}%`}
-              centerBottom="Complete"
-            />
-
-            <div className="w-full space-y-3">
-              <LegendRow
-                label="Completed"
-                value={`${stats.computedProgress}%`}
-                colorClass="bg-blue-600"
-              />
-              <LegendRow
-                label="Remaining"
-                value={`${stats.remainingProgress}%`}
-                colorClass="bg-slate-300"
-              />
-              <ProgressBar
-                label="Tower Progress"
-                value={stats.computedProgress}
-                barClass="bg-blue-600"
-              />
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Open Defects</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.openDefectCount}
+              </div>
             </div>
-          </div>
-        </ChartCard>
 
-        <ChartCard title="Steel Delivery" subtitle="Delivered vs outstanding">
-          <div className="flex flex-col items-center gap-4">
-            <DonutChart
-              percent={stats.deliveryPercent}
-              color="#16a34a"
-              remainderColor="#e2e8f0"
-              centerTop={`${stats.deliveryPercent}%`}
-              centerBottom="Delivered"
-            />
-
-            <div className="w-full space-y-3">
-              <LegendRow
-                label="Delivered Qty"
-                value={String(stats.deliveredQty)}
-                colorClass="bg-green-600"
-              />
-              <LegendRow
-                label="Outstanding Qty"
-                value={String(stats.outstandingQty)}
-                colorClass="bg-slate-300"
-              />
-              <ProgressBar
-                label="Steel Completion"
-                value={stats.deliveryPercent}
-                barClass="bg-green-600"
-              />
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Closed Defects</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.closedDefectCount}
+              </div>
             </div>
-          </div>
-        </ChartCard>
 
-        <ChartCard title="Defects Status" subtitle="Open vs closed">
-          <div className="flex flex-col items-center gap-4">
-            <DonutChart
-              percent={
-                stats.defectCount > 0
-                  ? Math.round(
-                      (stats.closedDefectCount / stats.defectCount) * 100
-                    )
-                  : 100
-              }
-              color="#16a34a"
-              remainderColor="#dc2626"
-              centerTop={String(stats.defectCount)}
-              centerBottom="Total"
-            />
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Modifications</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.modificationCount}
+              </div>
+            </div>
 
-            <div className="w-full space-y-3">
-              <LegendRow
-                label="Closed"
-                value={String(stats.closedDefectCount)}
-                colorClass="bg-green-600"
-              />
-              <LegendRow
-                label="Open"
-                value={String(stats.openDefectCount)}
-                colorClass="bg-red-600"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <SmallStat
-                  label="Open Rate"
-                  value={`${
-                    stats.defectCount > 0
-                      ? Math.round(
-                          (stats.openDefectCount / stats.defectCount) * 100
-                        )
-                      : 0
-                  }%`}
-                  tone="red"
-                />
-                <SmallStat
-                  label="Closed Rate"
-                  value={`${
-                    stats.defectCount > 0
-                      ? Math.round(
-                          (stats.closedDefectCount / stats.defectCount) * 100
-                        )
-                      : 0
-                  }%`}
-                  tone="green"
-                />
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Total Delay Hours</div>
+              <div className="text-2xl font-bold mt-1">
+                {formatDecimal(stats.totalDelayHours, 1)}
               </div>
             </div>
           </div>
-        </ChartCard>
 
-        <ChartCard title="Safety Documents" subtitle="Compliance snapshot">
-          <div className="flex flex-col items-center gap-4">
-            <DonutChart
-              percent={
-                stats.totalSafetyDocs > 0
-                  ? Math.round((stats.activeSafetyDocs / stats.totalSafetyDocs) * 100)
-                  : 100
-              }
-              color="#16a34a"
-              remainderColor="#e2e8f0"
-              centerTop={String(stats.totalSafetyDocs)}
-              centerBottom="Docs"
-            />
-
-            <div className="w-full space-y-3">
-              <LegendRow
-                label="Active"
-                value={String(stats.activeSafetyDocs)}
-                colorClass="bg-green-600"
-              />
-              <LegendRow
-                label="Expiring Soon"
-                value={String(stats.expiringSoonSafetyDocs)}
-                colorClass="bg-orange-500"
-              />
-              <LegendRow
-                label="Expired"
-                value={String(stats.expiredSafetyDocs)}
-                colorClass="bg-red-600"
-              />
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Weather</div>
+              <div className="text-lg font-semibold mt-1">
+                {formatDecimal(stats.totalWeatherDelay, 1)}
+              </div>
             </div>
-          </div>
-        </ChartCard>
-      </div>
-
-      <div className="grid xl:grid-cols-4 gap-6">
-        <PanelCard
-          title="Operations Summary"
-          subtitle="Field productivity and logged activity"
-        >
-          <div className="space-y-3">
-            <MetricRow
-              label="Current Status"
-              value={stats.computedStatus}
-              tone={
-                stats.computedStatus === "Complete"
-                  ? "green"
-                  : stats.computedStatus === "In Progress"
-                  ? "blue"
-                  : "slate"
-              }
-            />
-            <MetricRow
-              label="Daily Dockets Logged"
-              value={String(stats.docketCount)}
-            />
-            <MetricRow
-              label="Total Manhours"
-              value={`${stats.totalHours}h`}
-              tone="blue"
-            />
-            <MetricRow
-              label="Tower Weight"
-              value={
-                stats.towerWeightTonnes !== null
-                  ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
-                  : "-"
-              }
-              tone="slate"
-            />
-            <MetricRow
-              label="Completed Tonnes"
-              value={
-                stats.completedTonnes !== null
-                  ? `${formatDecimal(stats.completedTonnes, 2)}t`
-                  : "-"
-              }
-              tone="green"
-            />
-            <MetricRow
-              label="MH / Tonne"
-              value={
-                stats.manhoursPerTonne !== null
-                  ? `${formatDecimal(stats.manhoursPerTonne, 2)} h/t`
-                  : "-"
-              }
-              tone="orange"
-            />
-            <MetricRow label="Last Docket Date" value={stats.latestDate || "-"} />
-            <MetricRow
-              label="Modifications Logged"
-              value={String(stats.modificationCount)}
-              tone="slate"
-            />
-          </div>
-        </PanelCard>
-
-        <PanelCard
-          title="Delay Breakdown"
-          subtitle="Highlighting productivity losses"
-        >
-          <div className="space-y-4">
-            <DelayBar
-              label="Weather"
-              value={stats.totalWeatherDelay}
-              total={stats.totalDelayHours}
-              barClass="bg-orange-500"
-            />
-            <DelayBar
-              label="Lightning"
-              value={stats.totalLightningDelay}
-              total={stats.totalDelayHours}
-              barClass="bg-red-500"
-            />
-            <DelayBar
-              label="Toolbox"
-              value={stats.totalToolboxDelay}
-              total={stats.totalDelayHours}
-              barClass="bg-amber-500"
-            />
-            <DelayBar
-              label="Other"
-              value={stats.totalOtherDelay}
-              total={stats.totalDelayHours}
-              barClass="bg-slate-500"
-            />
-            <div className="pt-2 border-t">
-              <MetricRow
-                label="Total Delay Hours"
-                value={`${stats.totalDelayHours}h`}
-                tone={stats.totalDelayHours > 0 ? "orange" : "green"}
-              />
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Lightning</div>
+              <div className="text-lg font-semibold mt-1">
+                {formatDecimal(stats.totalLightningDelay, 1)}
+              </div>
             </div>
-          </div>
-        </PanelCard>
-
-        <PanelCard
-          title="Quality & Steel Snapshot"
-          subtitle="Quick action-needed overview"
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <SmallStat
-              label="Open Defects"
-              value={String(stats.openDefectCount)}
-              tone={stats.openDefectCount > 0 ? "red" : "green"}
-            />
-            <SmallStat
-              label="Total Defects"
-              value={String(stats.defectCount)}
-              tone="slate"
-            />
-            <SmallStat
-              label="Bundles"
-              value={String(stats.totalRequiredBundles)}
-              tone="blue"
-            />
-            <SmallStat
-              label="Required Qty"
-              value={String(stats.totalRequiredQty)}
-              tone="slate"
-            />
-            <SmallStat
-              label="Delivered Qty"
-              value={String(stats.deliveredQty)}
-              tone="green"
-            />
-            <SmallStat
-              label="Outstanding Qty"
-              value={String(stats.outstandingQty)}
-              tone={stats.outstandingQty > 0 ? "orange" : "green"}
-            />
-          </div>
-        </PanelCard>
-
-        <PanelCard
-          title="Safety Documents"
-          subtitle="Document compliance overview"
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <SmallStat
-              label="Total Docs"
-              value={String(stats.totalSafetyDocs)}
-              tone="slate"
-            />
-            <SmallStat
-              label="Active Docs"
-              value={String(stats.activeSafetyDocs)}
-              tone={stats.activeSafetyDocs > 0 ? "green" : "slate"}
-            />
-            <SmallStat
-              label="Expiring Soon"
-              value={String(stats.expiringSoonSafetyDocs)}
-              tone={stats.expiringSoonSafetyDocs > 0 ? "orange" : "green"}
-            />
-            <SmallStat
-              label="Expired Docs"
-              value={String(stats.expiredSafetyDocs)}
-              tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
-            />
-      
-          </div>
-        </PanelCard>
-      </div>
-
-      <div className="bg-white border rounded-2xl p-6">
-        <div className="mb-5">
-          <div className="text-xl font-semibold">Tower Information</div>
-          <div className="text-sm text-slate-500 mt-1">
-            Imported tower properties and project-specific fields from the CSV.
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Toolbox</div>
+              <div className="text-lg font-semibold mt-1">
+                {formatDecimal(stats.totalToolboxDelay, 1)}
+              </div>
+            </div>
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Other</div>
+              <div className="text-lg font-semibold mt-1">
+                {formatDecimal(stats.totalOtherDelay, 1)}
+              </div>
+            </div>
           </div>
         </div>
 
-        {extraDataEntries.length === 0 ? (
-          <div className="text-slate-500">No tower extra data available.</div>
-        ) : (
-          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {extraDataEntries.map(([key, value]) => (
-              <div
-                key={key}
-                className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
-              >
-                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {formatLabel(key)}
-                </div>
+        <div className="bg-white border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-xl font-bold">Workpack / Safety</h2>
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/workpack`}
+              className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+            >
+              Open Workpack
+            </Link>
+          </div>
 
-                <div className="text-sm font-semibold text-right text-slate-900">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Safety Docs</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.totalSafetyDocs}
+              </div>
+            </div>
+
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Active Docs</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.activeSafetyDocs}
+              </div>
+            </div>
+
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Expired</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.expiredSafetyDocs}
+              </div>
+            </div>
+
+            <div className="border rounded-xl p-4">
+              <div className="text-sm text-slate-500">Expiring Soon</div>
+              <div className="text-2xl font-bold mt-1">
+                {stats.expiringSoonSafetyDocs}
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">User Role</div>
+            <div className="text-lg font-semibold mt-1">{role || "-"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-xl font-bold">Delivery Summary</h2>
+          <Link
+            href={`/project/${projectId}/tower/${towerId}/deliveries`}
+            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+          >
+            Open Deliveries
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-4">
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Bundles</div>
+            <div className="text-2xl font-bold mt-1">{stats.totalRequiredBundles}</div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Required Qty</div>
+            <div className="text-2xl font-bold mt-1">{formatDecimal(stats.totalRequiredQty, 0)}</div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Delivered Qty</div>
+            <div className="text-2xl font-bold mt-1">{formatDecimal(stats.deliveredQty, 0)}</div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Outstanding Qty</div>
+            <div className="text-2xl font-bold mt-1">{formatDecimal(stats.outstandingQty, 0)}</div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Delivery Records</div>
+            <div className="text-2xl font-bold mt-1">{deliveries.length}</div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Progress</div>
+            <div className="text-2xl font-bold mt-1">{formatDecimal(stats.deliveryPercent, 0)}%</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-xl font-bold">Tower Details</h2>
+          <div className="text-sm text-slate-500">
+            Imported tower overview fields
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Tower Name</div>
+            <div className="text-lg font-semibold mt-1">
+              {tower.name || "-"}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Line</div>
+            <div className="text-lg font-semibold mt-1">
+              {tower.line || "-"}
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-4">
+            <div className="text-sm text-slate-500">Stored Status</div>
+            <div className="text-lg font-semibold mt-1">
+              {tower.status || "-"}
+            </div>
+          </div>
+        </div>
+
+        {extraFields.length > 0 && (
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {extraFields.map(([key, value]) => (
+              <div key={key} className="border rounded-xl p-4">
+                <div className="text-sm text-slate-500">{formatLabel(key)}</div>
+                <div className="text-lg font-semibold mt-1">
                   {formatValue(value)}
                 </div>
               </div>
             ))}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  subtext,
-  tone,
-}: {
-  label: string;
-  value: string;
-  subtext?: string;
-  tone: "blue" | "green" | "orange" | "red" | "slate";
-}) {
-  const toneClasses: Record<typeof tone, string> = {
-    blue: "border-blue-200 bg-blue-50 text-blue-900",
-    green: "border-green-200 bg-green-50 text-green-900",
-    orange: "border-orange-200 bg-orange-50 text-orange-900",
-    red: "border-red-200 bg-red-50 text-red-900",
-    slate: "border-slate-200 bg-slate-50 text-slate-900",
-  };
-
-  const topBarClasses: Record<typeof tone, string> = {
-    blue: "bg-blue-600",
-    green: "bg-green-600",
-    orange: "bg-orange-500",
-    red: "bg-red-600",
-    slate: "bg-slate-500",
-  };
-
-  return (
-    <div className={`border rounded-2xl overflow-hidden min-h-[132px] ${toneClasses[tone]}`}>
-      <div className={`h-1.5 ${topBarClasses[tone]}`} />
-      <div className="p-4 flex flex-col justify-between h-[calc(100%-6px)]">
-        <div className="text-[11px] uppercase tracking-wide opacity-70 leading-4">
-          {label}
-        </div>
-        <div className="text-2xl font-bold mt-2 leading-tight break-words">
-          {value}
-        </div>
-        <div className="text-xs mt-2 opacity-70 leading-4 min-h-[32px]">
-          {subtext || "\u00A0"}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ChartCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white border rounded-2xl p-6">
-      <div className="mb-5">
-        <div className="text-lg font-semibold">{title}</div>
-        <div className="text-sm text-slate-500 mt-1">{subtitle}</div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function PanelCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white border rounded-2xl p-6">
-      <div className="mb-4">
-        <div className="text-lg font-semibold">{title}</div>
-        <div className="text-sm text-slate-500 mt-1">{subtitle}</div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function DonutChart({
-  percent,
-  color,
-  remainderColor,
-  centerTop,
-  centerBottom,
-}: {
-  percent: number;
-  color: string;
-  remainderColor: string;
-  centerTop: string;
-  centerBottom: string;
-}) {
-  const safePercent = clampPercent(percent);
-
-  return (
-    <div
-      className="relative h-44 w-44 rounded-full"
-      style={{
-        background: `conic-gradient(${color} 0% ${safePercent}%, ${remainderColor} ${safePercent}% 100%)`,
-      }}
-    >
-      <div className="absolute inset-5 rounded-full bg-white border flex flex-col items-center justify-center text-center">
-        <div className="text-2xl font-bold">{centerTop}</div>
-        <div className="text-xs text-slate-500 mt-1">{centerBottom}</div>
-      </div>
-    </div>
-  );
-}
-
-function LegendRow({
-  label,
-  value,
-  colorClass,
-}: {
-  label: string;
-  value: string;
-  colorClass: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`h-3 w-3 rounded-full ${colorClass}`} />
-        <span className="text-sm text-slate-600">{label}</span>
-      </div>
-      <span className="font-semibold">{value}</span>
-    </div>
-  );
-}
-
-function ProgressBar({
-  label,
-  value,
-  barClass,
-}: {
-  label: string;
-  value: number;
-  barClass: string;
-}) {
-  const safeValue = clampPercent(value);
-
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-3 text-sm mb-1">
-        <span className="text-slate-500">{label}</span>
-        <span className="font-medium">{safeValue}%</span>
-      </div>
-      <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
-        <div
-          className={`h-3 rounded-full ${barClass}`}
-          style={{ width: `${safeValue}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DelayBar({
-  label,
-  value,
-  total,
-  barClass,
-}: {
-  label: string;
-  value: number;
-  total: number;
-  barClass: string;
-}) {
-  const percent = total > 0 ? (value / total) * 100 : 0;
-
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-3 text-sm mb-1">
-        <span className="text-slate-600">{label}</span>
-        <span className="font-medium">{value}h</span>
-      </div>
-      <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
-        <div
-          className={`h-3 rounded-full ${barClass}`}
-          style={{ width: `${clampPercent(percent)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SmallStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "blue" | "green" | "orange" | "red" | "slate";
-}) {
-  const classes: Record<typeof tone, string> = {
-    blue: "border-blue-200 bg-blue-50 text-blue-900",
-    green: "border-green-200 bg-green-50 text-green-900",
-    orange: "border-orange-200 bg-orange-50 text-orange-900",
-    red: "border-red-200 bg-red-50 text-red-900",
-    slate: "border-slate-200 bg-slate-50 text-slate-900",
-  };
-
-  return (
-    <div className={`border rounded-xl p-4 ${classes[tone]}`}>
-      <div className="text-xs opacity-70">{label}</div>
-      <div className="text-xl font-bold mt-1">{value}</div>
-    </div>
-  );
-}
-
-function MetricRow({
-  label,
-  value,
-  tone = "slate",
-}: {
-  label: string;
-  value: string;
-  tone?: "blue" | "green" | "orange" | "red" | "slate";
-}) {
-  const valueClasses: Record<typeof tone, string> = {
-    blue: "text-blue-700",
-    green: "text-green-700",
-    orange: "text-orange-700",
-    red: "text-red-700",
-    slate: "text-slate-900",
-  };
-
-  return (
-    <div className="flex items-center justify-between gap-4 border-b last:border-b-0 pb-2 last:pb-0">
-      <div className="text-slate-500 text-sm">{label}</div>
-      <div className={`font-semibold text-right ${valueClasses[tone]}`}>
-        {value}
       </div>
     </div>
   );
