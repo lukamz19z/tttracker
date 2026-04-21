@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -208,10 +208,7 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 
   const towerWeightLikeEntry = entries.find(([key]) => {
     const k = key.trim().toLowerCase();
-    return (
-      (k.includes("tower") || k.includes("structure")) &&
-      k.includes("weight")
-    );
+    return (k.includes("tower") || k.includes("structure")) && k.includes("weight");
   });
 
   if (towerWeightLikeEntry) {
@@ -360,13 +357,6 @@ function getBadgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
   }
 }
 
-function getStatusKind(status: string) {
-  const s = status.trim().toLowerCase();
-  if (s === "complete" || s === "completed" || s === "closed") return "green";
-  if (s === "in progress") return "yellow";
-  return "slate";
-}
-
 function getItcStatusKind(status: string) {
   const s = status.trim().toLowerCase();
   if (s === "approved" || s === "closed" || s === "submitted") return "green";
@@ -425,6 +415,47 @@ function MetricTile({
   );
 }
 
+function DonutWheel({
+  value,
+  label,
+  sublabel,
+  color,
+}: {
+  value: number;
+  label: string;
+  sublabel?: string;
+  color: string;
+}) {
+  const safeValue = clampPercent(value);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-4">
+        <div
+          className="relative h-20 w-20 rounded-full"
+          style={{
+            background: `conic-gradient(${color} 0deg ${safeValue * 3.6}deg, #e5e7eb ${safeValue * 3.6}deg 360deg)`,
+          }}
+        >
+          <div className="absolute inset-[8px] rounded-full bg-white flex items-center justify-center">
+            <span className="text-lg font-bold text-slate-900">
+              {Math.round(safeValue)}%
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <div className="text-sm text-slate-500">{label}</div>
+          <div className="text-xl font-semibold text-slate-900 mt-1">
+            {Math.round(safeValue)}%
+          </div>
+          {sublabel ? <div className="text-sm text-slate-500 mt-1">{sublabel}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SectionHeader({
   title,
   subtitle,
@@ -432,7 +463,7 @@ function SectionHeader({
 }: {
   title: string;
   subtitle: string;
-  action?: React.ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -804,6 +835,26 @@ export default function TowerOverviewPage() {
     return Object.entries(extra).sort(([a], [b]) => a.localeCompare(b));
   }, [tower?.extra_data]);
 
+  const safetyActivePercent = useMemo(() => {
+    if (stats.totalSafetyDocs <= 0) return 0;
+    return clampPercent((stats.activeSafetyDocs / stats.totalSafetyDocs) * 100);
+  }, [stats.activeSafetyDocs, stats.totalSafetyDocs]);
+
+  const itcCompletionPercent = useMemo(() => {
+    if (!itcMetrics.hasItc) return 0;
+    if (itcMetrics.itcMode === "Client") {
+      return itcMetrics.clientUploadCount > 0 ? 100 : 0;
+    }
+    if (itcMetrics.checklistTotal <= 0) return 0;
+    return clampPercent((itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100);
+  }, [
+    itcMetrics.hasItc,
+    itcMetrics.itcMode,
+    itcMetrics.clientUploadCount,
+    itcMetrics.checklistComplete,
+    itcMetrics.checklistTotal,
+  ]);
+
   if (loading || !tower) {
     return <div className="p-8">Loading tower overview...</div>;
   }
@@ -880,6 +931,33 @@ export default function TowerOverviewPage() {
             accent="blue"
           />
         </div>
+
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <DonutWheel
+            value={stats.computedProgress}
+            label="Total Progress"
+            sublabel={`${stats.remainingProgress}% remaining`}
+            color="#2563eb"
+          />
+          <DonutWheel
+            value={stats.deliveryPercent}
+            label="Delivery Progress"
+            sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
+            color="#059669"
+          />
+          <DonutWheel
+            value={itcCompletionPercent}
+            label="ITC Completion"
+            sublabel={itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"}
+            color="#7c3aed"
+          />
+          <DonutWheel
+            value={safetyActivePercent}
+            label="Safety Docs Active"
+            sublabel={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active`}
+            color="#f59e0b"
+          />
+        </div>
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -902,15 +980,15 @@ export default function TowerOverviewPage() {
           </div>
         ) : (
           <div className="mt-6 space-y-4">
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")} lg:col-span-1`}>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}>
                 <div className="text-sm text-slate-500">Mode</div>
                 <div className="mt-1 text-2xl font-bold text-slate-900">
                   {itcMetrics.itcMode}
                 </div>
               </div>
 
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")} lg:col-span-1`}>
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}>
                 <div className="text-sm text-slate-500">Ready Status</div>
                 <div className="mt-3">
                   <span
@@ -925,7 +1003,7 @@ export default function TowerOverviewPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Status</div>
                 <div className="mt-3">
                   <span
@@ -938,14 +1016,14 @@ export default function TowerOverviewPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Revision</div>
                 <div className="mt-1 text-2xl font-bold text-slate-900">
                   {itcMetrics.revision}
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Client Uploads</div>
                 <div className="mt-1 text-2xl font-bold text-slate-900">
                   {itcMetrics.clientUploadCount}
@@ -987,7 +1065,7 @@ export default function TowerOverviewPage() {
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <SectionHeader
             title="Construction Summary"
-            subtitle="Defects, modifications and delay breakdown."
+            subtitle="Defects, modifications, and delay overview."
             action={
               <Link
                 href={`/project/${projectId}/tower/${towerId}/dockets`}
@@ -998,7 +1076,7 @@ export default function TowerOverviewPage() {
             }
           />
 
-          <div className="mt-6 grid grid-cols-2 gap-4">
+          <div className="mt-6 grid grid-cols-2 xl:grid-cols-4 gap-4">
             <MetricTile
               title="Open Defects"
               value={String(stats.openDefectCount)}
@@ -1020,34 +1098,34 @@ export default function TowerOverviewPage() {
             <MetricTile
               title="Total Delay Hours"
               value={formatDecimal(stats.totalDelayHours, 1)}
-              subtitle="combined all delay types"
+              subtitle="all delay categories"
               accent="amber"
             />
           </div>
 
-          <div className="mt-6 grid grid-cols-2 xl:grid-cols-4 gap-4">
-            <div className="rounded-2xl border border-slate-200 bg-blue-50 p-4">
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm text-slate-500">Weather</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalWeatherDelay, 1)}
+                {formatDecimal(stats.totalWeatherDelay, 1)} h
               </div>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-violet-50 p-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm text-slate-500">Lightning</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalLightningDelay, 1)}
+                {formatDecimal(stats.totalLightningDelay, 1)} h
               </div>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-amber-50 p-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm text-slate-500">Toolbox</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalToolboxDelay, 1)}
+                {formatDecimal(stats.totalToolboxDelay, 1)} h
               </div>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-rose-50 p-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm text-slate-500">Other</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalOtherDelay, 1)}
+                {formatDecimal(stats.totalOtherDelay, 1)} h
               </div>
             </div>
           </div>
@@ -1189,7 +1267,10 @@ export default function TowerOverviewPage() {
         {extraFields.length > 0 && (
           <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {extraFields.map(([key, value]) => (
-              <div key={key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div
+                key={key}
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+              >
                 <div className="text-sm text-slate-500">{formatLabel(key)}</div>
                 <div className="mt-1 text-lg font-semibold text-slate-900">
                   {formatValue(value)}
