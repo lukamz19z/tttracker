@@ -1223,12 +1223,19 @@ export default function ItcPage() {
         >
           Lift Studies
         </Link>
+                <Link
+          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
+          href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
+        >
+          Drawings
+        </Link>
         <Link
           className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/documents`}
         >
           Documents
         </Link>
+        
       </div>
 
       <div
