@@ -12,17 +12,12 @@ type TowerRecord = {
   line?: string | null;
   status?: string | null;
   progress?: number | null;
-  structure_type?: string | null;
-  structure_height?: string | null;
-  structure_weight?: string | null;
-  tower_type?: string | null;
-  height?: string | number | null;
-  weight?: string | number | null;
   extra_data?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 
 type ItcMode = "BC" | "Client";
+type ItcValidation = "" | "Y" | "N" | "NA";
 
 type ItcDocument = {
   id: string;
@@ -33,8 +28,8 @@ type ItcDocument = {
   revision?: string | null;
   structure_number?: string | null;
   structure_type?: string | null;
-  structure_height?: string | null;
-  structure_weight?: string | null;
+  structure_height?: number | string | null;
+  structure_weight?: number | string | null;
   itc_mode?: ItcMode | null;
   subcontractor_name?: string | null;
   subcontractor_signed_at?: string | null;
@@ -54,7 +49,7 @@ type ItcItem = {
   section_key: string;
   item_no: number;
   description: string;
-  validation: "Y" | "N" | "NA" | "";
+  validation: ItcValidation;
   responsible_role: string | null;
   lh_name: string | null;
   lh_signature: string | null;
@@ -115,7 +110,7 @@ const CHECKLIST_SECTIONS: ChecklistSection[] = [
       { itemNo: 5, description: "Foundation suitability verification to erect tower", role: "LH" },
       { itemNo: 6, description: "Updated work packs available at site", role: "LH" },
       { itemNo: 7, description: "Correct assembly drawings are ensured", role: "LH" },
-      { itemNo: 8, description: "All relevant permits (including access, safety, environment, TMP) are in place", role: "LH" },
+      { itemNo: 8, description: "All relevant permits (including access, safety and environment, TMP) are in place", role: "LH" },
       { itemNo: 9, description: "Weather check completed", role: "LH" },
       { itemNo: 10, description: "Communication systems working has been checked", role: "LH" },
       { itemNo: 11, description: "Test and tag are checked", role: "LH" },
@@ -134,10 +129,10 @@ const CHECKLIST_SECTIONS: ChecklistSection[] = [
     items: [
       { itemNo: 18, description: "Members are checked for straightness", role: "LH" },
       { itemNo: 19, description: "Members, plates and fasteners are properly galvanized", role: "LH" },
-      { itemNo: 20, description: "Members, plates, and fasteners are properly marked", role: "LH" },
+      { itemNo: 20, description: "Members, plates and fasteners are properly marked", role: "LH" },
       { itemNo: 21, description: "Members and plates are assembled in correct orientation", role: "LH" },
       { itemNo: 22, description: "Correct size and number of bolts are installed in correct locations", role: "LH" },
-      { itemNo: 23, description: "Bolts are installed in correct direction (nuts outwards/downwards)", role: "LH" },
+      { itemNo: 23, description: "Bolts are installed in correct direction (nuts outwards / downwards)", role: "LH" },
       { itemNo: 24, description: "Correct size and numbers of packers are installed in correct locations", role: "LH" },
       { itemNo: 25, description: "Spring lock washers used under nut of every bolt (excluding locknuts)", role: "LH" },
       { itemNo: 26, description: "No flat washer is used with spring lock washer", role: "LH" },
@@ -176,21 +171,6 @@ function normaliseStatus(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-function badgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
-  switch (kind) {
-    case "green":
-      return "bg-green-100 text-green-700 border-green-200";
-    case "yellow":
-      return "bg-yellow-100 text-yellow-800 border-yellow-200";
-    case "red":
-      return "bg-red-100 text-red-700 border-red-200";
-    case "blue":
-      return "bg-blue-100 text-blue-700 border-blue-200";
-    default:
-      return "bg-slate-100 text-slate-700 border-slate-200";
-  }
-}
-
 function getStringField(row: GenericRow, key: string): string | null {
   const value = row[key];
   return typeof value === "string" ? value : null;
@@ -217,10 +197,76 @@ function isDeliveredLike(status: unknown): boolean {
   return ["delivered", "complete", "completed", "received", "closed"].includes(s);
 }
 
+function badgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
+  switch (kind) {
+    case "green":
+      return "bg-green-100 text-green-700 border-green-200";
+    case "yellow":
+      return "bg-yellow-100 text-yellow-800 border-yellow-200";
+    case "red":
+      return "bg-red-100 text-red-700 border-red-200";
+    case "blue":
+      return "bg-blue-100 text-blue-700 border-blue-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function validationButtonClasses(current: ItcValidation, value: ItcValidation) {
+  if (current !== value) {
+    return "border bg-white text-slate-700 hover:bg-slate-50";
+  }
+
+  if (value === "Y") return "border bg-green-100 text-green-700 border-green-200";
+  if (value === "N") return "border bg-red-100 text-red-700 border-red-200";
+  return "border bg-yellow-100 text-yellow-800 border-yellow-200";
+}
+
 function formatDate(value?: string | null): string {
   if (!value) return "-";
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString();
+}
+
+function emptyToNull(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function emptyToNumberOrNull(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isNaN(value) ? null : value;
+
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+
+  const parsed = Number(trimmed);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function numberOrBlank(value: string | number | null | undefined): string {
+  if (value == null) return "";
+  return String(value);
+}
+
+function pickTowerValue(tower: TowerRecord | null, keys: string[]): string {
+  if (!tower) return "";
+
+  for (const key of keys) {
+    const direct = tower[key];
+    if (typeof direct === "string" && direct.trim()) return direct;
+    if (typeof direct === "number") return String(direct);
+
+    const extra = tower.extra_data;
+    if (extra && typeof extra === "object") {
+      const extraValue = extra[key];
+      if (typeof extraValue === "string" && extraValue.trim()) return extraValue;
+      if (typeof extraValue === "number") return String(extraValue);
+    }
+  }
+
+  return "";
 }
 
 function buildDefaultItems(itcId: string): Omit<ItcItem, "id">[] {
@@ -236,30 +282,8 @@ function buildDefaultItems(itcId: string): Omit<ItcItem, "id">[] {
       lh_signature: null,
       checked_date: null,
       notes: null,
-    }))
+    })),
   );
-}
-
-function pickTowerValue(
-  tower: TowerRecord | null,
-  keys: string[],
-): string {
-  if (!tower) return "";
-
-  for (const key of keys) {
-    const direct = tower[key];
-    if (typeof direct === "string" && direct.trim()) return direct;
-    if (typeof direct === "number") return String(direct);
-
-    const extra = tower.extra_data;
-    if (extra && typeof extra === "object") {
-      const value = extra[key];
-      if (typeof value === "string" && value.trim()) return value;
-      if (typeof value === "number") return String(value);
-    }
-  }
-
-  return "";
 }
 
 export default function TowerItcPage() {
@@ -288,7 +312,7 @@ export default function TowerItcPage() {
     signoff: false,
   });
 
-  const [savingHeader, setSavingHeader] = useState(false);
+  const [savingDetails, setSavingDetails] = useState(false);
   const [savingSignoff, setSavingSignoff] = useState(false);
   const [uploadingClient, setUploadingClient] = useState(false);
 
@@ -312,6 +336,56 @@ export default function TowerItcPage() {
     void loadPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [towerId]);
+
+  async function createDefaultItcDocument(towerRecord: TowerRecord | null): Promise<ItcDocument | null> {
+    const payload = {
+      tower_id: towerId,
+      project_id: projectId,
+      title: "ITC - Tower Assembly and Erection",
+      status: "Draft",
+      revision: "Rev 0",
+      structure_number: towerRecord?.name ? String(towerRecord.name) : null,
+      structure_type: emptyToNull(
+        pickTowerValue(towerRecord, ["structure_type", "tower_type", "type", "structure"]),
+      ),
+      structure_height: emptyToNumberOrNull(
+        pickTowerValue(towerRecord, ["structure_height", "tower_height", "height", "towerheight"]),
+      ),
+      structure_weight: emptyToNumberOrNull(
+        pickTowerValue(towerRecord, ["structure_weight", "weight", "tower_weight", "mass"]),
+      ),
+      itc_mode: "BC" as ItcMode,
+      subcontractor_name: "",
+      ugl_supervisor_name: "",
+      project_engineer_name: "",
+      transgrid_rep_name: "",
+    };
+
+    const { data, error } = await supabase
+      .from("tower_itc_documents")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (error) {
+      alert(error.message || "Failed to create ITC record.");
+      return null;
+    }
+
+    const created = data as ItcDocument;
+    await seedChecklistItems(created.id);
+    return created;
+  }
+
+  async function seedChecklistItems(itcId: string) {
+    const defaults = buildDefaultItems(itcId);
+
+    const { error } = await supabase.from("tower_itc_items").insert(defaults);
+    if (error) {
+      alert(error.message || "Failed to seed checklist items.");
+      return;
+    }
+  }
 
   async function loadPage() {
     setLoading(true);
@@ -350,8 +424,6 @@ export default function TowerItcPage() {
     ]);
 
     const towerData = (towerRes.data as TowerRecord | null) ?? null;
-    const latestItc = (itcRes.data as ItcDocument | null) ?? null;
-
     setTower(towerData);
     setLatestDate(docketRes.data?.[0]?.docket_date ?? null);
     setDefects((defectsRes.data as GenericRow[] | null) ?? []);
@@ -359,63 +431,57 @@ export default function TowerItcPage() {
     setModifications((modificationsRes.data as GenericRow[] | null) ?? []);
     setClientUploads((clientUploadsRes.data as ClientItcUpload[] | null) ?? []);
 
+    let latestItc = (itcRes.data as ItcDocument | null) ?? null;
+
+    if (!latestItc) {
+      latestItc = await createDefaultItcDocument(towerData);
+    }
+
     if (latestItc) {
-      const patchedItc: ItcDocument = {
+      const patched: ItcDocument = {
         ...latestItc,
         itc_mode: latestItc.itc_mode ?? "BC",
-        structure_number:
-          latestItc.structure_number ||
-          (towerData?.name ? String(towerData.name) : ""),
+        structure_number: latestItc.structure_number || (towerData?.name ? String(towerData.name) : ""),
         structure_type:
           latestItc.structure_type ||
-          pickTowerValue(towerData, [
-            "structure_type",
-            "tower_type",
-            "type",
-            "structure",
-          ]),
+          pickTowerValue(towerData, ["structure_type", "tower_type", "type", "structure"]),
         structure_height:
-          latestItc.structure_height ||
-          pickTowerValue(towerData, [
-            "structure_height",
-            "tower_height",
-            "height",
-            "towerheight",
-          ]),
+          latestItc.structure_height ??
+          pickTowerValue(towerData, ["structure_height", "tower_height", "height", "towerheight"]),
         structure_weight:
-          latestItc.structure_weight ||
-          pickTowerValue(towerData, [
-            "structure_weight",
-            "weight",
-            "tower_weight",
-            "mass",
-          ]),
+          latestItc.structure_weight ??
+          pickTowerValue(towerData, ["structure_weight", "weight", "tower_weight", "mass"]),
       };
 
-      setItcDoc(patchedItc);
+      setItcDoc(patched);
 
-      const [itemsRes, torqueRes] = await Promise.all([
-        supabase
+const itemsRes = await supabase
+  .from("tower_itc_items")
+  .select("*")
+  .eq("itc_id", latestItc.id)
+  .order("item_no", { ascending: true });
+
+const torqueRes = await supabase
+  .from("tower_itc_torque")
+  .select("*")
+  .eq("itc_id", latestItc.id)
+  .order("item_no", { ascending: true });
+
+      let itemData = (itemsRes.data as ItcItem[] | null) ?? [];
+      if (itemData.length === 0) {
+        await seedChecklistItems(latestItc.id);
+
+        const retry = await supabase
           .from("tower_itc_items")
           .select("*")
           .eq("itc_id", latestItc.id)
-          .order("item_no", { ascending: true }),
-        supabase
-          .from("tower_itc_torque")
-          .select("*")
-          .eq("itc_id", latestItc.id)
-          .order("item_no", { ascending: true }),
-      ]);
+          .order("item_no", { ascending: true });
 
-      const itemData = (itemsRes.data as ItcItem[] | null) ?? [];
-      const torqueData = (torqueRes.data as TorqueRow[] | null) ?? [];
+        itemData = (retry.data as ItcItem[] | null) ?? [];
+      }
 
       setItcItems(itemData);
-      setTorqueRows(torqueData);
-
-      if (itemData.length === 0) {
-        await seedChecklistItems(latestItc.id);
-      }
+      setTorqueRows((torqueRes.data as TorqueRow[] | null) ?? []);
     } else {
       setItcDoc(null);
       setItcItems([]);
@@ -425,106 +491,66 @@ export default function TowerItcPage() {
     setLoading(false);
   }
 
-  async function seedChecklistItems(itcId: string) {
-    const defaults = buildDefaultItems(itcId);
-
-    const { error } = await supabase.from("tower_itc_items").insert(defaults);
-    if (error) {
-      alert(error.message || "Failed to seed checklist items.");
-      return;
-    }
-
-    const { data } = await supabase
-      .from("tower_itc_items")
-      .select("*")
-      .eq("itc_id", itcId)
-      .order("item_no", { ascending: true });
-
-    setItcItems((data as ItcItem[] | null) ?? []);
+  function toggleSection(key: string) {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  async function ensureItcDocument(): Promise<ItcDocument | null> {
-    if (itcDoc?.id) return itcDoc;
+  function setItemLocal(id: string, patch: Partial<ItcItem>) {
+    setItcItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
 
-    const defaultDoc = {
-      tower_id: towerId,
-      project_id: projectId,
-      title: "ITC - Tower Assembly and Erection",
-      status: "Draft",
-      revision: "Rev 0",
-      structure_number: tower?.name ? String(tower.name) : "",
-      structure_type: pickTowerValue(tower, [
-        "structure_type",
-        "tower_type",
-        "type",
-        "structure",
-      ]),
-      structure_height: pickTowerValue(tower, [
-        "structure_height",
-        "tower_height",
-        "height",
-        "towerheight",
-      ]),
-      structure_weight: pickTowerValue(tower, [
-        "structure_weight",
-        "weight",
-        "tower_weight",
-        "mass",
-      ]),
-      itc_mode: "BC" as ItcMode,
-      subcontractor_name: "",
-      ugl_supervisor_name: "",
-      project_engineer_name: "",
-      transgrid_rep_name: "",
+  async function saveItem(id: string) {
+    const row = itcItems.find((item) => item.id === id);
+    if (!row) return;
+
+    const patch = {
+      validation: row.validation,
+      lh_name: emptyToNull(row.lh_name),
+      lh_signature: emptyToNull(row.lh_signature),
+      checked_date: emptyToNull(row.checked_date),
+      notes: emptyToNull(row.notes),
     };
 
-    const { data, error } = await supabase
-      .from("tower_itc_documents")
-      .insert(defaultDoc)
+    const { error, data } = await supabase
+      .from("tower_itc_items")
+      .update(patch)
+      .eq("id", id)
       .select("*")
       .single();
 
     if (error) {
-      alert(error.message || "Failed to create ITC document.");
-      return null;
+      alert(error.message || "Failed to save checklist row.");
+      return;
     }
 
-    const created = data as ItcDocument;
-    setItcDoc(created);
-    await seedChecklistItems(created.id);
-    return created;
+    setItcItems((prev) => prev.map((item) => (item.id === id ? (data as ItcItem) : item)));
   }
 
-  async function saveHeaderFields() {
-    const doc = await ensureItcDocument();
-    if (!doc) return;
+  async function saveDetails() {
+    if (!itcDoc?.id) return;
 
-    setSavingHeader(true);
+    setSavingDetails(true);
 
     const payload = {
-      revision: doc.revision ?? "Rev 0",
-      status: doc.status ?? "Draft",
-      itc_mode: doc.itc_mode ?? "BC",
-      structure_number: doc.structure_number ?? (tower?.name ? String(tower.name) : ""),
+      revision: emptyToNull(itcDoc.revision) ?? "Rev 0",
+      status: emptyToNull(itcDoc.status) ?? "Draft",
+      itc_mode: itcDoc.itc_mode ?? "BC",
+      structure_number: emptyToNull(itcDoc.structure_number) ?? (tower?.name ? String(tower.name) : null),
       structure_type:
-        doc.structure_type ??
-        pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"]),
-      structure_height:
-        doc.structure_height ??
-        pickTowerValue(tower, ["structure_height", "tower_height", "height", "towerheight"]),
-      structure_weight:
-        doc.structure_weight ??
-        pickTowerValue(tower, ["structure_weight", "weight", "tower_weight", "mass"]),
+        emptyToNull(typeof itcDoc.structure_type === "string" ? itcDoc.structure_type : String(itcDoc.structure_type ?? "")) ??
+        emptyToNull(pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"])),
+      structure_height: emptyToNumberOrNull(numberOrBlank(itcDoc.structure_height)),
+      structure_weight: emptyToNumberOrNull(numberOrBlank(itcDoc.structure_weight)),
     };
 
     const { error, data } = await supabase
       .from("tower_itc_documents")
       .update(payload)
-      .eq("id", doc.id)
+      .eq("id", itcDoc.id)
       .select("*")
       .single();
 
-    setSavingHeader(false);
+    setSavingDetails(false);
 
     if (error) {
       alert(error.message || "Failed to save ITC details.");
@@ -535,59 +561,23 @@ export default function TowerItcPage() {
     alert("ITC details saved.");
   }
 
-  async function updateChecklistItem(id: string, patch: Partial<ItcItem>) {
-    const { error, data } = await supabase
-      .from("tower_itc_items")
-      .update(patch)
-      .eq("id", id)
-      .select("*")
-      .single();
-
-    if (error) {
-      alert(error.message || "Failed to update checklist item.");
-      return;
-    }
-
-    setItcItems((prev) =>
-      prev.map((item) => (item.id === id ? (data as ItcItem) : item)),
-    );
-  }
-
-  function setItemLocal(id: string, patch: Partial<ItcItem>) {
-    setItcItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-    );
-  }
-
-  async function saveItem(id: string) {
-    const item = itcItems.find((x) => x.id === id);
-    if (!item) return;
-
-    await updateChecklistItem(id, {
-      validation: item.validation,
-      lh_name: item.lh_name,
-      lh_signature: item.lh_signature,
-      checked_date: item.checked_date,
-      notes: item.notes,
-    });
-  }
-
   async function addTorqueRow() {
-    const doc = await ensureItcDocument();
-    if (!doc) return;
+    if (!itcDoc?.id) return;
+
+    const payload = {
+      itc_id: itcDoc.id,
+      item_no: emptyToNumberOrNull(newTorque.item_no),
+      bolt_grade: emptyToNull(newTorque.bolt_grade),
+      bolt_dia: emptyToNumberOrNull(newTorque.bolt_dia),
+      structural_washers: emptyToNull(newTorque.structural_washers),
+      bolt_count: emptyToNumberOrNull(newTorque.bolt_count),
+      torque_achieved: emptyToNull(newTorque.torque_achieved),
+      remarks: emptyToNull(newTorque.remarks),
+    };
 
     const { error, data } = await supabase
       .from("tower_itc_torque")
-      .insert({
-        itc_id: doc.id,
-        item_no: newTorque.item_no ? Number(newTorque.item_no) : null,
-        bolt_grade: newTorque.bolt_grade || null,
-        bolt_dia: newTorque.bolt_dia ? Number(newTorque.bolt_dia) : null,
-        structural_washers: newTorque.structural_washers || null,
-        bolt_count: newTorque.bolt_count ? Number(newTorque.bolt_count) : null,
-        torque_achieved: newTorque.torque_achieved || null,
-        remarks: newTorque.remarks || null,
-      })
+      .insert(payload)
       .select("*")
       .single();
 
@@ -597,9 +587,7 @@ export default function TowerItcPage() {
     }
 
     setTorqueRows((prev) =>
-      [...prev, data as TorqueRow].sort(
-        (a, b) => (a.item_no ?? 0) - (b.item_no ?? 0),
-      ),
+      [...prev, data as TorqueRow].sort((a, b) => (a.item_no ?? 0) - (b.item_no ?? 0)),
     );
 
     setNewTorque({
@@ -614,14 +602,10 @@ export default function TowerItcPage() {
   }
 
   async function deleteTorqueRow(id: string) {
-    const ok = window.confirm("Delete this torque row?");
-    if (!ok) return;
+    const confirmed = window.confirm("Delete this torque row?");
+    if (!confirmed) return;
 
-    const { error } = await supabase
-      .from("tower_itc_torque")
-      .delete()
-      .eq("id", id);
-
+    const { error } = await supabase.from("tower_itc_torque").delete().eq("id", id);
     if (error) {
       alert(error.message || "Failed to delete torque row.");
       return;
@@ -632,7 +616,7 @@ export default function TowerItcPage() {
 
   async function uploadClientItc() {
     if (!clientFile) {
-      alert("Please choose a file.");
+      alert("Choose a file first.");
       return;
     }
 
@@ -641,33 +625,29 @@ export default function TowerItcPage() {
     const safeName = clientFile.name.replace(/\s+/g, "-");
     const path = `${projectId}/${towerId}/${Date.now()}-${safeName}`;
 
-    const storageRes = await supabase.storage
-      .from("itc-files")
-      .upload(path, clientFile, {
-        upsert: true,
-      });
+    const uploadRes = await supabase.storage.from("itc-files").upload(path, clientFile, {
+      upsert: true,
+    });
 
-    if (storageRes.error) {
+    if (uploadRes.error) {
       setUploadingClient(false);
-      alert(storageRes.error.message || "Failed to upload file.");
+      alert(uploadRes.error.message || "Failed to upload file.");
       return;
     }
 
-    const { data: publicUrlData } = supabase.storage
-      .from("itc-files")
-      .getPublicUrl(path);
+    const { data: urlData } = supabase.storage.from("itc-files").getPublicUrl(path);
 
     const { error, data } = await supabase
       .from("tower_itc_client_uploads")
       .insert({
         project_id: projectId,
         tower_id: towerId,
-        title: clientTitle || clientFile.name,
-        revision: clientRevision || null,
-        status: clientStatus || "Uploaded",
-        comments: clientComments || null,
+        title: emptyToNull(clientTitle) ?? clientFile.name,
+        revision: emptyToNull(clientRevision),
+        status: clientStatus,
+        comments: emptyToNull(clientComments),
         file_name: clientFile.name,
-        file_url: publicUrlData.publicUrl,
+        file_url: urlData.publicUrl,
       })
       .select("*")
       .single();
@@ -675,7 +655,7 @@ export default function TowerItcPage() {
     setUploadingClient(false);
 
     if (error) {
-      alert(error.message || "Failed to save client ITC record.");
+      alert(error.message || "Failed to save client ITC upload.");
       return;
     }
 
@@ -686,16 +666,11 @@ export default function TowerItcPage() {
     setClientComments("");
     setClientFile(null);
 
-    const fileInput = document.getElementById(
-      "client-itc-file",
-    ) as HTMLInputElement | null;
-    if (fileInput) fileInput.value = "";
+    const input = document.getElementById("client-itc-file") as HTMLInputElement | null;
+    if (input) input.value = "";
   }
 
-  async function updateClientUpload(
-    id: string,
-    patch: Partial<ClientItcUpload>,
-  ) {
+  async function updateClientUpload(id: string, patch: Partial<ClientItcUpload>) {
     const { error, data } = await supabase
       .from("tower_itc_client_uploads")
       .update(patch)
@@ -704,35 +679,32 @@ export default function TowerItcPage() {
       .single();
 
     if (error) {
-      alert(error.message || "Failed to update client ITC record.");
+      alert(error.message || "Failed to update client ITC.");
       return;
     }
 
-    setClientUploads((prev) =>
-      prev.map((row) => (row.id === id ? (data as ClientItcUpload) : row)),
-    );
+    setClientUploads((prev) => prev.map((row) => (row.id === id ? (data as ClientItcUpload) : row)));
   }
 
   async function saveSignoff() {
-    const doc = await ensureItcDocument();
-    if (!doc) return;
+    if (!itcDoc?.id) return;
 
     setSavingSignoff(true);
 
     const { error, data } = await supabase
       .from("tower_itc_documents")
       .update({
-        subcontractor_name: doc.subcontractor_name ?? "",
-        subcontractor_signed_at: doc.subcontractor_signed_at ?? null,
-        ugl_supervisor_name: doc.ugl_supervisor_name ?? "",
-        ugl_supervisor_signed_at: doc.ugl_supervisor_signed_at ?? null,
-        project_engineer_name: doc.project_engineer_name ?? "",
-        project_engineer_signed_at: doc.project_engineer_signed_at ?? null,
-        transgrid_rep_name: doc.transgrid_rep_name ?? "",
-        transgrid_rep_signed_at: doc.transgrid_rep_signed_at ?? null,
-        status: overallReady ? "Submitted" : doc.status ?? "Draft",
+        subcontractor_name: emptyToNull(itcDoc.subcontractor_name),
+        subcontractor_signed_at: emptyToNull(itcDoc.subcontractor_signed_at),
+        ugl_supervisor_name: emptyToNull(itcDoc.ugl_supervisor_name),
+        ugl_supervisor_signed_at: emptyToNull(itcDoc.ugl_supervisor_signed_at),
+        project_engineer_name: emptyToNull(itcDoc.project_engineer_name),
+        project_engineer_signed_at: emptyToNull(itcDoc.project_engineer_signed_at),
+        transgrid_rep_name: emptyToNull(itcDoc.transgrid_rep_name),
+        transgrid_rep_signed_at: emptyToNull(itcDoc.transgrid_rep_signed_at),
+        status: overallReady ? "Submitted" : (emptyToNull(itcDoc.status) ?? "Draft"),
       })
-      .eq("id", doc.id)
+      .eq("id", itcDoc.id)
       .select("*")
       .single();
 
@@ -744,34 +716,28 @@ export default function TowerItcPage() {
     }
 
     setItcDoc(data as ItcDocument);
-    alert("Sign-off section saved.");
+    alert("Sign-off saved.");
   }
 
   const defectsSummary = useMemo(() => {
     const total = defects.length;
-    const closed = defects.filter((row) =>
-      isClosedLike(getRowStatus(row)),
-    ).length;
-    const open = total - closed;
+    const closed = defects.filter((row) => isClosedLike(getRowStatus(row))).length;
     return {
       total,
       closed,
-      open,
-      complete: total === 0 || open === 0,
+      open: total - closed,
+      complete: total === 0 || total - closed === 0,
     };
   }, [defects]);
 
   const deliveriesSummary = useMemo(() => {
     const total = deliveries.length;
-    const complete = deliveries.filter((row) =>
-      isDeliveredLike(getRowStatus(row)),
-    ).length;
-    const pending = total - complete;
+    const complete = deliveries.filter((row) => isDeliveredLike(getRowStatus(row))).length;
     return {
       total,
       complete,
-      pending,
-      allDelivered: total === 0 || pending === 0,
+      pending: total - complete,
+      allDelivered: total === 0 || total - complete === 0,
     };
   }, [deliveries]);
 
@@ -784,40 +750,34 @@ export default function TowerItcPage() {
 
   const docketSummary = useMemo(() => {
     return {
-      exists: !!latestDate,
       complete: !!latestDate,
     };
   }, [latestDate]);
 
+  const checklistSummary = useMemo(() => {
+    const total = itcItems.length;
+    const passed = itcItems.filter((item) => item.validation === "Y" || item.validation === "NA").length;
+    const failed = itcItems.filter((item) => item.validation === "N").length;
+    const pending = itcItems.filter((item) => item.validation === "").length;
+
+    return {
+      total,
+      passed,
+      failed,
+      pending,
+      done: total > 0 && failed === 0 && pending === 0,
+    };
+  }, [itcItems]);
+
   const torqueSummary = useMemo(() => {
     const total = torqueRows.length;
-    const complete = torqueRows.filter(
-      (row) => String(row.torque_achieved || "").trim() !== "",
-    ).length;
-
+    const complete = torqueRows.filter((row) => String(row.torque_achieved || "").trim() !== "").length;
     return {
       total,
       complete,
-      done: total > 0 && complete === total,
+      done: total > 0 && total === complete,
     };
   }, [torqueRows]);
-
-  const checklistSummary = useMemo(() => {
-    const total = itcItems.length;
-    const completed = itcItems.filter(
-      (item) => item.validation === "Y" || item.validation === "NA",
-    ).length;
-    const failed = itcItems.filter((item) => item.validation === "N").length;
-    const pending = total - completed - failed;
-
-    return {
-      total,
-      completed,
-      failed,
-      pending,
-      done: total > 0 && pending === 0 && failed === 0,
-    };
-  }, [itcItems]);
 
   const clientItcSummary = useMemo(() => {
     return {
@@ -829,13 +789,11 @@ export default function TowerItcPage() {
   const currentMode: ItcMode = itcDoc?.itc_mode ?? "BC";
 
   const readinessItems = useMemo(() => {
-    const baseItems = [
+    const common = [
       {
         label: "Latest daily docket submitted",
         complete: docketSummary.complete,
-        detail: latestDate
-          ? `Latest docket: ${latestDate}`
-          : "No daily docket submitted yet",
+        detail: latestDate ? `Latest docket: ${latestDate}` : "No daily docket submitted yet",
       },
       {
         label: "Defects closed",
@@ -863,39 +821,39 @@ export default function TowerItcPage() {
       },
     ];
 
-    if (currentMode === "BC") {
+    if (currentMode === "Client") {
       return [
-        ...baseItems,
+        ...common,
         {
-          label: "BC checklist complete",
-          complete: checklistSummary.done,
-          detail: `${checklistSummary.completed}/${checklistSummary.total} compliant, ${checklistSummary.failed} failed, ${checklistSummary.pending} pending`,
-        },
-        {
-          label: "Torque sheet complete",
-          complete: torqueSummary.done,
-          detail:
-            torqueSummary.total > 0
-              ? `${torqueSummary.complete}/${torqueSummary.total} rows complete`
-              : "No torque rows added yet",
+          label: "Client ITC uploaded",
+          complete: clientItcSummary.present,
+          detail: clientItcSummary.present
+            ? `${clientItcSummary.total} uploaded`
+            : "No client ITC uploaded yet",
         },
       ];
     }
 
     return [
-      ...baseItems,
+      ...common,
       {
-        label: "Client ITC uploaded",
-        complete: clientItcSummary.present,
-        detail: clientItcSummary.present
-          ? `${clientItcSummary.total} uploaded`
-          : "No client ITC uploaded yet",
+        label: "BC checklist complete",
+        complete: checklistSummary.done,
+        detail: `${checklistSummary.passed}/${checklistSummary.total} compliant, ${checklistSummary.failed} failed, ${checklistSummary.pending} pending`,
+      },
+      {
+        label: "Torque sheet complete",
+        complete: torqueSummary.done,
+        detail:
+          torqueSummary.total > 0
+            ? `${torqueSummary.complete}/${torqueSummary.total} rows complete`
+            : "No torque rows added yet",
       },
     ];
   }, [
-    checklistSummary.completed,
     checklistSummary.done,
     checklistSummary.failed,
+    checklistSummary.passed,
     checklistSummary.pending,
     checklistSummary.total,
     clientItcSummary.present,
@@ -917,13 +875,12 @@ export default function TowerItcPage() {
   ]);
 
   const overallReady = useMemo(() => {
-    if (currentMode === "BC") {
+    if (currentMode === "Client") {
       return (
         docketSummary.complete &&
         defectsSummary.complete &&
         deliveriesSummary.allDelivered &&
-        checklistSummary.done &&
-        torqueSummary.done
+        clientItcSummary.present
       );
     }
 
@@ -931,7 +888,8 @@ export default function TowerItcPage() {
       docketSummary.complete &&
       defectsSummary.complete &&
       deliveriesSummary.allDelivered &&
-      clientItcSummary.present
+      checklistSummary.done &&
+      torqueSummary.done
     );
   }, [
     checklistSummary.done,
@@ -950,11 +908,7 @@ export default function TowerItcPage() {
     }));
   }, [itcItems]);
 
-  function toggleSection(key: string) {
-    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
-
-  if (loading || !tower) {
+  if (loading || !tower || !itcDoc) {
     return <div className="p-8">Loading ITC...</div>;
   }
 
@@ -997,9 +951,7 @@ export default function TowerItcPage() {
 
       <div
         className={`border rounded-2xl p-5 ${
-          overallReady
-            ? "bg-green-50 border-green-200"
-            : "bg-yellow-50 border-yellow-200"
+          overallReady ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"
         }`}
       >
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -1007,7 +959,7 @@ export default function TowerItcPage() {
             <h1 className="text-2xl font-bold">Inspection & Test Checksheet (ITC)</h1>
             <p className="text-sm text-slate-600 mt-1">
               {currentMode === "BC"
-                ? "BC checklist mode with integrated torque and sign-off."
+                ? "BC ITC mode with checklist, torque and sign-off."
                 : "Client ITC mode with upload tracking and sign-off."}
             </p>
           </div>
@@ -1063,6 +1015,7 @@ export default function TowerItcPage() {
                 <div className="font-medium">{item.label}</div>
                 <div className="text-sm text-slate-500">{item.detail}</div>
               </div>
+
               <span
                 className={`px-3 py-1 rounded-full border text-xs font-semibold whitespace-nowrap ${
                   item.complete ? badgeClasses("green") : badgeClasses("red")
@@ -1079,23 +1032,19 @@ export default function TowerItcPage() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-xl font-bold">ITC Details</h2>
           <button
-            onClick={() => void saveHeaderFields()}
-            disabled={savingHeader}
+            onClick={() => void saveDetails()}
+            disabled={savingDetails}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
           >
-            {savingHeader ? "Saving..." : "Save Details"}
+            {savingDetails ? "Saving..." : "Save Details"}
           </button>
         </div>
 
         <div className="grid md:grid-cols-2 xl:grid-cols-5 gap-4">
           <select
-            value={itcDoc?.itc_mode ?? "BC"}
+            value={itcDoc.itc_mode ?? "BC"}
             onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, itc_mode: e.target.value as ItcMode }
-                  : prev,
-              )
+              setItcDoc((prev) => (prev ? { ...prev, itc_mode: e.target.value as ItcMode } : prev))
             }
             className="border rounded-lg p-2"
           >
@@ -1104,87 +1053,62 @@ export default function TowerItcPage() {
           </select>
 
           <input
-            value={itcDoc?.revision ?? "Rev 0"}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev ? { ...prev, revision: e.target.value } : prev,
-              )
-            }
+            value={itcDoc.revision ?? "Rev 0"}
+            onChange={(e) => setItcDoc((prev) => (prev ? { ...prev, revision: e.target.value } : prev))}
             placeholder="Revision"
             className="border rounded-lg p-2"
           />
 
           <input
-            value={itcDoc?.status ?? "Draft"}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev ? { ...prev, status: e.target.value } : prev,
-              )
-            }
+            value={itcDoc.status ?? "Draft"}
+            onChange={(e) => setItcDoc((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
             placeholder="Status"
             className="border rounded-lg p-2"
           />
 
           <input
-            value={itcDoc?.structure_number ?? (tower.name ? String(tower.name) : "")}
             readOnly
-            className="border rounded-lg p-2 bg-slate-50"
+            value={itcDoc.structure_number ?? (tower.name ? String(tower.name) : "")}
             placeholder="Structure Number"
+            className="border rounded-lg p-2 bg-slate-50"
           />
 
           <input
-            value={
-              itcDoc?.structure_type ??
-              pickTowerValue(tower, [
-                "structure_type",
-                "tower_type",
-                "type",
-                "structure",
-              ])
-            }
             readOnly
-            className="border rounded-lg p-2 bg-slate-50"
+            value={
+              typeof itcDoc.structure_type === "string"
+                ? itcDoc.structure_type
+                : pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"])
+            }
             placeholder="Structure Type"
+            className="border rounded-lg p-2 bg-slate-50"
           />
 
           <input
-            value={
-              itcDoc?.structure_height ??
-              pickTowerValue(tower, [
-                "structure_height",
-                "tower_height",
-                "height",
-                "towerheight",
-              ])
-            }
             readOnly
-            className="border rounded-lg p-2 bg-slate-50"
+            value={
+              numberOrBlank(itcDoc.structure_height) ||
+              pickTowerValue(tower, ["structure_height", "tower_height", "height", "towerheight"])
+            }
             placeholder="Structure Height"
+            className="border rounded-lg p-2 bg-slate-50"
           />
 
           <input
-            value={
-              itcDoc?.structure_weight ??
-              pickTowerValue(tower, [
-                "structure_weight",
-                "weight",
-                "tower_weight",
-                "mass",
-              ])
-            }
             readOnly
-            className="border rounded-lg p-2 bg-slate-50"
+            value={
+              numberOrBlank(itcDoc.structure_weight) ||
+              pickTowerValue(tower, ["structure_weight", "weight", "tower_weight", "mass"])
+            }
             placeholder="Structure Weight"
+            className="border rounded-lg p-2 bg-slate-50"
           />
         </div>
       </div>
 
       {currentMode === "BC" &&
         sectionItems.map((section) => (
-          <div
-            key={section.key}
-            className="bg-white border rounded-2xl overflow-hidden"
-          >
+          <div key={section.key} className="bg-white border rounded-2xl overflow-hidden">
             <button
               onClick={() => toggleSection(section.key)}
               className="w-full flex items-center justify-between px-6 py-4 bg-slate-50 hover:bg-slate-100 text-left"
@@ -1192,8 +1116,7 @@ export default function TowerItcPage() {
               <div>
                 <div className="text-lg font-bold">{section.title}</div>
                 <div className="text-sm text-slate-500">
-                  {section.rows.filter((row) => row.validation !== "").length}/
-                  {section.rows.length} answered
+                  {section.rows.filter((row) => row.validation !== "").length}/{section.rows.length} answered
                 </div>
               </div>
               <span className="text-sm font-medium">
@@ -1209,85 +1132,92 @@ export default function TowerItcPage() {
                   </div>
                 )}
 
+                {section.rows.length === 0 && (
+                  <div className="border rounded-xl p-4 text-slate-500">
+                    No checklist rows found for this section.
+                  </div>
+                )}
+
                 <div className="space-y-4">
                   {section.rows.map((item) => (
                     <div key={item.id} className="border rounded-xl p-4">
-                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                        <div className="xl:w-[40%]">
-                          <div className="font-semibold">
-                            {item.item_no}. {item.description}
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                          <div className="lg:w-[45%]">
+                            <div className="font-semibold">
+                              {item.item_no}. {item.description}
+                            </div>
+                            <div className="text-sm text-slate-500 mt-1">
+                              Responsibility: {item.responsible_role || "LH"}
+                            </div>
                           </div>
-                          <div className="text-sm text-slate-500 mt-1">
-                            Responsibility: {item.responsible_role || "LH"}
+
+                          <div className="lg:w-[55%] space-y-3">
+                            <div className="flex gap-2 flex-wrap">
+                              {(["Y", "N", "NA"] as ItcValidation[]).map((value) => (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  onClick={() => setItemLocal(item.id, { validation: value })}
+                                  className={`px-4 py-2 rounded-lg text-sm font-semibold ${validationButtonClasses(
+                                    item.validation,
+                                    value,
+                                  )}`}
+                                >
+                                  {value}
+                                </button>
+                              ))}
+
+                              <button
+                                type="button"
+                                onClick={() => setItemLocal(item.id, { validation: "" })}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold ${validationButtonClasses(
+                                  item.validation,
+                                  "",
+                                )}`}
+                              >
+                                Clear
+                              </button>
+                            </div>
+
+                            <div className="grid md:grid-cols-3 gap-3">
+                              <input
+                                value={item.lh_name ?? ""}
+                                onChange={(e) => setItemLocal(item.id, { lh_name: e.target.value })}
+                                placeholder="LH Name"
+                                className="border rounded-lg p-2"
+                              />
+                              <input
+                                value={item.lh_signature ?? ""}
+                                onChange={(e) => setItemLocal(item.id, { lh_signature: e.target.value })}
+                                placeholder="Signature / Initials"
+                                className="border rounded-lg p-2"
+                              />
+                              <input
+                                type="date"
+                                value={item.checked_date ?? ""}
+                                onChange={(e) => setItemLocal(item.id, { checked_date: e.target.value })}
+                                className="border rounded-lg p-2"
+                              />
+                            </div>
                           </div>
                         </div>
 
-                        <div className="xl:w-[60%] grid md:grid-cols-4 gap-3">
-                          <select
-                            value={item.validation}
-                            onChange={(e) =>
-                              setItemLocal(item.id, {
-                                validation: e.target.value as ItcItem["validation"],
-                              })
-                            }
-                            className="border rounded-lg p-2"
+                        <div className="flex flex-col md:flex-row gap-3">
+                          <input
+                            value={item.notes ?? ""}
+                            onChange={(e) => setItemLocal(item.id, { notes: e.target.value })}
+                            placeholder="Notes / comments"
+                            className="border rounded-lg p-2 flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void saveItem(item.id)}
+                            className="border px-4 py-2 rounded-lg hover:bg-slate-50"
                           >
-                            <option value="">Validation</option>
-                            <option value="Y">Y</option>
-                            <option value="N">N</option>
-                            <option value="NA">NA</option>
-                          </select>
-
-                          <input
-                            value={item.lh_name ?? ""}
-                            onChange={(e) =>
-                              setItemLocal(item.id, {
-                                lh_name: e.target.value,
-                              })
-                            }
-                            placeholder="LH Name"
-                            className="border rounded-lg p-2"
-                          />
-
-                          <input
-                            value={item.lh_signature ?? ""}
-                            onChange={(e) =>
-                              setItemLocal(item.id, {
-                                lh_signature: e.target.value,
-                              })
-                            }
-                            placeholder="Signature / Initials"
-                            className="border rounded-lg p-2"
-                          />
-
-                          <input
-                            type="date"
-                            value={item.checked_date ?? ""}
-                            onChange={(e) =>
-                              setItemLocal(item.id, {
-                                checked_date: e.target.value,
-                              })
-                            }
-                            className="border rounded-lg p-2"
-                          />
+                            Save Row
+                          </button>
                         </div>
-                      </div>
-
-                      <div className="mt-3 flex flex-col md:flex-row gap-3">
-                        <input
-                          value={item.notes ?? ""}
-                          onChange={(e) =>
-                            setItemLocal(item.id, { notes: e.target.value })
-                          }
-                          placeholder="Notes / comments"
-                          className="border rounded-lg p-2 flex-1"
-                        />
-                        <button
-                          onClick={() => void saveItem(item.id)}
-                          className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-                        >
-                          Save Row
-                        </button>
                       </div>
                     </div>
                   ))}
@@ -1319,84 +1249,54 @@ export default function TowerItcPage() {
               <div className="grid md:grid-cols-7 gap-3">
                 <input
                   value={newTorque.item_no}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      item_no: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, item_no: e.target.value }))}
                   placeholder="Item No."
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.bolt_grade}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      bolt_grade: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_grade: e.target.value }))}
                   placeholder="Bolt Grade"
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.bolt_dia}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      bolt_dia: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_dia: e.target.value }))}
                   placeholder="Bolt Dia"
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.structural_washers}
                   onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      structural_washers: e.target.value,
-                    }))
+                    setNewTorque((prev) => ({ ...prev, structural_washers: e.target.value }))
                   }
                   placeholder="Structural Washers"
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.bolt_count}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      bolt_count: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_count: e.target.value }))}
                   placeholder="Bolt Count"
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.torque_achieved}
                   onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      torque_achieved: e.target.value,
-                    }))
+                    setNewTorque((prev) => ({ ...prev, torque_achieved: e.target.value }))
                   }
                   placeholder="Torque Achieved"
                   className="border rounded-lg p-2"
                 />
                 <input
                   value={newTorque.remarks}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({
-                      ...prev,
-                      remarks: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, remarks: e.target.value }))}
                   placeholder="Remarks"
                   className="border rounded-lg p-2"
                 />
               </div>
 
               <button
+                type="button"
                 onClick={() => void addTorqueRow()}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
               >
@@ -1418,12 +1318,10 @@ export default function TowerItcPage() {
                         Item {row.item_no ?? "-"} · Grade {row.bolt_grade || "-"}
                       </div>
                       <div className="text-sm text-slate-500 mt-1">
-                        Dia: {row.bolt_dia ?? "-"} · Washers:{" "}
-                        {row.structural_washers || "-"}
+                        Dia: {row.bolt_dia ?? "-"} · Washers: {row.structural_washers || "-"}
                       </div>
                       <div className="text-sm text-slate-500">
-                        Bolts: {row.bolt_count ?? "-"} · Achieved:{" "}
-                        {row.torque_achieved || "-"}
+                        Bolts: {row.bolt_count ?? "-"} · Achieved: {row.torque_achieved || "-"}
                       </div>
                       <div className="text-sm text-slate-500">
                         Remarks: {row.remarks || "-"}
@@ -1431,6 +1329,7 @@ export default function TowerItcPage() {
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => void deleteTorqueRow(row.id)}
                       className="text-red-600 hover:text-red-700"
                     >
@@ -1451,9 +1350,7 @@ export default function TowerItcPage() {
         >
           <div>
             <div className="text-lg font-bold">Client ITC Uploads</div>
-            <div className="text-sm text-slate-500">
-              {clientUploads.length} uploaded record(s)
-            </div>
+            <div className="text-sm text-slate-500">{clientUploads.length} uploaded record(s)</div>
           </div>
           <span className="text-sm font-medium">
             {expandedSections.client ? "Collapse" : "Expand"}
@@ -1501,6 +1398,7 @@ export default function TowerItcPage() {
             </div>
 
             <button
+              type="button"
               onClick={() => void uploadClientItc()}
               disabled={uploadingClient}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
@@ -1517,25 +1415,16 @@ export default function TowerItcPage() {
                 <div key={row.id} className="border rounded-xl p-4">
                   <div className="grid lg:grid-cols-[2fr_1fr_1fr_auto] gap-4 items-start">
                     <div>
-                      <div className="font-semibold">
-                        {row.title || row.file_name || "Client ITC"}
-                      </div>
+                      <div className="font-semibold">{row.title || row.file_name || "Client ITC"}</div>
                       <div className="text-sm text-slate-500 mt-1">
-                        Revision: {row.revision || "-"} · Uploaded:{" "}
-                        {formatDate(row.created_at)}
+                        Revision: {row.revision || "-"} · Uploaded: {formatDate(row.created_at)}
                       </div>
-                      <div className="text-sm text-slate-500">
-                        {row.comments || "-"}
-                      </div>
+                      <div className="text-sm text-slate-500">{row.comments || "-"}</div>
                     </div>
 
                     <select
                       value={row.status || "Uploaded"}
-                      onChange={(e) =>
-                        void updateClientUpload(row.id, {
-                          status: e.target.value,
-                        })
-                      }
+                      onChange={(e) => void updateClientUpload(row.id, { status: e.target.value })}
                       className="border rounded-lg p-2"
                     >
                       <option>Uploaded</option>
@@ -1549,18 +1438,10 @@ export default function TowerItcPage() {
                       value={row.revision || ""}
                       onChange={(e) =>
                         setClientUploads((prev) =>
-                          prev.map((x) =>
-                            x.id === row.id
-                              ? { ...x, revision: e.target.value }
-                              : x,
-                          ),
+                          prev.map((x) => (x.id === row.id ? { ...x, revision: e.target.value } : x)),
                         )
                       }
-                      onBlur={(e) =>
-                        void updateClientUpload(row.id, {
-                          revision: e.target.value,
-                        })
-                      }
+                      onBlur={(e) => void updateClientUpload(row.id, { revision: e.target.value })}
                       placeholder="Revision"
                       className="border rounded-lg p-2"
                     />
@@ -1603,23 +1484,19 @@ export default function TowerItcPage() {
               <div className="border rounded-xl p-4 space-y-3">
                 <div className="font-semibold">Sub-contractor Representative</div>
                 <input
-                  value={itcDoc?.subcontractor_name ?? ""}
+                  value={itcDoc.subcontractor_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) =>
-                      prev ? { ...prev, subcontractor_name: e.target.value } : prev,
-                    )
+                    setItcDoc((prev) => (prev ? { ...prev, subcontractor_name: e.target.value } : prev))
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
                 />
                 <input
                   type="date"
-                  value={itcDoc?.subcontractor_signed_at ?? ""}
+                  value={itcDoc.subcontractor_signed_at ?? ""}
                   onChange={(e) =>
                     setItcDoc((prev) =>
-                      prev
-                        ? { ...prev, subcontractor_signed_at: e.target.value }
-                        : prev,
+                      prev ? { ...prev, subcontractor_signed_at: e.target.value } : prev,
                     )
                   }
                   className="border rounded-lg p-2 w-full"
@@ -1629,23 +1506,19 @@ export default function TowerItcPage() {
               <div className="border rounded-xl p-4 space-y-3">
                 <div className="font-semibold">UGL Supervisor</div>
                 <input
-                  value={itcDoc?.ugl_supervisor_name ?? ""}
+                  value={itcDoc.ugl_supervisor_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) =>
-                      prev ? { ...prev, ugl_supervisor_name: e.target.value } : prev,
-                    )
+                    setItcDoc((prev) => (prev ? { ...prev, ugl_supervisor_name: e.target.value } : prev))
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
                 />
                 <input
                   type="date"
-                  value={itcDoc?.ugl_supervisor_signed_at ?? ""}
+                  value={itcDoc.ugl_supervisor_signed_at ?? ""}
                   onChange={(e) =>
                     setItcDoc((prev) =>
-                      prev
-                        ? { ...prev, ugl_supervisor_signed_at: e.target.value }
-                        : prev,
+                      prev ? { ...prev, ugl_supervisor_signed_at: e.target.value } : prev,
                     )
                   }
                   className="border rounded-lg p-2 w-full"
@@ -1653,16 +1526,12 @@ export default function TowerItcPage() {
               </div>
 
               <div className="border rounded-xl p-4 space-y-3">
-                <div className="font-semibold">
-                  Project Engineer / Construction Manager
-                </div>
+                <div className="font-semibold">Project Engineer / Construction Manager</div>
                 <input
-                  value={itcDoc?.project_engineer_name ?? ""}
+                  value={itcDoc.project_engineer_name ?? ""}
                   onChange={(e) =>
                     setItcDoc((prev) =>
-                      prev
-                        ? { ...prev, project_engineer_name: e.target.value }
-                        : prev,
+                      prev ? { ...prev, project_engineer_name: e.target.value } : prev,
                     )
                   }
                   placeholder="Name"
@@ -1670,12 +1539,10 @@ export default function TowerItcPage() {
                 />
                 <input
                   type="date"
-                  value={itcDoc?.project_engineer_signed_at ?? ""}
+                  value={itcDoc.project_engineer_signed_at ?? ""}
                   onChange={(e) =>
                     setItcDoc((prev) =>
-                      prev
-                        ? { ...prev, project_engineer_signed_at: e.target.value }
-                        : prev,
+                      prev ? { ...prev, project_engineer_signed_at: e.target.value } : prev,
                     )
                   }
                   className="border rounded-lg p-2 w-full"
@@ -1685,23 +1552,19 @@ export default function TowerItcPage() {
               <div className="border rounded-xl p-4 space-y-3">
                 <div className="font-semibold">TransGrid Representative</div>
                 <input
-                  value={itcDoc?.transgrid_rep_name ?? ""}
+                  value={itcDoc.transgrid_rep_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) =>
-                      prev ? { ...prev, transgrid_rep_name: e.target.value } : prev,
-                    )
+                    setItcDoc((prev) => (prev ? { ...prev, transgrid_rep_name: e.target.value } : prev))
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
                 />
                 <input
                   type="date"
-                  value={itcDoc?.transgrid_rep_signed_at ?? ""}
+                  value={itcDoc.transgrid_rep_signed_at ?? ""}
                   onChange={(e) =>
                     setItcDoc((prev) =>
-                      prev
-                        ? { ...prev, transgrid_rep_signed_at: e.target.value }
-                        : prev,
+                      prev ? { ...prev, transgrid_rep_signed_at: e.target.value } : prev,
                     )
                   }
                   className="border rounded-lg p-2 w-full"
@@ -1711,9 +1574,7 @@ export default function TowerItcPage() {
 
             <div
               className={`border rounded-xl p-4 ${
-                overallReady
-                  ? "bg-green-50 border-green-200"
-                  : "bg-yellow-50 border-yellow-200"
+                overallReady ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"
               }`}
             >
               <div className="font-semibold">
@@ -1722,15 +1583,12 @@ export default function TowerItcPage() {
                   : "This ITC still has outstanding items before full sign-off."}
               </div>
               <div className="text-sm text-slate-600 mt-1">
-                Status will save as{" "}
-                <span className="font-medium">
-                  {overallReady ? "Submitted" : itcDoc?.status || "Draft"}
-                </span>
-                .
+                Status will save as <span className="font-medium">{overallReady ? "Submitted" : (itcDoc.status || "Draft")}</span>.
               </div>
             </div>
 
             <button
+              type="button"
               onClick={() => void saveSignoff()}
               disabled={savingSignoff}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
