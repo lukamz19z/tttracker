@@ -1761,7 +1761,7 @@ export default function ItcPage() {
           <div>
             <div className="text-lg font-bold">Sign-off</div>
             <div className="text-sm text-slate-500">
-              Sub-contractor, UGL, Project Engineer / CM, and TransGrid fields
+              Sign-off Fields
             </div>
           </div>
           <span className="text-sm font-medium">
@@ -1773,7 +1773,7 @@ export default function ItcPage() {
           <div className="p-6 space-y-5">
             <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
               <div className="border rounded-xl p-4 space-y-3">
-                <div className="font-semibold">Sub-contractor Representative</div>
+                <div className="font-semibold">BC Representative</div>
                 <input
                   value={itcDoc.subcontractor_name ?? ""}
                   onChange={(e) =>
@@ -1795,7 +1795,7 @@ export default function ItcPage() {
               </div>
 
               <div className="border rounded-xl p-4 space-y-3">
-                <div className="font-semibold">UGL Supervisor</div>
+                <div className="font-semibold">Supervisor</div>
                 <input
                   value={itcDoc.ugl_supervisor_name ?? ""}
                   onChange={(e) =>
@@ -1841,7 +1841,7 @@ export default function ItcPage() {
               </div>
 
               <div className="border rounded-xl p-4 space-y-3">
-                <div className="font-semibold">TransGrid Representative</div>
+                <div className="font-semibold">PC Representative</div>
                 <input
                   value={itcDoc.transgrid_rep_name ?? ""}
                   onChange={(e) =>
