@@ -60,6 +60,28 @@ type DeliveryItemRow = {
   qty_delivered?: number | null;
 };
 
+type GenericDocumentRow = {
+  id?: string;
+  tower_id?: string | null;
+  status?: string | null;
+  category?: string | null;
+  type?: string | null;
+  document_type?: string | null;
+  expiry_date?: string | null;
+  valid_to?: string | null;
+  end_date?: string | null;
+  issue_date?: string | null;
+  start_date?: string | null;
+  is_active?: boolean | null;
+};
+
+type DocumentMetrics = {
+  totalSafetyDocs: number;
+  activeSafetyDocs: number;
+  expiredSafetyDocs: number;
+  expiringSoonSafetyDocs: number;
+};
+
 type OverviewStats = {
   latestDate: string | null;
   docketCount: number;
@@ -81,6 +103,13 @@ type OverviewStats = {
   computedProgress: number;
   remainingProgress: number;
   computedStatus: string;
+  totalSafetyDocs: number;
+  activeSafetyDocs: number;
+  expiredSafetyDocs: number;
+  expiringSoonSafetyDocs: number;
+  towerWeightTonnes: number | null;
+  completedTonnes: number | null;
+  manhoursPerTonne: number | null;
 };
 
 type UserRole = "admin" | "editor" | "viewer" | string | null;
@@ -97,6 +126,26 @@ function formatValue(value: unknown) {
   if (typeof value === "number") return String(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
+}
+
+function formatDecimal(value: number | null, decimals = 2) {
+  if (value === null || Number.isNaN(value)) return "-";
+  return value.toFixed(decimals);
+}
+
+function extractNumericValue(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+
+  const str = String(value).trim();
+  if (!str) return null;
+
+  const cleaned = str.replace(/,/g, "");
+  const match = cleaned.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function getOpenDefectCount(defects: DefectRow[]) {
@@ -123,6 +172,137 @@ function getStatusFromProgress(progress: number) {
 
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
+}
+
+function isSafetyDocument(doc: GenericDocumentRow) {
+  const values = [
+    doc.category,
+    doc.type,
+    doc.document_type,
+    doc.status,
+  ]
+    .filter(Boolean)
+    .map((v) => String(v).toLowerCase());
+
+  if (values.length === 0) return true;
+
+  return values.some((value) =>
+    [
+      "safety",
+      "permit",
+      "swms",
+      "itc",
+      "checklist",
+      "sign on",
+      "sign-on",
+      "lift",
+      "study",
+      "wms",
+      "jsea",
+      "jsa",
+    ].some((keyword) => value.includes(keyword))
+  );
+}
+
+function getDocumentExpiryDate(doc: GenericDocumentRow) {
+  return (
+    doc.expiry_date ||
+    doc.valid_to ||
+    doc.end_date ||
+    null
+  );
+}
+
+function isDocumentExpired(expiryDate: string | null, today: Date) {
+  if (!expiryDate) return false;
+  const expiry = new Date(expiryDate);
+  if (Number.isNaN(expiry.getTime())) return false;
+
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+
+  return expiryOnly < todayOnly;
+}
+
+function isDocumentExpiringSoon(expiryDate: string | null, today: Date, days = 30) {
+  if (!expiryDate) return false;
+  const expiry = new Date(expiryDate);
+  if (Number.isNaN(expiry.getTime())) return false;
+
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const soonDate = new Date(todayOnly);
+  soonDate.setDate(soonDate.getDate() + days);
+
+  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+
+  return expiryOnly >= todayOnly && expiryOnly <= soonDate;
+}
+
+async function loadDocumentMetrics(
+  supabase: ReturnType<typeof createSupabaseBrowser>,
+  towerId: string
+): Promise<DocumentMetrics> {
+  const candidateTables = [
+    "tower_workpack_documents",
+    "tower_documents",
+    "workpack_documents",
+  ];
+
+  const emptyMetrics: DocumentMetrics = {
+    totalSafetyDocs: 0,
+    activeSafetyDocs: 0,
+    expiredSafetyDocs: 0,
+    expiringSoonSafetyDocs: 0,
+  };
+
+  for (const tableName of candidateTables) {
+    try {
+      const res = await supabase
+        .from(tableName)
+        .select(
+          "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active"
+        )
+        .eq("tower_id", towerId);
+
+      if (res.error) {
+        continue;
+      }
+
+      const rows = ((res.data as GenericDocumentRow[] | null) ?? []).filter(isSafetyDocument);
+      const today = new Date();
+
+      const expiredSafetyDocs = rows.filter((doc) =>
+        isDocumentExpired(getDocumentExpiryDate(doc), today)
+      ).length;
+
+      const expiringSoonSafetyDocs = rows.filter((doc) =>
+        isDocumentExpiringSoon(getDocumentExpiryDate(doc), today, 30)
+      ).length;
+
+      const activeSafetyDocs = rows.filter((doc) => {
+        const status = String(doc.status || "").toLowerCase();
+        const expiry = getDocumentExpiryDate(doc);
+
+        if (doc.is_active === true) return true;
+        if (status.includes("active") || status.includes("current") || status.includes("valid")) {
+          return !isDocumentExpired(expiry, today);
+        }
+
+        return !isDocumentExpired(expiry, today);
+      }).length;
+
+      return {
+        totalSafetyDocs: rows.length,
+        activeSafetyDocs,
+        expiredSafetyDocs,
+        expiringSoonSafetyDocs,
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return emptyMetrics;
 }
 
 export default function TowerOverviewPage() {
@@ -171,6 +351,7 @@ export default function TowerOverviewPage() {
         modsRes,
         requiredBundlesRes,
         deliveriesRes,
+        documentMetrics,
       ] = await Promise.all([
         supabase.from("towers").select("*").eq("id", towerId).single(),
         supabase
@@ -190,6 +371,7 @@ export default function TowerOverviewPage() {
           .from("tower_bundle_deliveries")
           .select("id")
           .eq("tower_id", towerId),
+        loadDocumentMetrics(supabase, towerId),
       ]);
 
       if (cancelled) return;
@@ -296,6 +478,29 @@ export default function TowerOverviewPage() {
       const openDefectCount = getOpenDefectCount(defects);
       const closedDefectCount = Math.max(0, defects.length - openDefectCount);
 
+      const weightSources = [
+        nextTower?.extra_data?.weight,
+        nextTower?.extra_data?.tower_weight,
+        nextTower?.extra_data?.mass,
+        nextTower?.extra_data?.tower_mass,
+        nextTower?.extra_data?.["Weight"],
+        nextTower?.extra_data?.["Tower Weight"],
+        nextTower?.extra_data?.["Mass"],
+      ];
+
+      const towerWeightTonnes =
+        weightSources.map(extractNumericValue).find((v) => v !== null) ?? null;
+
+      const completedTonnes =
+        towerWeightTonnes !== null
+          ? towerWeightTonnes * (computedProgress / 100)
+          : null;
+
+      const manhoursPerTonne =
+        completedTonnes && completedTonnes > 0
+          ? totalHours / completedTonnes
+          : null;
+
       const nextStats: OverviewStats = {
         latestDate,
         docketCount: dockets.length,
@@ -317,6 +522,22 @@ export default function TowerOverviewPage() {
         computedProgress,
         remainingProgress,
         computedStatus,
+        totalSafetyDocs: documentMetrics.totalSafetyDocs,
+        activeSafetyDocs: documentMetrics.activeSafetyDocs,
+        expiredSafetyDocs: documentMetrics.expiredSafetyDocs,
+        expiringSoonSafetyDocs: documentMetrics.expiringSoonSafetyDocs,
+        towerWeightTonnes:
+          towerWeightTonnes !== null
+            ? Math.round(towerWeightTonnes * 1000) / 1000
+            : null,
+        completedTonnes:
+          completedTonnes !== null
+            ? Math.round(completedTonnes * 1000) / 1000
+            : null,
+        manhoursPerTonne:
+          manhoursPerTonne !== null
+            ? Math.round(manhoursPerTonne * 100) / 100
+            : null,
       };
 
       if (!cancelled) {
@@ -404,7 +625,7 @@ export default function TowerOverviewPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-10 gap-4">
           <KpiCard
             label="Progress"
             value={`${stats.computedProgress}%`}
@@ -424,10 +645,36 @@ export default function TowerOverviewPage() {
             subtext={`${stats.docketCount} dockets`}
           />
           <KpiCard
+            label="MH / Tonne"
+            value={
+              stats.manhoursPerTonne !== null
+                ? formatDecimal(stats.manhoursPerTonne, 2)
+                : "-"
+            }
+            tone="orange"
+            subtext={
+              stats.completedTonnes !== null
+                ? `${formatDecimal(stats.completedTonnes, 2)}t complete`
+                : "Needs weight + progress"
+            }
+          />
+          <KpiCard
             label="Open Defects"
             value={String(stats.openDefectCount)}
             tone={stats.openDefectCount > 0 ? "red" : "green"}
             subtext={`${stats.defectCount} total`}
+          />
+          <KpiCard
+            label="Safety Docs"
+            value={String(stats.totalSafetyDocs)}
+            tone="slate"
+            subtext={`${stats.activeSafetyDocs} active`}
+          />
+          <KpiCard
+            label="Expired Docs"
+            value={String(stats.expiredSafetyDocs)}
+            tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
+            subtext={`${stats.expiringSoonSafetyDocs} soon`}
           />
           <KpiCard
             label="Mods"
@@ -442,21 +689,21 @@ export default function TowerOverviewPage() {
             subtext="All causes"
           />
           <KpiCard
-            label="Last Docket"
-            value={stats.latestDate || "-"}
-            tone="slate"
-            subtext="Latest activity"
-          />
-          <KpiCard
             label="Tower Weight"
-            value={weightValue !== null ? formatValue(weightValue) : "-"}
+            value={
+              stats.towerWeightTonnes !== null
+                ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
+                : weightValue !== null
+                ? formatValue(weightValue)
+                : "-"
+            }
             tone="slate"
             subtext="From CSV import"
           />
         </div>
       </div>
 
-      <div className="grid xl:grid-cols-3 gap-6">
+      <div className="grid xl:grid-cols-4 gap-6">
         <ChartCard title="Overall Progress" subtitle="Completed vs remaining">
           <div className="flex flex-col items-center gap-4">
             <DonutChart
@@ -571,9 +818,45 @@ export default function TowerOverviewPage() {
             </div>
           </div>
         </ChartCard>
+
+        <ChartCard title="Safety Documents" subtitle="Current compliance snapshot">
+          <div className="flex flex-col items-center gap-4">
+            <DonutChart
+              percent={
+                stats.totalSafetyDocs > 0
+                  ? Math.round(
+                      (stats.activeSafetyDocs / stats.totalSafetyDocs) * 100
+                    )
+                  : 100
+              }
+              color="#16a34a"
+              remainderColor="#dc2626"
+              centerTop={String(stats.totalSafetyDocs)}
+              centerBottom="Docs"
+            />
+
+            <div className="w-full space-y-3">
+              <LegendRow
+                label="Active"
+                value={String(stats.activeSafetyDocs)}
+                colorClass="bg-green-600"
+              />
+              <LegendRow
+                label="Expired"
+                value={String(stats.expiredSafetyDocs)}
+                colorClass="bg-red-600"
+              />
+              <LegendRow
+                label="Expiring Soon"
+                value={String(stats.expiringSoonSafetyDocs)}
+                colorClass="bg-orange-500"
+              />
+            </div>
+          </div>
+        </ChartCard>
       </div>
 
-      <div className="grid xl:grid-cols-3 gap-6">
+      <div className="grid xl:grid-cols-4 gap-6">
         <PanelCard
           title="Operations Summary"
           subtitle="Field productivity and logged activity"
@@ -598,6 +881,15 @@ export default function TowerOverviewPage() {
               label="Total Manhours"
               value={`${stats.totalHours}h`}
               tone="blue"
+            />
+            <MetricRow
+              label="MH / Tonne"
+              value={
+                stats.manhoursPerTonne !== null
+                  ? `${formatDecimal(stats.manhoursPerTonne, 2)} h/t`
+                  : "-"
+              }
+              tone="orange"
             />
             <MetricRow label="Last Docket Date" value={stats.latestDate || "-"} />
             <MetricRow
@@ -681,6 +973,52 @@ export default function TowerOverviewPage() {
               label="Outstanding Qty"
               value={String(stats.outstandingQty)}
               tone={stats.outstandingQty > 0 ? "orange" : "green"}
+            />
+          </div>
+        </PanelCard>
+
+        <PanelCard
+          title="Safety Documents"
+          subtitle="Document compliance view"
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <SmallStat
+              label="Total Docs"
+              value={String(stats.totalSafetyDocs)}
+              tone="slate"
+            />
+            <SmallStat
+              label="Active Docs"
+              value={String(stats.activeSafetyDocs)}
+              tone={stats.activeSafetyDocs > 0 ? "green" : "slate"}
+            />
+            <SmallStat
+              label="Expired Docs"
+              value={String(stats.expiredSafetyDocs)}
+              tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
+            />
+            <SmallStat
+              label="Expiring Soon"
+              value={String(stats.expiringSoonSafetyDocs)}
+              tone={stats.expiringSoonSafetyDocs > 0 ? "orange" : "green"}
+            />
+            <SmallStat
+              label="Tower Weight"
+              value={
+                stats.towerWeightTonnes !== null
+                  ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
+                  : "-"
+              }
+              tone="blue"
+            />
+            <SmallStat
+              label="Completed Tonnes"
+              value={
+                stats.completedTonnes !== null
+                  ? `${formatDecimal(stats.completedTonnes, 2)}t`
+                  : "-"
+              }
+              tone="green"
             />
           </div>
         </PanelCard>
