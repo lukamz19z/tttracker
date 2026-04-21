@@ -1035,24 +1035,7 @@ export default function TowerOverviewPage() {
               value={String(stats.expiredSafetyDocs)}
               tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
             />
-            <SmallStat
-              label="Tower Weight"
-              value={
-                stats.towerWeightTonnes !== null
-                  ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
-                  : "-"
-              }
-              tone="blue"
-            />
-            <SmallStat
-              label="MH / Tonne"
-              value={
-                stats.manhoursPerTonne !== null
-                  ? `${formatDecimal(stats.manhoursPerTonne, 2)}`
-                  : "-"
-              }
-              tone="orange"
-            />
+      
           </div>
         </PanelCard>
       </div>
