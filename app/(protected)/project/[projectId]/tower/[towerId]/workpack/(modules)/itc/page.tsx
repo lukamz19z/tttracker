@@ -213,13 +213,11 @@ function badgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
 }
 
 function validationButtonClasses(current: ItcValidation, value: ItcValidation) {
-  if (current !== value) {
-    return "border bg-white text-slate-700 hover:bg-slate-50";
-  }
-
+  if (current !== value) return "border bg-white text-slate-700 hover:bg-slate-50";
   if (value === "Y") return "border bg-green-100 text-green-700 border-green-200";
   if (value === "N") return "border bg-red-100 text-red-700 border-red-200";
-  return "border bg-yellow-100 text-yellow-800 border-yellow-200";
+  if (value === "NA") return "border bg-yellow-100 text-yellow-800 border-yellow-200";
+  return "border bg-slate-100 text-slate-700 border-slate-200";
 }
 
 function formatDate(value?: string | null): string {
@@ -237,10 +235,8 @@ function emptyToNull(value: string | null | undefined): string | null {
 function emptyToNumberOrNull(value: string | number | null | undefined): number | null {
   if (value == null) return null;
   if (typeof value === "number") return Number.isNaN(value) ? null : value;
-
   const trimmed = value.trim();
   if (trimmed === "") return null;
-
   const parsed = Number(trimmed);
   return Number.isNaN(parsed) ? null : parsed;
 }
@@ -250,23 +246,87 @@ function numberOrBlank(value: string | number | null | undefined): string {
   return String(value);
 }
 
-function pickTowerValue(tower: TowerRecord | null, keys: string[]): string {
+function normalizeKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function getTowerFieldValue(tower: TowerRecord | null, candidateKeys: string[]): string {
   if (!tower) return "";
 
-  for (const key of keys) {
-    const direct = tower[key];
-    if (typeof direct === "string" && direct.trim()) return direct;
-    if (typeof direct === "number") return String(direct);
+  const normalizedCandidates = candidateKeys.map(normalizeKey);
+  const directEntries = Object.entries(tower).filter(([key]) => key !== "extra_data");
 
-    const extra = tower.extra_data;
-    if (extra && typeof extra === "object") {
-      const extraValue = extra[key];
-      if (typeof extraValue === "string" && extraValue.trim()) return extraValue;
-      if (typeof extraValue === "number") return String(extraValue);
+  for (const [key, value] of directEntries) {
+    const normalizedKey = normalizeKey(key);
+    if (normalizedCandidates.includes(normalizedKey)) {
+      if (typeof value === "string" && value.trim()) return value;
+      if (typeof value === "number") return String(value);
+    }
+  }
+
+  const extra = tower.extra_data;
+  if (extra && typeof extra === "object") {
+    for (const [key, value] of Object.entries(extra)) {
+      const normalizedKey = normalizeKey(key);
+      if (normalizedCandidates.includes(normalizedKey)) {
+        if (typeof value === "string" && value.trim()) return value;
+        if (typeof value === "number") return String(value);
+      }
+    }
+
+    for (const [key, value] of Object.entries(extra)) {
+      const normalizedKey = normalizeKey(key);
+      const matched = candidateKeys.some((candidate) => {
+        const c = normalizeKey(candidate);
+        return normalizedKey.includes(c) || c.includes(normalizedKey);
+      });
+
+      if (matched) {
+        if (typeof value === "string" && value.trim()) return value;
+        if (typeof value === "number") return String(value);
+      }
     }
   }
 
   return "";
+}
+
+function getTowerStructureType(tower: TowerRecord | null): string {
+  return getTowerFieldValue(tower, [
+    "structure_type",
+    "structure type",
+    "tower_type",
+    "tower type",
+    "type",
+    "structure",
+  ]);
+}
+
+function getTowerStructureHeight(tower: TowerRecord | null): string {
+  return getTowerFieldValue(tower, [
+    "structure_height",
+    "structure height",
+    "tower_height",
+    "tower height",
+    "height",
+    "towerheight",
+    "structureheight",
+  ]);
+}
+
+function getTowerStructureWeight(tower: TowerRecord | null): string {
+  return getTowerFieldValue(tower, [
+    "structure_weight",
+    "structure weight",
+    "structure total weights",
+    "structure total weight",
+    "tower_weight",
+    "tower weight",
+    "weight",
+    "mass",
+    "total weight",
+    "weights",
+  ]);
 }
 
 function buildDefaultItems(itcId: string): Omit<ItcItem, "id">[] {
@@ -286,7 +346,7 @@ function buildDefaultItems(itcId: string): Omit<ItcItem, "id">[] {
   );
 }
 
-export default function TowerItcPage() {
+export default function ItcPage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
@@ -337,7 +397,17 @@ export default function TowerItcPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [towerId]);
 
-  async function createDefaultItcDocument(towerRecord: TowerRecord | null): Promise<ItcDocument | null> {
+  async function seedChecklistItems(itcId: string) {
+    const defaults = buildDefaultItems(itcId);
+    const { error } = await supabase.from("tower_itc_items").insert(defaults);
+    if (error) {
+      alert(error.message || "Failed to seed checklist items.");
+    }
+  }
+
+  async function createDefaultItcDocument(
+    towerRecord: TowerRecord | null,
+  ): Promise<ItcDocument | null> {
     const payload = {
       tower_id: towerId,
       project_id: projectId,
@@ -345,15 +415,9 @@ export default function TowerItcPage() {
       status: "Draft",
       revision: "Rev 0",
       structure_number: towerRecord?.name ? String(towerRecord.name) : null,
-      structure_type: emptyToNull(
-        pickTowerValue(towerRecord, ["structure_type", "tower_type", "type", "structure"]),
-      ),
-      structure_height: emptyToNumberOrNull(
-        pickTowerValue(towerRecord, ["structure_height", "tower_height", "height", "towerheight"]),
-      ),
-      structure_weight: emptyToNumberOrNull(
-        pickTowerValue(towerRecord, ["structure_weight", "weight", "tower_weight", "mass"]),
-      ),
+      structure_type: emptyToNull(getTowerStructureType(towerRecord)),
+      structure_height: emptyToNumberOrNull(getTowerStructureHeight(towerRecord)),
+      structure_weight: emptyToNumberOrNull(getTowerStructureWeight(towerRecord)),
       itc_mode: "BC" as ItcMode,
       subcontractor_name: "",
       ugl_supervisor_name: "",
@@ -375,16 +439,6 @@ export default function TowerItcPage() {
     const created = data as ItcDocument;
     await seedChecklistItems(created.id);
     return created;
-  }
-
-  async function seedChecklistItems(itcId: string) {
-    const defaults = buildDefaultItems(itcId);
-
-    const { error } = await supabase.from("tower_itc_items").insert(defaults);
-    if (error) {
-      alert(error.message || "Failed to seed checklist items.");
-      return;
-    }
   }
 
   async function loadPage() {
@@ -441,33 +495,31 @@ export default function TowerItcPage() {
       const patched: ItcDocument = {
         ...latestItc,
         itc_mode: latestItc.itc_mode ?? "BC",
-        structure_number: latestItc.structure_number || (towerData?.name ? String(towerData.name) : ""),
-        structure_type:
-          latestItc.structure_type ||
-          pickTowerValue(towerData, ["structure_type", "tower_type", "type", "structure"]),
+        structure_number:
+          latestItc.structure_number || (towerData?.name ? String(towerData.name) : ""),
+        structure_type: latestItc.structure_type || getTowerStructureType(towerData),
         structure_height:
-          latestItc.structure_height ??
-          pickTowerValue(towerData, ["structure_height", "tower_height", "height", "towerheight"]),
+          latestItc.structure_height ?? getTowerStructureHeight(towerData),
         structure_weight:
-          latestItc.structure_weight ??
-          pickTowerValue(towerData, ["structure_weight", "weight", "tower_weight", "mass"]),
+          latestItc.structure_weight ?? getTowerStructureWeight(towerData),
       };
 
       setItcDoc(patched);
 
-const itemsRes = await supabase
-  .from("tower_itc_items")
-  .select("*")
-  .eq("itc_id", latestItc.id)
-  .order("item_no", { ascending: true });
+      const itemsRes = await supabase
+        .from("tower_itc_items")
+        .select("*")
+        .eq("itc_id", latestItc.id)
+        .order("item_no", { ascending: true });
 
-const torqueRes = await supabase
-  .from("tower_itc_torque")
-  .select("*")
-  .eq("itc_id", latestItc.id)
-  .order("item_no", { ascending: true });
+      const torqueRes = await supabase
+        .from("tower_itc_torque")
+        .select("*")
+        .eq("itc_id", latestItc.id)
+        .order("item_no", { ascending: true });
 
       let itemData = (itemsRes.data as ItcItem[] | null) ?? [];
+
       if (itemData.length === 0) {
         await seedChecklistItems(latestItc.id);
 
@@ -535,12 +587,20 @@ const torqueRes = await supabase
       revision: emptyToNull(itcDoc.revision) ?? "Rev 0",
       status: emptyToNull(itcDoc.status) ?? "Draft",
       itc_mode: itcDoc.itc_mode ?? "BC",
-      structure_number: emptyToNull(itcDoc.structure_number) ?? (tower?.name ? String(tower.name) : null),
+      structure_number:
+        emptyToNull(itcDoc.structure_number) ?? (tower?.name ? String(tower.name) : null),
       structure_type:
-        emptyToNull(typeof itcDoc.structure_type === "string" ? itcDoc.structure_type : String(itcDoc.structure_type ?? "")) ??
-        emptyToNull(pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"])),
-      structure_height: emptyToNumberOrNull(numberOrBlank(itcDoc.structure_height)),
-      structure_weight: emptyToNumberOrNull(numberOrBlank(itcDoc.structure_weight)),
+        emptyToNull(
+          typeof itcDoc.structure_type === "string"
+            ? itcDoc.structure_type
+            : String(itcDoc.structure_type ?? ""),
+        ) ?? emptyToNull(getTowerStructureType(tower)),
+      structure_height:
+        emptyToNumberOrNull(numberOrBlank(itcDoc.structure_height)) ??
+        emptyToNumberOrNull(getTowerStructureHeight(tower)),
+      structure_weight:
+        emptyToNumberOrNull(numberOrBlank(itcDoc.structure_weight)) ??
+        emptyToNumberOrNull(getTowerStructureWeight(tower)),
     };
 
     const { error, data } = await supabase
@@ -719,6 +779,227 @@ const torqueRes = await supabase
     alert("Sign-off saved.");
   }
 
+  function exportToPdf() {
+    if (!itcDoc || !tower) return;
+
+    const checklistHtml = CHECKLIST_SECTIONS.map((section) => {
+      const rows = itcItems.filter((item) => item.section_key === section.key);
+
+      return `
+        <div style="margin-bottom:24px; page-break-inside:avoid;">
+          <h2 style="font-size:18px; margin:0 0 8px 0;">${section.title}</h2>
+          <p style="font-size:12px; color:#555; margin:0 0 12px 0;">${section.note ?? ""}</p>
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead>
+              <tr>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Item</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Description</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Validation</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">LH Name</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Signature</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Date</th>
+                <th style="border:1px solid #ccc; padding:8px; text-align:left;">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                rows.length > 0
+                  ? rows
+                      .map(
+                        (row) => `
+                          <tr>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.item_no}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.description}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.validation || "-"}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.lh_name || "-"}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.lh_signature || "-"}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.checked_date || "-"}</td>
+                            <td style="border:1px solid #ccc; padding:8px;">${row.notes || "-"}</td>
+                          </tr>
+                        `,
+                      )
+                      .join("")
+                  : `
+                    <tr>
+                      <td colspan="7" style="border:1px solid #ccc; padding:8px;">No rows</td>
+                    </tr>
+                  `
+              }
+            </tbody>
+          </table>
+        </div>
+      `;
+    }).join("");
+
+    const torqueHtml =
+      currentMode === "BC"
+        ? `
+          <div style="margin-bottom:24px;">
+            <h2 style="font-size:18px; margin:0 0 8px 0;">Torque Sheet</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Item</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Bolt Grade</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Bolt Dia</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Washers</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Bolt Count</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Torque Achieved</th>
+                  <th style="border:1px solid #ccc; padding:8px; text-align:left;">Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${
+                  torqueRows.length > 0
+                    ? torqueRows
+                        .map(
+                          (row) => `
+                            <tr>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.item_no ?? "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.bolt_grade || "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.bolt_dia ?? "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.structural_washers || "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.bolt_count ?? "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.torque_achieved || "-"}</td>
+                              <td style="border:1px solid #ccc; padding:8px;">${row.remarks || "-"}</td>
+                            </tr>
+                          `,
+                        )
+                        .join("")
+                    : `
+                      <tr>
+                        <td colspan="7" style="border:1px solid #ccc; padding:8px;">No torque rows</td>
+                      </tr>
+                    `
+                }
+              </tbody>
+            </table>
+          </div>
+        `
+        : "";
+
+    const clientHtml = `
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:18px; margin:0 0 8px 0;">Client ITC Uploads</h2>
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <thead>
+            <tr>
+              <th style="border:1px solid #ccc; padding:8px; text-align:left;">Title</th>
+              <th style="border:1px solid #ccc; padding:8px; text-align:left;">Revision</th>
+              <th style="border:1px solid #ccc; padding:8px; text-align:left;">Status</th>
+              <th style="border:1px solid #ccc; padding:8px; text-align:left;">Comments</th>
+              <th style="border:1px solid #ccc; padding:8px; text-align:left;">Uploaded</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              clientUploads.length > 0
+                ? clientUploads
+                    .map(
+                      (row) => `
+                        <tr>
+                          <td style="border:1px solid #ccc; padding:8px;">${row.title || row.file_name || "-"}</td>
+                          <td style="border:1px solid #ccc; padding:8px;">${row.revision || "-"}</td>
+                          <td style="border:1px solid #ccc; padding:8px;">${row.status || "-"}</td>
+                          <td style="border:1px solid #ccc; padding:8px;">${row.comments || "-"}</td>
+                          <td style="border:1px solid #ccc; padding:8px;">${formatDate(row.created_at)}</td>
+                        </tr>
+                      `,
+                    )
+                    .join("")
+                : `
+                  <tr>
+                    <td colspan="5" style="border:1px solid #ccc; padding:8px;">No client uploads</td>
+                  </tr>
+                `
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    const signoffHtml = `
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:18px; margin:0 0 8px 0;">Sign-off</h2>
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <tbody>
+            <tr>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">Sub-contractor Representative</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.subcontractor_name || "-"}</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.subcontractor_signed_at || "-"}</td>
+            </tr>
+            <tr>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">UGL Supervisor</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.ugl_supervisor_name || "-"}</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.ugl_supervisor_signed_at || "-"}</td>
+            </tr>
+            <tr>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">Project Engineer / Construction Manager</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.project_engineer_name || "-"}</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.project_engineer_signed_at || "-"}</td>
+            </tr>
+            <tr>
+              <td style="border:1px solid #ccc; padding:8px; font-weight:600;">TransGrid Representative</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.transgrid_rep_name || "-"}</td>
+              <td style="border:1px solid #ccc; padding:8px;">${itcDoc.transgrid_rep_signed_at || "-"}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      alert("Popup blocked. Please allow popups and try again.");
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>ITC Export - ${itcDoc.structure_number || tower.name || towerId}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+            h1 { margin: 0 0 12px 0; font-size: 24px; }
+            .meta { margin-bottom: 24px; }
+            .meta-row { margin-bottom: 6px; font-size: 13px; }
+            .status { display:inline-block; padding: 4px 8px; border:1px solid #ccc; border-radius: 999px; font-size: 12px; }
+            @media print {
+              body { padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Inspection & Test Checksheet (ITC)</h1>
+          <div class="meta">
+            <div class="meta-row"><strong>Structure Number:</strong> ${itcDoc.structure_number || tower.name || "-"}</div>
+            <div class="meta-row"><strong>Structure Type:</strong> ${typeof itcDoc.structure_type === "string" ? itcDoc.structure_type : "-"}</div>
+            <div class="meta-row"><strong>Structure Height:</strong> ${numberOrBlank(itcDoc.structure_height) || "-"}</div>
+            <div class="meta-row"><strong>Structure Weight:</strong> ${numberOrBlank(itcDoc.structure_weight) || "-"}</div>
+            <div class="meta-row"><strong>Revision:</strong> ${itcDoc.revision || "-"}</div>
+            <div class="meta-row"><strong>Mode:</strong> ${itcDoc.itc_mode || "BC"}</div>
+            <div class="meta-row"><strong>Status:</strong> <span class="status">${itcDoc.status || "-"}</span></div>
+            <div class="meta-row"><strong>Latest Daily Docket:</strong> ${latestDate || "-"}</div>
+          </div>
+          ${currentMode === "BC" ? checklistHtml : ""}
+          ${torqueHtml}
+          ${clientHtml}
+          ${signoffHtml}
+        </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+
+    setTimeout(() => {
+      printWindow.focus();
+      printWindow.print();
+    }, 300);
+  }
+
   const defectsSummary = useMemo(() => {
     const total = defects.length;
     const closed = defects.filter((row) => isClosedLike(getRowStatus(row))).length;
@@ -742,16 +1023,11 @@ const torqueRes = await supabase
   }, [deliveries]);
 
   const modificationsSummary = useMemo(() => {
-    return {
-      total: modifications.length,
-      complete: true,
-    };
+    return { total: modifications.length, complete: true };
   }, [modifications]);
 
   const docketSummary = useMemo(() => {
-    return {
-      complete: !!latestDate,
-    };
+    return { complete: !!latestDate };
   }, [latestDate]);
 
   const checklistSummary = useMemo(() => {
@@ -759,7 +1035,6 @@ const torqueRes = await supabase
     const passed = itcItems.filter((item) => item.validation === "Y" || item.validation === "NA").length;
     const failed = itcItems.filter((item) => item.validation === "N").length;
     const pending = itcItems.filter((item) => item.validation === "").length;
-
     return {
       total,
       passed,
@@ -780,10 +1055,7 @@ const torqueRes = await supabase
   }, [torqueRows]);
 
   const clientItcSummary = useMemo(() => {
-    return {
-      total: clientUploads.length,
-      present: clientUploads.length > 0,
-    };
+    return { total: clientUploads.length, present: clientUploads.length > 0 };
   }, [clientUploads]);
 
   const currentMode: ItcMode = itcDoc?.itc_mode ?? "BC";
@@ -914,7 +1186,11 @@ const torqueRes = await supabase
 
   return (
     <div className="p-8 space-y-6">
-      <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />
+      <TowerHeader
+        projectId={projectId}
+        tower={tower}
+        latestDate={latestDate}
+      />
 
       <div className="flex gap-2 border-b pb-2 overflow-x-auto">
         <Link
@@ -941,13 +1217,6 @@ const torqueRes = await supabase
         >
           Lift Studies
         </Link>
-                <Link
-          className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
-          href={`/project/${projectId}/tower/${towerId}/workpack/drawings`}
-        >
-          Drawings
-        </Link>
-        
         <Link
           className="px-4 py-2 bg-slate-100 border rounded-t-lg whitespace-nowrap"
           href={`/project/${projectId}/tower/${towerId}/workpack/documents`}
@@ -971,12 +1240,22 @@ const torqueRes = await supabase
             </p>
           </div>
 
-          <div
-            className={`inline-flex items-center px-3 py-2 rounded-full border text-sm font-semibold w-fit ${
-              overallReady ? badgeClasses("green") : badgeClasses("yellow")
-            }`}
-          >
-            {overallReady ? "Ready for sign-off" : "Attention required"}
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={exportToPdf}
+              className="border px-4 py-2 rounded-lg hover:bg-white"
+            >
+              Export to PDF
+            </button>
+
+            <div
+              className={`inline-flex items-center px-3 py-2 rounded-full border text-sm font-semibold w-fit ${
+                overallReady ? badgeClasses("green") : badgeClasses("yellow")
+              }`}
+            >
+              {overallReady ? "Ready for sign-off" : "Attention required"}
+            </div>
           </div>
         </div>
       </div>
@@ -1085,7 +1364,7 @@ const torqueRes = await supabase
             value={
               typeof itcDoc.structure_type === "string"
                 ? itcDoc.structure_type
-                : pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"])
+                : getTowerStructureType(tower)
             }
             placeholder="Structure Type"
             className="border rounded-lg p-2 bg-slate-50"
@@ -1093,20 +1372,14 @@ const torqueRes = await supabase
 
           <input
             readOnly
-            value={
-              numberOrBlank(itcDoc.structure_height) ||
-              pickTowerValue(tower, ["structure_height", "tower_height", "height", "towerheight"])
-            }
+            value={numberOrBlank(itcDoc.structure_height) || getTowerStructureHeight(tower)}
             placeholder="Structure Height"
             className="border rounded-lg p-2 bg-slate-50"
           />
 
           <input
             readOnly
-            value={
-              numberOrBlank(itcDoc.structure_weight) ||
-              pickTowerValue(tower, ["structure_weight", "weight", "tower_weight", "mass"])
-            }
+            value={numberOrBlank(itcDoc.structure_weight) || getTowerStructureWeight(tower)}
             placeholder="Structure Weight"
             className="border rounded-lg p-2 bg-slate-50"
           />
@@ -1174,7 +1447,6 @@ const torqueRes = await supabase
                                   {value}
                                 </button>
                               ))}
-
                               <button
                                 type="button"
                                 onClick={() => setItemLocal(item.id, { validation: "" })}
@@ -1274,9 +1546,7 @@ const torqueRes = await supabase
                 />
                 <input
                   value={newTorque.structural_washers}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({ ...prev, structural_washers: e.target.value }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, structural_washers: e.target.value }))}
                   placeholder="Structural Washers"
                   className="border rounded-lg p-2"
                 />
@@ -1288,9 +1558,7 @@ const torqueRes = await supabase
                 />
                 <input
                   value={newTorque.torque_achieved}
-                  onChange={(e) =>
-                    setNewTorque((prev) => ({ ...prev, torque_achieved: e.target.value }))
-                  }
+                  onChange={(e) => setNewTorque((prev) => ({ ...prev, torque_achieved: e.target.value }))}
                   placeholder="Torque Achieved"
                   className="border rounded-lg p-2"
                 />
@@ -1590,7 +1858,8 @@ const torqueRes = await supabase
                   : "This ITC still has outstanding items before full sign-off."}
               </div>
               <div className="text-sm text-slate-600 mt-1">
-                Status will save as <span className="font-medium">{overallReady ? "Submitted" : (itcDoc.status || "Draft")}</span>.
+                Status will save as{" "}
+                <span className="font-medium">{overallReady ? "Submitted" : itcDoc.status || "Draft"}</span>.
               </div>
             </div>
 
