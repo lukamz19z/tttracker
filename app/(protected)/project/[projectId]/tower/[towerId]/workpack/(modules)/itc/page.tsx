@@ -782,6 +782,8 @@ export default function ItcPage() {
   function exportToPdf() {
     if (!itcDoc || !tower) return;
 
+    const logoUrl = `${window.location.origin}/bc-logo.png`;
+
     const checklistHtml = CHECKLIST_SECTIONS.map((section) => {
       const rows = itcItems.filter((item) => item.section_key === section.key);
 
@@ -961,27 +963,35 @@ export default function ItcPage() {
           <title>ITC Export - ${itcDoc.structure_number || tower.name || towerId}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
-            h1 { margin: 0 0 12px 0; font-size: 24px; }
+            h1 { margin: 0; font-size: 24px; }
             .meta { margin-bottom: 24px; }
             .meta-row { margin-bottom: 6px; font-size: 13px; }
             .status { display:inline-block; padding: 4px 8px; border:1px solid #ccc; border-radius: 999px; font-size: 12px; }
-            @media print {
-              body { padding: 0; }
-            }
+            @media print { body { padding: 0; } }
           </style>
         </head>
         <body>
-          <h1>Inspection & Test Checksheet (ITC)</h1>
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px;">
+            <div>
+              <h1>Inspection & Test Checksheet (ITC)</h1>
+              <div style="font-size:12px; color:#555; margin-top:4px;">
+                Tower Assembly and Erection
+              </div>
+            </div>
+            <img src="${logoUrl}" alt="BC Logo" style="height:60px; width:auto;" />
+          </div>
+
           <div class="meta">
             <div class="meta-row"><strong>Structure Number:</strong> ${itcDoc.structure_number || tower.name || "-"}</div>
             <div class="meta-row"><strong>Structure Type:</strong> ${typeof itcDoc.structure_type === "string" ? itcDoc.structure_type : "-"}</div>
-            <div class="meta-row"><strong>Structure Height:</strong> ${numberOrBlank(itcDoc.structure_height) || "-"}</div>
-            <div class="meta-row"><strong>Structure Weight:</strong> ${numberOrBlank(itcDoc.structure_weight) || "-"}</div>
+            <div class="meta-row"><strong>Structure Height:</strong> ${numberOrBlank(itcDoc.structure_height) ? `${numberOrBlank(itcDoc.structure_height)} m` : "-"}</div>
+            <div class="meta-row"><strong>Structure Weight:</strong> ${numberOrBlank(itcDoc.structure_weight) ? `${numberOrBlank(itcDoc.structure_weight)} t` : "-"}</div>
             <div class="meta-row"><strong>Revision:</strong> ${itcDoc.revision || "-"}</div>
             <div class="meta-row"><strong>Mode:</strong> ${itcDoc.itc_mode || "BC"}</div>
             <div class="meta-row"><strong>Status:</strong> <span class="status">${itcDoc.status || "-"}</span></div>
             <div class="meta-row"><strong>Latest Daily Docket:</strong> ${latestDate || "-"}</div>
           </div>
+
           ${currentMode === "BC" ? checklistHtml : ""}
           ${torqueHtml}
           ${clientHtml}
@@ -1186,11 +1196,7 @@ export default function ItcPage() {
 
   return (
     <div className="p-8 space-y-6">
-      <TowerHeader
-        projectId={projectId}
-        tower={tower}
-        latestDate={latestDate}
-      />
+      <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />
 
       <div className="flex gap-2 border-b pb-2 overflow-x-auto">
         <Link
@@ -1370,19 +1376,29 @@ export default function ItcPage() {
             className="border rounded-lg p-2 bg-slate-50"
           />
 
-          <input
-            readOnly
-            value={numberOrBlank(itcDoc.structure_height) || getTowerStructureHeight(tower)}
-            placeholder="Structure Height"
-            className="border rounded-lg p-2 bg-slate-50"
-          />
+          <div className="relative">
+            <input
+              readOnly
+              value={numberOrBlank(itcDoc.structure_height) || getTowerStructureHeight(tower)}
+              placeholder="Structure Height"
+              className="border rounded-lg p-2 pr-12 bg-slate-50 w-full"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">
+              m
+            </span>
+          </div>
 
-          <input
-            readOnly
-            value={numberOrBlank(itcDoc.structure_weight) || getTowerStructureWeight(tower)}
-            placeholder="Structure Weight"
-            className="border rounded-lg p-2 bg-slate-50"
-          />
+          <div className="relative">
+            <input
+              readOnly
+              value={numberOrBlank(itcDoc.structure_weight) || getTowerStructureWeight(tower)}
+              placeholder="Structure Weight"
+              className="border rounded-lg p-2 pr-12 bg-slate-50 w-full"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">
+              t
+            </span>
+          </div>
         </div>
       </div>
 
