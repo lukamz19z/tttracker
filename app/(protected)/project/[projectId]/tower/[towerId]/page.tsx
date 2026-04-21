@@ -205,12 +205,7 @@ function isSafetyDocument(doc: GenericDocumentRow) {
 }
 
 function getDocumentExpiryDate(doc: GenericDocumentRow) {
-  return (
-    doc.expiry_date ||
-    doc.valid_to ||
-    doc.end_date ||
-    null
-  );
+  return doc.expiry_date || doc.valid_to || doc.end_date || null;
 }
 
 function isDocumentExpired(expiryDate: string | null, today: Date) {
@@ -264,9 +259,7 @@ async function loadDocumentMetrics(
         )
         .eq("tower_id", towerId);
 
-      if (res.error) {
-        continue;
-      }
+      if (res.error) continue;
 
       const rows = ((res.data as GenericDocumentRow[] | null) ?? []).filter(isSafetyDocument);
       const today = new Date();
@@ -382,8 +375,7 @@ export default function TowerOverviewPage() {
       const dockets = (docketsRes.data as DocketRow[] | null) ?? [];
       const defects = (defectsRes.data as DefectRow[] | null) ?? [];
       const modifications = (modsRes.data as ModificationRow[] | null) ?? [];
-      const requiredBundles =
-        (requiredBundlesRes.data as BundleRow[] | null) ?? [];
+      const requiredBundles = (requiredBundlesRes.data as BundleRow[] | null) ?? [];
       const deliveries = (deliveriesRes.data as DeliveryRow[] | null) ?? [];
 
       let labourRows: LabourRow[] = [];
@@ -483,9 +475,9 @@ export default function TowerOverviewPage() {
         nextTower?.extra_data?.tower_weight,
         nextTower?.extra_data?.mass,
         nextTower?.extra_data?.tower_mass,
-        nextTower?.extra_data?.["Weight"],
+        nextTower?.extra_data?.Weight,
         nextTower?.extra_data?.["Tower Weight"],
-        nextTower?.extra_data?.["Mass"],
+        nextTower?.extra_data?.Mass,
       ];
 
       const towerWeightTonnes =
@@ -497,7 +489,7 @@ export default function TowerOverviewPage() {
           : null;
 
       const manhoursPerTonne =
-        completedTonnes && completedTonnes > 0
+        completedTonnes !== null && completedTonnes > 0
           ? totalHours / completedTonnes
           : null;
 
@@ -560,13 +552,6 @@ export default function TowerOverviewPage() {
     );
   }, [tower]);
 
-  const weightValue = useMemo(() => {
-    const weightEntry = extraDataEntries.find(([key]) =>
-      key.toLowerCase().includes("weight")
-    );
-    return weightEntry ? weightEntry[1] : null;
-  }, [extraDataEntries]);
-
   if (loading || !tower || !stats) {
     return <div className="p-8">Loading...</div>;
   }
@@ -625,7 +610,7 @@ export default function TowerOverviewPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-10 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           <KpiCard
             label="Progress"
             value={`${stats.computedProgress}%`}
@@ -648,14 +633,14 @@ export default function TowerOverviewPage() {
             label="MH / Tonne"
             value={
               stats.manhoursPerTonne !== null
-                ? formatDecimal(stats.manhoursPerTonne, 2)
+                ? `${formatDecimal(stats.manhoursPerTonne, 2)}`
                 : "-"
             }
             tone="orange"
             subtext={
-              stats.completedTonnes !== null
-                ? `${formatDecimal(stats.completedTonnes, 2)}t complete`
-                : "Needs weight + progress"
+              stats.completedTonnes !== null && stats.completedTonnes > 0
+                ? `${formatDecimal(stats.completedTonnes, 2)} t complete`
+                : "Needs progress"
             }
           />
           <KpiCard
@@ -664,37 +649,36 @@ export default function TowerOverviewPage() {
             tone={stats.openDefectCount > 0 ? "red" : "green"}
             subtext={`${stats.defectCount} total`}
           />
+
           <KpiCard
             label="Safety Docs"
             value={String(stats.totalSafetyDocs)}
             tone="slate"
-            subtext={`${stats.activeSafetyDocs} active`}
+            subtext="Tracked"
+          />
+          <KpiCard
+            label="Active Docs"
+            value={String(stats.activeSafetyDocs)}
+            tone={stats.activeSafetyDocs > 0 ? "green" : "slate"}
+            subtext="Current"
+          />
+          <KpiCard
+            label="Expiring Soon"
+            value={String(stats.expiringSoonSafetyDocs)}
+            tone={stats.expiringSoonSafetyDocs > 0 ? "orange" : "green"}
+            subtext="30 days"
           />
           <KpiCard
             label="Expired Docs"
             value={String(stats.expiredSafetyDocs)}
             tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
-            subtext={`${stats.expiringSoonSafetyDocs} soon`}
-          />
-          <KpiCard
-            label="Mods"
-            value={String(stats.modificationCount)}
-            tone="slate"
-            subtext="Logged items"
-          />
-          <KpiCard
-            label="Delay Hours"
-            value={`${stats.totalDelayHours}h`}
-            tone={stats.totalDelayHours > 0 ? "orange" : "green"}
-            subtext="All causes"
+            subtext="Need action"
           />
           <KpiCard
             label="Tower Weight"
             value={
               stats.towerWeightTonnes !== null
-                ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
-                : weightValue !== null
-                ? formatValue(weightValue)
+                ? `${formatDecimal(stats.towerWeightTonnes, 2)} t`
                 : "-"
             }
             tone="slate"
@@ -819,18 +803,16 @@ export default function TowerOverviewPage() {
           </div>
         </ChartCard>
 
-        <ChartCard title="Safety Documents" subtitle="Current compliance snapshot">
+        <ChartCard title="Safety Documents" subtitle="Compliance snapshot">
           <div className="flex flex-col items-center gap-4">
             <DonutChart
               percent={
                 stats.totalSafetyDocs > 0
-                  ? Math.round(
-                      (stats.activeSafetyDocs / stats.totalSafetyDocs) * 100
-                    )
+                  ? Math.round((stats.activeSafetyDocs / stats.totalSafetyDocs) * 100)
                   : 100
               }
               color="#16a34a"
-              remainderColor="#dc2626"
+              remainderColor="#e2e8f0"
               centerTop={String(stats.totalSafetyDocs)}
               centerBottom="Docs"
             />
@@ -842,14 +824,14 @@ export default function TowerOverviewPage() {
                 colorClass="bg-green-600"
               />
               <LegendRow
-                label="Expired"
-                value={String(stats.expiredSafetyDocs)}
-                colorClass="bg-red-600"
-              />
-              <LegendRow
                 label="Expiring Soon"
                 value={String(stats.expiringSoonSafetyDocs)}
                 colorClass="bg-orange-500"
+              />
+              <LegendRow
+                label="Expired"
+                value={String(stats.expiredSafetyDocs)}
+                colorClass="bg-red-600"
               />
             </div>
           </div>
@@ -881,6 +863,24 @@ export default function TowerOverviewPage() {
               label="Total Manhours"
               value={`${stats.totalHours}h`}
               tone="blue"
+            />
+            <MetricRow
+              label="Tower Weight"
+              value={
+                stats.towerWeightTonnes !== null
+                  ? `${formatDecimal(stats.towerWeightTonnes, 2)}t`
+                  : "-"
+              }
+              tone="slate"
+            />
+            <MetricRow
+              label="Completed Tonnes"
+              value={
+                stats.completedTonnes !== null
+                  ? `${formatDecimal(stats.completedTonnes, 2)}t`
+                  : "-"
+              }
+              tone="green"
             />
             <MetricRow
               label="MH / Tonne"
@@ -979,7 +979,7 @@ export default function TowerOverviewPage() {
 
         <PanelCard
           title="Safety Documents"
-          subtitle="Document compliance view"
+          subtitle="Document compliance overview"
         >
           <div className="grid grid-cols-2 gap-3">
             <SmallStat
@@ -993,14 +993,14 @@ export default function TowerOverviewPage() {
               tone={stats.activeSafetyDocs > 0 ? "green" : "slate"}
             />
             <SmallStat
-              label="Expired Docs"
-              value={String(stats.expiredSafetyDocs)}
-              tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
-            />
-            <SmallStat
               label="Expiring Soon"
               value={String(stats.expiringSoonSafetyDocs)}
               tone={stats.expiringSoonSafetyDocs > 0 ? "orange" : "green"}
+            />
+            <SmallStat
+              label="Expired Docs"
+              value={String(stats.expiredSafetyDocs)}
+              tone={stats.expiredSafetyDocs > 0 ? "red" : "green"}
             />
             <SmallStat
               label="Tower Weight"
@@ -1012,13 +1012,13 @@ export default function TowerOverviewPage() {
               tone="blue"
             />
             <SmallStat
-              label="Completed Tonnes"
+              label="MH / Tonne"
               value={
-                stats.completedTonnes !== null
-                  ? `${formatDecimal(stats.completedTonnes, 2)}t`
+                stats.manhoursPerTonne !== null
+                  ? `${formatDecimal(stats.manhoursPerTonne, 2)}`
                   : "-"
               }
-              tone="green"
+              tone="orange"
             />
           </div>
         </PanelCard>
@@ -1085,12 +1085,18 @@ function KpiCard({
   };
 
   return (
-    <div className={`border rounded-2xl overflow-hidden ${toneClasses[tone]}`}>
+    <div className={`border rounded-2xl overflow-hidden min-h-[132px] ${toneClasses[tone]}`}>
       <div className={`h-1.5 ${topBarClasses[tone]}`} />
-      <div className="p-4">
-        <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
-        <div className="text-2xl font-bold mt-1 break-words">{value}</div>
-        <div className="text-xs mt-1 opacity-70">{subtext || "\u00A0"}</div>
+      <div className="p-4 flex flex-col justify-between h-[calc(100%-6px)]">
+        <div className="text-[11px] uppercase tracking-wide opacity-70 leading-4">
+          {label}
+        </div>
+        <div className="text-2xl font-bold mt-2 leading-tight break-words">
+          {value}
+        </div>
+        <div className="text-xs mt-2 opacity-70 leading-4 min-h-[32px]">
+          {subtext || "\u00A0"}
+        </div>
       </div>
     </div>
   );
