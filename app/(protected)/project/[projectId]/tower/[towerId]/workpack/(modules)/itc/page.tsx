@@ -12,8 +12,17 @@ type TowerRecord = {
   line?: string | null;
   status?: string | null;
   progress?: number | null;
+  structure_type?: string | null;
+  structure_height?: string | null;
+  structure_weight?: string | null;
+  tower_type?: string | null;
+  height?: string | number | null;
+  weight?: string | number | null;
+  extra_data?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
+
+type ItcMode = "BC" | "Client";
 
 type ItcDocument = {
   id: string;
@@ -21,16 +30,12 @@ type ItcDocument = {
   project_id?: string | null;
   title?: string | null;
   status?: string | null;
-  work_lot_no?: string | null;
-  document_no?: string | null;
   revision?: string | null;
   structure_number?: string | null;
   structure_type?: string | null;
   structure_height?: string | null;
   structure_weight?: string | null;
-  comments_preparation?: string | null;
-  comments_assembly?: string | null;
-  comments_final?: string | null;
+  itc_mode?: ItcMode | null;
   subcontractor_name?: string | null;
   subcontractor_signed_at?: string | null;
   ugl_supervisor_name?: string | null;
@@ -235,6 +240,28 @@ function buildDefaultItems(itcId: string): Omit<ItcItem, "id">[] {
   );
 }
 
+function pickTowerValue(
+  tower: TowerRecord | null,
+  keys: string[],
+): string {
+  if (!tower) return "";
+
+  for (const key of keys) {
+    const direct = tower[key];
+    if (typeof direct === "string" && direct.trim()) return direct;
+    if (typeof direct === "number") return String(direct);
+
+    const extra = tower.extra_data;
+    if (extra && typeof extra === "object") {
+      const value = extra[key];
+      if (typeof value === "string" && value.trim()) return value;
+      if (typeof value === "number") return String(value);
+    }
+  }
+
+  return "";
+}
+
 export default function TowerItcPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -323,18 +350,50 @@ export default function TowerItcPage() {
     ]);
 
     const towerData = (towerRes.data as TowerRecord | null) ?? null;
-    const latestDocket = docketRes.data?.[0]?.docket_date ?? null;
     const latestItc = (itcRes.data as ItcDocument | null) ?? null;
 
     setTower(towerData);
-    setLatestDate(latestDocket);
+    setLatestDate(docketRes.data?.[0]?.docket_date ?? null);
     setDefects((defectsRes.data as GenericRow[] | null) ?? []);
     setDeliveries((deliveriesRes.data as GenericRow[] | null) ?? []);
     setModifications((modificationsRes.data as GenericRow[] | null) ?? []);
     setClientUploads((clientUploadsRes.data as ClientItcUpload[] | null) ?? []);
-    setItcDoc(latestItc);
 
     if (latestItc) {
+      const patchedItc: ItcDocument = {
+        ...latestItc,
+        itc_mode: latestItc.itc_mode ?? "BC",
+        structure_number:
+          latestItc.structure_number ||
+          (towerData?.name ? String(towerData.name) : ""),
+        structure_type:
+          latestItc.structure_type ||
+          pickTowerValue(towerData, [
+            "structure_type",
+            "tower_type",
+            "type",
+            "structure",
+          ]),
+        structure_height:
+          latestItc.structure_height ||
+          pickTowerValue(towerData, [
+            "structure_height",
+            "tower_height",
+            "height",
+            "towerheight",
+          ]),
+        structure_weight:
+          latestItc.structure_weight ||
+          pickTowerValue(towerData, [
+            "structure_weight",
+            "weight",
+            "tower_weight",
+            "mass",
+          ]),
+      };
+
+      setItcDoc(patchedItc);
+
       const [itemsRes, torqueRes] = await Promise.all([
         supabase
           .from("tower_itc_items")
@@ -357,6 +416,10 @@ export default function TowerItcPage() {
       if (itemData.length === 0) {
         await seedChecklistItems(latestItc.id);
       }
+    } else {
+      setItcDoc(null);
+      setItcItems([]);
+      setTorqueRows([]);
     }
 
     setLoading(false);
@@ -381,23 +444,34 @@ export default function TowerItcPage() {
   }
 
   async function ensureItcDocument(): Promise<ItcDocument | null> {
-    if (itcDoc) return itcDoc;
+    if (itcDoc?.id) return itcDoc;
 
     const defaultDoc = {
       tower_id: towerId,
       project_id: projectId,
-      title: "BC ITC - Tower Assembly and Erection",
+      title: "ITC - Tower Assembly and Erection",
       status: "Draft",
-      work_lot_no: "",
-      document_no: "3200-0645-ME-002",
       revision: "Rev 0",
       structure_number: tower?.name ? String(tower.name) : "",
-      structure_type: "",
-      structure_height: "",
-      structure_weight: "",
-      comments_preparation: "",
-      comments_assembly: "",
-      comments_final: "",
+      structure_type: pickTowerValue(tower, [
+        "structure_type",
+        "tower_type",
+        "type",
+        "structure",
+      ]),
+      structure_height: pickTowerValue(tower, [
+        "structure_height",
+        "tower_height",
+        "height",
+        "towerheight",
+      ]),
+      structure_weight: pickTowerValue(tower, [
+        "structure_weight",
+        "weight",
+        "tower_weight",
+        "mass",
+      ]),
+      itc_mode: "BC" as ItcMode,
       subcontractor_name: "",
       ugl_supervisor_name: "",
       project_engineer_name: "",
@@ -426,22 +500,26 @@ export default function TowerItcPage() {
     if (!doc) return;
 
     setSavingHeader(true);
+
+    const payload = {
+      revision: doc.revision ?? "Rev 0",
+      status: doc.status ?? "Draft",
+      itc_mode: doc.itc_mode ?? "BC",
+      structure_number: doc.structure_number ?? (tower?.name ? String(tower.name) : ""),
+      structure_type:
+        doc.structure_type ??
+        pickTowerValue(tower, ["structure_type", "tower_type", "type", "structure"]),
+      structure_height:
+        doc.structure_height ??
+        pickTowerValue(tower, ["structure_height", "tower_height", "height", "towerheight"]),
+      structure_weight:
+        doc.structure_weight ??
+        pickTowerValue(tower, ["structure_weight", "weight", "tower_weight", "mass"]),
+    };
+
     const { error, data } = await supabase
       .from("tower_itc_documents")
-      .update({
-        title: doc.title,
-        work_lot_no: doc.work_lot_no ?? "",
-        document_no: doc.document_no ?? "",
-        revision: doc.revision ?? "",
-        structure_number: doc.structure_number ?? "",
-        structure_type: doc.structure_type ?? "",
-        structure_height: doc.structure_height ?? "",
-        structure_weight: doc.structure_weight ?? "",
-        comments_preparation: doc.comments_preparation ?? "",
-        comments_assembly: doc.comments_assembly ?? "",
-        comments_final: doc.comments_final ?? "",
-        status: doc.status ?? "Draft",
-      })
+      .update(payload)
       .eq("id", doc.id)
       .select("*")
       .single();
@@ -449,12 +527,12 @@ export default function TowerItcPage() {
     setSavingHeader(false);
 
     if (error) {
-      alert(error.message || "Failed to save ITC header.");
+      alert(error.message || "Failed to save ITC details.");
       return;
     }
 
     setItcDoc(data as ItcDocument);
-    alert("ITC header saved.");
+    alert("ITC details saved.");
   }
 
   async function updateChecklistItem(id: string, patch: Partial<ItcItem>) {
@@ -470,12 +548,14 @@ export default function TowerItcPage() {
       return;
     }
 
-    setItcItems((prev) => prev.map((item) => (item.id === id ? (data as ItcItem) : item)));
+    setItcItems((prev) =>
+      prev.map((item) => (item.id === id ? (data as ItcItem) : item)),
+    );
   }
 
   function setItemLocal(id: string, patch: Partial<ItcItem>) {
     setItcItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+      prev.map((item) => (item.id === id ? { ...item, ...patch } : item)),
     );
   }
 
@@ -516,7 +596,12 @@ export default function TowerItcPage() {
       return;
     }
 
-    setTorqueRows((prev) => [...prev, data as TorqueRow].sort((a, b) => (a.item_no ?? 0) - (b.item_no ?? 0)));
+    setTorqueRows((prev) =>
+      [...prev, data as TorqueRow].sort(
+        (a, b) => (a.item_no ?? 0) - (b.item_no ?? 0),
+      ),
+    );
+
     setNewTorque({
       item_no: "",
       bolt_grade: "",
@@ -532,7 +617,11 @@ export default function TowerItcPage() {
     const ok = window.confirm("Delete this torque row?");
     if (!ok) return;
 
-    const { error } = await supabase.from("tower_itc_torque").delete().eq("id", id);
+    const { error } = await supabase
+      .from("tower_itc_torque")
+      .delete()
+      .eq("id", id);
+
     if (error) {
       alert(error.message || "Failed to delete torque row.");
       return;
@@ -552,9 +641,11 @@ export default function TowerItcPage() {
     const safeName = clientFile.name.replace(/\s+/g, "-");
     const path = `${projectId}/${towerId}/${Date.now()}-${safeName}`;
 
-    const storageRes = await supabase.storage.from("itc-files").upload(path, clientFile, {
-      upsert: true,
-    });
+    const storageRes = await supabase.storage
+      .from("itc-files")
+      .upload(path, clientFile, {
+        upsert: true,
+      });
 
     if (storageRes.error) {
       setUploadingClient(false);
@@ -562,7 +653,9 @@ export default function TowerItcPage() {
       return;
     }
 
-    const { data: publicUrlData } = supabase.storage.from("itc-files").getPublicUrl(path);
+    const { data: publicUrlData } = supabase.storage
+      .from("itc-files")
+      .getPublicUrl(path);
 
     const { error, data } = await supabase
       .from("tower_itc_client_uploads")
@@ -593,11 +686,16 @@ export default function TowerItcPage() {
     setClientComments("");
     setClientFile(null);
 
-    const fileInput = document.getElementById("client-itc-file") as HTMLInputElement | null;
+    const fileInput = document.getElementById(
+      "client-itc-file",
+    ) as HTMLInputElement | null;
     if (fileInput) fileInput.value = "";
   }
 
-  async function updateClientUpload(id: string, patch: Partial<ClientItcUpload>) {
+  async function updateClientUpload(
+    id: string,
+    patch: Partial<ClientItcUpload>,
+  ) {
     const { error, data } = await supabase
       .from("tower_itc_client_uploads")
       .update(patch)
@@ -610,7 +708,9 @@ export default function TowerItcPage() {
       return;
     }
 
-    setClientUploads((prev) => prev.map((row) => (row.id === id ? (data as ClientItcUpload) : row)));
+    setClientUploads((prev) =>
+      prev.map((row) => (row.id === id ? (data as ClientItcUpload) : row)),
+    );
   }
 
   async function saveSignoff() {
@@ -649,7 +749,9 @@ export default function TowerItcPage() {
 
   const defectsSummary = useMemo(() => {
     const total = defects.length;
-    const closed = defects.filter((row) => isClosedLike(getRowStatus(row))).length;
+    const closed = defects.filter((row) =>
+      isClosedLike(getRowStatus(row)),
+    ).length;
     const open = total - closed;
     return {
       total,
@@ -661,7 +763,9 @@ export default function TowerItcPage() {
 
   const deliveriesSummary = useMemo(() => {
     const total = deliveries.length;
-    const complete = deliveries.filter((row) => isDeliveredLike(getRowStatus(row))).length;
+    const complete = deliveries.filter((row) =>
+      isDeliveredLike(getRowStatus(row)),
+    ).length;
     const pending = total - complete;
     return {
       total,
@@ -687,7 +791,10 @@ export default function TowerItcPage() {
 
   const torqueSummary = useMemo(() => {
     const total = torqueRows.length;
-    const complete = torqueRows.filter((row) => String(row.torque_achieved || "").trim() !== "").length;
+    const complete = torqueRows.filter(
+      (row) => String(row.torque_achieved || "").trim() !== "",
+    ).length;
+
     return {
       total,
       complete,
@@ -697,9 +804,12 @@ export default function TowerItcPage() {
 
   const checklistSummary = useMemo(() => {
     const total = itcItems.length;
-    const completed = itcItems.filter((item) => item.validation === "Y" || item.validation === "NA").length;
+    const completed = itcItems.filter(
+      (item) => item.validation === "Y" || item.validation === "NA",
+    ).length;
     const failed = itcItems.filter((item) => item.validation === "N").length;
     const pending = total - completed - failed;
+
     return {
       total,
       completed,
@@ -716,12 +826,16 @@ export default function TowerItcPage() {
     };
   }, [clientUploads]);
 
-  const readinessItems = useMemo(
-    () => [
+  const currentMode: ItcMode = itcDoc?.itc_mode ?? "BC";
+
+  const readinessItems = useMemo(() => {
+    const baseItems = [
       {
         label: "Latest daily docket submitted",
         complete: docketSummary.complete,
-        detail: latestDate ? `Latest docket: ${latestDate}` : "No daily docket submitted yet",
+        detail: latestDate
+          ? `Latest docket: ${latestDate}`
+          : "No daily docket submitted yet",
       },
       {
         label: "Defects closed",
@@ -747,19 +861,29 @@ export default function TowerItcPage() {
             ? `${modificationsSummary.total} modification record(s)`
             : "No modification records",
       },
-      {
-        label: "BC checklist complete",
-        complete: checklistSummary.done,
-        detail: `${checklistSummary.completed}/${checklistSummary.total} compliant, ${checklistSummary.failed} failed, ${checklistSummary.pending} pending`,
-      },
-      {
-        label: "Torque sheet complete",
-        complete: torqueSummary.done,
-        detail:
-          torqueSummary.total > 0
-            ? `${torqueSummary.complete}/${torqueSummary.total} rows complete`
-            : "No torque rows added yet",
-      },
+    ];
+
+    if (currentMode === "BC") {
+      return [
+        ...baseItems,
+        {
+          label: "BC checklist complete",
+          complete: checklistSummary.done,
+          detail: `${checklistSummary.completed}/${checklistSummary.total} compliant, ${checklistSummary.failed} failed, ${checklistSummary.pending} pending`,
+        },
+        {
+          label: "Torque sheet complete",
+          complete: torqueSummary.done,
+          detail:
+            torqueSummary.total > 0
+              ? `${torqueSummary.complete}/${torqueSummary.total} rows complete`
+              : "No torque rows added yet",
+        },
+      ];
+    }
+
+    return [
+      ...baseItems,
       {
         label: "Client ITC uploaded",
         complete: clientItcSummary.present,
@@ -767,44 +891,55 @@ export default function TowerItcPage() {
           ? `${clientItcSummary.total} uploaded`
           : "No client ITC uploaded yet",
       },
-    ],
-    [
-      checklistSummary.completed,
-      checklistSummary.done,
-      checklistSummary.failed,
-      checklistSummary.pending,
-      checklistSummary.total,
-      clientItcSummary.present,
-      clientItcSummary.total,
-      deliveriesSummary.allDelivered,
-      deliveriesSummary.complete,
-      deliveriesSummary.total,
-      defectsSummary.closed,
-      defectsSummary.complete,
-      defectsSummary.total,
-      docketSummary.complete,
-      latestDate,
-      modificationsSummary.complete,
-      modificationsSummary.total,
-      torqueSummary.complete,
-      torqueSummary.done,
-      torqueSummary.total,
-    ]
-  );
+    ];
+  }, [
+    checklistSummary.completed,
+    checklistSummary.done,
+    checklistSummary.failed,
+    checklistSummary.pending,
+    checklistSummary.total,
+    clientItcSummary.present,
+    clientItcSummary.total,
+    currentMode,
+    deliveriesSummary.allDelivered,
+    deliveriesSummary.complete,
+    deliveriesSummary.total,
+    defectsSummary.closed,
+    defectsSummary.complete,
+    defectsSummary.total,
+    docketSummary.complete,
+    latestDate,
+    modificationsSummary.complete,
+    modificationsSummary.total,
+    torqueSummary.complete,
+    torqueSummary.done,
+    torqueSummary.total,
+  ]);
 
   const overallReady = useMemo(() => {
+    if (currentMode === "BC") {
+      return (
+        docketSummary.complete &&
+        defectsSummary.complete &&
+        deliveriesSummary.allDelivered &&
+        checklistSummary.done &&
+        torqueSummary.done
+      );
+    }
+
     return (
       docketSummary.complete &&
       defectsSummary.complete &&
       deliveriesSummary.allDelivered &&
-      checklistSummary.done &&
-      torqueSummary.done
+      clientItcSummary.present
     );
   }, [
-    docketSummary.complete,
-    defectsSummary.complete,
-    deliveriesSummary.allDelivered,
     checklistSummary.done,
+    clientItcSummary.present,
+    currentMode,
+    deliveriesSummary.allDelivered,
+    defectsSummary.complete,
+    docketSummary.complete,
     torqueSummary.done,
   ]);
 
@@ -862,14 +997,18 @@ export default function TowerItcPage() {
 
       <div
         className={`border rounded-2xl p-5 ${
-          overallReady ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"
+          overallReady
+            ? "bg-green-50 border-green-200"
+            : "bg-yellow-50 border-yellow-200"
         }`}
       >
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Inspection & Test Checksheet (ITC)</h1>
             <p className="text-sm text-slate-600 mt-1">
-              Combined BC checklist, torque register, client ITC upload, readiness tracking, and sign-off.
+              {currentMode === "BC"
+                ? "BC checklist mode with integrated torque and sign-off."
+                : "Client ITC mode with upload tracking and sign-off."}
             </p>
           </div>
 
@@ -880,58 +1019,6 @@ export default function TowerItcPage() {
           >
             {overallReady ? "Ready for sign-off" : "Attention required"}
           </div>
-        </div>
-      </div>
-
-      <div className="grid md:grid-cols-4 xl:grid-cols-7 gap-4">
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Daily Docket</div>
-          <div className="text-lg font-bold">{latestDate || "None"}</div>
-          <div className="text-sm text-slate-600 mt-1">Latest tower docket</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Defects</div>
-          <div className="text-2xl font-bold">{defectsSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">
-            Open {defectsSummary.open} · Closed {defectsSummary.closed}
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Deliveries</div>
-          <div className="text-2xl font-bold">{deliveriesSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">
-            Pending {deliveriesSummary.pending} · Complete {deliveriesSummary.complete}
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Modifications</div>
-          <div className="text-2xl font-bold">{modificationsSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">Linked to this tower</div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Checklist</div>
-          <div className="text-2xl font-bold">{checklistSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">
-            Done {checklistSummary.completed} · Pending {checklistSummary.pending}
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Torque Rows</div>
-          <div className="text-2xl font-bold">{torqueSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">
-            Complete {torqueSummary.complete}/{torqueSummary.total}
-          </div>
-        </div>
-
-        <div className="bg-white border rounded-2xl p-4">
-          <div className="text-sm text-slate-500">Client ITC</div>
-          <div className="text-2xl font-bold">{clientItcSummary.total}</div>
-          <div className="text-sm text-slate-600 mt-1">Uploads recorded</div>
         </div>
       </div>
 
@@ -990,80 +1077,48 @@ export default function TowerItcPage() {
 
       <div className="bg-white border rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-xl font-bold">ITC Header / Details</h2>
+          <h2 className="text-xl font-bold">ITC Details</h2>
           <button
             onClick={() => void saveHeaderFields()}
             disabled={savingHeader}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
           >
-            {savingHeader ? "Saving..." : "Save Header"}
+            {savingHeader ? "Saving..." : "Save Details"}
           </button>
         </div>
 
-        <div className="grid md:grid-cols-4 gap-4">
-          <input
-            value={itcDoc?.work_lot_no ?? ""}
+        <div className="grid md:grid-cols-2 xl:grid-cols-5 gap-4">
+          <select
+            value={itcDoc?.itc_mode ?? "BC"}
             onChange={(e) =>
               setItcDoc((prev) =>
                 prev
-                  ? { ...prev, work_lot_no: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      work_lot_no: e.target.value,
-                    }
+                  ? { ...prev, itc_mode: e.target.value as ItcMode }
+                  : prev,
               )
             }
-            placeholder="Work Lot No."
             className="border rounded-lg p-2"
-          />
-          <input
-            value={itcDoc?.document_no ?? "3200-0645-ME-002"}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, document_no: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      document_no: e.target.value,
-                    }
-              )
-            }
-            placeholder="Document No."
-            className="border rounded-lg p-2"
-          />
+          >
+            <option value="BC">BC ITC</option>
+            <option value="Client">Client ITC</option>
+          </select>
+
           <input
             value={itcDoc?.revision ?? "Rev 0"}
             onChange={(e) =>
               setItcDoc((prev) =>
-                prev
-                  ? { ...prev, revision: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      revision: e.target.value,
-                    }
+                prev ? { ...prev, revision: e.target.value } : prev,
               )
             }
             placeholder="Revision"
             className="border rounded-lg p-2"
           />
+
           <input
             value={itcDoc?.status ?? "Draft"}
             onChange={(e) =>
               setItcDoc((prev) =>
-                prev
-                  ? { ...prev, status: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      status: e.target.value,
-                    }
+                prev ? { ...prev, status: e.target.value } : prev,
               )
             }
             placeholder="Status"
@@ -1071,311 +1126,323 @@ export default function TowerItcPage() {
           />
 
           <input
-            value={itcDoc?.structure_number ?? (typeof tower.name === "string" ? tower.name : "")}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, structure_number: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      structure_number: e.target.value,
-                    }
-              )
-            }
+            value={itcDoc?.structure_number ?? (tower.name ? String(tower.name) : "")}
+            readOnly
+            className="border rounded-lg p-2 bg-slate-50"
             placeholder="Structure Number"
-            className="border rounded-lg p-2"
           />
+
           <input
-            value={itcDoc?.structure_type ?? ""}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, structure_type: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      structure_type: e.target.value,
-                    }
-              )
+            value={
+              itcDoc?.structure_type ??
+              pickTowerValue(tower, [
+                "structure_type",
+                "tower_type",
+                "type",
+                "structure",
+              ])
             }
+            readOnly
+            className="border rounded-lg p-2 bg-slate-50"
             placeholder="Structure Type"
-            className="border rounded-lg p-2"
           />
+
           <input
-            value={itcDoc?.structure_height ?? ""}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, structure_height: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      structure_height: e.target.value,
-                    }
-              )
+            value={
+              itcDoc?.structure_height ??
+              pickTowerValue(tower, [
+                "structure_height",
+                "tower_height",
+                "height",
+                "towerheight",
+              ])
             }
+            readOnly
+            className="border rounded-lg p-2 bg-slate-50"
             placeholder="Structure Height"
-            className="border rounded-lg p-2"
           />
+
           <input
-            value={itcDoc?.structure_weight ?? ""}
-            onChange={(e) =>
-              setItcDoc((prev) =>
-                prev
-                  ? { ...prev, structure_weight: e.target.value }
-                  : {
-                      id: "",
-                      tower_id: towerId,
-                      project_id: projectId,
-                      structure_weight: e.target.value,
-                    }
-              )
+            value={
+              itcDoc?.structure_weight ??
+              pickTowerValue(tower, [
+                "structure_weight",
+                "weight",
+                "tower_weight",
+                "mass",
+              ])
             }
+            readOnly
+            className="border rounded-lg p-2 bg-slate-50"
             placeholder="Structure Weight"
-            className="border rounded-lg p-2"
           />
         </div>
       </div>
 
-      {sectionItems.map((section) => (
-        <div key={section.key} className="bg-white border rounded-2xl overflow-hidden">
+      {currentMode === "BC" &&
+        sectionItems.map((section) => (
+          <div
+            key={section.key}
+            className="bg-white border rounded-2xl overflow-hidden"
+          >
+            <button
+              onClick={() => toggleSection(section.key)}
+              className="w-full flex items-center justify-between px-6 py-4 bg-slate-50 hover:bg-slate-100 text-left"
+            >
+              <div>
+                <div className="text-lg font-bold">{section.title}</div>
+                <div className="text-sm text-slate-500">
+                  {section.rows.filter((row) => row.validation !== "").length}/
+                  {section.rows.length} answered
+                </div>
+              </div>
+              <span className="text-sm font-medium">
+                {expandedSections[section.key] ? "Collapse" : "Expand"}
+              </span>
+            </button>
+
+            {expandedSections[section.key] && (
+              <div className="p-6 space-y-4">
+                {section.note && (
+                  <div className="text-sm text-slate-600 bg-slate-50 border rounded-xl p-3">
+                    {section.note}
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  {section.rows.map((item) => (
+                    <div key={item.id} className="border rounded-xl p-4">
+                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                        <div className="xl:w-[40%]">
+                          <div className="font-semibold">
+                            {item.item_no}. {item.description}
+                          </div>
+                          <div className="text-sm text-slate-500 mt-1">
+                            Responsibility: {item.responsible_role || "LH"}
+                          </div>
+                        </div>
+
+                        <div className="xl:w-[60%] grid md:grid-cols-4 gap-3">
+                          <select
+                            value={item.validation}
+                            onChange={(e) =>
+                              setItemLocal(item.id, {
+                                validation: e.target.value as ItcItem["validation"],
+                              })
+                            }
+                            className="border rounded-lg p-2"
+                          >
+                            <option value="">Validation</option>
+                            <option value="Y">Y</option>
+                            <option value="N">N</option>
+                            <option value="NA">NA</option>
+                          </select>
+
+                          <input
+                            value={item.lh_name ?? ""}
+                            onChange={(e) =>
+                              setItemLocal(item.id, {
+                                lh_name: e.target.value,
+                              })
+                            }
+                            placeholder="LH Name"
+                            className="border rounded-lg p-2"
+                          />
+
+                          <input
+                            value={item.lh_signature ?? ""}
+                            onChange={(e) =>
+                              setItemLocal(item.id, {
+                                lh_signature: e.target.value,
+                              })
+                            }
+                            placeholder="Signature / Initials"
+                            className="border rounded-lg p-2"
+                          />
+
+                          <input
+                            type="date"
+                            value={item.checked_date ?? ""}
+                            onChange={(e) =>
+                              setItemLocal(item.id, {
+                                checked_date: e.target.value,
+                              })
+                            }
+                            className="border rounded-lg p-2"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-col md:flex-row gap-3">
+                        <input
+                          value={item.notes ?? ""}
+                          onChange={(e) =>
+                            setItemLocal(item.id, { notes: e.target.value })
+                          }
+                          placeholder="Notes / comments"
+                          className="border rounded-lg p-2 flex-1"
+                        />
+                        <button
+                          onClick={() => void saveItem(item.id)}
+                          className="border px-4 py-2 rounded-lg hover:bg-slate-50"
+                        >
+                          Save Row
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+      {currentMode === "BC" && (
+        <div className="bg-white border rounded-2xl overflow-hidden">
           <button
-            onClick={() => toggleSection(section.key)}
+            onClick={() => toggleSection("torque")}
             className="w-full flex items-center justify-between px-6 py-4 bg-slate-50 hover:bg-slate-100 text-left"
           >
             <div>
-              <div className="text-lg font-bold">{section.title}</div>
+              <div className="text-lg font-bold">Torque Sheet</div>
               <div className="text-sm text-slate-500">
-                {section.rows.filter((row) => row.validation !== "").length}/{section.rows.length} answered
+                {torqueSummary.complete}/{torqueSummary.total} rows complete
               </div>
             </div>
             <span className="text-sm font-medium">
-              {expandedSections[section.key] ? "Collapse" : "Expand"}
+              {expandedSections.torque ? "Collapse" : "Expand"}
             </span>
           </button>
 
-          {expandedSections[section.key] && (
+          {expandedSections.torque && (
             <div className="p-6 space-y-4">
-              {section.note && (
-                <div className="text-sm text-slate-600 bg-slate-50 border rounded-xl p-3">
-                  {section.note}
-                </div>
-              )}
-
-              <div className="space-y-4">
-                {section.rows.map((item) => (
-                  <div key={item.id} className="border rounded-xl p-4">
-                    <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                      <div className="xl:w-[40%]">
-                        <div className="font-semibold">
-                          {item.item_no}. {item.description}
-                        </div>
-                        <div className="text-sm text-slate-500 mt-1">
-                          Responsibility: {item.responsible_role || "LH"}
-                        </div>
-                      </div>
-
-                      <div className="xl:w-[60%] grid md:grid-cols-4 gap-3">
-                        <select
-                          value={item.validation}
-                          onChange={(e) => setItemLocal(item.id, { validation: e.target.value as ItcItem["validation"] })}
-                          className="border rounded-lg p-2"
-                        >
-                          <option value="">Validation</option>
-                          <option value="Y">Y</option>
-                          <option value="N">N</option>
-                          <option value="NA">NA</option>
-                        </select>
-
-                        <input
-                          value={item.lh_name ?? ""}
-                          onChange={(e) => setItemLocal(item.id, { lh_name: e.target.value })}
-                          placeholder="LH Name"
-                          className="border rounded-lg p-2"
-                        />
-
-                        <input
-                          value={item.lh_signature ?? ""}
-                          onChange={(e) => setItemLocal(item.id, { lh_signature: e.target.value })}
-                          placeholder="Signature / Initials"
-                          className="border rounded-lg p-2"
-                        />
-
-                        <input
-                          type="date"
-                          value={item.checked_date ?? ""}
-                          onChange={(e) => setItemLocal(item.id, { checked_date: e.target.value })}
-                          className="border rounded-lg p-2"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-col md:flex-row gap-3">
-                      <input
-                        value={item.notes ?? ""}
-                        onChange={(e) => setItemLocal(item.id, { notes: e.target.value })}
-                        placeholder="Notes / comments"
-                        className="border rounded-lg p-2 flex-1"
-                      />
-                      <button
-                        onClick={() => void saveItem(item.id)}
-                        className="border px-4 py-2 rounded-lg hover:bg-slate-50"
-                      >
-                        Save Row
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              <div className="grid md:grid-cols-7 gap-3">
+                <input
+                  value={newTorque.item_no}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      item_no: e.target.value,
+                    }))
+                  }
+                  placeholder="Item No."
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.bolt_grade}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      bolt_grade: e.target.value,
+                    }))
+                  }
+                  placeholder="Bolt Grade"
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.bolt_dia}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      bolt_dia: e.target.value,
+                    }))
+                  }
+                  placeholder="Bolt Dia"
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.structural_washers}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      structural_washers: e.target.value,
+                    }))
+                  }
+                  placeholder="Structural Washers"
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.bolt_count}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      bolt_count: e.target.value,
+                    }))
+                  }
+                  placeholder="Bolt Count"
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.torque_achieved}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      torque_achieved: e.target.value,
+                    }))
+                  }
+                  placeholder="Torque Achieved"
+                  className="border rounded-lg p-2"
+                />
+                <input
+                  value={newTorque.remarks}
+                  onChange={(e) =>
+                    setNewTorque((prev) => ({
+                      ...prev,
+                      remarks: e.target.value,
+                    }))
+                  }
+                  placeholder="Remarks"
+                  className="border rounded-lg p-2"
+                />
               </div>
 
-              <div className="grid md:grid-cols-3 gap-4">
-                {section.key === "preparation" && (
-                  <textarea
-                    value={itcDoc?.comments_preparation ?? ""}
-                    onChange={(e) =>
-                      setItcDoc((prev) => (prev ? { ...prev, comments_preparation: e.target.value } : prev))
-                    }
-                    placeholder="Preparation comments"
-                    className="border rounded-xl p-3 min-h-[110px]"
-                  />
+              <button
+                onClick={() => void addTorqueRow()}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Add Torque Row
+              </button>
+
+              <div className="space-y-3">
+                {torqueRows.length === 0 && (
+                  <div className="text-slate-500">No torque rows added yet.</div>
                 )}
-                {section.key === "assembly" && (
-                  <textarea
-                    value={itcDoc?.comments_assembly ?? ""}
-                    onChange={(e) =>
-                      setItcDoc((prev) => (prev ? { ...prev, comments_assembly: e.target.value } : prev))
-                    }
-                    placeholder="Assembly / erection comments"
-                    className="border rounded-xl p-3 min-h-[110px]"
-                  />
-                )}
-                {section.key === "final" && (
-                  <textarea
-                    value={itcDoc?.comments_final ?? ""}
-                    onChange={(e) =>
-                      setItcDoc((prev) => (prev ? { ...prev, comments_final: e.target.value } : prev))
-                    }
-                    placeholder="Final comments"
-                    className="border rounded-xl p-3 min-h-[110px]"
-                  />
-                )}
+
+                {torqueRows.map((row) => (
+                  <div
+                    key={row.id}
+                    className="border rounded-xl p-4 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"
+                  >
+                    <div>
+                      <div className="font-semibold">
+                        Item {row.item_no ?? "-"} · Grade {row.bolt_grade || "-"}
+                      </div>
+                      <div className="text-sm text-slate-500 mt-1">
+                        Dia: {row.bolt_dia ?? "-"} · Washers:{" "}
+                        {row.structural_washers || "-"}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        Bolts: {row.bolt_count ?? "-"} · Achieved:{" "}
+                        {row.torque_achieved || "-"}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        Remarks: {row.remarks || "-"}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => void deleteTorqueRow(row.id)}
+                      className="text-red-600 hover:text-red-700"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
-      ))}
-
-      <div className="bg-white border rounded-2xl overflow-hidden">
-        <button
-          onClick={() => toggleSection("torque")}
-          className="w-full flex items-center justify-between px-6 py-4 bg-slate-50 hover:bg-slate-100 text-left"
-        >
-          <div>
-            <div className="text-lg font-bold">Torque Sheet</div>
-            <div className="text-sm text-slate-500">
-              {torqueSummary.complete}/{torqueSummary.total} rows complete
-            </div>
-          </div>
-          <span className="text-sm font-medium">
-            {expandedSections.torque ? "Collapse" : "Expand"}
-          </span>
-        </button>
-
-        {expandedSections.torque && (
-          <div className="p-6 space-y-4">
-            <div className="grid md:grid-cols-7 gap-3">
-              <input
-                value={newTorque.item_no}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, item_no: e.target.value }))}
-                placeholder="Item No."
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.bolt_grade}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_grade: e.target.value }))}
-                placeholder="Bolt Grade"
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.bolt_dia}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_dia: e.target.value }))}
-                placeholder="Bolt Dia"
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.structural_washers}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, structural_washers: e.target.value }))}
-                placeholder="Structural Washers"
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.bolt_count}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, bolt_count: e.target.value }))}
-                placeholder="Bolt Count"
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.torque_achieved}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, torque_achieved: e.target.value }))}
-                placeholder="Torque Achieved"
-                className="border rounded-lg p-2"
-              />
-              <input
-                value={newTorque.remarks}
-                onChange={(e) => setNewTorque((prev) => ({ ...prev, remarks: e.target.value }))}
-                placeholder="Remarks"
-                className="border rounded-lg p-2"
-              />
-            </div>
-
-            <button
-              onClick={() => void addTorqueRow()}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
-            >
-              Add Torque Row
-            </button>
-
-            <div className="space-y-3">
-              {torqueRows.length === 0 && (
-                <div className="text-slate-500">No torque rows added yet.</div>
-              )}
-
-              {torqueRows.map((row) => (
-                <div
-                  key={row.id}
-                  className="border rounded-xl p-4 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4"
-                >
-                  <div>
-                    <div className="font-semibold">
-                      Item {row.item_no ?? "-"} · Grade {row.bolt_grade || "-"}
-                    </div>
-                    <div className="text-sm text-slate-500 mt-1">
-                      Dia: {row.bolt_dia ?? "-"} · Washers: {row.structural_washers || "-"}
-                    </div>
-                    <div className="text-sm text-slate-500">
-                      Bolts: {row.bolt_count ?? "-"} · Achieved: {row.torque_achieved || "-"}
-                    </div>
-                    <div className="text-sm text-slate-500">
-                      Remarks: {row.remarks || "-"}
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => void deleteTorqueRow(row.id)}
-                    className="text-red-600 hover:text-red-700"
-                  >
-                    Delete
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
       <div className="bg-white border rounded-2xl overflow-hidden">
         <button
@@ -1450,16 +1517,25 @@ export default function TowerItcPage() {
                 <div key={row.id} className="border rounded-xl p-4">
                   <div className="grid lg:grid-cols-[2fr_1fr_1fr_auto] gap-4 items-start">
                     <div>
-                      <div className="font-semibold">{row.title || row.file_name || "Client ITC"}</div>
-                      <div className="text-sm text-slate-500 mt-1">
-                        Revision: {row.revision || "-"} · Uploaded: {formatDate(row.created_at)}
+                      <div className="font-semibold">
+                        {row.title || row.file_name || "Client ITC"}
                       </div>
-                      <div className="text-sm text-slate-500">{row.comments || "-"}</div>
+                      <div className="text-sm text-slate-500 mt-1">
+                        Revision: {row.revision || "-"} · Uploaded:{" "}
+                        {formatDate(row.created_at)}
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        {row.comments || "-"}
+                      </div>
                     </div>
 
                     <select
                       value={row.status || "Uploaded"}
-                      onChange={(e) => void updateClientUpload(row.id, { status: e.target.value })}
+                      onChange={(e) =>
+                        void updateClientUpload(row.id, {
+                          status: e.target.value,
+                        })
+                      }
                       className="border rounded-lg p-2"
                     >
                       <option>Uploaded</option>
@@ -1473,10 +1549,18 @@ export default function TowerItcPage() {
                       value={row.revision || ""}
                       onChange={(e) =>
                         setClientUploads((prev) =>
-                          prev.map((x) => (x.id === row.id ? { ...x, revision: e.target.value } : x))
+                          prev.map((x) =>
+                            x.id === row.id
+                              ? { ...x, revision: e.target.value }
+                              : x,
+                          ),
                         )
                       }
-                      onBlur={(e) => void updateClientUpload(row.id, { revision: e.target.value })}
+                      onBlur={(e) =>
+                        void updateClientUpload(row.id, {
+                          revision: e.target.value,
+                        })
+                      }
                       placeholder="Revision"
                       className="border rounded-lg p-2"
                     />
@@ -1521,7 +1605,9 @@ export default function TowerItcPage() {
                 <input
                   value={itcDoc?.subcontractor_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, subcontractor_name: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev ? { ...prev, subcontractor_name: e.target.value } : prev,
+                    )
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
@@ -1530,7 +1616,11 @@ export default function TowerItcPage() {
                   type="date"
                   value={itcDoc?.subcontractor_signed_at ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, subcontractor_signed_at: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev
+                        ? { ...prev, subcontractor_signed_at: e.target.value }
+                        : prev,
+                    )
                   }
                   className="border rounded-lg p-2 w-full"
                 />
@@ -1541,7 +1631,9 @@ export default function TowerItcPage() {
                 <input
                   value={itcDoc?.ugl_supervisor_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, ugl_supervisor_name: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev ? { ...prev, ugl_supervisor_name: e.target.value } : prev,
+                    )
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
@@ -1550,18 +1642,28 @@ export default function TowerItcPage() {
                   type="date"
                   value={itcDoc?.ugl_supervisor_signed_at ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, ugl_supervisor_signed_at: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev
+                        ? { ...prev, ugl_supervisor_signed_at: e.target.value }
+                        : prev,
+                    )
                   }
                   className="border rounded-lg p-2 w-full"
                 />
               </div>
 
               <div className="border rounded-xl p-4 space-y-3">
-                <div className="font-semibold">Project Engineer / Construction Manager</div>
+                <div className="font-semibold">
+                  Project Engineer / Construction Manager
+                </div>
                 <input
                   value={itcDoc?.project_engineer_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, project_engineer_name: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev
+                        ? { ...prev, project_engineer_name: e.target.value }
+                        : prev,
+                    )
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
@@ -1570,7 +1672,11 @@ export default function TowerItcPage() {
                   type="date"
                   value={itcDoc?.project_engineer_signed_at ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, project_engineer_signed_at: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev
+                        ? { ...prev, project_engineer_signed_at: e.target.value }
+                        : prev,
+                    )
                   }
                   className="border rounded-lg p-2 w-full"
                 />
@@ -1581,7 +1687,9 @@ export default function TowerItcPage() {
                 <input
                   value={itcDoc?.transgrid_rep_name ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, transgrid_rep_name: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev ? { ...prev, transgrid_rep_name: e.target.value } : prev,
+                    )
                   }
                   placeholder="Name"
                   className="border rounded-lg p-2 w-full"
@@ -1590,7 +1698,11 @@ export default function TowerItcPage() {
                   type="date"
                   value={itcDoc?.transgrid_rep_signed_at ?? ""}
                   onChange={(e) =>
-                    setItcDoc((prev) => (prev ? { ...prev, transgrid_rep_signed_at: e.target.value } : prev))
+                    setItcDoc((prev) =>
+                      prev
+                        ? { ...prev, transgrid_rep_signed_at: e.target.value }
+                        : prev,
+                    )
                   }
                   className="border rounded-lg p-2 w-full"
                 />
@@ -1599,16 +1711,22 @@ export default function TowerItcPage() {
 
             <div
               className={`border rounded-xl p-4 ${
-                overallReady ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"
+                overallReady
+                  ? "bg-green-50 border-green-200"
+                  : "bg-yellow-50 border-yellow-200"
               }`}
             >
               <div className="font-semibold">
                 {overallReady
-                  ? "This ITC appears ready for submission/sign-off."
+                  ? "This ITC appears ready for submission / sign-off."
                   : "This ITC still has outstanding items before full sign-off."}
               </div>
               <div className="text-sm text-slate-600 mt-1">
-                Status will save as <span className="font-medium">{overallReady ? "Submitted" : (itcDoc?.status || "Draft")}</span>.
+                Status will save as{" "}
+                <span className="font-medium">
+                  {overallReady ? "Submitted" : itcDoc?.status || "Draft"}
+                </span>
+                .
               </div>
             </div>
 
