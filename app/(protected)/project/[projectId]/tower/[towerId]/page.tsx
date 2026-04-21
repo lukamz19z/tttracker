@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { getUserRole } from "@/lib/roles";
 import TowerHeader from "@/components/towers/TowerHeader";
 
 type Tower = {
@@ -151,8 +150,6 @@ type OverviewStats = {
   completedTonnes: number | null;
   manhoursPerTonne: number | null;
 };
-
-type UserRole = "admin" | "editor" | "viewer" | string | null;
 
 function formatLabel(key: string) {
   return key
@@ -394,39 +391,6 @@ function sectionCardClasses(tint: "blue" | "purple" | "emerald" | "amber" | "ros
   }
 }
 
-function ringStyle(percent: number, color: string) {
-  const safe = clampPercent(percent);
-  return {
-    background: `conic-gradient(${color} 0deg ${safe * 3.6}deg, #e5e7eb ${safe * 3.6}deg 360deg)`,
-  };
-}
-
-function MiniRing({
-  value,
-  label,
-  colorClass,
-  colorHex,
-}: {
-  value: number;
-  label: string;
-  colorClass: string;
-  colorHex: string;
-}) {
-  return (
-    <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm">
-      <div className="relative h-16 w-16 rounded-full p-[6px]" style={ringStyle(value, colorHex)}>
-        <div className="flex h-full w-full items-center justify-center rounded-full bg-white">
-          <span className={`text-sm font-bold ${colorClass}`}>{Math.round(value)}%</span>
-        </div>
-      </div>
-      <div>
-        <div className="text-sm text-slate-500">{label}</div>
-        <div className="text-lg font-semibold text-slate-900">{Math.round(value)}%</div>
-      </div>
-    </div>
-  );
-}
-
 function MetricTile({
   title,
   value,
@@ -523,7 +487,6 @@ export default function TowerOverviewPage() {
   const [tower, setTower] = useState<Tower | null>(null);
   const [latestDate, setLatestDate] = useState<string | null>(null);
   const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
-  const [role, setRole] = useState<UserRole>(null);
 
   const [dockets, setDockets] = useState<DocketRow[]>([]);
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
@@ -557,14 +520,10 @@ export default function TowerOverviewPage() {
   async function load() {
     setLoading(true);
 
-    const [towerRes, roleRes] = await Promise.all([
-      supabase.from("towers").select("*").eq("id", towerId).single(),
-      getUserRole(),
-    ]);
+    const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
 
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
-    setRole(roleRes);
 
     if (towerData?.cover_photo_path) {
       const { data } = supabase.storage
@@ -869,211 +828,159 @@ export default function TowerOverviewPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_1fr] gap-6">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Tower Performance"
-            subtitle="High-level delivery, progress and production metrics."
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="Tower Performance"
+          subtitle="High-level delivery, progress and production metrics."
+        />
+
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
+          <MetricTile
+            title="Tower Progress"
+            value={`${stats.computedProgress}%`}
+            subtitle={`${stats.remainingProgress}% remaining`}
+            accent="blue"
           />
-
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <MetricTile
-              title="Tower Progress"
-              value={`${stats.computedProgress}%`}
-              subtitle={`${stats.remainingProgress}% remaining`}
-              accent="blue"
-            />
-            <MetricTile
-              title="Manhours"
-              value={formatDecimal(stats.totalHours, 1)}
-              subtitle={`Dockets logged: ${stats.docketCount}`}
-              accent="purple"
-            />
-            <MetricTile
-              title="Delivery Progress"
-              value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-              subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
-              accent="emerald"
-            />
-            <MetricTile
-              title="Manhours / Tonne"
-              value={formatDecimal(stats.manhoursPerTonne, 2)}
-              subtitle={
-                stats.towerWeightTonnes !== null
-                  ? `Tower weight: ${formatDecimal(stats.towerWeightTonnes, 2)} t`
-                  : "Tower weight not found"
-              }
-              accent="amber"
-            />
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <MiniRing
-              value={stats.computedProgress}
-              label="Assembly / Erection"
-              colorClass="text-blue-700"
-              colorHex="#2563eb"
-            />
-            <MiniRing
-              value={stats.deliveryPercent}
-              label="Steel Delivery"
-              colorClass="text-emerald-700"
-              colorHex="#059669"
-            />
-            <MiniRing
-              value={
-                itcMetrics.hasItc
-                  ? itcMetrics.overallReady
-                    ? 100
-                    : itcMetrics.checklistTotal > 0
-                    ? (itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100
-                    : 0
-                  : 0
-              }
-              label="ITC Completion"
-              colorClass="text-violet-700"
-              colorHex="#7c3aed"
-            />
-          </div>
-
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Last Docket</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {stats.latestDate || "-"}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Completed Tonnes</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {stats.completedTonnes !== null
-                  ? `${formatDecimal(stats.completedTonnes, 2)} t`
-                  : "-"}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Stored Status</div>
-              <div className="mt-2">
-                <span
-                  className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
-                    getStatusKind(tower.status || stats.computedStatus),
-                  )}`}
-                >
-                  {tower.status || stats.computedStatus}
-                </span>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">User Role</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {role || "-"}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="ITC Overview"
-            subtitle="Latest ITC status and readiness summary for this tower."
-            action={
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-              >
-                Open ITC
-              </Link>
+          <MetricTile
+            title="Manhours"
+            value={formatDecimal(stats.totalHours, 1)}
+            subtitle={`Dockets logged: ${stats.docketCount}`}
+            accent="purple"
+          />
+          <MetricTile
+            title="Delivery Progress"
+            value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+            subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
+            accent="emerald"
+          />
+          <MetricTile
+            title="Manhours / Tonne"
+            value={formatDecimal(stats.manhoursPerTonne, 2)}
+            subtitle={
+              stats.towerWeightTonnes !== null
+                ? `Tower weight: ${formatDecimal(stats.towerWeightTonnes, 2)} t`
+                : "Tower weight not found"
             }
+            accent="amber"
           />
-
-          {!itcMetrics.hasItc ? (
-            <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
-              No ITC has been created for this tower yet.
-            </div>
-          ) : (
-            <div className="mt-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-2xl border p-4 shadow-sm ${sectionCardClasses("purple")}`}>
-                  <div className="text-sm text-slate-500">Mode</div>
-                  <div className="mt-1 text-xl font-bold text-slate-900">
-                    {itcMetrics.itcMode}
-                  </div>
-                </div>
-
-                <div className={`rounded-2xl border p-4 shadow-sm ${sectionCardClasses("emerald")}`}>
-                  <div className="text-sm text-slate-500">Ready Status</div>
-                  <div className="mt-2">
-                    <span
-                      className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
-                        itcMetrics.overallReady
-                          ? "bg-green-100 text-green-700 border-green-200"
-                          : "bg-yellow-100 text-yellow-800 border-yellow-200"
-                      }`}
-                    >
-                      {itcMetrics.overallReady ? "Ready" : "Pending"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">Status</div>
-                  <div className="mt-2">
-                    <span
-                      className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
-                        getItcStatusKind(itcMetrics.itcStatus),
-                      )}`}
-                    >
-                      {itcMetrics.itcStatus}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">Revision</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    {itcMetrics.revision}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">Client Uploads</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    {itcMetrics.clientUploadCount}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                <MetricTile
-                  title="Checklist Passed"
-                  value={String(itcMetrics.checklistComplete)}
-                  subtitle={`of ${itcMetrics.checklistTotal}`}
-                  accent="blue"
-                />
-                <MetricTile
-                  title="Checklist Failed"
-                  value={String(itcMetrics.checklistFailed)}
-                  subtitle="items needing action"
-                  accent="rose"
-                />
-                <MetricTile
-                  title="Checklist Pending"
-                  value={String(itcMetrics.checklistPending)}
-                  subtitle="unfinished items"
-                  accent="amber"
-                />
-                <MetricTile
-                  title="Torque Complete"
-                  value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
-                  subtitle="completed torque rows"
-                  accent="emerald"
-                />
-              </div>
-            </div>
-          )}
+          <MetricTile
+            title="Last Docket"
+            value={stats.latestDate || "-"}
+            subtitle="latest submitted date"
+            accent="slate"
+          />
+          <MetricTile
+            title="Completed Tonnes"
+            value={
+              stats.completedTonnes !== null
+                ? `${formatDecimal(stats.completedTonnes, 2)} t`
+                : "-"
+            }
+            subtitle={tower.status || stats.computedStatus}
+            accent="blue"
+          />
         </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="ITC Overview"
+          subtitle="Latest ITC status and readiness summary for this tower."
+          action={
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            >
+              Open ITC
+            </Link>
+          }
+        />
+
+        {!itcMetrics.hasItc ? (
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+            No ITC has been created for this tower yet.
+          </div>
+        ) : (
+          <div className="mt-6 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")} lg:col-span-1`}>
+                <div className="text-sm text-slate-500">Mode</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.itcMode}
+                </div>
+              </div>
+
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")} lg:col-span-1`}>
+                <div className="text-sm text-slate-500">Ready Status</div>
+                <div className="mt-3">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
+                      itcMetrics.overallReady
+                        ? "bg-green-100 text-green-700 border-green-200"
+                        : "bg-yellow-100 text-yellow-800 border-yellow-200"
+                    }`}
+                  >
+                    {itcMetrics.overallReady ? "Ready" : "Pending"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+                <div className="text-sm text-slate-500">Status</div>
+                <div className="mt-3">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
+                      getItcStatusKind(itcMetrics.itcStatus),
+                    )}`}
+                  >
+                    {itcMetrics.itcStatus}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+                <div className="text-sm text-slate-500">Revision</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.revision}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 lg:col-span-1">
+                <div className="text-sm text-slate-500">Client Uploads</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.clientUploadCount}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+              <MetricTile
+                title="Checklist Passed"
+                value={String(itcMetrics.checklistComplete)}
+                subtitle={`of ${itcMetrics.checklistTotal}`}
+                accent="blue"
+              />
+              <MetricTile
+                title="Checklist Failed"
+                value={String(itcMetrics.checklistFailed)}
+                subtitle="items needing action"
+                accent="rose"
+              />
+              <MetricTile
+                title="Checklist Pending"
+                value={String(itcMetrics.checklistPending)}
+                subtitle="unfinished items"
+                accent="amber"
+              />
+              <MetricTile
+                title="Torque Complete"
+                value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
+                subtitle="completed torque rows"
+                accent="emerald"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -1185,13 +1092,6 @@ export default function TowerOverviewPage() {
               subtitle="within 14 days"
               accent="amber"
             />
-          </div>
-
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm text-slate-500">Workpack Access</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {role || "-"}
-            </div>
           </div>
         </div>
       </div>
