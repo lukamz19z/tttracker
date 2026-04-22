@@ -59,6 +59,26 @@ type DeliveryItemRow = {
   qty_delivered?: number | null;
 };
 
+type MaterialBundleRow = {
+  id?: string;
+  tower_id?: string;
+  bundle_no: string;
+  qty_required?: number | null;
+  total_weight?: number | null;
+  section?: string | null;
+};
+
+type MaterialMemberRow = {
+  id?: string;
+  tower_id?: string;
+  bundle_reference: string;
+  drawing_number?: string | null;
+  mark_no: string;
+  pn_final?: string | null;
+  qty_per_tower?: number | null;
+  section?: string | null;
+};
+
 type GenericDocumentRow = {
   id?: string;
   tower_id?: string | null;
@@ -139,6 +159,13 @@ type OverviewStats = {
   deliveredQty: number;
   outstandingQty: number;
   deliveryPercent: number;
+  materialBundleCount: number;
+  materialMemberCount: number;
+  materialRequiredQty: number;
+  materialDeliveredQty: number;
+  materialOutstandingQty: number;
+  materialProgressPercent: number;
+  materialTotalWeight: number;
   computedProgress: number;
   remainingProgress: number;
   computedStatus: string;
@@ -438,17 +465,13 @@ function DonutWheel({
           }}
         >
           <div className="absolute inset-[8px] rounded-full bg-white flex items-center justify-center">
-            <span className="text-lg font-bold text-slate-900">
-              {Math.round(safeValue)}%
-            </span>
+            <span className="text-lg font-bold text-slate-900">{Math.round(safeValue)}%</span>
           </div>
         </div>
 
         <div>
           <div className="text-sm text-slate-500">{label}</div>
-          <div className="text-xl font-semibold text-slate-900 mt-1">
-            {Math.round(safeValue)}%
-          </div>
+          <div className="text-xl font-semibold text-slate-900 mt-1">{Math.round(safeValue)}%</div>
           {sublabel ? <div className="text-sm text-slate-500 mt-1">{sublabel}</div> : null}
         </div>
       </div>
@@ -526,6 +549,8 @@ export default function TowerOverviewPage() {
   const [bundles, setBundles] = useState<BundleRow[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItemRow[]>([]);
+  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>([]);
+  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>([]);
   const [documents, setDocuments] = useState<GenericDocumentRow[]>([]);
   const [itcMetrics, setItcMetrics] = useState<ItcMetrics>({
     hasItc: false,
@@ -601,6 +626,8 @@ export default function TowerOverviewPage() {
       deliveriesData,
       deliveryItemsData,
       documentsData,
+      materialBundlesData,
+      materialMembersData,
     ] = await Promise.all([
       safeSelect<DefectRow>(supabase, "tower_defects", "id, status", [
         { column: "tower_id", value: towerId },
@@ -628,6 +655,18 @@ export default function TowerOverviewPage() {
         "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active",
         [{ column: "tower_id", value: towerId }],
       ),
+      safeSelect<MaterialBundleRow>(
+        supabase,
+        "tower_required_bundles",
+        "id, tower_id, bundle_no, qty_required, total_weight, section",
+        [{ column: "tower_id", value: towerId }],
+      ),
+      safeSelect<MaterialMemberRow>(
+        supabase,
+        "tower_material_members",
+        "id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section",
+        [{ column: "tower_id", value: towerId }],
+      ),
     ]);
 
     setLabourRows(labourData);
@@ -637,6 +676,8 @@ export default function TowerOverviewPage() {
     setDeliveries(deliveriesData);
     setDeliveryItems(deliveryItemsData);
     setDocuments(documentsData);
+    setMaterialBundles(materialBundlesData);
+    setMaterialMembers(materialMembersData);
 
     const itcDocs = await safeSelect<ItcDocumentRow>(
       supabase,
@@ -688,9 +729,7 @@ export default function TowerOverviewPage() {
       const checklistComplete = itcItems.filter(
         (item) => item.validation === "Y" || item.validation === "NA",
       ).length;
-      const checklistFailed = itcItems.filter(
-        (item) => item.validation === "N",
-      ).length;
+      const checklistFailed = itcItems.filter((item) => item.validation === "N").length;
       const checklistPending = checklistTotal - checklistComplete - checklistFailed;
 
       const torqueTotal = torqueRows.length;
@@ -729,10 +768,7 @@ export default function TowerOverviewPage() {
   }
 
   const stats = useMemo<OverviewStats>(() => {
-    const totalHours = labourRows.reduce(
-      (sum, row) => sum + Number(row.total_hours || 0),
-      0,
-    );
+    const totalHours = labourRows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
 
     const totalWeatherDelay = dockets.reduce(
       (sum, row) => sum + Number(row.weather_delay_hours || 0),
@@ -777,6 +813,34 @@ export default function TowerOverviewPage() {
         ? clampPercent((deliveredQty / totalRequiredQty) * 100)
         : 0;
 
+    const materialBundleCount = materialBundles.length;
+    const materialMemberCount = materialMembers.length;
+    const materialRequiredQty = materialBundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
+
+    const materialBundleSet = new Set(
+      materialBundles.map((row) => String(row.bundle_no || "").trim()).filter(Boolean),
+    );
+
+    const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
+      const bundleNo = String(row.bundle_no || "").trim();
+      if (!materialBundleSet.has(bundleNo)) return sum;
+      return sum + Number(row.qty_delivered || 0);
+    }, 0);
+
+    const materialOutstandingQty = Math.max(0, materialRequiredQty - materialDeliveredQty);
+    const materialProgressPercent =
+      materialRequiredQty > 0
+        ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100)
+        : 0;
+
+    const materialTotalWeight = materialBundles.reduce(
+      (sum, row) => sum + Number(row.total_weight || 0),
+      0,
+    );
+
     const computedProgress = getProgressFromDockets(dockets);
     const remainingProgress = Math.max(0, 100 - computedProgress);
     const computedStatus = getStatusFromProgress(computedProgress);
@@ -807,6 +871,13 @@ export default function TowerOverviewPage() {
       deliveredQty,
       outstandingQty,
       deliveryPercent,
+      materialBundleCount,
+      materialMemberCount,
+      materialRequiredQty,
+      materialDeliveredQty,
+      materialOutstandingQty,
+      materialProgressPercent,
+      materialTotalWeight,
       computedProgress,
       remainingProgress,
       computedStatus,
@@ -825,6 +896,8 @@ export default function TowerOverviewPage() {
     modifications,
     bundles,
     deliveryItems,
+    materialBundles,
+    materialMembers,
     documents,
     tower?.extra_data,
     latestDate,
@@ -1061,43 +1134,69 @@ export default function TowerOverviewPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="grid xl:grid-cols-2 gap-6">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <SectionHeader
-            title="Construction Summary"
-            subtitle="Defects, modifications, and delay overview."
-            action={
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/dockets`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-              >
-                Open Daily Dockets
-              </Link>
-            }
+            title="Defects / Mods"
+            subtitle="Open issues and change tracking for this tower."
           />
 
-          <div className="mt-6 grid grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="mt-6 grid grid-cols-2 gap-4">
             <MetricTile
               title="Open Defects"
               value={String(stats.openDefectCount)}
-              subtitle={`Total defects: ${stats.defectCount}`}
+              subtitle={`${stats.defectCount} total defects`}
               accent="rose"
             />
             <MetricTile
               title="Closed Defects"
               value={String(stats.closedDefectCount)}
-              subtitle="resolved items"
+              subtitle="resolved / closed out"
               accent="emerald"
             />
             <MetricTile
               title="Modifications"
               value={String(stats.modificationCount)}
-              subtitle="logged changes"
+              subtitle="logged tower modifications"
+              accent="blue"
+            />
+            <MetricTile
+              title="Computed Status"
+              value={stats.computedStatus}
+              subtitle="from latest progress"
+              accent="slate"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Delay Summary"
+            subtitle="Breakdown of downtime recorded in daily dockets."
+          />
+
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Weather Delay"
+              value={`${formatDecimal(stats.totalWeatherDelay, 1)} h`}
+              subtitle="weather-related downtime"
+              accent="blue"
+            />
+            <MetricTile
+              title="Lightning Delay"
+              value={`${formatDecimal(stats.totalLightningDelay, 1)} h`}
+              subtitle="lightning downtime"
               accent="purple"
             />
             <MetricTile
-              title="Total Delay Hours"
-              value={formatDecimal(stats.totalDelayHours, 1)}
+              title="Toolbox Delay"
+              value={`${formatDecimal(stats.totalToolboxDelay, 1)} h`}
+              subtitle="pre-start / toolbox delays"
+              accent="emerald"
+            />
+            <MetricTile
+              title="Total Delays"
+              value={`${formatDecimal(stats.totalDelayHours, 1)} h`}
               subtitle="all delay categories"
               accent="amber"
             />
@@ -1237,6 +1336,71 @@ export default function TowerOverviewPage() {
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
+          title="Materials Summary"
+          subtitle="Materials register overview for this tower."
+          action={
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/materials`}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            >
+              Open Materials
+            </Link>
+          }
+        />
+
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+          <MetricTile
+            title="Bundles"
+            value={String(stats.materialBundleCount)}
+            subtitle="materials bundle rows"
+            accent="blue"
+          />
+          <MetricTile
+            title="Members"
+            value={String(stats.materialMemberCount)}
+            subtitle="member register rows"
+            accent="purple"
+          />
+          <MetricTile
+            title="Required Qty"
+            value={formatDecimal(stats.materialRequiredQty, 0)}
+            subtitle="planned materials quantity"
+            accent="purple"
+          />
+          <MetricTile
+            title="Delivered Qty"
+            value={formatDecimal(stats.materialDeliveredQty, 0)}
+            subtitle="matched against deliveries"
+            accent="emerald"
+          />
+          <MetricTile
+            title="Outstanding Qty"
+            value={formatDecimal(stats.materialOutstandingQty, 0)}
+            subtitle="still to arrive"
+            accent="rose"
+          />
+          <MetricTile
+            title="Progress"
+            value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
+            subtitle={
+              stats.materialTotalWeight > 0
+                ? `${formatDecimal(stats.materialTotalWeight, 2)} total weight`
+                : "delivered vs required"
+            }
+            accent="emerald"
+          />
+        </div>
+
+        <div className="mt-6 h-4 rounded-full overflow-hidden bg-slate-100">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600"
+            style={{ width: `${stats.materialProgressPercent}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
           title="Tower Details"
           subtitle="Imported tower overview fields and CSV-backed metadata."
         />
@@ -1269,10 +1433,10 @@ export default function TowerOverviewPage() {
             {extraFields.map(([key, value]) => (
               <div
                 key={key}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
               >
                 <div className="text-sm text-slate-500">{formatLabel(key)}</div>
-                <div className="mt-1 text-lg font-semibold text-slate-900">
+                <div className="mt-1 text-lg font-semibold text-slate-900 break-words">
                   {formatValue(value)}
                 </div>
               </div>
