@@ -106,14 +106,7 @@ type MemberCheck = {
   checked_at: string | null;
 };
 
-type SegmentTotals = {
-  required: number;
-  delivered: number;
-  remaining: number;
-  progress: number;
-};
-
-type ViewMode = "bundles" | "members" | "crosscheck";
+type ViewMode = "bundles" | "members";
 type StatusFilter =
   | "all"
   | "not_checked"
@@ -283,6 +276,7 @@ export default function MaterialsPage() {
   const [manageMode, setManageMode] = useState(false);
 
   const [expandedBundles, setExpandedBundles] = useState<Record<string, boolean>>({});
+  const [showUnmatchedMembers, setShowUnmatchedMembers] = useState(false);
   const [selectedBundleRows, setSelectedBundleRows] = useState<Record<string, boolean>>({});
   const [selectedMemberRows, setSelectedMemberRows] = useState<Record<string, boolean>>({});
 
@@ -440,20 +434,6 @@ export default function MaterialsPage() {
     return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
   }
 
-  function getSegmentTotals(rows: Bundle[]): SegmentTotals {
-    const required = rows.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0);
-    const delivered = rows.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0);
-    const remaining = Math.max(required - delivered, 0);
-    const progress = required > 0 ? (delivered / required) * 100 : 0;
-
-    return {
-      required,
-      delivered,
-      remaining,
-      progress,
-    };
-  }
-
   /* =========================================================
      LOOKUPS
   ========================================================= */
@@ -544,7 +524,7 @@ export default function MaterialsPage() {
   }
 
   /* =========================================================
-     AUTO SAVE FOR BUNDLES
+     AUTO SAVE
   ========================================================= */
 
   function scheduleAutoSave(nextRows: Bundle[]) {
@@ -613,7 +593,7 @@ export default function MaterialsPage() {
   }
 
   /* =========================================================
-     BUNDLE ACTIONS
+     MANAGE ACTIONS
   ========================================================= */
 
   function addBundleRow() {
@@ -634,10 +614,7 @@ export default function MaterialsPage() {
     setBundles((prev) => {
       const next = prev.map((row) => {
         if (row.ui_id !== ui_id) return row;
-        return {
-          ...row,
-          [field]: value,
-        };
+        return { ...row, [field]: value };
       });
       scheduleAutoSave(next);
       return next;
@@ -662,19 +639,13 @@ export default function MaterialsPage() {
           .eq("tower_id", towerId)
           .eq("bundle_no", row.bundle_no.trim());
 
-        if (error) {
-          console.error("delete bundle error", error);
-        }
+        if (error) console.error("delete bundle error", error);
       }
     }
 
     setSelectedBundleRows({});
     await load();
   }
-
-  /* =========================================================
-     MEMBER ACTIONS
-  ========================================================= */
 
   function addMemberRow() {
     setMembers((prev) => [
@@ -696,12 +667,15 @@ export default function MaterialsPage() {
     setMembers((prev) =>
       prev.map((row) => {
         if (row.ui_id !== ui_id) return row;
-        return {
-          ...row,
-          [field]: value,
-        };
+        return { ...row, [field]: value };
       })
     );
+  }
+
+  async function saveBundlesNow() {
+    await persistBundles(bundles);
+    alert("Bundle register saved.");
+    await load();
   }
 
   async function saveMembersNow() {
@@ -729,9 +703,7 @@ export default function MaterialsPage() {
           .eq("bundle_reference", row.bundle_reference.trim())
           .eq("mark_no", row.mark_no.trim());
 
-        if (error) {
-          console.error("delete member error", error);
-        }
+        if (error) console.error("delete member error", error);
       }
     }
 
@@ -776,6 +748,33 @@ export default function MaterialsPage() {
     await saveDerivedBundleStatus(payload.bundle_no);
   }
 
+  async function clearMemberStatus(member: Member) {
+    const { error } = await supabase
+      .from("tower_material_member_checks")
+      .delete()
+      .eq("tower_id", towerId)
+      .eq("bundle_no", member.bundle_reference.trim())
+      .eq("mark_no", member.mark_no.trim());
+
+    if (error) {
+      console.error("clear member status error", error);
+      alert("Failed to clear member status.");
+      return;
+    }
+
+    setMemberChecks((prev) =>
+      prev.filter(
+        (row) =>
+          !(
+            row.bundle_no.trim() === member.bundle_reference.trim() &&
+            row.mark_no.trim() === member.mark_no.trim()
+          )
+      )
+    );
+
+    await saveDerivedBundleStatus(member.bundle_reference.trim());
+  }
+
   async function updateBundleManualStatus(bundleNo: string, status: BundleCheckStatus, notes = "") {
     const payload = {
       tower_id: towerId,
@@ -801,6 +800,22 @@ export default function MaterialsPage() {
       next.push(payload);
       return next;
     });
+  }
+
+  async function clearBundleManualStatus(bundleNo: string) {
+    const { error } = await supabase
+      .from("tower_material_bundle_checks")
+      .delete()
+      .eq("tower_id", towerId)
+      .eq("bundle_no", bundleNo.trim());
+
+    if (error) {
+      console.error("clear bundle status error", error);
+      alert("Failed to clear bundle status.");
+      return;
+    }
+
+    setBundleChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
   }
 
   async function saveDerivedBundleStatus(bundleNo: string) {
@@ -833,6 +848,7 @@ export default function MaterialsPage() {
 
   async function markWholeBundle(bundleNo: string, status: MemberCheckStatus) {
     const relatedMembers = membersByBundle[bundleNo.trim()] || [];
+
     if (!relatedMembers.length) {
       await updateBundleManualStatus(
         bundleNo,
@@ -868,6 +884,23 @@ export default function MaterialsPage() {
     });
 
     await saveDerivedBundleStatus(bundleNo);
+  }
+
+  async function clearWholeBundleStatuses(bundleNo: string) {
+    const { error: memberDeleteError } = await supabase
+      .from("tower_material_member_checks")
+      .delete()
+      .eq("tower_id", towerId)
+      .eq("bundle_no", bundleNo.trim());
+
+    if (memberDeleteError) {
+      console.error("clear whole bundle member statuses error", memberDeleteError);
+      alert("Failed to clear bundle member statuses.");
+      return;
+    }
+
+    setMemberChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
+    await clearBundleManualStatus(bundleNo);
   }
 
   /* =========================================================
@@ -955,7 +988,13 @@ export default function MaterialsPage() {
       complete: async (res: ParseResult<CsvRow>) => {
         const rows = res.data
           .map((r): MemberImportRow | null => {
-            const markNo = r.mark_no || r["Mark No"] || r.mark || r["Member Mark"];
+            const markNo =
+              r.mark_no ||
+              r["Mark No"] ||
+              r["Mark No."] ||
+              r.mark ||
+              r["Member Mark"];
+
             const bundleReference =
               r.bundle_reference || r["Bundle Reference"] || r.bundle_no || r["Bundle No"];
 
@@ -966,8 +1005,16 @@ export default function MaterialsPage() {
               bundle_reference: String(bundleReference).trim(),
               drawing_number: safeString(r.drawing_number || r["Drawing Number"]),
               mark_no: String(markNo).trim(),
-              pn_final: safeString(r.pn_final || r["Standardised PN FINAL"] || r["PN"]),
-              qty_per_tower: safeNumber(r.qty_per_tower || r["Qty/Tower"] || r["Qty"] || 0, 0),
+              pn_final: safeString(
+                r.pn_final ||
+                  r["Standardised PN FINAL"] ||
+                  r["Standardised PN Final"] ||
+                  r["PN"]
+              ),
+              qty_per_tower: safeNumber(
+                r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0,
+                0
+              ),
               section: normaliseSection(safeString(r.section || r["Section"] || "General")),
             };
           })
@@ -1003,16 +1050,6 @@ export default function MaterialsPage() {
   }
 
   /* =========================================================
-     SAVE BUTTONS
-  ========================================================= */
-
-  async function saveBundlesNow() {
-    await persistBundles(bundles);
-    alert("Bundle register saved.");
-    await load();
-  }
-
-  /* =========================================================
      FILTERED DATA
   ========================================================= */
 
@@ -1040,10 +1077,20 @@ export default function MaterialsPage() {
     });
   }, [bundles, search, sectionFilter, statusFilter, membersByBundle, deliveries]);
 
-  const filteredMembers = useMemo(() => {
+  const matchedMembers = useMemo(
+    () => members.filter((member) => !!bundleMap[member.bundle_reference.trim()]),
+    [members, bundleMap]
+  );
+
+  const unmatchedMembers = useMemo(
+    () => members.filter((member) => !bundleMap[member.bundle_reference.trim()]),
+    [members, bundleMap]
+  );
+
+  const filteredMatchedMembers = useMemo(() => {
     const q = normaliseSearch(search);
 
-    return members.filter((member) => {
+    return matchedMembers.filter((member) => {
       if (sectionFilter !== "all" && member.section !== sectionFilter) return false;
       if (!memberMatchesStatus(member, statusFilter)) return false;
 
@@ -1060,28 +1107,29 @@ export default function MaterialsPage() {
 
       return text.includes(q);
     });
-  }, [members, search, sectionFilter, statusFilter, memberCheckMap]);
+  }, [matchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
 
-  const missingMemberRows = useMemo(() => {
-    return members.filter((member) => !bundleMap[member.bundle_reference.trim()]);
-  }, [members, bundleMap]);
+  const filteredUnmatchedMembers = useMemo(() => {
+    const q = normaliseSearch(search);
 
-  const bundlesWithoutMembers = useMemo(() => {
-    return bundles.filter((bundle) => (membersByBundle[bundle.bundle_no.trim()] || []).length === 0);
-  }, [bundles, membersByBundle]);
+    return unmatchedMembers.filter((member) => {
+      if (sectionFilter !== "all" && member.section !== sectionFilter) return false;
+      if (!memberMatchesStatus(member, statusFilter)) return false;
 
-  const duplicateMemberMap = useMemo(() => {
-    const countMap: Record<string, number> = {};
-    members.forEach((member) => {
-      const key = member.mark_no.trim();
-      countMap[key] = (countMap[key] || 0) + 1;
+      if (!q) return true;
+
+      const text = matchesText(
+        member.mark_no,
+        member.pn_final,
+        member.drawing_number,
+        member.bundle_reference,
+        member.section,
+        member.qty_per_tower
+      );
+
+      return text.includes(q);
     });
-    return countMap;
-  }, [members]);
-
-  const duplicateMembers = useMemo(() => {
-    return members.filter((member) => duplicateMemberMap[member.mark_no.trim()] > 1);
-  }, [members, duplicateMemberMap]);
+  }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
 
   const overallRequired = useMemo(
     () => bundles.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0),
@@ -1152,49 +1200,21 @@ export default function MaterialsPage() {
       return;
     }
 
-    if (viewMode === "members") {
-      const rows = [
-        ["Mark No", "PN", "Drawing No", "Bundle Reference", "Qty", "Section", "Status"],
-        ...filteredMembers.map((member) => [
-          member.mark_no,
-          member.pn_final,
-          member.drawing_number,
-          member.bundle_reference,
-          member.qty_per_tower,
-          member.section,
-          statusLabel(getMemberCheck(member)?.status || "not_checked"),
-        ]),
-      ];
-
-      const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
-      downloadTextFile("materials_members.csv", csv, "text/csv;charset=utf-8;");
-      return;
-    }
-
     const rows = [
-      ["Type", "Reference", "Detail", "Status"],
-      ...missingMemberRows.map((row) => [
-        "Missing Bundle Match",
-        row.mark_no,
-        row.bundle_reference,
-        "Review",
-      ]),
-      ...bundlesWithoutMembers.map((row) => [
-        "Bundle Without Members",
-        row.bundle_no,
-        row.section,
-        "Review",
-      ]),
-      ...duplicateMembers.map((row) => [
-        "Duplicate Member",
-        row.mark_no,
-        row.bundle_reference,
-        "Review",
+      ["Mark No", "PN", "Drawing No", "Bundle Reference", "Qty", "Section", "Status"],
+      ...filteredMatchedMembers.map((member) => [
+        member.mark_no,
+        member.pn_final,
+        member.drawing_number,
+        member.bundle_reference,
+        member.qty_per_tower,
+        member.section,
+        statusLabel(getMemberCheck(member)?.status || "not_checked"),
       ]),
     ];
 
     const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
-    downloadTextFile("materials_crosscheck.csv", csv, "text/csv;charset=utf-8;");
+    downloadTextFile("materials_members.csv", csv, "text/csv;charset=utf-8;");
   }
 
   function printCurrentView() {
@@ -1237,7 +1257,7 @@ export default function MaterialsPage() {
           </tbody>
         </table>
       `;
-    } else if (viewMode === "members") {
+    } else {
       title = "Member List";
       bodyHtml = `
         <table>
@@ -1253,7 +1273,7 @@ export default function MaterialsPage() {
             </tr>
           </thead>
           <tbody>
-            ${filteredMembers
+            ${filteredMatchedMembers
               .map(
                 (member) => `
               <tr>
@@ -1271,51 +1291,6 @@ export default function MaterialsPage() {
           </tbody>
         </table>
       `;
-    } else {
-      title = "Cross Check";
-      bodyHtml = `
-        <h3>Members with Missing Bundle Match</h3>
-        <table>
-          <thead><tr><th>Mark No</th><th>Bundle Ref</th><th>Section</th></tr></thead>
-          <tbody>
-            ${missingMemberRows
-              .map(
-                (row) => `
-                <tr><td>${row.mark_no}</td><td>${row.bundle_reference}</td><td>${row.section}</td></tr>
-              `
-              )
-              .join("")}
-          </tbody>
-        </table>
-
-        <h3>Bundles Without Members</h3>
-        <table>
-          <thead><tr><th>Bundle No</th><th>Section</th></tr></thead>
-          <tbody>
-            ${bundlesWithoutMembers
-              .map(
-                (row) => `
-                <tr><td>${row.bundle_no}</td><td>${row.section}</td></tr>
-              `
-              )
-              .join("")}
-          </tbody>
-        </table>
-
-        <h3>Duplicate Members</h3>
-        <table>
-          <thead><tr><th>Mark No</th><th>Bundle Ref</th><th>Section</th></tr></thead>
-          <tbody>
-            ${duplicateMembers
-              .map(
-                (row) => `
-                <tr><td>${row.mark_no}</td><td>${row.bundle_reference}</td><td>${row.section}</td></tr>
-              `
-              )
-              .join("")}
-          </tbody>
-        </table>
-      `;
     }
 
     const html = `
@@ -1324,7 +1299,7 @@ export default function MaterialsPage() {
           <title>${title}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
-            h1, h3 { margin: 0 0 12px 0; }
+            h1 { margin: 0 0 12px 0; }
             .meta { margin-bottom: 20px; color: #475569; font-size: 12px; }
             table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
             th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; }
@@ -1367,7 +1342,7 @@ export default function MaterialsPage() {
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Materials Register</h1>
                 <p className="text-slate-500 mt-1">
-                  Search bundles or members, cross-check site delivery, and print filtered lists for the steel chaser.
+                  Search bundles or members, confirm what arrived to site, and print filtered lists.
                 </p>
               </div>
 
@@ -1413,7 +1388,7 @@ export default function MaterialsPage() {
                 className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
               />
 
-              <div className="grid grid-cols-3 bg-slate-100 rounded-2xl p-1">
+              <div className="grid grid-cols-2 bg-slate-100 rounded-2xl p-1">
                 <ModeButton
                   active={viewMode === "bundles"}
                   onClick={() => setViewMode("bundles")}
@@ -1423,11 +1398,6 @@ export default function MaterialsPage() {
                   active={viewMode === "members"}
                   onClick={() => setViewMode("members")}
                   label="Members"
-                />
-                <ModeButton
-                  active={viewMode === "crosscheck"}
-                  onClick={() => setViewMode("crosscheck")}
-                  label="Cross Check"
                 />
               </div>
 
@@ -1570,6 +1540,8 @@ export default function MaterialsPage() {
                   const relatedMembers = membersByBundle[bundle.bundle_no.trim()] || [];
                   const status = deriveBundleStatus(bundle.bundle_no);
                   const expanded = !!expandedBundles[bundle.bundle_no];
+                  const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
+                  const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
 
                   return (
                     <div
@@ -1640,6 +1612,15 @@ export default function MaterialsPage() {
                               >
                                 Mark Whole Bundle Missing
                               </button>
+
+                              {(hasMemberStatuses || hasManualBundleStatus) && (
+                                <button
+                                  onClick={() => void clearWholeBundleStatuses(bundle.bundle_no)}
+                                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                                >
+                                  Clear Status
+                                </button>
+                              )}
                             </div>
                           </div>
 
@@ -1691,12 +1672,13 @@ export default function MaterialsPage() {
                             <div className="pt-2 border-t border-slate-200 space-y-3">
                               {relatedMembers.length === 0 ? (
                                 <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                                  No linked members found for this bundle. It can still be marked manually,
-                                  but the cross-check is stronger once members are uploaded.
+                                  No linked members found for this bundle. It can still be marked manually.
                                 </div>
                               ) : (
                                 relatedMembers.map((member) => {
                                   const memberStatus = getMemberCheck(member)?.status || "not_checked";
+                                  const hasStatus = !!getMemberCheck(member);
+
                                   return (
                                     <div
                                       key={member.ui_id}
@@ -1720,7 +1702,7 @@ export default function MaterialsPage() {
                                           </div>
                                         </div>
 
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                                           <button
                                             onClick={() => void updateMemberStatus(member, "arrived")}
                                             className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
@@ -1745,6 +1727,14 @@ export default function MaterialsPage() {
                                           >
                                             Issue
                                           </button>
+                                          {hasStatus && (
+                                            <button
+                                              onClick={() => void clearMemberStatus(member)}
+                                              className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                                            >
+                                              Clear
+                                            </button>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -1763,13 +1753,12 @@ export default function MaterialsPage() {
           )}
 
           {viewMode === "members" && (
-            <div className="space-y-3">
-              {filteredMembers.length === 0 ? (
-                <EmptyState text="No members match the current filters." />
+            <div className="space-y-4">
+              {filteredMatchedMembers.length === 0 ? (
+                <EmptyState text="No matched members match the current filters." />
               ) : (
-                filteredMembers.map((member) => {
+                filteredMatchedMembers.map((member) => {
                   const status = getMemberCheck(member)?.status || "not_checked";
-                  const linkedBundle = bundleMap[member.bundle_reference.trim()];
 
                   return (
                     <div
@@ -1809,16 +1798,10 @@ export default function MaterialsPage() {
                                 Bundle {member.bundle_reference} • PN {member.pn_final || "—"} • Drawing{" "}
                                 {member.drawing_number || "—"} • Qty {member.qty_per_tower} • {member.section}
                               </div>
-
-                              {!linkedBundle && (
-                                <div className="text-xs text-rose-600 mt-2 font-medium">
-                                  No matching bundle found in bundle register.
-                                </div>
-                              )}
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                             <button
                               onClick={() => void updateMemberStatus(member, "arrived")}
                               className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
@@ -1843,6 +1826,14 @@ export default function MaterialsPage() {
                             >
                               Issue
                             </button>
+                            {!!getMemberCheck(member) && (
+                              <button
+                                onClick={() => void clearMemberStatus(member)}
+                                className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                              >
+                                Clear
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -1887,92 +1878,156 @@ export default function MaterialsPage() {
                   );
                 })
               )}
-            </div>
-          )}
 
-          {viewMode === "crosscheck" && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <CrossCheckCard
-                  title="Members With Missing Bundle Match"
-                  count={missingMemberRows.length}
-                  tone="red"
-                  description="Members uploaded with a bundle reference that does not exist in the bundle register."
-                />
-                <CrossCheckCard
-                  title="Bundles Without Members"
-                  count={bundlesWithoutMembers.length}
-                  tone="amber"
-                  description="Bundle rows with no linked members uploaded."
-                />
-                <CrossCheckCard
-                  title="Duplicate Member Marks"
-                  count={duplicateMembers.length}
-                  tone="purple"
-                  description="Member marks that appear more than once and should be reviewed."
-                />
-              </div>
+              <div className="border border-slate-200 rounded-3xl bg-white overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowUnmatchedMembers((prev) => !prev)}
+                  className="w-full px-4 py-4 text-left bg-slate-100 hover:bg-slate-200 flex items-center justify-between"
+                >
+                  <div>
+                    <div className="font-semibold">Members not in bundle register</div>
+                    <div className="text-sm text-slate-500">
+                      {filteredUnmatchedMembers.length} filtered • {unmatchedMembers.length} total
+                    </div>
+                  </div>
+                  <div className="text-sm font-medium text-slate-700">
+                    {showUnmatchedMembers ? "Hide" : "Show"}
+                  </div>
+                </button>
 
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                <div className="border border-slate-200 rounded-3xl p-4 bg-white">
-                  <h3 className="font-bold text-lg mb-3">Missing Bundle Match</h3>
-                  <div className="space-y-2 max-h-[420px] overflow-auto">
-                    {missingMemberRows.length === 0 ? (
-                      <div className="text-sm text-slate-500">No issues found.</div>
+                {showUnmatchedMembers && (
+                  <div className="p-4 space-y-3">
+                    {filteredUnmatchedMembers.length === 0 ? (
+                      <EmptyState text="No unmatched members match the current filters." />
                     ) : (
-                      missingMemberRows.map((row) => (
-                        <div key={row.ui_id} className="rounded-2xl bg-rose-50 border border-rose-200 p-3">
-                          <div className="font-semibold">{row.mark_no}</div>
-                          <div className="text-sm text-slate-600">
-                            Bundle ref {row.bundle_reference} • {row.section}
+                      filteredUnmatchedMembers.map((member) => {
+                        const status = getMemberCheck(member)?.status || "not_checked";
+
+                        return (
+                          <div
+                            key={member.ui_id}
+                            className="border border-rose-200 rounded-2xl bg-rose-50 p-4"
+                          >
+                            <div className="flex flex-col gap-4">
+                              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                                <div className="flex items-start gap-3">
+                                  {manageMode && (
+                                    <input
+                                      type="checkbox"
+                                      className="mt-1 h-4 w-4"
+                                      checked={!!selectedMemberRows[member.ui_id]}
+                                      onChange={(e) =>
+                                        setSelectedMemberRows((prev) => ({
+                                          ...prev,
+                                          [member.ui_id]: e.target.checked,
+                                        }))
+                                      }
+                                    />
+                                  )}
+
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <h3 className="font-bold text-lg">{member.mark_no}</h3>
+                                      <span
+                                        className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
+                                          status
+                                        )}`}
+                                      >
+                                        {statusLabel(status)}
+                                      </span>
+                                    </div>
+
+                                    <div className="text-sm text-slate-600 mt-1">
+                                      Bundle {member.bundle_reference} • PN {member.pn_final || "—"} • Drawing{" "}
+                                      {member.drawing_number || "—"} • Qty {member.qty_per_tower} • {member.section}
+                                    </div>
+
+                                    <div className="text-xs text-rose-700 mt-2 font-medium">
+                                      This member does not currently match any uploaded bundle number.
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "arrived")}
+                                    className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
+                                  >
+                                    Arrived
+                                  </button>
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "not_here")}
+                                    className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
+                                  >
+                                    Not Here
+                                  </button>
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "missing")}
+                                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                                  >
+                                    Missing
+                                  </button>
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "issue")}
+                                    className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
+                                  >
+                                    Issue
+                                  </button>
+                                  {!!getMemberCheck(member) && (
+                                    <button
+                                      onClick={() => void clearMemberStatus(member)}
+                                      className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                                    >
+                                      Clear
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {manageMode && (
+                                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 pt-2 border-t border-rose-200">
+                                  <Field
+                                    label="Bundle Ref"
+                                    value={member.bundle_reference}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
+                                  />
+                                  <Field
+                                    label="Mark No"
+                                    value={member.mark_no}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
+                                  />
+                                  <Field
+                                    label="PN"
+                                    value={member.pn_final}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
+                                  />
+                                  <Field
+                                    label="Drawing"
+                                    value={member.drawing_number}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
+                                  />
+                                  <Field
+                                    label="Qty"
+                                    value={member.qty_per_tower}
+                                    onChange={(v) =>
+                                      updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))
+                                    }
+                                  />
+                                  <Field
+                                    label="Section"
+                                    value={member.section}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                                  />
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
-                </div>
-
-                <div className="border border-slate-200 rounded-3xl p-4 bg-white">
-                  <h3 className="font-bold text-lg mb-3">Bundles Without Members</h3>
-                  <div className="space-y-2 max-h-[420px] overflow-auto">
-                    {bundlesWithoutMembers.length === 0 ? (
-                      <div className="text-sm text-slate-500">No issues found.</div>
-                    ) : (
-                      bundlesWithoutMembers.map((row) => (
-                        <div key={row.ui_id} className="rounded-2xl bg-amber-50 border border-amber-200 p-3">
-                          <div className="font-semibold">{row.bundle_no}</div>
-                          <div className="text-sm text-slate-600">{row.section}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div className="border border-slate-200 rounded-3xl p-4 bg-white">
-                  <h3 className="font-bold text-lg mb-3">Duplicate Members</h3>
-                  <div className="space-y-2 max-h-[420px] overflow-auto">
-                    {duplicateMembers.length === 0 ? (
-                      <div className="text-sm text-slate-500">No issues found.</div>
-                    ) : (
-                      duplicateMembers.map((row) => (
-                        <div key={row.ui_id} className="rounded-2xl bg-purple-50 border border-purple-200 p-3">
-                          <div className="font-semibold">{row.mark_no}</div>
-                          <div className="text-sm text-slate-600">
-                            Bundle {row.bundle_reference} • {row.section}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="border border-slate-200 rounded-3xl p-5 bg-slate-50">
-                <h3 className="font-bold text-lg mb-2">Cross-check usage</h3>
-                <p className="text-sm text-slate-600">
-                  Use this tab after reuploading bundle and member CSVs. It will show missing matches,
-                  empty bundles, and duplicate member marks before the Leading Hand starts checking items on site.
-                </p>
+                )}
               </div>
             </div>
           )}
@@ -2058,32 +2113,6 @@ function StatusCard({
     <div className={`rounded-2xl px-4 py-4 ${toneMap[tone]}`}>
       <div className="text-xs opacity-80">{label}</div>
       <div className="font-bold text-lg mt-1">{value}</div>
-    </div>
-  );
-}
-
-function CrossCheckCard({
-  title,
-  count,
-  description,
-  tone,
-}: {
-  title: string;
-  count: number;
-  description: string;
-  tone: "red" | "amber" | "purple";
-}) {
-  const toneMap: Record<string, string> = {
-    red: "bg-rose-50 border-rose-200 text-rose-800",
-    amber: "bg-amber-50 border-amber-200 text-amber-800",
-    purple: "bg-purple-50 border-purple-200 text-purple-800",
-  };
-
-  return (
-    <div className={`border rounded-3xl p-5 ${toneMap[tone]}`}>
-      <div className="text-sm font-medium">{title}</div>
-      <div className="text-3xl font-bold mt-2">{count}</div>
-      <div className="text-sm mt-2 opacity-80">{description}</div>
     </div>
   );
 }
