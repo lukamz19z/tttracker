@@ -242,20 +242,12 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
     return extractNumericValue(towerWeightLikeEntry[1]);
   }
 
-  const genericWeightEntry = entries.find(([key]) => {
-    const k = key.trim().toLowerCase();
-    return k.includes("weight");
-  });
-
+  const genericWeightEntry = entries.find(([key]) => key.trim().toLowerCase().includes("weight"));
   if (genericWeightEntry) {
     return extractNumericValue(genericWeightEntry[1]);
   }
 
-  const massEntry = entries.find(([key]) => {
-    const k = key.trim().toLowerCase();
-    return k.includes("mass");
-  });
-
+  const massEntry = entries.find(([key]) => key.trim().toLowerCase().includes("mass"));
   if (massEntry) {
     return extractNumericValue(massEntry[1]);
   }
@@ -297,20 +289,9 @@ function isSafetyDocument(doc: GenericDocumentRow) {
   if (values.length === 0) return true;
 
   return values.some((value) =>
-    [
-      "safety",
-      "permit",
-      "swms",
-      "itc",
-      "checklist",
-      "sign on",
-      "sign-on",
-      "lift",
-      "study",
-      "wms",
-      "jsea",
-      "jsa",
-    ].some((keyword) => value.includes(keyword)),
+    ["safety", "permit", "swms", "itc", "checklist", "sign on", "sign-on", "lift", "study", "wms", "jsea", "jsa"].some(
+      (keyword) => value.includes(keyword),
+    ),
   );
 }
 
@@ -577,14 +558,11 @@ export default function TowerOverviewPage() {
     setLoading(true);
 
     const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
-
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
 
     if (towerData?.cover_photo_path) {
-      const { data } = supabase.storage
-        .from("tower-photos")
-        .getPublicUrl(towerData.cover_photo_path);
+      const { data } = supabase.storage.from("tower-photos").getPublicUrl(towerData.cover_photo_path);
       setCoverPhotoUrl(data.publicUrl);
     } else {
       setCoverPhotoUrl(null);
@@ -615,7 +593,6 @@ export default function TowerOverviewPage() {
         ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
         "docket_id, total_hours",
       );
-
       labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
     }
 
@@ -705,24 +682,15 @@ export default function TowerOverviewPage() {
       });
     } else {
       const [itcItems, torqueRows, clientUploads] = await Promise.all([
-        safeSelect<ItcItemRow>(
-          supabase,
-          "tower_itc_items",
-          "id, itc_id, validation",
-          [{ column: "itc_id", value: latestItc.id }],
-        ),
-        safeSelect<ItcTorqueRow>(
-          supabase,
-          "tower_itc_torque",
-          "id, itc_id, torque_achieved",
-          [{ column: "itc_id", value: latestItc.id }],
-        ),
-        safeSelect<ItcClientUploadRow>(
-          supabase,
-          "tower_itc_client_uploads",
-          "id, tower_id",
-          [{ column: "tower_id", value: towerId }],
-        ),
+        safeSelect<ItcItemRow>(supabase, "tower_itc_items", "id, itc_id, validation", [
+          { column: "itc_id", value: latestItc.id },
+        ]),
+        safeSelect<ItcTorqueRow>(supabase, "tower_itc_torque", "id, itc_id, torque_achieved", [
+          { column: "itc_id", value: latestItc.id },
+        ]),
+        safeSelect<ItcClientUploadRow>(supabase, "tower_itc_client_uploads", "id, tower_id", [
+          { column: "tower_id", value: towerId },
+        ]),
       ]);
 
       const checklistTotal = itcItems.length;
@@ -770,27 +738,11 @@ export default function TowerOverviewPage() {
   const stats = useMemo<OverviewStats>(() => {
     const totalHours = labourRows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
 
-    const totalWeatherDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.weather_delay_hours || 0),
-      0,
-    );
-    const totalLightningDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.lightning_delay_hours || 0),
-      0,
-    );
-    const totalToolboxDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.toolbox_delay_hours || 0),
-      0,
-    );
-    const totalOtherDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.other_delay_hours || 0),
-      0,
-    );
-    const totalDelayHours =
-      totalWeatherDelay +
-      totalLightningDelay +
-      totalToolboxDelay +
-      totalOtherDelay;
+    const totalWeatherDelay = dockets.reduce((sum, row) => sum + Number(row.weather_delay_hours || 0), 0);
+    const totalLightningDelay = dockets.reduce((sum, row) => sum + Number(row.lightning_delay_hours || 0), 0);
+    const totalToolboxDelay = dockets.reduce((sum, row) => sum + Number(row.toolbox_delay_hours || 0), 0);
+    const totalOtherDelay = dockets.reduce((sum, row) => sum + Number(row.other_delay_hours || 0), 0);
+    const totalDelayHours = totalWeatherDelay + totalLightningDelay + totalToolboxDelay + totalOtherDelay;
 
     const defectCount = defects.length;
     const openDefectCount = getOpenDefectCount(defects);
@@ -798,27 +750,15 @@ export default function TowerOverviewPage() {
     const modificationCount = modifications.length;
 
     const totalRequiredBundles = bundles.length;
-    const totalRequiredQty = bundles.reduce(
-      (sum, row) => sum + Number(row.qty_required || 0),
-      0,
-    );
+    const totalRequiredQty = bundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
 
-    const deliveredQty = deliveryItems.reduce(
-      (sum, row) => sum + Number(row.qty_delivered || 0),
-      0,
-    );
+    const deliveredQty = deliveryItems.reduce((sum, row) => sum + Number(row.qty_delivered || 0), 0);
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent =
-      totalRequiredQty > 0
-        ? clampPercent((deliveredQty / totalRequiredQty) * 100)
-        : 0;
+    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
 
     const materialBundleCount = materialBundles.length;
     const materialMemberCount = materialMembers.length;
-    const materialRequiredQty = materialBundles.reduce(
-      (sum, row) => sum + Number(row.qty_required || 0),
-      0,
-    );
+    const materialRequiredQty = materialBundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
 
     const materialBundleSet = new Set(
       materialBundles.map((row) => String(row.bundle_no || "").trim()).filter(Boolean),
@@ -832,14 +772,9 @@ export default function TowerOverviewPage() {
 
     const materialOutstandingQty = Math.max(0, materialRequiredQty - materialDeliveredQty);
     const materialProgressPercent =
-      materialRequiredQty > 0
-        ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100)
-        : 0;
+      materialRequiredQty > 0 ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100) : 0;
 
-    const materialTotalWeight = materialBundles.reduce(
-      (sum, row) => sum + Number(row.total_weight || 0),
-      0,
-    );
+    const materialTotalWeight = materialBundles.reduce((sum, row) => sum + Number(row.total_weight || 0), 0);
 
     const computedProgress = getProgressFromDockets(dockets);
     const remainingProgress = Math.max(0, 100 - computedProgress);
@@ -915,9 +850,7 @@ export default function TowerOverviewPage() {
 
   const itcCompletionPercent = useMemo(() => {
     if (!itcMetrics.hasItc) return 0;
-    if (itcMetrics.itcMode === "Client") {
-      return itcMetrics.clientUploadCount > 0 ? 100 : 0;
-    }
+    if (itcMetrics.itcMode === "Client") return itcMetrics.clientUploadCount > 0 ? 100 : 0;
     if (itcMetrics.checklistTotal <= 0) return 0;
     return clampPercent((itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100);
   }, [
@@ -928,26 +861,31 @@ export default function TowerOverviewPage() {
     itcMetrics.checklistTotal,
   ]);
 
+  const combinedLogisticsProgress = useMemo(() => {
+    if (stats.totalRequiredQty > 0 && stats.materialRequiredQty > 0) {
+      return (stats.deliveryPercent + stats.materialProgressPercent) / 2;
+    }
+    if (stats.materialRequiredQty > 0) return stats.materialProgressPercent;
+    return stats.deliveryPercent;
+  }, [
+    stats.deliveryPercent,
+    stats.materialProgressPercent,
+    stats.totalRequiredQty,
+    stats.materialRequiredQty,
+  ]);
+
   if (loading || !tower) {
     return <div className="p-8">Loading tower overview...</div>;
   }
 
   return (
     <div className="min-h-screen bg-slate-50 p-8 space-y-6">
-      <TowerHeader
-        projectId={projectId}
-        tower={tower}
-        latestDate={stats.latestDate}
-      />
+      <TowerHeader projectId={projectId} tower={tower} latestDate={stats.latestDate} />
 
       {(coverPhotoUrl || tower.cover_photo_path) && (
         <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
           {coverPhotoUrl ? (
-            <img
-              src={coverPhotoUrl}
-              alt="Tower cover"
-              className="h-72 w-full object-cover"
-            />
+            <img src={coverPhotoUrl} alt="Tower cover" className="h-72 w-full object-cover" />
           ) : null}
         </div>
       )}
@@ -995,11 +933,7 @@ export default function TowerOverviewPage() {
           />
           <MetricTile
             title="Completed Tonnes"
-            value={
-              stats.completedTonnes !== null
-                ? `${formatDecimal(stats.completedTonnes, 2)} t`
-                : "-"
-            }
+            value={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t` : "-"}
             subtitle={tower.status || stats.computedStatus}
             accent="blue"
           />
@@ -1056,9 +990,7 @@ export default function TowerOverviewPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
               <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}>
                 <div className="text-sm text-slate-500">Mode</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.itcMode}
-                </div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.itcMode}</div>
               </div>
 
               <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}>
@@ -1091,16 +1023,12 @@ export default function TowerOverviewPage() {
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Revision</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.revision}
-                </div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.revision}</div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Client Uploads</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.clientUploadCount}
-                </div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.clientUploadCount}</div>
               </div>
             </div>
 
@@ -1134,7 +1062,7 @@ export default function TowerOverviewPage() {
         )}
       </div>
 
-      <div className="grid xl:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <SectionHeader
             title="Defects / Mods"
@@ -1201,33 +1129,6 @@ export default function TowerOverviewPage() {
               accent="amber"
             />
           </div>
-
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Weather</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalWeatherDelay, 1)} h
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Lightning</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalLightningDelay, 1)} h
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Toolbox</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalToolboxDelay, 1)} h
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm text-slate-500">Other</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {formatDecimal(stats.totalOtherDelay, 1)} h
-              </div>
-            </div>
-          </div>
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1271,131 +1172,70 @@ export default function TowerOverviewPage() {
             />
           </div>
         </div>
-      </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="Delivery Summary"
-          subtitle="Bundle and steel delivery metrics for this tower."
-          action={
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/deliveries`}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              Open Deliveries
-            </Link>
-          }
-        />
-
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
-          <MetricTile
-            title="Bundles"
-            value={String(stats.totalRequiredBundles)}
-            subtitle="bundle register rows"
-            accent="blue"
-          />
-          <MetricTile
-            title="Required Qty"
-            value={formatDecimal(stats.totalRequiredQty, 0)}
-            subtitle="planned steel quantity"
-            accent="purple"
-          />
-          <MetricTile
-            title="Delivered Qty"
-            value={formatDecimal(stats.deliveredQty, 0)}
-            subtitle="received to date"
-            accent="emerald"
-          />
-          <MetricTile
-            title="Outstanding Qty"
-            value={formatDecimal(stats.outstandingQty, 0)}
-            subtitle="still to arrive"
-            accent="rose"
-          />
-          <MetricTile
-            title="Delivery Records"
-            value={String(deliveries.length)}
-            subtitle="logged delivery events"
-            accent="amber"
-          />
-          <MetricTile
-            title="Progress"
-            value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-            subtitle="delivered vs required"
-            accent="emerald"
-          />
-        </div>
-
-        <div className="mt-6 h-4 rounded-full overflow-hidden bg-slate-100">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600"
-            style={{ width: `${stats.deliveryPercent}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="Materials Summary"
-          subtitle="Materials register overview for this tower."
-          action={
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/materials`}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              Open Materials
-            </Link>
-          }
-        />
-
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
-          <MetricTile
-            title="Bundles"
-            value={String(stats.materialBundleCount)}
-            subtitle="materials bundle rows"
-            accent="blue"
-          />
-          <MetricTile
-            title="Members"
-            value={String(stats.materialMemberCount)}
-            subtitle="member register rows"
-            accent="purple"
-          />
-          <MetricTile
-            title="Required Qty"
-            value={formatDecimal(stats.materialRequiredQty, 0)}
-            subtitle="planned materials quantity"
-            accent="purple"
-          />
-          <MetricTile
-            title="Delivered Qty"
-            value={formatDecimal(stats.materialDeliveredQty, 0)}
-            subtitle="matched against deliveries"
-            accent="emerald"
-          />
-          <MetricTile
-            title="Outstanding Qty"
-            value={formatDecimal(stats.materialOutstandingQty, 0)}
-            subtitle="still to arrive"
-            accent="rose"
-          />
-          <MetricTile
-            title="Progress"
-            value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
-            subtitle={
-              stats.materialTotalWeight > 0
-                ? `${formatDecimal(stats.materialTotalWeight, 2)} total weight`
-                : "delivered vs required"
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Logistics / Materials"
+            subtitle="Combined delivery and materials overview for this tower."
+            action={
+              <div className="flex gap-2 flex-wrap">
+                <Link
+                  href={`/project/${projectId}/tower/${towerId}/deliveries`}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                >
+                  Open Deliveries
+                </Link>
+                <Link
+                  href={`/project/${projectId}/tower/${towerId}/materials`}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                >
+                  Open Materials
+                </Link>
+              </div>
             }
-            accent="emerald"
           />
-        </div>
 
-        <div className="mt-6 h-4 rounded-full overflow-hidden bg-slate-100">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600"
-            style={{ width: `${stats.materialProgressPercent}%` }}
-          />
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Bundle Delivery"
+              value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+              subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
+              accent="emerald"
+            />
+            <MetricTile
+              title="Materials Progress"
+              value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
+              subtitle={`${formatDecimal(stats.materialDeliveredQty, 0)} / ${formatDecimal(stats.materialRequiredQty, 0)} qty`}
+              accent="purple"
+            />
+            <MetricTile
+              title="Material Members"
+              value={String(stats.materialMemberCount)}
+              subtitle={`${stats.materialBundleCount} bundles • ${formatDecimal(stats.materialTotalWeight, 2)} total weight`}
+              accent="blue"
+            />
+            <MetricTile
+              title="Outstanding"
+              value={formatDecimal(stats.materialOutstandingQty || stats.outstandingQty, 0)}
+              subtitle="still to arrive"
+              accent="rose"
+            />
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <DonutWheel
+              value={stats.deliveryPercent}
+              label="Delivery Progress"
+              sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
+              color="#059669"
+            />
+            <DonutWheel
+              value={combinedLogisticsProgress}
+              label="Combined Logistics"
+              sublabel={`${formatDecimal(stats.materialOutstandingQty, 0)} materials qty outstanding`}
+              color="#7c3aed"
+            />
+          </div>
         </div>
       </div>
 
@@ -1408,23 +1248,17 @@ export default function TowerOverviewPage() {
         <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Tower Name</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {tower.name || "-"}
-            </div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.name || "-"}</div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Line</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {tower.line || "-"}
-            </div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.line || "-"}</div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Stored Status</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {tower.status || "-"}
-            </div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.status || "-"}</div>
           </div>
         </div>
 
