@@ -139,9 +139,7 @@ function KpiTile({
   const styles = getAccentClasses(accent);
 
   return (
-    <div
-      className={`rounded-2xl border bg-gradient-to-br p-5 shadow-sm ${styles.card}`}
-    >
+    <div className={`rounded-2xl border bg-gradient-to-br p-5 shadow-sm ${styles.card}`}>
       <div className={`mb-4 h-1.5 w-14 rounded-full ${styles.bar}`} />
       <div className="text-sm font-medium text-slate-500">{title}</div>
       <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
@@ -222,7 +220,7 @@ const initialAssets: PlantAsset[] = [
   {
     id: "3",
     assetId: "PL-003",
-    description: 'Generator 45kVA',
+    description: "Generator 45kVA",
     category: "Generator",
     make: "CAT",
     model: "DE45",
@@ -287,7 +285,7 @@ export default function PlantPage() {
       const craneState = getComplianceState(asset.craneSafeExpiry);
 
       const states: ComplianceState[] = [serviceState, riskState, craneState].filter(
-        (s) => s !== "N/A"
+        (s) => s !== "N/A",
       );
 
       let overall: ComplianceState = "N/A";
@@ -311,10 +309,7 @@ export default function PlantPage() {
     return assetsWithCompliance.filter((asset) => {
       if (statusFilter !== "All" && asset.status !== statusFilter) return false;
       if (siteFilter !== "All" && asset.siteAllocation !== siteFilter) return false;
-      if (
-        complianceFilter !== "All" &&
-        asset.overallComplianceState !== complianceFilter
-      ) {
+      if (complianceFilter !== "All" && asset.overallComplianceState !== complianceFilter) {
         return false;
       }
 
@@ -342,10 +337,10 @@ export default function PlantPage() {
     const totalPlant = assets.length;
     const inService = assets.filter((a) => a.status === "Active").length;
     const dueSoon = assetsWithCompliance.filter(
-      (a) => a.overallComplianceState === "Due Soon"
+      (a) => a.overallComplianceState === "Due Soon",
     ).length;
     const overdue = assetsWithCompliance.filter(
-      (a) => a.overallComplianceState === "Overdue"
+      (a) => a.overallComplianceState === "Overdue",
     ).length;
 
     return { totalPlant, inService, dueSoon, overdue };
@@ -398,9 +393,7 @@ export default function PlantPage() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-              Plant Register
-            </h1>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Plant Register</h1>
             <p className="mt-2 text-slate-600">
               Manage heavy plant, servicing, compliance and operational status.
             </p>
@@ -539,7 +532,7 @@ export default function PlantPage() {
                     <td className="p-3 align-top">
                       <span
                         className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getStatusTone(
-                          asset.status
+                          asset.status,
                         )}`}
                       >
                         {asset.status}
@@ -566,7 +559,7 @@ export default function PlantPage() {
                     <td className="p-3 align-top">
                       <span
                         className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getComplianceTone(
-                          asset.overallComplianceState
+                          asset.overallComplianceState,
                         )}`}
                       >
                         {asset.overallComplianceState}
@@ -610,7 +603,7 @@ export default function PlantPage() {
                     </div>
                     <span
                       className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getStatusTone(
-                        asset.status
+                        asset.status,
                       )}`}
                     >
                       {asset.status}
@@ -639,7 +632,7 @@ export default function PlantPage() {
                       <div className="mt-1">
                         <span
                           className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getComplianceTone(
-                            asset.overallComplianceState
+                            asset.overallComplianceState,
                           )}`}
                         >
                           {asset.overallComplianceState}
