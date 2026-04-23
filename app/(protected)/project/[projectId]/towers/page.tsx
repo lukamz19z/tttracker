@@ -18,6 +18,13 @@ type Tower = {
   extra_data?: Record<string, unknown> | null;
 };
 
+type DocketRow = {
+  id: string;
+  tower_id?: string | null;
+  assembly_percent?: number | null;
+  erection_percent?: number | null;
+};
+
 type StatusFilter = "All" | "Not Started" | "In Progress" | "Complete";
 type UserRole = "admin" | "editor" | "viewer" | string | null;
 
@@ -29,24 +36,6 @@ function getTowerLabel(tower: Tower) {
     tower.name ||
     "Unnamed Tower"
   );
-}
-
-function normalizeStatus(status?: string | null): Exclude<StatusFilter, "All"> {
-  const value = (status || "").trim().toLowerCase();
-
-  if (value === "complete" || value === "completed") return "Complete";
-  if (value === "in progress") return "In Progress";
-  return "Not Started";
-}
-
-function getStatusBadgeClasses(status: string) {
-  if (status === "Complete") {
-    return "bg-green-50 text-green-700 border-green-200";
-  }
-  if (status === "In Progress") {
-    return "bg-blue-50 text-blue-700 border-blue-200";
-  }
-  return "bg-slate-50 text-slate-700 border-slate-200";
 }
 
 function getTowerType(tower: Tower) {
@@ -67,6 +56,37 @@ function getTowerType(tower: Tower) {
   return found ? String(found) : "-";
 }
 
+function getStatusBadgeClasses(status: string) {
+  if (status === "Complete") {
+    return "bg-green-50 text-green-700 border-green-200";
+  }
+  if (status === "In Progress") {
+    return "bg-blue-50 text-blue-700 border-blue-200";
+  }
+  return "bg-slate-50 text-slate-700 border-slate-200";
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function getTotalProgressFromDockets(
+  dockets: Array<{ assembly_percent?: number | null; erection_percent?: number | null }>
+) {
+  return dockets.reduce((max, docket) => {
+    const assembly = Number(docket.assembly_percent || 0);
+    const erection = Number(docket.erection_percent || 0);
+    const weighted = Math.round(assembly * 0.5 + erection * 0.5);
+    return Math.max(max, weighted);
+  }, 0);
+}
+
+function normalizeStatusFromProgress(progress: number): Exclude<StatusFilter, "All"> {
+  if (progress >= 100) return "Complete";
+  if (progress > 0) return "In Progress";
+  return "Not Started";
+}
+
 export default function TowersPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -74,6 +94,7 @@ export default function TowersPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [towers, setTowers] = useState<Tower[]>([]);
+  const [dockets, setDockets] = useState<DocketRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
@@ -107,22 +128,30 @@ export default function TowersPage() {
     async function run() {
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from("towers")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("name");
+      const [towersRes, docketsRes] = await Promise.all([
+        supabase.from("towers").select("*").eq("project_id", projectId).order("name"),
+        supabase
+          .from("tower_daily_dockets")
+          .select("id, tower_id, assembly_percent, erection_percent")
+          .eq("project_id", projectId),
+      ]);
 
       if (cancelled) return;
 
-      if (error) {
-        console.error(error);
+      if (towersRes.error) {
+        console.error(towersRes.error);
         setTowers([]);
+        setDockets([]);
         setLoading(false);
         return;
       }
 
-      setTowers((data as Tower[]) || []);
+      if (docketsRes.error) {
+        console.error(docketsRes.error);
+      }
+
+      setTowers((towersRes.data as Tower[]) || []);
+      setDockets((docketsRes.data as DocketRow[]) || []);
       setLoading(false);
     }
 
@@ -133,23 +162,38 @@ export default function TowersPage() {
     };
   }, [projectId, supabase]);
 
+  const progressByTower = useMemo(() => {
+    const grouped: Record<string, DocketRow[]> = {};
+
+    dockets.forEach((docket) => {
+      const towerId = docket.tower_id;
+      if (!towerId) return;
+      if (!grouped[towerId]) grouped[towerId] = [];
+      grouped[towerId].push(docket);
+    });
+
+    const progressMap: Record<string, number> = {};
+
+    towers.forEach((tower) => {
+      const relatedDockets = grouped[tower.id] || [];
+      progressMap[tower.id] = getTotalProgressFromDockets(relatedDockets);
+    });
+
+    return progressMap;
+  }, [towers, dockets]);
+
   const summary = useMemo(() => {
     const total = towers.length;
-    const complete = towers.filter(
-      (t) => normalizeStatus(t.status) === "Complete"
-    ).length;
-    const inProgress = towers.filter(
-      (t) => normalizeStatus(t.status) === "In Progress"
-    ).length;
-    const notStarted = towers.filter(
-      (t) => normalizeStatus(t.status) === "Not Started"
-    ).length;
+
+    const progressValues = towers.map((tower) => progressByTower[tower.id] || 0);
+
+    const complete = progressValues.filter((p) => p >= 100).length;
+    const inProgress = progressValues.filter((p) => p > 0 && p < 100).length;
+    const notStarted = progressValues.filter((p) => p <= 0).length;
 
     const avgProgress =
       total > 0
-        ? Math.round(
-            towers.reduce((sum, t) => sum + Number(t.progress || 0), 0) / total
-          )
+        ? Math.round(progressValues.reduce((sum, p) => sum + p, 0) / total)
         : 0;
 
     return {
@@ -159,13 +203,14 @@ export default function TowersPage() {
       notStarted,
       avgProgress,
     };
-  }, [towers]);
+  }, [towers, progressByTower]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return towers.filter((tower) => {
-      const status = normalizeStatus(tower.status);
+      const progress = progressByTower[tower.id] || 0;
+      const status = normalizeStatusFromProgress(progress);
 
       if (statusFilter !== "All" && status !== statusFilter) {
         return false;
@@ -178,7 +223,7 @@ export default function TowersPage() {
         tower.name || "",
         tower.line || "",
         status,
-        String(tower.progress || 0),
+        String(progress),
         getTowerType(tower),
       ];
 
@@ -186,7 +231,7 @@ export default function TowersPage() {
         value.toLowerCase().includes(q)
       );
     });
-  }, [towers, search, statusFilter]);
+  }, [towers, search, statusFilter, progressByTower]);
 
   async function handleDeleteTower(tower: Tower) {
     const label = getTowerLabel(tower);
@@ -207,6 +252,7 @@ export default function TowersPage() {
       }
 
       setTowers((prev) => prev.filter((t) => t.id !== tower.id));
+      setDockets((prev) => prev.filter((d) => d.tower_id !== tower.id));
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Failed to delete tower.");
@@ -353,8 +399,8 @@ export default function TowersPage() {
 
               <tbody>
                 {filtered.map((tower) => {
-                  const status = normalizeStatus(tower.status);
-                  const progress = Number(tower.progress || 0);
+                  const progress = progressByTower[tower.id] || 0;
+                  const status = normalizeStatusFromProgress(progress);
                   const label = getTowerLabel(tower);
 
                   return (
@@ -400,7 +446,7 @@ export default function TowersPage() {
                                 : "bg-slate-300"
                             }`}
                             style={{
-                              width: `${Math.max(0, Math.min(100, progress))}%`,
+                              width: `${clampPercent(progress)}%`,
                             }}
                           />
                         </div>
