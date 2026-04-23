@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { getUserRole } from "@/lib/roles";
 
 type Project = {
   id: string;
@@ -66,6 +67,7 @@ type MaterialBundleRow = {
 };
 
 type QuickActionType = "docket" | "delivery" | "materials" | null;
+type UserRole = "admin" | "editor" | "viewer" | string | null;
 
 type ProjectStats = {
   totalTowers: number;
@@ -349,11 +351,29 @@ export default function ProjectDashboard() {
   const [loading, setLoading] = useState(true);
   const [actionType, setActionType] = useState<QuickActionType>(null);
   const [towerSearch, setTowerSearch] = useState("");
+  const [role, setRole] = useState<UserRole>(null);
+
+  const [editingProject, setEditingProject] = useState(false);
+  const [savingProject, setSavingProject] = useState(false);
+  const [projectForm, setProjectForm] = useState({
+    name: "",
+    location: "",
+    status: "",
+    client: "",
+  });
+
+  const isAdmin = role === "admin";
 
   useEffect(() => {
     void load();
+    void loadRole();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  async function loadRole() {
+    const userRole = await getUserRole();
+    setRole(userRole);
+  }
 
   async function load() {
     setLoading(true);
@@ -475,7 +495,15 @@ export default function ProjectDashboard() {
       }
     }
 
-    setProject((projectData as Project | null) || null);
+    const loadedProject = (projectData as Project | null) || null;
+
+    setProject(loadedProject);
+    setProjectForm({
+      name: loadedProject?.name || "",
+      location: loadedProject?.location || "",
+      status: loadedProject?.status || "",
+      client: loadedProject?.client || "",
+    });
     setTowers(loadedTowers);
     setDockets(loadedDockets);
     setLabourRows(loadedLabourRows);
@@ -615,6 +643,61 @@ export default function ProjectDashboard() {
     setTowerSearch("");
   }
 
+  function startEditingProject() {
+    if (!project) return;
+
+    setProjectForm({
+      name: project.name || "",
+      location: project.location || "",
+      status: project.status || "",
+      client: project.client || "",
+    });
+    setEditingProject(true);
+  }
+
+  function cancelEditingProject() {
+    if (project) {
+      setProjectForm({
+        name: project.name || "",
+        location: project.location || "",
+        status: project.status || "",
+        client: project.client || "",
+      });
+    }
+    setEditingProject(false);
+  }
+
+  async function saveProjectDetails() {
+    if (!project) return;
+
+    setSavingProject(true);
+
+    const payload = {
+      name: projectForm.name.trim(),
+      location: projectForm.location.trim(),
+      status: projectForm.status.trim(),
+      client: projectForm.client.trim(),
+    };
+
+    const { data, error } = await supabase
+      .from("projects")
+      .update(payload)
+      .eq("id", project.id)
+      .select("id, name, status, client, location")
+      .single();
+
+    setSavingProject(false);
+
+    if (error) {
+      console.error("project update error", error);
+      alert("Failed to update project details.");
+      return;
+    }
+
+    setProject((data as Project) || null);
+    setEditingProject(false);
+  }
+
   function goToTowerAction(towerId: string) {
     if (!actionType) return;
 
@@ -654,32 +737,118 @@ export default function ProjectDashboard() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 md:p-8 space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-              {project?.name || `Project ${projectId}`}
-            </h1>
-            <p className="mt-2 text-slate-600">
-              Project-wide overview across all assigned towers.
-            </p>
-          </div>
+        {!editingProject ? (
+          <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                {project?.name || `Project ${projectId}`}
+              </h1>
+              <p className="mt-2 text-slate-600">
+                Project-wide overview across all assigned towers.
+              </p>
+            </div>
 
-          <div className="flex flex-wrap gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Status</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">
-                {project?.status || "-"}
+            <div className="flex flex-wrap gap-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Status</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.status || "-"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Location</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.location || "-"}
+                </div>
+              </div>
+
+              {isAdmin && (
+                <button
+                  onClick={startEditingProject}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium hover:bg-slate-50"
+                >
+                  Edit Project
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                  Edit Project Details
+                </h1>
+                <p className="mt-2 text-slate-600">
+                  Update project name, location and other high-level details.
+                </p>
+              </div>
+
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={cancelEditingProject}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveProjectDetails}
+                  disabled={savingProject}
+                  className="rounded-xl bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {savingProject ? "Saving..." : "Save Changes"}
+                </button>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Location</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">
-                {project?.location || "-"}
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Project Name</label>
+                <input
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2.5"
+                  value={projectForm.name}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Location</label>
+                <input
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2.5"
+                  value={projectForm.location}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, location: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Status</label>
+                <input
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2.5"
+                  value={projectForm.status}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, status: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Client</label>
+                <input
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2.5"
+                  value={projectForm.client}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, client: e.target.value }))
+                  }
+                />
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="grid md:grid-cols-2 xl:grid-cols-6 gap-4">
