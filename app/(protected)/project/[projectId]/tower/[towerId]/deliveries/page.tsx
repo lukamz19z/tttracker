@@ -5,8 +5,6 @@ import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
-/* ================= TYPES ================= */
-
 type Tower = {
   id: string;
   name?: string | null;
@@ -43,8 +41,6 @@ type DocketRow = {
   docket_date: string | null;
 };
 
-/* ================= HELPERS ================= */
-
 function safeString(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
   if (value === null || value === undefined) return fallback;
@@ -54,6 +50,10 @@ function safeString(value: unknown, fallback = ""): string {
 function safeNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -83,11 +83,24 @@ function getTowerPrintLabel(tower: Tower | null): string {
   );
 }
 
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, value));
+function getDeliveryTotalQty(delivery: Delivery): number {
+  return (delivery.tower_bundle_delivery_items || []).reduce(
+    (sum, item) => sum + safeNumber(item.qty_delivered, 0),
+    0,
+  );
 }
 
-/* ================= PAGE ================= */
+function getDeliveryBundleText(delivery: Delivery): string {
+  const items = delivery.tower_bundle_delivery_items || [];
+  if (items.length === 0) return "No bundles";
+  if (items.length <= 3) {
+    return items.map((item) => `${item.bundle_no} × ${item.qty_delivered}`).join(", ");
+  }
+  return `${items
+    .slice(0, 3)
+    .map((item) => `${item.bundle_no} × ${item.qty_delivered}`)
+    .join(", ")} +${items.length - 3} more`;
+}
 
 export default function DeliveriesPage() {
   const params = useParams();
@@ -107,12 +120,13 @@ export default function DeliveriesPage() {
   const [vehicle, setVehicle] = useState("");
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
 
+  const [showAddDelivery, setShowAddDelivery] = useState(false);
+  const [showBundleSummary, setShowBundleSummary] = useState(false);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editQtyMap, setEditQtyMap] = useState<Record<string, number>>({});
 
   const [reloadKey, setReloadKey] = useState(0);
-
-  /* ================= LOAD ================= */
 
   useEffect(() => {
     if (!towerId) return;
@@ -164,8 +178,6 @@ export default function DeliveriesPage() {
     };
   }, [towerId, reloadKey, supabase]);
 
-  /* ================= TOTALS ================= */
-
   const deliveredTotals = useMemo(() => {
     const map: Record<string, number> = {};
 
@@ -210,7 +222,28 @@ export default function DeliveriesPage() {
     });
   }, [bundles, search, deliveredTotals]);
 
-  /* ================= SAVE DELIVERY ================= */
+  const filteredDeliveries = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    if (!q) return deliveries;
+
+    return deliveries.filter((delivery) => {
+      const itemText = delivery.tower_bundle_delivery_items
+        ?.map((item) => `${item.bundle_no} ${item.qty_delivered}`)
+        .join(" ");
+
+      const text = [
+        delivery.delivered_by || "",
+        delivery.vehicle || "",
+        formatDateTime(delivery.created_at),
+        itemText || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return text.includes(q);
+    });
+  }, [deliveries, search]);
 
   async function saveDelivery() {
     const items = Object.entries(qtyMap)
@@ -221,7 +254,7 @@ export default function DeliveriesPage() {
       }));
 
     if (!items.length) {
-      alert("Enter delivered quantities");
+      alert("Enter delivered quantities.");
       return;
     }
 
@@ -236,7 +269,7 @@ export default function DeliveriesPage() {
       .single();
 
     if (error || !data) {
-      alert(error?.message || "Insert failed");
+      alert(error?.message || "Insert failed.");
       return;
     }
 
@@ -249,17 +282,16 @@ export default function DeliveriesPage() {
     const { error: itemError } = await supabase.from("tower_bundle_delivery_items").insert(payload);
 
     if (itemError) {
-      alert(itemError.message || "Failed to save delivery items");
+      alert(itemError.message || "Failed to save delivery items.");
       return;
     }
 
     setDeliveredBy("");
     setVehicle("");
     setQtyMap({});
+    setShowAddDelivery(false);
     setReloadKey((v) => v + 1);
   }
-
-  /* ================= DELETE ================= */
 
   async function deleteDelivery(id: string) {
     if (!confirm("Delete delivery?")) return;
@@ -267,14 +299,12 @@ export default function DeliveriesPage() {
     const { error } = await supabase.from("tower_bundle_deliveries").delete().eq("id", id);
 
     if (error) {
-      alert(error.message || "Failed to delete delivery");
+      alert(error.message || "Failed to delete delivery.");
       return;
     }
 
     setReloadKey((v) => v + 1);
   }
-
-  /* ================= EDIT ================= */
 
   function startEdit(delivery: Delivery) {
     setEditingId(delivery.id);
@@ -301,7 +331,7 @@ export default function DeliveriesPage() {
       .eq("delivery_id", editingId);
 
     if (deleteError) {
-      alert(deleteError.message || "Failed to clear old delivery items");
+      alert(deleteError.message || "Failed to clear old delivery items.");
       return;
     }
 
@@ -317,7 +347,7 @@ export default function DeliveriesPage() {
       const { error: insertError } = await supabase.from("tower_bundle_delivery_items").insert(payload);
 
       if (insertError) {
-        alert(insertError.message || "Failed to save edited delivery");
+        alert(insertError.message || "Failed to save edited delivery.");
         return;
       }
     }
@@ -327,31 +357,10 @@ export default function DeliveriesPage() {
     setReloadKey((v) => v + 1);
   }
 
-  /* ================= PRINT / PDF ================= */
-
   function printDeliveriesPDF() {
     const towerLabel = getTowerPrintLabel(tower);
     const towerLine = safeString(tower?.line, "");
     const title = "Delivery Register";
-
-    const bundleRows = bundles
-      .map((bundle) => {
-        const delivered = deliveredTotals[bundle.bundle_no] || 0;
-        const required = safeNumber(bundle.qty_required, 0);
-        const remaining = Math.max(required - delivered, 0);
-
-        return `
-          <tr>
-            <td>${bundle.bundle_no}</td>
-            <td>${bundle.section || ""}</td>
-            <td>${required}</td>
-            <td>${delivered}</td>
-            <td>${remaining}</td>
-            <td>${remaining <= 0 ? "Complete" : delivered > 0 ? "Partial" : "Outstanding"}</td>
-          </tr>
-        `;
-      })
-      .join("");
 
     const deliveryRows = deliveries
       .map((delivery) => {
@@ -364,6 +373,7 @@ export default function DeliveriesPage() {
             <td>${formatDateTime(delivery.created_at)}</td>
             <td>${delivery.delivered_by || ""}</td>
             <td>${delivery.vehicle || ""}</td>
+            <td>${getDeliveryTotalQty(delivery)}</td>
             <td>${items || ""}</td>
           </tr>
         `;
@@ -375,12 +385,7 @@ export default function DeliveriesPage() {
         <head>
           <title>${title} - ${towerLabel}</title>
           <style>
-            body {
-              font-family: Arial, sans-serif;
-              padding: 24px;
-              color: #0f172a;
-            }
-
+            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
             .print-header {
               display: flex;
               justify-content: space-between;
@@ -389,80 +394,34 @@ export default function DeliveriesPage() {
               padding-bottom: 12px;
               margin-bottom: 18px;
             }
-
-            h1 {
-              margin: 0;
-              font-size: 22px;
-            }
-
-            h2 {
-              margin: 24px 0 10px 0;
-              font-size: 16px;
-            }
-
-            .tower-label {
-              font-size: 18px;
-              font-weight: 700;
-            }
-
-            .meta {
-              font-size: 12px;
-              color: #64748b;
-              margin-top: 4px;
-            }
-
+            h1 { margin: 0; font-size: 22px; }
+            .tower-label { font-size: 18px; font-weight: 700; }
+            .meta { font-size: 12px; color: #64748b; margin-top: 4px; }
             .summary {
               display: grid;
               grid-template-columns: repeat(4, 1fr);
               gap: 10px;
               margin-bottom: 18px;
             }
-
             .summary-card {
               border: 1px solid #cbd5e1;
               background: #f8fafc;
               padding: 10px;
               border-radius: 10px;
             }
-
-            .summary-label {
-              font-size: 11px;
-              color: #64748b;
-            }
-
-            .summary-value {
-              font-size: 18px;
-              font-weight: 700;
-              margin-top: 4px;
-            }
-
-            table {
-              border-collapse: collapse;
-              width: 100%;
-              margin-bottom: 24px;
-            }
-
-            th,
-            td {
+            .summary-label { font-size: 11px; color: #64748b; }
+            .summary-value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+            table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+            th, td {
               border: 1px solid #cbd5e1;
-              padding: 8px;
-              font-size: 12px;
+              padding: 7px;
+              font-size: 11px;
               text-align: left;
               vertical-align: top;
             }
-
-            th {
-              background: #f1f5f9;
-            }
-
-            thead {
-              display: table-header-group;
-            }
-
-            tr {
-              page-break-inside: avoid;
-            }
-
+            th { background: #f1f5f9; }
+            thead { display: table-header-group; }
+            tr { page-break-inside: avoid; }
             .print-footer {
               margin-top: 20px;
               padding-top: 8px;
@@ -472,10 +431,7 @@ export default function DeliveriesPage() {
               display: flex;
               justify-content: space-between;
             }
-
-            @page {
-              margin: 14mm 10mm;
-            }
+            @page { margin: 14mm 10mm; }
           </style>
         </head>
 
@@ -511,35 +467,18 @@ export default function DeliveriesPage() {
             </div>
           </div>
 
-          <h2>Bundle Delivery Summary</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Bundle No</th>
-                <th>Section</th>
-                <th>Required</th>
-                <th>Delivered</th>
-                <th>Remaining</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${bundleRows || `<tr><td colspan="6">No bundles found.</td></tr>`}
-            </tbody>
-          </table>
-
-          <h2>Delivery History</h2>
           <table>
             <thead>
               <tr>
                 <th>Date</th>
                 <th>Delivered By</th>
                 <th>Vehicle</th>
+                <th>Total Qty</th>
                 <th>Items</th>
               </tr>
             </thead>
             <tbody>
-              ${deliveryRows || `<tr><td colspan="4">No deliveries logged.</td></tr>`}
+              ${deliveryRows || `<tr><td colspan="5">No deliveries logged.</td></tr>`}
             </tbody>
           </table>
 
@@ -561,8 +500,6 @@ export default function DeliveriesPage() {
     win.print();
   }
 
-  /* ================= RENDER ================= */
-
   if (loading) {
     return <div className="p-8">Loading deliveries...</div>;
   }
@@ -575,20 +512,32 @@ export default function DeliveriesPage() {
         <div className="p-4 md:p-6 border-b border-slate-200">
           <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-                Deliveries
-              </h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Deliveries</h1>
               <p className="text-slate-500 mt-1">
-                Record delivered bundles and track outstanding steel for this tower.
+                Fast delivery register for bundle arrivals and outstanding steel.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <button
+                onClick={() => setShowBundleSummary((v) => !v)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
+              >
+                {showBundleSummary ? "Hide Bundle Summary" : "Bundle Summary"}
+              </button>
+
+              <button
                 onClick={printDeliveriesPDF}
                 className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
               >
                 Print / Export PDF
+              </button>
+
+              <button
+                onClick={() => setShowAddDelivery((v) => !v)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium"
+              >
+                {showAddDelivery ? "Close Add" : "Add Delivery"}
               </button>
             </div>
           </div>
@@ -600,7 +549,7 @@ export default function DeliveriesPage() {
             <SummaryCard label="Progress" value={`${progress.toFixed(1)}%`} tone="blue" />
           </div>
 
-          <div className="mt-5 h-4 rounded-full overflow-hidden bg-slate-100">
+          <div className="mt-5 h-3 rounded-full overflow-hidden bg-slate-100">
             <div
               className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600"
               style={{ width: `${progress}%` }}
@@ -608,195 +557,310 @@ export default function DeliveriesPage() {
           </div>
         </div>
 
-        <div className="p-4 md:p-6 space-y-6">
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 md:p-5">
-            <h2 className="text-xl font-bold text-slate-900">Add Delivery</h2>
+        <div className="p-4 md:p-6 space-y-5">
+          <div className="flex flex-col md:flex-row md:items-center gap-3">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search delivery, bundle number, driver, vehicle..."
+              className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
 
-            <div className="grid md:grid-cols-3 gap-3 mt-4">
-              <input
-                value={deliveredBy}
-                onChange={(e) => setDeliveredBy(e.target.value)}
-                placeholder="Delivered by"
-                className="border border-slate-300 rounded-2xl px-4 py-3 text-sm"
-              />
-
-              <input
-                value={vehicle}
-                onChange={(e) => setVehicle(e.target.value)}
-                placeholder="Vehicle / truck"
-                className="border border-slate-300 rounded-2xl px-4 py-3 text-sm"
-              />
-
-              <button
-                onClick={saveDelivery}
-                className="rounded-2xl bg-slate-900 text-white px-4 py-3 text-sm font-medium hover:bg-slate-800"
-              >
-                Save Delivery
-              </button>
-            </div>
-
-            <div className="mt-4">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search bundle number or section..."
-                className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm"
-              />
-            </div>
-
-            <div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {filteredBundles.map((bundle) => {
-                const delivered = deliveredTotals[bundle.bundle_no] || 0;
-                const required = safeNumber(bundle.qty_required, 0);
-                const remaining = Math.max(required - delivered, 0);
-
-                return (
-                  <div
-                    key={bundle.bundle_no}
-                    className="rounded-2xl border border-slate-200 bg-white p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">{bundle.bundle_no}</div>
-                        <div className="text-sm text-slate-500 mt-1">
-                          {bundle.section || "General"}
-                        </div>
-                      </div>
-
-                      <span className="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs font-medium">
-                        Rem {remaining}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 mt-4 text-sm">
-                      <MiniStat label="Req" value={required} />
-                      <MiniStat label="Del" value={delivered} />
-                      <MiniStat label="Rem" value={remaining} />
-                    </div>
-
-                    <input
-                      type="number"
-                      min="0"
-                      value={qtyMap[bundle.bundle_no] ?? ""}
-                      onChange={(e) =>
-                        setQtyMap((prev) => ({
-                          ...prev,
-                          [bundle.bundle_no]: Number(e.target.value),
-                        }))
-                      }
-                      placeholder="Qty delivered now"
-                      className="mt-4 w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                    />
-                  </div>
-                );
-              })}
+            <div className="text-sm text-slate-500 md:min-w-[160px] md:text-right">
+              Showing <span className="font-semibold text-slate-800">{filteredDeliveries.length}</span>{" "}
+              of <span className="font-semibold text-slate-800">{deliveries.length}</span>
             </div>
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-white overflow-hidden">
-            <div className="p-4 md:p-5 border-b border-slate-200">
-              <h2 className="text-xl font-bold text-slate-900">Delivery History</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                Logged delivery records for this tower.
-              </p>
-            </div>
+          {showAddDelivery && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="font-bold text-slate-900">Add Delivery</h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Enter quantities against bundle numbers, then save.
+                  </p>
+                </div>
 
-            {deliveries.length === 0 ? (
-              <div className="p-8 text-slate-500">No deliveries logged yet.</div>
-            ) : (
-              <div className="divide-y divide-slate-200">
-                {deliveries.map((delivery) => {
-                  const isEditing = editingId === delivery.id;
+                <button
+                  onClick={saveDelivery}
+                  className="rounded-xl bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700"
+                >
+                  Save Delivery
+                </button>
+              </div>
 
-                  return (
-                    <div key={delivery.id} className="p-4 md:p-5">
-                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+              <div className="grid md:grid-cols-2 gap-3 mt-4">
+                <input
+                  value={deliveredBy}
+                  onChange={(e) => setDeliveredBy(e.target.value)}
+                  placeholder="Delivered by"
+                  className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                />
+
+                <input
+                  value={vehicle}
+                  onChange={(e) => setVehicle(e.target.value)}
+                  placeholder="Vehicle / truck"
+                  className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                <div className="hidden md:grid grid-cols-[1.5fr_1fr_80px_80px_80px_120px] gap-2 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+                  <div>Bundle</div>
+                  <div>Section</div>
+                  <div>Req</div>
+                  <div>Del</div>
+                  <div>Rem</div>
+                  <div>Qty Now</div>
+                </div>
+
+                <div className="divide-y divide-slate-100 max-h-[420px] overflow-auto">
+                  {filteredBundles.map((bundle) => {
+                    const delivered = deliveredTotals[bundle.bundle_no] || 0;
+                    const required = safeNumber(bundle.qty_required, 0);
+                    const remaining = Math.max(required - delivered, 0);
+
+                    return (
+                      <div
+                        key={bundle.bundle_no}
+                        className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_80px_80px_80px_120px] gap-2 px-3 py-2 items-center text-sm"
+                      >
                         <div>
-                          <div className="font-semibold text-slate-900">
-                            {formatDateTime(delivery.created_at)}
-                          </div>
-                          <div className="text-sm text-slate-500 mt-1">
-                            Delivered by {delivery.delivered_by || "—"} • Vehicle{" "}
-                            {delivery.vehicle || "—"}
+                          <div className="font-semibold text-slate-900">{bundle.bundle_no}</div>
+                          <div className="md:hidden text-xs text-slate-500 mt-1">
+                            {bundle.section || "General"} • Req {required} • Del {delivered} • Rem{" "}
+                            {remaining}
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          {!isEditing ? (
-                            <>
+                        <div className="hidden md:block text-slate-600">{bundle.section || "General"}</div>
+                        <div className="hidden md:block text-slate-700">{required}</div>
+                        <div className="hidden md:block text-slate-700">{delivered}</div>
+                        <div className="hidden md:block text-slate-700">{remaining}</div>
+
+                        <input
+                          type="number"
+                          min="0"
+                          value={qtyMap[bundle.bundle_no] ?? ""}
+                          onChange={(e) =>
+                            setQtyMap((prev) => ({
+                              ...prev,
+                              [bundle.bundle_no]: Number(e.target.value),
+                            }))
+                          }
+                          placeholder="0"
+                          className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showBundleSummary && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+              <div className="grid grid-cols-[1.5fr_1fr_70px_70px_70px] gap-2 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+                <div>Bundle</div>
+                <div>Section</div>
+                <div>Req</div>
+                <div>Del</div>
+                <div>Rem</div>
+              </div>
+
+              <div className="divide-y divide-slate-100 max-h-[360px] overflow-auto">
+                {filteredBundles.map((bundle) => {
+                  const delivered = deliveredTotals[bundle.bundle_no] || 0;
+                  const required = safeNumber(bundle.qty_required, 0);
+                  const remaining = Math.max(required - delivered, 0);
+
+                  return (
+                    <div
+                      key={`summary-${bundle.bundle_no}`}
+                      className="grid grid-cols-[1.5fr_1fr_70px_70px_70px] gap-2 px-3 py-2 text-sm"
+                    >
+                      <div className="font-medium text-slate-900">{bundle.bundle_no}</div>
+                      <div className="text-slate-600 truncate">{bundle.section || "General"}</div>
+                      <div>{required}</div>
+                      <div>{delivered}</div>
+                      <div
+                        className={
+                          remaining <= 0 ? "text-emerald-700 font-semibold" : "text-rose-700"
+                        }
+                      >
+                        {remaining}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="font-bold text-slate-900">Delivery Register</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Thin rows for quick scanning and mobile scrolling.
+                </p>
+              </div>
+            </div>
+
+            <div className="hidden md:grid grid-cols-[165px_1fr_1fr_80px_2fr_150px] bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
+              <div>Date</div>
+              <div>Delivered By</div>
+              <div>Vehicle</div>
+              <div>Qty</div>
+              <div>Bundles</div>
+              <div className="text-right">Actions</div>
+            </div>
+
+            {filteredDeliveries.length === 0 ? (
+              <div className="p-8 text-center text-slate-500">No deliveries match your search.</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {filteredDeliveries.map((delivery) => {
+                  const isEditing = editingId === delivery.id;
+                  const totalQty = getDeliveryTotalQty(delivery);
+
+                  return (
+                    <div key={delivery.id}>
+                      {!isEditing ? (
+                        <>
+                          <div className="hidden md:grid grid-cols-[165px_1fr_1fr_80px_2fr_150px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-slate-50">
+                            <div className="text-slate-700">{formatDateTime(delivery.created_at)}</div>
+                            <div className="text-slate-900 font-medium">
+                              {delivery.delivered_by || "—"}
+                            </div>
+                            <div className="text-slate-700">{delivery.vehicle || "—"}</div>
+                            <div className="font-semibold text-slate-900">{totalQty}</div>
+                            <div className="text-slate-600 truncate">
+                              {getDeliveryBundleText(delivery)}
+                            </div>
+                            <div className="flex justify-end gap-2">
                               <button
                                 onClick={() => startEdit(delivery)}
-                                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"
+                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium"
                               >
                                 Edit
                               </button>
-
                               <button
                                 onClick={() => void deleteDelivery(delivery.id)}
-                                className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
                               >
                                 Delete
                               </button>
-                            </>
-                          ) : (
-                            <>
+                            </div>
+                          </div>
+
+                          <div className="md:hidden px-4 py-3 hover:bg-slate-50">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-900">
+                                  {formatDateTime(delivery.created_at)}
+                                </div>
+                                <div className="text-sm text-slate-500 mt-1">
+                                  {delivery.delivered_by || "—"} • {delivery.vehicle || "—"}
+                                </div>
+                              </div>
+                              <div className="rounded-full bg-slate-100 text-slate-800 px-3 py-1 text-xs font-semibold">
+                                Qty {totalQty}
+                              </div>
+                            </div>
+
+                            <div className="text-sm text-slate-600 mt-2">
+                              {getDeliveryBundleText(delivery)}
+                            </div>
+
+                            <div className="flex gap-2 mt-3">
+                              <button
+                                onClick={() => startEdit(delivery)}
+                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => void deleteDelivery(delivery.id)}
+                                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="px-4 py-4 bg-blue-50">
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <div className="font-bold text-slate-900">Editing Delivery</div>
+                              <div className="text-sm text-slate-600 mt-1">
+                                {formatDateTime(delivery.created_at)} • {delivery.delivered_by || "—"} •{" "}
+                                {delivery.vehicle || "—"}
+                              </div>
+                            </div>
+
+                            <div className="flex gap-2">
                               <button
                                 onClick={cancelEdit}
-                                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"
+                                className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium hover:bg-slate-50"
                               >
                                 Cancel
                               </button>
-
                               <button
                                 onClick={saveEdit}
-                                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
+                                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
                               >
                                 Save Edit
                               </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
+                            </div>
+                          </div>
 
-                      {!isEditing ? (
-                        <div className="mt-4 grid md:grid-cols-2 xl:grid-cols-4 gap-2">
-                          {delivery.tower_bundle_delivery_items?.map((item) => (
-                            <div
-                              key={`${delivery.id}-${item.bundle_no}`}
-                              className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3"
-                            >
-                              <div className="font-semibold text-slate-900">{item.bundle_no}</div>
-                              <div className="text-sm text-slate-500 mt-1">
-                                Qty delivered: {item.qty_delivered}
-                              </div>
+                          <div className="mt-4 rounded-2xl border border-blue-100 bg-white overflow-hidden">
+                            <div className="hidden md:grid grid-cols-[1.5fr_1fr_90px] bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+                              <div>Bundle</div>
+                              <div>Section</div>
+                              <div>Qty</div>
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="mt-4 grid md:grid-cols-2 xl:grid-cols-3 gap-3">
-                          {bundles.map((bundle) => (
-                            <div
-                              key={`${delivery.id}-edit-${bundle.bundle_no}`}
-                              className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3"
-                            >
-                              <div className="font-semibold text-slate-900">{bundle.bundle_no}</div>
-                              <div className="text-sm text-slate-500 mt-1">
-                                {bundle.section || "General"}
-                              </div>
-                              <input
-                                type="number"
-                                min="0"
-                                value={editQtyMap[bundle.bundle_no] ?? ""}
-                                onChange={(e) =>
-                                  setEditQtyMap((prev) => ({
-                                    ...prev,
-                                    [bundle.bundle_no]: Number(e.target.value),
-                                  }))
-                                }
-                                className="mt-3 w-full border border-slate-300 rounded-xl px-3 py-2 text-sm"
-                              />
+
+                            <div className="divide-y divide-slate-100 max-h-[360px] overflow-auto">
+                              {bundles.map((bundle) => (
+                                <div
+                                  key={`${delivery.id}-edit-${bundle.bundle_no}`}
+                                  className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_90px] gap-2 px-3 py-2 items-center text-sm"
+                                >
+                                  <div>
+                                    <div className="font-semibold text-slate-900">
+                                      {bundle.bundle_no}
+                                    </div>
+                                    <div className="md:hidden text-xs text-slate-500 mt-1">
+                                      {bundle.section || "General"}
+                                    </div>
+                                  </div>
+
+                                  <div className="hidden md:block text-slate-600">
+                                    {bundle.section || "General"}
+                                  </div>
+
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={editQtyMap[bundle.bundle_no] ?? ""}
+                                    onChange={(e) =>
+                                      setEditQtyMap((prev) => ({
+                                        ...prev,
+                                        [bundle.bundle_no]: Number(e.target.value),
+                                      }))
+                                    }
+                                    className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
+                                  />
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -810,8 +874,6 @@ export default function DeliveriesPage() {
     </div>
   );
 }
-
-/* ================= SMALL UI ================= */
 
 function SummaryCard({
   label,
@@ -833,15 +895,6 @@ function SummaryCard({
     <div className={`rounded-2xl px-4 py-4 ${toneMap[tone]}`}>
       <div className="text-xs opacity-80">{label}</div>
       <div className="font-bold text-lg mt-1">{value}</div>
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-xl bg-slate-100 px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="font-semibold text-slate-900">{value}</div>
     </div>
   );
 }
