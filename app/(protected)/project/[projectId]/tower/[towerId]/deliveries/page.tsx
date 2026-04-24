@@ -118,6 +118,13 @@ export default function DeliveriesPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [editMode, setEditMode] = useState(false);
+  const [editingDeliveryId, setEditingDeliveryId] = useState<string | null>(null);
+  const [editQtyMap, setEditQtyMap] = useState<Record<string, number>>({});
+  const [editDeliveredBy, setEditDeliveredBy] = useState("");
+  const [editVehicle, setEditVehicle] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -273,14 +280,100 @@ export default function DeliveriesPage() {
     setReloadKey((v) => v + 1);
   }
 
+  function startEditDelivery(delivery: Delivery) {
+    const map: Record<string, number> = {};
+
+    delivery.tower_bundle_delivery_items.forEach((item) => {
+      map[item.bundle_no] = safeNumber(item.qty_delivered, 0);
+    });
+
+    setEditingDeliveryId(delivery.id);
+    setEditQtyMap(map);
+    setEditDeliveredBy(delivery.delivered_by || "");
+    setEditVehicle(delivery.vehicle || "");
+  }
+
+  function cancelEditDelivery() {
+    setEditingDeliveryId(null);
+    setEditQtyMap({});
+    setEditDeliveredBy("");
+    setEditVehicle("");
+  }
+
+  async function saveEditDelivery() {
+    if (!editingDeliveryId) return;
+
+    const items = Object.entries(editQtyMap)
+      .filter(([, qty]) => Number(qty) > 0)
+      .map(([bundle_no, qty]) => ({
+        delivery_id: editingDeliveryId,
+        bundle_no,
+        qty_delivered: Number(qty),
+      }));
+
+    if (!items.length) {
+      alert("This edit has no delivered quantities. Delete the delivery instead if it was a mistake.");
+      return;
+    }
+
+    setSavingEdit(true);
+
+    const { error: deliveryUpdateError } = await supabase
+      .from("tower_bundle_deliveries")
+      .update({
+        delivered_by: editDeliveredBy,
+        vehicle: editVehicle,
+      })
+      .eq("id", editingDeliveryId);
+
+    if (deliveryUpdateError) {
+      setSavingEdit(false);
+      alert(deliveryUpdateError.message || "Failed to update delivery.");
+      return;
+    }
+
+    const { error: deleteItemsError } = await supabase
+      .from("tower_bundle_delivery_items")
+      .delete()
+      .eq("delivery_id", editingDeliveryId);
+
+    if (deleteItemsError) {
+      setSavingEdit(false);
+      alert(deleteItemsError.message || "Failed to update delivery items.");
+      return;
+    }
+
+    const { error: insertItemsError } = await supabase
+      .from("tower_bundle_delivery_items")
+      .insert(items);
+
+    setSavingEdit(false);
+
+    if (insertItemsError) {
+      alert(insertItemsError.message || "Failed to save edited quantities.");
+      return;
+    }
+
+    cancelEditDelivery();
+    setReloadKey((v) => v + 1);
+  }
+
   async function deleteDelivery(id: string) {
-    if (!confirm("Delete delivery?")) return;
+    const confirmed = window.confirm(
+      "Delete this delivery?\n\nThis should only be used for a misclick or incorrect entry.",
+    );
+
+    if (!confirmed) return;
 
     const { error } = await supabase.from("tower_bundle_deliveries").delete().eq("id", id);
 
     if (error) {
       alert(error.message || "Failed to delete delivery.");
       return;
+    }
+
+    if (editingDeliveryId === id) {
+      cancelEditDelivery();
     }
 
     setReloadKey((v) => v + 1);
@@ -479,6 +572,21 @@ export default function DeliveriesPage() {
               </button>
 
               <button
+                onClick={() => {
+                  setEditMode((prev) => !prev);
+                  setShowHistory(true);
+                  cancelEditDelivery();
+                }}
+                className={`px-4 py-2 rounded-xl text-sm font-medium border ${
+                  editMode
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                }`}
+              >
+                {editMode ? "Exit Edit Mode" : "Edit Mode"}
+              </button>
+
+              <button
                 onClick={saveDelivery}
                 disabled={saving}
                 className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium disabled:opacity-60"
@@ -634,6 +742,13 @@ export default function DeliveriesPage() {
             </div>
           </div>
 
+          {editMode && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              Edit mode is on. Use this only to fix a misclick, adjust delivered quantities, or delete an
+              incorrect delivery record.
+            </div>
+          )}
+
           {showHistory && (
             <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-200">
@@ -657,22 +772,129 @@ export default function DeliveriesPage() {
                       .map((item) => `${item.bundle_no} × ${item.qty_delivered}`)
                       .join(", ");
 
+                    const isEditing = editingDeliveryId === delivery.id;
+
                     return (
-                      <div
-                        key={delivery.id}
-                        className="grid grid-cols-1 md:grid-cols-[170px_1fr_1fr_80px_2fr_90px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-slate-50"
-                      >
-                        <div className="text-slate-700">{formatDateTime(delivery.created_at)}</div>
-                        <div className="font-medium text-slate-900">{delivery.delivered_by || "—"}</div>
-                        <div className="text-slate-700">{delivery.vehicle || "—"}</div>
-                        <div className="font-semibold text-slate-900">Qty {totalQty}</div>
-                        <div className="text-slate-600 truncate">{itemText || "No items"}</div>
-                        <button
-                          onClick={() => void deleteDelivery(delivery.id)}
-                          className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
-                        >
-                          Delete
-                        </button>
+                      <div key={delivery.id}>
+                        {!isEditing ? (
+                          <div className="grid grid-cols-1 md:grid-cols-[170px_1fr_1fr_80px_2fr_160px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-slate-50">
+                            <div className="text-slate-700">{formatDateTime(delivery.created_at)}</div>
+                            <div className="font-medium text-slate-900">
+                              {delivery.delivered_by || "—"}
+                            </div>
+                            <div className="text-slate-700">{delivery.vehicle || "—"}</div>
+                            <div className="font-semibold text-slate-900">Qty {totalQty}</div>
+                            <div className="text-slate-600 truncate">{itemText || "No items"}</div>
+
+                            <div className="flex gap-2 md:justify-end">
+                              {editMode && (
+                                <>
+                                  <button
+                                    onClick={() => startEditDelivery(delivery)}
+                                    className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium"
+                                  >
+                                    Edit
+                                  </button>
+
+                                  <button
+                                    onClick={() => void deleteDelivery(delivery.id)}
+                                    className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
+                                  >
+                                    Delete
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="bg-blue-50 p-4 space-y-4">
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                              <div>
+                                <div className="font-bold text-slate-900">Editing Delivery</div>
+                                <div className="text-sm text-slate-600 mt-1">
+                                  {formatDateTime(delivery.created_at)}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={cancelEditDelivery}
+                                  className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium hover:bg-slate-50"
+                                >
+                                  Cancel
+                                </button>
+
+                                <button
+                                  onClick={saveEditDelivery}
+                                  disabled={savingEdit}
+                                  className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+                                >
+                                  {savingEdit ? "Saving..." : "Save Edit"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-3">
+                              <input
+                                value={editDeliveredBy}
+                                onChange={(e) => setEditDeliveredBy(e.target.value)}
+                                placeholder="Delivered by"
+                                className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                              />
+
+                              <input
+                                value={editVehicle}
+                                onChange={(e) => setEditVehicle(e.target.value)}
+                                placeholder="Vehicle / truck"
+                                className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                              />
+                            </div>
+
+                            <div className="rounded-2xl border border-blue-100 bg-white overflow-hidden">
+                              <div className="hidden md:grid grid-cols-[1.5fr_1fr_110px] bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+                                <div>Bundle</div>
+                                <div>Section</div>
+                                <div>Qty</div>
+                              </div>
+
+                              <div className="divide-y divide-slate-100 max-h-[360px] overflow-auto">
+                                {bundles.map((bundle) => (
+                                  <div
+                                    key={`${delivery.id}-edit-${bundle.bundle_no}`}
+                                    className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_110px] gap-2 px-3 py-2 items-center text-sm"
+                                  >
+                                    <div>
+                                      <div className="font-semibold text-slate-900">
+                                        {bundle.bundle_no}
+                                      </div>
+                                      <div className="md:hidden text-xs text-slate-500 mt-1">
+                                        {bundle.section || "General"}
+                                      </div>
+                                    </div>
+
+                                    <div className="hidden md:block text-slate-600">
+                                      {bundle.section || "General"}
+                                    </div>
+
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={editQtyMap[bundle.bundle_no] ?? ""}
+                                      onChange={(e) =>
+                                        setEditQtyMap((prev) => ({
+                                          ...prev,
+                                          [bundle.bundle_no]: Number(e.target.value),
+                                        }))
+                                      }
+                                      placeholder="0"
+                                      className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
