@@ -83,23 +83,19 @@ function getTowerPrintLabel(tower: Tower | null): string {
   );
 }
 
-function getDeliveryTotalQty(delivery: Delivery): number {
-  return (delivery.tower_bundle_delivery_items || []).reduce(
-    (sum, item) => sum + safeNumber(item.qty_delivered, 0),
-    0,
-  );
+function getStatus(required: number, delivered: number) {
+  const remaining = Math.max(required - delivered, 0);
+  if (required <= 0) return "No Qty";
+  if (remaining <= 0) return "Complete";
+  if (delivered > 0) return "Partial";
+  return "Outstanding";
 }
 
-function getDeliveryBundleText(delivery: Delivery): string {
-  const items = delivery.tower_bundle_delivery_items || [];
-  if (items.length === 0) return "No bundles";
-  if (items.length <= 3) {
-    return items.map((item) => `${item.bundle_no} × ${item.qty_delivered}`).join(", ");
-  }
-  return `${items
-    .slice(0, 3)
-    .map((item) => `${item.bundle_no} × ${item.qty_delivered}`)
-    .join(", ")} +${items.length - 3} more`;
+function getStatusClasses(status: string) {
+  if (status === "Complete") return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (status === "Partial") return "bg-amber-100 text-amber-700 border-amber-200";
+  if (status === "Outstanding") return "bg-rose-100 text-rose-700 border-rose-200";
+  return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
 export default function DeliveriesPage() {
@@ -119,12 +115,8 @@ export default function DeliveriesPage() {
   const [deliveredBy, setDeliveredBy] = useState("");
   const [vehicle, setVehicle] = useState("");
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
-
-  const [showAddDelivery, setShowAddDelivery] = useState(false);
-  const [showBundleSummary, setShowBundleSummary] = useState(false);
-
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editQtyMap, setEditQtyMap] = useState<Record<string, number>>({});
+  const [showHistory, setShowHistory] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -209,11 +201,18 @@ export default function DeliveriesPage() {
     if (!q) return bundles;
 
     return bundles.filter((bundle) => {
+      const delivered = deliveredTotals[bundle.bundle_no] || 0;
+      const required = safeNumber(bundle.qty_required, 0);
+      const remaining = Math.max(required - delivered, 0);
+      const status = getStatus(required, delivered);
+
       const text = [
         bundle.bundle_no,
         bundle.section || "",
-        String(bundle.qty_required || 0),
-        String(deliveredTotals[bundle.bundle_no] || 0),
+        String(required),
+        String(delivered),
+        String(remaining),
+        status,
       ]
         .join(" ")
         .toLowerCase();
@@ -221,29 +220,6 @@ export default function DeliveriesPage() {
       return text.includes(q);
     });
   }, [bundles, search, deliveredTotals]);
-
-  const filteredDeliveries = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    if (!q) return deliveries;
-
-    return deliveries.filter((delivery) => {
-      const itemText = delivery.tower_bundle_delivery_items
-        ?.map((item) => `${item.bundle_no} ${item.qty_delivered}`)
-        .join(" ");
-
-      const text = [
-        delivery.delivered_by || "",
-        delivery.vehicle || "",
-        formatDateTime(delivery.created_at),
-        itemText || "",
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return text.includes(q);
-    });
-  }, [deliveries, search]);
 
   async function saveDelivery() {
     const items = Object.entries(qtyMap)
@@ -254,9 +230,11 @@ export default function DeliveriesPage() {
       }));
 
     if (!items.length) {
-      alert("Enter delivered quantities.");
+      alert("Enter at least one delivered quantity.");
       return;
     }
+
+    setSaving(true);
 
     const { data, error } = await supabase
       .from("tower_bundle_deliveries")
@@ -269,6 +247,7 @@ export default function DeliveriesPage() {
       .single();
 
     if (error || !data) {
+      setSaving(false);
       alert(error?.message || "Insert failed.");
       return;
     }
@@ -281,6 +260,8 @@ export default function DeliveriesPage() {
 
     const { error: itemError } = await supabase.from("tower_bundle_delivery_items").insert(payload);
 
+    setSaving(false);
+
     if (itemError) {
       alert(itemError.message || "Failed to save delivery items.");
       return;
@@ -289,7 +270,6 @@ export default function DeliveriesPage() {
     setDeliveredBy("");
     setVehicle("");
     setQtyMap({});
-    setShowAddDelivery(false);
     setReloadKey((v) => v + 1);
   }
 
@@ -306,75 +286,28 @@ export default function DeliveriesPage() {
     setReloadKey((v) => v + 1);
   }
 
-  function startEdit(delivery: Delivery) {
-    setEditingId(delivery.id);
-
-    const map: Record<string, number> = {};
-    delivery.tower_bundle_delivery_items?.forEach((item) => {
-      map[item.bundle_no] = Number(item.qty_delivered);
-    });
-
-    setEditQtyMap(map);
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditQtyMap({});
-  }
-
-  async function saveEdit() {
-    if (!editingId) return;
-
-    const { error: deleteError } = await supabase
-      .from("tower_bundle_delivery_items")
-      .delete()
-      .eq("delivery_id", editingId);
-
-    if (deleteError) {
-      alert(deleteError.message || "Failed to clear old delivery items.");
-      return;
-    }
-
-    const payload = Object.entries(editQtyMap)
-      .filter(([, qty]) => Number(qty) > 0)
-      .map(([bundle_no, qty]) => ({
-        delivery_id: editingId,
-        bundle_no,
-        qty_delivered: Number(qty),
-      }));
-
-    if (payload.length > 0) {
-      const { error: insertError } = await supabase.from("tower_bundle_delivery_items").insert(payload);
-
-      if (insertError) {
-        alert(insertError.message || "Failed to save edited delivery.");
-        return;
-      }
-    }
-
-    setEditingId(null);
-    setEditQtyMap({});
-    setReloadKey((v) => v + 1);
-  }
-
   function printDeliveriesPDF() {
     const towerLabel = getTowerPrintLabel(tower);
     const towerLine = safeString(tower?.line, "");
-    const title = "Delivery Register";
+    const title = "Delivery Checklist";
 
-    const deliveryRows = deliveries
-      .map((delivery) => {
-        const items = delivery.tower_bundle_delivery_items
-          ?.map((item) => `${item.bundle_no} × ${item.qty_delivered}`)
-          .join("<br/>");
+    const bundleRows = filteredBundles
+      .map((bundle) => {
+        const required = safeNumber(bundle.qty_required, 0);
+        const delivered = deliveredTotals[bundle.bundle_no] || 0;
+        const remaining = Math.max(required - delivered, 0);
+        const status = getStatus(required, delivered);
 
         return `
           <tr>
-            <td>${formatDateTime(delivery.created_at)}</td>
-            <td>${delivery.delivered_by || ""}</td>
-            <td>${delivery.vehicle || ""}</td>
-            <td>${getDeliveryTotalQty(delivery)}</td>
-            <td>${items || ""}</td>
+            <td class="tick-cell"></td>
+            <td>${bundle.bundle_no}</td>
+            <td>${bundle.section || "General"}</td>
+            <td>${required}</td>
+            <td>${delivered}</td>
+            <td>${remaining}</td>
+            <td>${status}</td>
+            <td></td>
           </tr>
         `;
       })
@@ -385,53 +318,60 @@ export default function DeliveriesPage() {
         <head>
           <title>${title} - ${towerLabel}</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
+            body { font-family: Arial, sans-serif; padding: 18px; color: #0f172a; }
             .print-header {
               display: flex;
               justify-content: space-between;
               align-items: flex-start;
               border-bottom: 2px solid #0f172a;
-              padding-bottom: 12px;
-              margin-bottom: 18px;
+              padding-bottom: 10px;
+              margin-bottom: 12px;
             }
-            h1 { margin: 0; font-size: 22px; }
-            .tower-label { font-size: 18px; font-weight: 700; }
-            .meta { font-size: 12px; color: #64748b; margin-top: 4px; }
+            h1 { margin: 0; font-size: 20px; }
+            .tower-label { font-size: 16px; font-weight: 700; }
+            .meta { font-size: 11px; color: #64748b; margin-top: 4px; }
             .summary {
               display: grid;
               grid-template-columns: repeat(4, 1fr);
-              gap: 10px;
-              margin-bottom: 18px;
+              gap: 8px;
+              margin-bottom: 12px;
             }
             .summary-card {
               border: 1px solid #cbd5e1;
               background: #f8fafc;
-              padding: 10px;
-              border-radius: 10px;
-            }
-            .summary-label { font-size: 11px; color: #64748b; }
-            .summary-value { font-size: 18px; font-weight: 700; margin-top: 4px; }
-            table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
-            th, td {
-              border: 1px solid #cbd5e1;
               padding: 7px;
-              font-size: 11px;
-              text-align: left;
-              vertical-align: top;
+              border-radius: 6px;
             }
-            th { background: #f1f5f9; }
-            thead { display: table-header-group; }
-            tr { page-break-inside: avoid; }
-            .print-footer {
-              margin-top: 20px;
+            .summary-label { font-size: 9px; color: #64748b; }
+            .summary-value { font-size: 15px; font-weight: 700; margin-top: 2px; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td {
+              border: 1px solid #94a3b8;
+              padding: 5px 6px;
+              font-size: 10.5px;
+              text-align: left;
+              vertical-align: middle;
+            }
+            th { background: #e2e8f0; font-weight: 700; }
+            tr { page-break-inside: avoid; height: 22px; }
+            .tick-cell { width: 22px; min-width: 22px; }
+            .tick-cell:before {
+              content: "";
+              display: inline-block;
+              width: 12px;
+              height: 12px;
+              border: 1.5px solid #0f172a;
+            }
+            .footer {
+              margin-top: 12px;
               padding-top: 8px;
               border-top: 1px solid #cbd5e1;
-              font-size: 11px;
+              font-size: 10px;
               color: #64748b;
               display: flex;
               justify-content: space-between;
             }
-            @page { margin: 14mm 10mm; }
+            @page { margin: 12mm 8mm; }
           </style>
         </head>
 
@@ -470,19 +410,22 @@ export default function DeliveriesPage() {
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Delivered By</th>
-                <th>Vehicle</th>
-                <th>Total Qty</th>
-                <th>Items</th>
+                <th>Check</th>
+                <th>Bundle No</th>
+                <th>Section</th>
+                <th>Required</th>
+                <th>Delivered</th>
+                <th>Remaining</th>
+                <th>Status</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody>
-              ${deliveryRows || `<tr><td colspan="5">No deliveries logged.</td></tr>`}
+              ${bundleRows || `<tr><td colspan="8">No bundles found.</td></tr>`}
             </tbody>
           </table>
 
-          <div class="print-footer">
+          <div class="footer">
             <span>${title} - Tower ${towerLabel}</span>
             <span>TTTracker</span>
           </div>
@@ -512,20 +455,15 @@ export default function DeliveriesPage() {
         <div className="p-4 md:p-6 border-b border-slate-200">
           <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Deliveries</h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
+                Delivery Register
+              </h1>
               <p className="text-slate-500 mt-1">
-                Fast delivery register for bundle arrivals and outstanding steel.
+                Excel-style bundle checklist showing required, delivered and remaining quantities.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setShowBundleSummary((v) => !v)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
-              >
-                {showBundleSummary ? "Hide Bundle Summary" : "Bundle Summary"}
-              </button>
-
               <button
                 onClick={printDeliveriesPDF}
                 className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
@@ -534,10 +472,18 @@ export default function DeliveriesPage() {
               </button>
 
               <button
-                onClick={() => setShowAddDelivery((v) => !v)}
-                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium"
+                onClick={() => setShowHistory((v) => !v)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
               >
-                {showAddDelivery ? "Close Add" : "Add Delivery"}
+                {showHistory ? "Hide History" : "Show History"}
+              </button>
+
+              <button
+                onClick={saveDelivery}
+                disabled={saving}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium disabled:opacity-60"
+              >
+                {saving ? "Saving..." : "Save Delivery"}
               </button>
             </div>
           </div>
@@ -557,318 +503,183 @@ export default function DeliveriesPage() {
           </div>
         </div>
 
-        <div className="p-4 md:p-6 space-y-5">
-          <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="p-4 md:p-6 space-y-4">
+          <div className="grid md:grid-cols-[1fr_220px_220px] gap-3">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search delivery, bundle number, driver, vehicle..."
+              placeholder="Search bundle, section, status..."
               className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
 
-            <div className="text-sm text-slate-500 md:min-w-[160px] md:text-right">
-              Showing <span className="font-semibold text-slate-800">{filteredDeliveries.length}</span>{" "}
-              of <span className="font-semibold text-slate-800">{deliveries.length}</span>
+            <input
+              value={deliveredBy}
+              onChange={(e) => setDeliveredBy(e.target.value)}
+              placeholder="Delivered by"
+              className="border border-slate-300 rounded-2xl px-4 py-3 text-sm"
+            />
+
+            <input
+              value={vehicle}
+              onChange={(e) => setVehicle(e.target.value)}
+              placeholder="Vehicle / truck"
+              className="border border-slate-300 rounded-2xl px-4 py-3 text-sm"
+            />
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <div className="hidden md:grid grid-cols-[44px_1.5fr_1fr_80px_80px_80px_115px_110px] gap-2 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+              <div>Tick</div>
+              <div>Bundle No</div>
+              <div>Section</div>
+              <div>Req</div>
+              <div>Del</div>
+              <div>Rem</div>
+              <div>Status</div>
+              <div>Qty Now</div>
+            </div>
+
+            <div className="divide-y divide-slate-100">
+              {filteredBundles.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  No bundles match your search.
+                </div>
+              ) : (
+                filteredBundles.map((bundle) => {
+                  const delivered = deliveredTotals[bundle.bundle_no] || 0;
+                  const required = safeNumber(bundle.qty_required, 0);
+                  const remaining = Math.max(required - delivered, 0);
+                  const status = getStatus(required, delivered);
+                  const isComplete = status === "Complete";
+
+                  return (
+                    <div
+                      key={bundle.bundle_no}
+                      className="grid grid-cols-1 md:grid-cols-[44px_1.5fr_1fr_80px_80px_80px_115px_110px] gap-2 px-3 py-2 items-center text-sm hover:bg-slate-50"
+                    >
+                      <div className="hidden md:flex items-center">
+                        <div
+                          className={`h-5 w-5 rounded border flex items-center justify-center text-xs font-bold ${
+                            isComplete
+                              ? "bg-emerald-600 border-emerald-600 text-white"
+                              : "bg-white border-slate-400 text-white"
+                          }`}
+                        >
+                          {isComplete ? "✓" : ""}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`md:hidden h-5 w-5 rounded border flex items-center justify-center text-xs font-bold ${
+                              isComplete
+                                ? "bg-emerald-600 border-emerald-600 text-white"
+                                : "bg-white border-slate-400 text-white"
+                            }`}
+                          >
+                            {isComplete ? "✓" : ""}
+                          </div>
+                          <div className="font-semibold text-slate-900">{bundle.bundle_no}</div>
+                        </div>
+
+                        <div className="md:hidden text-xs text-slate-500 mt-1">
+                          {bundle.section || "General"} • Req {required} • Del {delivered} • Rem{" "}
+                          {remaining}
+                        </div>
+                      </div>
+
+                      <div className="hidden md:block text-slate-600 truncate">
+                        {bundle.section || "General"}
+                      </div>
+
+                      <div className="hidden md:block text-slate-700">{required}</div>
+                      <div className="hidden md:block text-slate-700">{delivered}</div>
+
+                      <div
+                        className={`hidden md:block font-semibold ${
+                          remaining <= 0 ? "text-emerald-700" : "text-rose-700"
+                        }`}
+                      >
+                        {remaining}
+                      </div>
+
+                      <div>
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusClasses(
+                            status,
+                          )}`}
+                        >
+                          {status}
+                        </span>
+                      </div>
+
+                      <input
+                        type="number"
+                        min="0"
+                        value={qtyMap[bundle.bundle_no] ?? ""}
+                        onChange={(e) =>
+                          setQtyMap((prev) => ({
+                            ...prev,
+                            [bundle.bundle_no]: Number(e.target.value),
+                          }))
+                        }
+                        placeholder="0"
+                        className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
+                      />
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
-          {showAddDelivery && (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div>
-                  <h2 className="font-bold text-slate-900">Add Delivery</h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    Enter quantities against bundle numbers, then save.
-                  </p>
-                </div>
-
-                <button
-                  onClick={saveDelivery}
-                  className="rounded-xl bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700"
-                >
-                  Save Delivery
-                </button>
+          {showHistory && (
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-200">
+                <h2 className="font-bold text-slate-900">Delivery History</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Logged delivery submissions for this tower.
+                </p>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-3 mt-4">
-                <input
-                  value={deliveredBy}
-                  onChange={(e) => setDeliveredBy(e.target.value)}
-                  placeholder="Delivered by"
-                  className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
-                />
+              {deliveries.length === 0 ? (
+                <div className="p-6 text-slate-500">No deliveries logged yet.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {deliveries.map((delivery) => {
+                    const totalQty = delivery.tower_bundle_delivery_items.reduce(
+                      (sum, item) => sum + safeNumber(item.qty_delivered, 0),
+                      0,
+                    );
 
-                <input
-                  value={vehicle}
-                  onChange={(e) => setVehicle(e.target.value)}
-                  placeholder="Vehicle / truck"
-                  className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
-                />
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white overflow-hidden">
-                <div className="hidden md:grid grid-cols-[1.5fr_1fr_80px_80px_80px_120px] gap-2 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
-                  <div>Bundle</div>
-                  <div>Section</div>
-                  <div>Req</div>
-                  <div>Del</div>
-                  <div>Rem</div>
-                  <div>Qty Now</div>
-                </div>
-
-                <div className="divide-y divide-slate-100 max-h-[420px] overflow-auto">
-                  {filteredBundles.map((bundle) => {
-                    const delivered = deliveredTotals[bundle.bundle_no] || 0;
-                    const required = safeNumber(bundle.qty_required, 0);
-                    const remaining = Math.max(required - delivered, 0);
+                    const itemText = delivery.tower_bundle_delivery_items
+                      .map((item) => `${item.bundle_no} × ${item.qty_delivered}`)
+                      .join(", ");
 
                     return (
                       <div
-                        key={bundle.bundle_no}
-                        className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_80px_80px_80px_120px] gap-2 px-3 py-2 items-center text-sm"
+                        key={delivery.id}
+                        className="grid grid-cols-1 md:grid-cols-[170px_1fr_1fr_80px_2fr_90px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-slate-50"
                       >
-                        <div>
-                          <div className="font-semibold text-slate-900">{bundle.bundle_no}</div>
-                          <div className="md:hidden text-xs text-slate-500 mt-1">
-                            {bundle.section || "General"} • Req {required} • Del {delivered} • Rem{" "}
-                            {remaining}
-                          </div>
-                        </div>
-
-                        <div className="hidden md:block text-slate-600">{bundle.section || "General"}</div>
-                        <div className="hidden md:block text-slate-700">{required}</div>
-                        <div className="hidden md:block text-slate-700">{delivered}</div>
-                        <div className="hidden md:block text-slate-700">{remaining}</div>
-
-                        <input
-                          type="number"
-                          min="0"
-                          value={qtyMap[bundle.bundle_no] ?? ""}
-                          onChange={(e) =>
-                            setQtyMap((prev) => ({
-                              ...prev,
-                              [bundle.bundle_no]: Number(e.target.value),
-                            }))
-                          }
-                          placeholder="0"
-                          className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
-                        />
+                        <div className="text-slate-700">{formatDateTime(delivery.created_at)}</div>
+                        <div className="font-medium text-slate-900">{delivery.delivered_by || "—"}</div>
+                        <div className="text-slate-700">{delivery.vehicle || "—"}</div>
+                        <div className="font-semibold text-slate-900">Qty {totalQty}</div>
+                        <div className="text-slate-600 truncate">{itemText || "No items"}</div>
+                        <button
+                          onClick={() => void deleteDelivery(delivery.id)}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
+                        >
+                          Delete
+                        </button>
                       </div>
                     );
                   })}
                 </div>
-              </div>
+              )}
             </div>
           )}
-
-          {showBundleSummary && (
-            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-              <div className="grid grid-cols-[1.5fr_1fr_70px_70px_70px] gap-2 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
-                <div>Bundle</div>
-                <div>Section</div>
-                <div>Req</div>
-                <div>Del</div>
-                <div>Rem</div>
-              </div>
-
-              <div className="divide-y divide-slate-100 max-h-[360px] overflow-auto">
-                {filteredBundles.map((bundle) => {
-                  const delivered = deliveredTotals[bundle.bundle_no] || 0;
-                  const required = safeNumber(bundle.qty_required, 0);
-                  const remaining = Math.max(required - delivered, 0);
-
-                  return (
-                    <div
-                      key={`summary-${bundle.bundle_no}`}
-                      className="grid grid-cols-[1.5fr_1fr_70px_70px_70px] gap-2 px-3 py-2 text-sm"
-                    >
-                      <div className="font-medium text-slate-900">{bundle.bundle_no}</div>
-                      <div className="text-slate-600 truncate">{bundle.section || "General"}</div>
-                      <div>{required}</div>
-                      <div>{delivered}</div>
-                      <div
-                        className={
-                          remaining <= 0 ? "text-emerald-700 font-semibold" : "text-rose-700"
-                        }
-                      >
-                        {remaining}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <h2 className="font-bold text-slate-900">Delivery Register</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Thin rows for quick scanning and mobile scrolling.
-                </p>
-              </div>
-            </div>
-
-            <div className="hidden md:grid grid-cols-[165px_1fr_1fr_80px_2fr_150px] bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-600">
-              <div>Date</div>
-              <div>Delivered By</div>
-              <div>Vehicle</div>
-              <div>Qty</div>
-              <div>Bundles</div>
-              <div className="text-right">Actions</div>
-            </div>
-
-            {filteredDeliveries.length === 0 ? (
-              <div className="p-8 text-center text-slate-500">No deliveries match your search.</div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {filteredDeliveries.map((delivery) => {
-                  const isEditing = editingId === delivery.id;
-                  const totalQty = getDeliveryTotalQty(delivery);
-
-                  return (
-                    <div key={delivery.id}>
-                      {!isEditing ? (
-                        <>
-                          <div className="hidden md:grid grid-cols-[165px_1fr_1fr_80px_2fr_150px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-slate-50">
-                            <div className="text-slate-700">{formatDateTime(delivery.created_at)}</div>
-                            <div className="text-slate-900 font-medium">
-                              {delivery.delivered_by || "—"}
-                            </div>
-                            <div className="text-slate-700">{delivery.vehicle || "—"}</div>
-                            <div className="font-semibold text-slate-900">{totalQty}</div>
-                            <div className="text-slate-600 truncate">
-                              {getDeliveryBundleText(delivery)}
-                            </div>
-                            <div className="flex justify-end gap-2">
-                              <button
-                                onClick={() => startEdit(delivery)}
-                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => void deleteDelivery(delivery.id)}
-                                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="md:hidden px-4 py-3 hover:bg-slate-50">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="font-semibold text-slate-900">
-                                  {formatDateTime(delivery.created_at)}
-                                </div>
-                                <div className="text-sm text-slate-500 mt-1">
-                                  {delivery.delivered_by || "—"} • {delivery.vehicle || "—"}
-                                </div>
-                              </div>
-                              <div className="rounded-full bg-slate-100 text-slate-800 px-3 py-1 text-xs font-semibold">
-                                Qty {totalQty}
-                              </div>
-                            </div>
-
-                            <div className="text-sm text-slate-600 mt-2">
-                              {getDeliveryBundleText(delivery)}
-                            </div>
-
-                            <div className="flex gap-2 mt-3">
-                              <button
-                                onClick={() => startEdit(delivery)}
-                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => void deleteDelivery(delivery.id)}
-                                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="px-4 py-4 bg-blue-50">
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <div>
-                              <div className="font-bold text-slate-900">Editing Delivery</div>
-                              <div className="text-sm text-slate-600 mt-1">
-                                {formatDateTime(delivery.created_at)} • {delivery.delivered_by || "—"} •{" "}
-                                {delivery.vehicle || "—"}
-                              </div>
-                            </div>
-
-                            <div className="flex gap-2">
-                              <button
-                                onClick={cancelEdit}
-                                className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium hover:bg-slate-50"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                onClick={saveEdit}
-                                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-                              >
-                                Save Edit
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 rounded-2xl border border-blue-100 bg-white overflow-hidden">
-                            <div className="hidden md:grid grid-cols-[1.5fr_1fr_90px] bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
-                              <div>Bundle</div>
-                              <div>Section</div>
-                              <div>Qty</div>
-                            </div>
-
-                            <div className="divide-y divide-slate-100 max-h-[360px] overflow-auto">
-                              {bundles.map((bundle) => (
-                                <div
-                                  key={`${delivery.id}-edit-${bundle.bundle_no}`}
-                                  className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_90px] gap-2 px-3 py-2 items-center text-sm"
-                                >
-                                  <div>
-                                    <div className="font-semibold text-slate-900">
-                                      {bundle.bundle_no}
-                                    </div>
-                                    <div className="md:hidden text-xs text-slate-500 mt-1">
-                                      {bundle.section || "General"}
-                                    </div>
-                                  </div>
-
-                                  <div className="hidden md:block text-slate-600">
-                                    {bundle.section || "General"}
-                                  </div>
-
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    value={editQtyMap[bundle.bundle_no] ?? ""}
-                                    onChange={(e) =>
-                                      setEditQtyMap((prev) => ({
-                                        ...prev,
-                                        [bundle.bundle_no]: Number(e.target.value),
-                                      }))
-                                    }
-                                    className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </div>
       </div>
     </div>
