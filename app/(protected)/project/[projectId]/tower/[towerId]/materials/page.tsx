@@ -161,7 +161,25 @@ function safeNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+function getTowerPrintLabel(tower: TowerRecord | null): string {
+  if (!tower) return "Unknown Tower";
 
+  const extra = tower.extra_data || {};
+
+  return (
+    safeString(tower.tower_number) ||
+    safeString(tower.structure_number) ||
+    safeString(tower.tower_no) ||
+    safeString(tower.name) ||
+    safeString(extra["Tower No"]) ||
+    safeString(extra["Tower Number"]) ||
+    safeString(extra["Structure Number"]) ||
+    safeString(extra["Structure No"]) ||
+    safeString(extra["Label"]) ||
+    safeString(extra["label"]) ||
+    "Unknown Tower"
+  );
+}
 function normaliseSection(value: string): string {
   const trimmed = value.trim();
   return trimmed === "" ? "General" : trimmed;
@@ -1221,6 +1239,8 @@ export default function MaterialsPage() {
     let title = "Materials";
     let bodyHtml = "";
 
+const towerLabel = getTowerPrintLabel(tower);
+const towerLine = safeString(tower?.line, "");
     if (viewMode === "bundles") {
       title = "Bundle List";
       bodyHtml = `
@@ -1293,26 +1313,95 @@ export default function MaterialsPage() {
       `;
     }
 
-    const html = `
-      <html>
-        <head>
-          <title>${title}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
-            h1 { margin: 0 0 12px 0; }
-            .meta { margin-bottom: 20px; color: #475569; font-size: 12px; }
-            table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
-            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; }
-            th { background: #f1f5f9; }
-          </style>
-        </head>
-        <body>
-          <h1>${title}</h1>
-          <div class="meta">Tower materials export • ${new Date().toLocaleString()}</div>
-          ${bodyHtml}
-        </body>
-      </html>
-    `;
+const html = `
+<html>
+<head>
+<title>${title} - ${towerLabel}</title>
+
+<style>
+body{
+font-family:Arial,sans-serif;
+padding:24px;
+color:#0f172a;
+}
+
+.print-header{
+display:flex;
+justify-content:space-between;
+align-items:flex-start;
+border-bottom:2px solid #0f172a;
+padding-bottom:12px;
+margin-bottom:18px;
+}
+
+h1{
+margin:0;
+font-size:22px;
+}
+
+.tower-label{
+font-size:18px;
+font-weight:700;
+}
+
+.meta{
+font-size:12px;
+color:#64748b;
+margin-top:4px;
+}
+
+table{
+border-collapse:collapse;
+width:100%;
+}
+
+th,td{
+border:1px solid #cbd5e1;
+padding:8px;
+font-size:12px;
+text-align:left;
+}
+
+th{
+background:#f1f5f9;
+}
+
+.print-footer{
+margin-top:20px;
+padding-top:8px;
+border-top:1px solid #cbd5e1;
+font-size:11px;
+color:#64748b;
+display:flex;
+justify-content:space-between;
+}
+</style>
+</head>
+
+<body>
+
+<div class="print-header">
+<div>
+<h1>${title}</h1>
+<div class="meta">Printed ${new Date().toLocaleString()}</div>
+</div>
+
+<div style="text-align:right">
+<div class="tower-label">Tower: ${towerLabel}</div>
+<div class="meta">${towerLine ? `Line: ${towerLine}` : ""}</div>
+</div>
+</div>
+
+${bodyHtml}
+
+<div class="print-footer">
+<span>${title} - Tower ${towerLabel}</span>
+<span>TTTracker</span>
+</div>
+
+</body>
+</html>
+`;
 
     const win = window.open("", "_blank", "width=1200,height=800");
     if (!win) return;
