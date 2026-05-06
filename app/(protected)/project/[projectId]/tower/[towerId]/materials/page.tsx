@@ -16,6 +16,7 @@ type DbBundleRow = {
   bundle_no: string;
   section: string | null;
   qty_required: number | null;
+  member_qty: number | null;
   total_weight: number | null;
 };
 
@@ -26,6 +27,7 @@ type Bundle = {
   bundle_no: string;
   section: string;
   qty_required: number;
+  member_qty: number;
   total_weight: number | null;
 };
 
@@ -107,6 +109,7 @@ type MemberCheck = {
 };
 
 type ViewMode = "bundles" | "members";
+
 type StatusFilter =
   | "all"
   | "not_checked"
@@ -134,6 +137,7 @@ type BundleImportRow = {
   bundle_no: string;
   section: string;
   qty_required: number;
+  member_qty: number;
   total_weight: number | null;
 };
 
@@ -161,6 +165,7 @@ function safeNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+
 function getTowerPrintLabel(tower: TowerRecord | null): string {
   if (!tower) return "Unknown Tower";
 
@@ -180,6 +185,7 @@ function getTowerPrintLabel(tower: TowerRecord | null): string {
     "Unknown Tower"
   );
 }
+
 function normaliseSection(value: string): string {
   const trimmed = value.trim();
   return trimmed === "" ? "General" : trimmed;
@@ -189,6 +195,7 @@ function makeUiId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
+
   return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -234,35 +241,40 @@ function statusClasses(status: BundleCheckStatus | MemberCheckStatus): string {
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
+
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
+
   return d.toLocaleString();
 }
 
 function csvEscape(value: string | number | null | undefined): string {
   const str = value === null || value === undefined ? "" : String(value);
+
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
+
   return str;
 }
 
 function downloadTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
+
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
+
   URL.revokeObjectURL(url);
 }
 
 function matchesText(...values: Array<string | number | null | undefined>) {
-  const joined = values
+  return values
     .map((v) => (v === null || v === undefined ? "" : String(v)))
     .join(" ")
     .toLowerCase();
-  return joined;
 }
 
 /* =========================================================
@@ -309,6 +321,7 @@ export default function MaterialsPage() {
 
   useEffect(() => {
     void load();
+
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
@@ -379,6 +392,7 @@ export default function MaterialsPage() {
       bundle_no: safeString(row.bundle_no),
       section: normaliseSection(safeString(row.section, "General")),
       qty_required: safeNumber(row.qty_required, 0),
+      member_qty: safeNumber(row.member_qty, 0),
       total_weight:
         row.total_weight === null || row.total_weight === undefined
           ? null
@@ -406,7 +420,7 @@ export default function MaterialsPage() {
         notes: safeString(row.notes),
         checked_by: safeString(row.checked_by),
         checked_at: row.checked_at || null,
-      })
+      }),
     );
 
     const loadedMemberChecks: MemberCheck[] = ((memberChecksRes.data || []) as DbMemberCheckRow[]).map(
@@ -419,7 +433,7 @@ export default function MaterialsPage() {
         notes: safeString(row.notes),
         checked_by: safeString(row.checked_by),
         checked_at: row.checked_at || null,
-      })
+      }),
     );
 
     setBundles(loadedBundles);
@@ -458,42 +472,63 @@ export default function MaterialsPage() {
 
   const membersByBundle = useMemo(() => {
     const map: Record<string, Member[]> = {};
+
     members.forEach((member) => {
       const key = member.bundle_reference.trim();
       if (!map[key]) map[key] = [];
       map[key].push(member);
     });
+
     return map;
   }, [members]);
 
+  function memberLinesForBundle(bundleNo: string): number {
+    return (membersByBundle[bundleNo.trim()] || []).length;
+  }
+
+  function memberQtyFromMemberList(bundleNo: string): number {
+    return (membersByBundle[bundleNo.trim()] || []).reduce(
+      (sum, member) => sum + safeNumber(member.qty_per_tower, 0),
+      0,
+    );
+  }
+
   const bundleMap = useMemo(() => {
     const map: Record<string, Bundle> = {};
+
     bundles.forEach((bundle) => {
       map[bundle.bundle_no.trim()] = bundle;
     });
+
     return map;
   }, [bundles]);
 
   const bundleCheckMap = useMemo(() => {
     const map: Record<string, BundleCheck> = {};
+
     bundleChecks.forEach((check) => {
       map[check.bundle_no.trim()] = check;
     });
+
     return map;
   }, [bundleChecks]);
 
   const memberCheckMap = useMemo(() => {
     const map: Record<string, MemberCheck> = {};
+
     memberChecks.forEach((check) => {
       map[`${check.bundle_no.trim()}__${check.mark_no.trim()}`] = check;
     });
+
     return map;
   }, [memberChecks]);
 
   const allSections = useMemo(() => {
     const set = new Set<string>();
+
     bundles.forEach((b) => set.add(normaliseSection(b.section)));
     members.forEach((m) => set.add(normaliseSection(m.section)));
+
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [bundles, members]);
 
@@ -561,6 +596,7 @@ export default function MaterialsPage() {
         bundle_no: row.bundle_no.trim(),
         section: normaliseSection(row.section),
         qty_required: safeNumber(row.qty_required, 0),
+        member_qty: safeNumber(row.member_qty, 0),
         total_weight:
           row.total_weight === null || row.total_weight === undefined
             ? null
@@ -623,6 +659,7 @@ export default function MaterialsPage() {
         bundle_no: "",
         section: "General",
         qty_required: 0,
+        member_qty: 0,
         total_weight: null,
       },
     ]);
@@ -634,6 +671,7 @@ export default function MaterialsPage() {
         if (row.ui_id !== ui_id) return row;
         return { ...row, [field]: value };
       });
+
       scheduleAutoSave(next);
       return next;
     });
@@ -641,6 +679,7 @@ export default function MaterialsPage() {
 
   async function deleteSelectedBundles() {
     const selected = bundles.filter((row) => selectedBundleRows[row.ui_id]);
+
     if (!selected.length) {
       alert("No bundle rows selected.");
       return;
@@ -686,7 +725,7 @@ export default function MaterialsPage() {
       prev.map((row) => {
         if (row.ui_id !== ui_id) return row;
         return { ...row, [field]: value };
-      })
+      }),
     );
   }
 
@@ -704,6 +743,7 @@ export default function MaterialsPage() {
 
   async function deleteSelectedMembers() {
     const selected = members.filter((row) => selectedMemberRows[row.ui_id]);
+
     if (!selected.length) {
       alert("No member rows selected.");
       return;
@@ -757,7 +797,7 @@ export default function MaterialsPage() {
     setMemberChecks((prev) => {
       const key = `${payload.bundle_no}__${payload.mark_no}`;
       const next = prev.filter(
-        (row) => `${row.bundle_no.trim()}__${row.mark_no.trim()}` !== key
+        (row) => `${row.bundle_no.trim()}__${row.mark_no.trim()}` !== key,
       );
       next.push(payload);
       return next;
@@ -786,8 +826,8 @@ export default function MaterialsPage() {
           !(
             row.bundle_no.trim() === member.bundle_reference.trim() &&
             row.mark_no.trim() === member.mark_no.trim()
-          )
-      )
+          ),
+      ),
     );
 
     await saveDerivedBundleStatus(member.bundle_reference.trim());
@@ -870,7 +910,7 @@ export default function MaterialsPage() {
     if (!relatedMembers.length) {
       await updateBundleManualStatus(
         bundleNo,
-        status === "arrived" ? "arrived" : status === "missing" ? "missing" : "partial"
+        status === "arrived" ? "arrived" : status === "missing" ? "missing" : "partial",
       );
       return;
     }
@@ -947,20 +987,32 @@ export default function MaterialsPage() {
               tower_id: towerId,
               bundle_no: String(bundleNo).trim(),
               section: normaliseSection(
-                safeString(r.section || r["Section"] || r["Bundle Group"] || "General")
+                safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
               ),
               qty_required: safeNumber(
                 r.qty_required ||
+                  r["Bundle Qty"] ||
+                  r["Bundle Quantity"] ||
                   r["Qty Required"] ||
                   r["Qty/Tower"] ||
                   r["Quantity of Bundles For Tower"] ||
                   r["NO."] ||
                   0,
-                0
+                0,
+              ),
+              member_qty: safeNumber(
+                r.member_qty ||
+                  r["Member Qty"] ||
+                  r["Member Quantity"] ||
+                  r["Members"] ||
+                  r["No. Members"] ||
+                  r["Member Count"] ||
+                  0,
+                0,
               ),
               total_weight: (() => {
                 const n = Number(
-                  r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"]
+                  r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"],
                 );
                 return Number.isFinite(n) ? n : null;
               })(),
@@ -1027,11 +1079,11 @@ export default function MaterialsPage() {
                 r.pn_final ||
                   r["Standardised PN FINAL"] ||
                   r["Standardised PN Final"] ||
-                  r["PN"]
+                  r["PN"],
               ),
               qty_per_tower: safeNumber(
                 r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0,
-                0
+                0,
               ),
               section: normaliseSection(safeString(r.section || r["Section"] || "General")),
             };
@@ -1084,11 +1136,14 @@ export default function MaterialsPage() {
         bundle.bundle_no,
         bundle.section,
         bundle.qty_required,
+        bundle.member_qty,
         bundle.total_weight,
         deliveredQty(bundle.bundle_no),
+        memberLinesForBundle(bundle.bundle_no),
+        memberQtyFromMemberList(bundle.bundle_no),
         ...((membersByBundle[bundle.bundle_no.trim()] || []).map((m) =>
-          [m.mark_no, m.pn_final, m.drawing_number].join(" ")
-        ) as string[])
+          [m.mark_no, m.pn_final, m.drawing_number, m.qty_per_tower].join(" "),
+        ) as string[]),
       );
 
       return text.includes(q);
@@ -1097,12 +1152,12 @@ export default function MaterialsPage() {
 
   const matchedMembers = useMemo(
     () => members.filter((member) => !!bundleMap[member.bundle_reference.trim()]),
-    [members, bundleMap]
+    [members, bundleMap],
   );
 
   const unmatchedMembers = useMemo(
     () => members.filter((member) => !bundleMap[member.bundle_reference.trim()]),
-    [members, bundleMap]
+    [members, bundleMap],
   );
 
   const filteredMatchedMembers = useMemo(() => {
@@ -1120,7 +1175,7 @@ export default function MaterialsPage() {
         member.drawing_number,
         member.bundle_reference,
         member.section,
-        member.qty_per_tower
+        member.qty_per_tower,
       );
 
       return text.includes(q);
@@ -1142,7 +1197,7 @@ export default function MaterialsPage() {
         member.drawing_number,
         member.bundle_reference,
         member.section,
-        member.qty_per_tower
+        member.qty_per_tower,
       );
 
       return text.includes(q);
@@ -1151,12 +1206,12 @@ export default function MaterialsPage() {
 
   const overallRequired = useMemo(
     () => bundles.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0),
-    [bundles]
+    [bundles],
   );
 
   const overallDelivered = useMemo(
     () => bundles.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0),
-    [bundles, deliveries]
+    [bundles, deliveries],
   );
 
   const overallRemaining = Math.max(overallRequired - overallDelivered, 0);
@@ -1164,7 +1219,17 @@ export default function MaterialsPage() {
 
   const totalBundleWeight = useMemo(
     () => bundles.reduce((sum, row) => sum + safeNumber(row.total_weight, 0), 0),
-    [bundles]
+    [bundles],
+  );
+
+  const totalBundleMemberQty = useMemo(
+    () => bundles.reduce((sum, row) => sum + safeNumber(row.member_qty, 0), 0),
+    [bundles],
+  );
+
+  const totalMemberQtyFromMemberCsv = useMemo(
+    () => members.reduce((sum, row) => sum + safeNumber(row.qty_per_tower, 0), 0),
+    [members],
   );
 
   const bundleStatusCounts = useMemo(() => {
@@ -1180,7 +1245,7 @@ export default function MaterialsPage() {
         partial: 0,
         missing: 0,
         issue: 0,
-      } as Record<BundleCheckStatus, number>
+      } as Record<BundleCheckStatus, number>,
     );
   }, [bundles, memberChecks, bundleChecks]);
 
@@ -1197,8 +1262,10 @@ export default function MaterialsPage() {
           "Qty Required",
           "Delivered",
           "Remaining",
+          "Member Qty",
+          "Member Lines",
+          "Member Qty From Member CSV",
           "Total Weight",
-          "Members Count",
           "Status",
         ],
         ...filteredBundles.map((bundle) => [
@@ -1207,8 +1274,10 @@ export default function MaterialsPage() {
           bundle.qty_required,
           deliveredQty(bundle.bundle_no),
           remainingQty(bundle),
+          bundle.member_qty,
+          memberLinesForBundle(bundle.bundle_no),
+          memberQtyFromMemberList(bundle.bundle_no),
           bundle.total_weight ?? "",
-          (membersByBundle[bundle.bundle_no.trim()] || []).length,
           statusLabel(deriveBundleStatus(bundle.bundle_no)),
         ]),
       ];
@@ -1239,8 +1308,9 @@ export default function MaterialsPage() {
     let title = "Materials";
     let bodyHtml = "";
 
-const towerLabel = getTowerPrintLabel(tower);
-const towerLine = safeString(tower?.line, "");
+    const towerLabel = getTowerPrintLabel(tower);
+    const towerLine = safeString(tower?.line, "");
+
     if (viewMode === "bundles") {
       title = "Bundle List";
       bodyHtml = `
@@ -1252,8 +1322,10 @@ const towerLine = safeString(tower?.line, "");
               <th>Qty Req.</th>
               <th>Delivered</th>
               <th>Remaining</th>
+              <th>Member Qty</th>
+              <th>Member Lines</th>
+              <th>CSV Member Qty</th>
               <th>Weight</th>
-              <th>Members</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -1267,11 +1339,13 @@ const towerLine = safeString(tower?.line, "");
                 <td>${bundle.qty_required}</td>
                 <td>${deliveredQty(bundle.bundle_no)}</td>
                 <td>${remainingQty(bundle)}</td>
+                <td>${bundle.member_qty}</td>
+                <td>${memberLinesForBundle(bundle.bundle_no)}</td>
+                <td>${memberQtyFromMemberList(bundle.bundle_no)}</td>
                 <td>${bundle.total_weight ?? ""}</td>
-                <td>${(membersByBundle[bundle.bundle_no.trim()] || []).length}</td>
                 <td>${statusLabel(deriveBundleStatus(bundle.bundle_no))}</td>
               </tr>
-            `
+            `,
               )
               .join("")}
           </tbody>
@@ -1305,7 +1379,7 @@ const towerLine = safeString(tower?.line, "");
                 <td>${member.section}</td>
                 <td>${statusLabel(getMemberCheck(member)?.status || "not_checked")}</td>
               </tr>
-            `
+            `,
               )
               .join("")}
           </tbody>
@@ -1313,7 +1387,7 @@ const towerLine = safeString(tower?.line, "");
       `;
     }
 
-const html = `
+    const html = `
 <html>
 <head>
 <title>${title} - ${towerLabel}</title>
@@ -1405,6 +1479,7 @@ ${bodyHtml}
 
     const win = window.open("", "_blank", "width=1200,height=800");
     if (!win) return;
+
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -1606,9 +1681,9 @@ ${bodyHtml}
           <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mb-6">
             <StatCard label="Bundles" value={bundles.length} />
             <StatCard label="Members" value={members.length} />
-            <StatCard label="Total Weight" value={totalBundleWeight.toFixed(2)} />
+            <StatCard label="Bundle Member Qty" value={totalBundleMemberQty} />
+            <StatCard label="CSV Member Qty" value={totalMemberQtyFromMemberCsv} />
             <StatCard label="Delivered" value={overallDelivered} />
-            <StatCard label="Remaining" value={overallRemaining} />
             <StatCard label="Progress" value={`${overallProgress.toFixed(1)}%`} />
           </div>
 
@@ -1631,6 +1706,7 @@ ${bodyHtml}
                   const expanded = !!expandedBundles[bundle.bundle_no];
                   const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
                   const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
+                  const csvMemberQty = memberQtyFromMemberList(bundle.bundle_no);
 
                   return (
                     <div
@@ -1660,7 +1736,7 @@ ${bodyHtml}
                                   <h2 className="text-lg md:text-xl font-bold">{bundle.bundle_no}</h2>
                                   <span
                                     className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
-                                      status
+                                      status,
                                     )}`}
                                   >
                                     {statusLabel(status)}
@@ -1668,9 +1744,10 @@ ${bodyHtml}
                                 </div>
 
                                 <div className="text-sm text-slate-500 mt-1">
-                                  {bundle.section} • Qty required {bundle.qty_required} • Delivered{" "}
-                                  {deliveredQty(bundle.bundle_no)} • Remaining {remainingQty(bundle)} •
-                                  Members {relatedMembers.length}
+                                  {bundle.section} • Bundle Qty {bundle.qty_required} • Member Qty{" "}
+                                  {bundle.member_qty} • Member Lines {relatedMembers.length} • CSV Member Qty{" "}
+                                  {csvMemberQty} • Delivered {deliveredQty(bundle.bundle_no)} • Remaining{" "}
+                                  {remainingQty(bundle)}
                                 </div>
                               </div>
                             </div>
@@ -1713,36 +1790,46 @@ ${bodyHtml}
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                          <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
                             <MiniStat label="Weight" value={bundle.total_weight ?? "—"} />
                             <MiniStat label="Section" value={bundle.section} />
+                            <MiniStat label="Member Qty" value={bundle.member_qty} />
+                            <MiniStat label="Member Lines" value={relatedMembers.length} />
+                            <MiniStat label="CSV Member Qty" value={csvMemberQty} />
                             <MiniStat label="Delivered" value={deliveredQty(bundle.bundle_no)} />
                             <MiniStat label="Remaining" value={remainingQty(bundle)} />
-                            <MiniStat
-                              label="Last Checked"
-                              value={formatDateTime(bundleCheckMap[bundle.bundle_no]?.checked_at)}
-                            />
                           </div>
 
                           {manageMode && (
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-2 border-t border-slate-200">
+                            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-2 border-t border-slate-200">
                               <Field
                                 label="Bundle No"
                                 value={bundle.bundle_no}
                                 onChange={(v) => updateBundleRow(bundle.ui_id, "bundle_no", v)}
                               />
+
                               <Field
                                 label="Section"
                                 value={bundle.section}
                                 onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)}
                               />
+
                               <Field
-                                label="Qty Required"
+                                label="Bundle Qty"
                                 value={bundle.qty_required}
                                 onChange={(v) =>
                                   updateBundleRow(bundle.ui_id, "qty_required", safeNumber(v, 0))
                                 }
                               />
+
+                              <Field
+                                label="Member Qty"
+                                value={bundle.member_qty}
+                                onChange={(v) =>
+                                  updateBundleRow(bundle.ui_id, "member_qty", safeNumber(v, 0))
+                                }
+                              />
+
                               <Field
                                 label="Total Weight"
                                 value={bundle.total_weight ?? ""}
@@ -1750,7 +1837,7 @@ ${bodyHtml}
                                   updateBundleRow(
                                     bundle.ui_id,
                                     "total_weight",
-                                    v === "" ? null : safeNumber(v, 0)
+                                    v === "" ? null : safeNumber(v, 0),
                                   )
                                 }
                               />
@@ -1779,15 +1866,17 @@ ${bodyHtml}
                                             <div className="font-semibold">{member.mark_no}</div>
                                             <span
                                               className={`px-2 py-1 rounded-full text-xs font-medium border ${statusClasses(
-                                                memberStatus
+                                                memberStatus,
                                               )}`}
                                             >
                                               {statusLabel(memberStatus)}
                                             </span>
                                           </div>
+
                                           <div className="text-sm text-slate-500 mt-1">
-                                            PN {member.pn_final || "—"} • Drawing {member.drawing_number || "—"} •
-                                            Qty {member.qty_per_tower} • {member.section}
+                                            PN {member.pn_final || "—"} • Drawing{" "}
+                                            {member.drawing_number || "—"} • Qty{" "}
+                                            {member.qty_per_tower} • {member.section}
                                           </div>
                                         </div>
 
@@ -1798,24 +1887,28 @@ ${bodyHtml}
                                           >
                                             Arrived
                                           </button>
+
                                           <button
                                             onClick={() => void updateMemberStatus(member, "not_here")}
                                             className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
                                           >
                                             Not Here
                                           </button>
+
                                           <button
                                             onClick={() => void updateMemberStatus(member, "missing")}
                                             className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                                           >
                                             Missing
                                           </button>
+
                                           <button
                                             onClick={() => void updateMemberStatus(member, "issue")}
                                             className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
                                           >
                                             Issue
                                           </button>
+
                                           {hasStatus && (
                                             <button
                                               onClick={() => void clearMemberStatus(member)}
@@ -1848,6 +1941,7 @@ ${bodyHtml}
               ) : (
                 filteredMatchedMembers.map((member) => {
                   const status = getMemberCheck(member)?.status || "not_checked";
+                  const matchingBundle = bundleMap[member.bundle_reference.trim()];
 
                   return (
                     <div
@@ -1876,7 +1970,7 @@ ${bodyHtml}
                                 <h3 className="font-bold text-lg">{member.mark_no}</h3>
                                 <span
                                   className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
-                                    status
+                                    status,
                                   )}`}
                                 >
                                   {statusLabel(status)}
@@ -1884,8 +1978,10 @@ ${bodyHtml}
                               </div>
 
                               <div className="text-sm text-slate-500 mt-1">
-                                Bundle {member.bundle_reference} • PN {member.pn_final || "—"} • Drawing{" "}
-                                {member.drawing_number || "—"} • Qty {member.qty_per_tower} • {member.section}
+                                Bundle {member.bundle_reference} • Bundle Member Qty{" "}
+                                {matchingBundle?.member_qty ?? "—"} • PN {member.pn_final || "—"} •
+                                Drawing {member.drawing_number || "—"} • Member Qty{" "}
+                                {member.qty_per_tower} • {member.section}
                               </div>
                             </div>
                           </div>
@@ -1897,24 +1993,28 @@ ${bodyHtml}
                             >
                               Arrived
                             </button>
+
                             <button
                               onClick={() => void updateMemberStatus(member, "not_here")}
                               className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
                             >
                               Not Here
                             </button>
+
                             <button
                               onClick={() => void updateMemberStatus(member, "missing")}
                               className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                             >
                               Missing
                             </button>
+
                             <button
                               onClick={() => void updateMemberStatus(member, "issue")}
                               className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
                             >
                               Issue
                             </button>
+
                             {!!getMemberCheck(member) && (
                               <button
                                 onClick={() => void clearMemberStatus(member)}
@@ -1933,21 +2033,25 @@ ${bodyHtml}
                               value={member.bundle_reference}
                               onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
                             />
+
                             <Field
                               label="Mark No"
                               value={member.mark_no}
                               onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
                             />
+
                             <Field
                               label="PN"
                               value={member.pn_final}
                               onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
                             />
+
                             <Field
                               label="Drawing"
                               value={member.drawing_number}
                               onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
                             />
+
                             <Field
                               label="Qty"
                               value={member.qty_per_tower}
@@ -1955,6 +2059,7 @@ ${bodyHtml}
                                 updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))
                               }
                             />
+
                             <Field
                               label="Section"
                               value={member.section}
@@ -1980,6 +2085,7 @@ ${bodyHtml}
                       {filteredUnmatchedMembers.length} filtered • {unmatchedMembers.length} total
                     </div>
                   </div>
+
                   <div className="text-sm font-medium text-slate-700">
                     {showUnmatchedMembers ? "Hide" : "Show"}
                   </div>
@@ -2020,7 +2126,7 @@ ${bodyHtml}
                                       <h3 className="font-bold text-lg">{member.mark_no}</h3>
                                       <span
                                         className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
-                                          status
+                                          status,
                                         )}`}
                                       >
                                         {statusLabel(status)}
@@ -2028,8 +2134,9 @@ ${bodyHtml}
                                     </div>
 
                                     <div className="text-sm text-slate-600 mt-1">
-                                      Bundle {member.bundle_reference} • PN {member.pn_final || "—"} • Drawing{" "}
-                                      {member.drawing_number || "—"} • Qty {member.qty_per_tower} • {member.section}
+                                      Bundle {member.bundle_reference} • PN {member.pn_final || "—"} •
+                                      Drawing {member.drawing_number || "—"} • Qty{" "}
+                                      {member.qty_per_tower} • {member.section}
                                     </div>
 
                                     <div className="text-xs text-rose-700 mt-2 font-medium">
@@ -2045,24 +2152,28 @@ ${bodyHtml}
                                   >
                                     Arrived
                                   </button>
+
                                   <button
                                     onClick={() => void updateMemberStatus(member, "not_here")}
                                     className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
                                   >
                                     Not Here
                                   </button>
+
                                   <button
                                     onClick={() => void updateMemberStatus(member, "missing")}
                                     className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                                   >
                                     Missing
                                   </button>
+
                                   <button
                                     onClick={() => void updateMemberStatus(member, "issue")}
                                     className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
                                   >
                                     Issue
                                   </button>
+
                                   {!!getMemberCheck(member) && (
                                     <button
                                       onClick={() => void clearMemberStatus(member)}
@@ -2081,21 +2192,27 @@ ${bodyHtml}
                                     value={member.bundle_reference}
                                     onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
                                   />
+
                                   <Field
                                     label="Mark No"
                                     value={member.mark_no}
                                     onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
                                   />
+
                                   <Field
                                     label="PN"
                                     value={member.pn_final}
                                     onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
                                   />
+
                                   <Field
                                     label="Drawing"
                                     value={member.drawing_number}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
+                                    onChange={(v) =>
+                                      updateMemberRow(member.ui_id, "drawing_number", v)
+                                    }
                                   />
+
                                   <Field
                                     label="Qty"
                                     value={member.qty_per_tower}
@@ -2103,6 +2220,7 @@ ${bodyHtml}
                                       updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))
                                     }
                                   />
+
                                   <Field
                                     label="Section"
                                     value={member.section}
@@ -2151,13 +2269,7 @@ function ModeButton({
   );
 }
 
-function StatCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
+function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="bg-slate-100 rounded-2xl px-4 py-4 min-w-[110px]">
       <div className="text-xs text-slate-500">{label}</div>
@@ -2166,13 +2278,7 @@ function StatCard({
   );
 }
 
-function MiniStat({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
+function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="bg-slate-100 rounded-2xl px-4 py-3">
       <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
