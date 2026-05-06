@@ -1217,19 +1217,9 @@ export default function MaterialsPage() {
   const overallRemaining = Math.max(overallRequired - overallDelivered, 0);
   const overallProgress = overallRequired > 0 ? (overallDelivered / overallRequired) * 100 : 0;
 
-  const totalBundleWeight = useMemo(
-    () => bundles.reduce((sum, row) => sum + safeNumber(row.total_weight, 0), 0),
-    [bundles],
-  );
-
   const totalBundleMemberQty = useMemo(
     () => bundles.reduce((sum, row) => sum + safeNumber(row.member_qty, 0), 0),
     [bundles],
-  );
-
-  const totalMemberQtyFromMemberCsv = useMemo(
-    () => members.reduce((sum, row) => sum + safeNumber(row.qty_per_tower, 0), 0),
-    [members],
   );
 
   const bundleStatusCounts = useMemo(() => {
@@ -1259,12 +1249,10 @@ export default function MaterialsPage() {
         [
           "Bundle No",
           "Section",
-          "Qty Required",
+          "Bundle Qty",
           "Delivered",
           "Remaining",
-          "Member Qty",
-          "Member Lines",
-          "Member Qty From Member CSV",
+          "Bundle Member Qty",
           "Total Weight",
           "Status",
         ],
@@ -1275,8 +1263,6 @@ export default function MaterialsPage() {
           deliveredQty(bundle.bundle_no),
           remainingQty(bundle),
           bundle.member_qty,
-          memberLinesForBundle(bundle.bundle_no),
-          memberQtyFromMemberList(bundle.bundle_no),
           bundle.total_weight ?? "",
           statusLabel(deriveBundleStatus(bundle.bundle_no)),
         ]),
@@ -1319,12 +1305,10 @@ export default function MaterialsPage() {
             <tr>
               <th>Bundle No</th>
               <th>Section</th>
-              <th>Qty Req.</th>
+              <th>Bundle Qty</th>
               <th>Delivered</th>
               <th>Remaining</th>
-              <th>Member Qty</th>
-              <th>Member Lines</th>
-              <th>CSV Member Qty</th>
+              <th>Bundle Member Qty</th>
               <th>Weight</th>
               <th>Status</th>
             </tr>
@@ -1340,8 +1324,6 @@ export default function MaterialsPage() {
                 <td>${deliveredQty(bundle.bundle_no)}</td>
                 <td>${remainingQty(bundle)}</td>
                 <td>${bundle.member_qty}</td>
-                <td>${memberLinesForBundle(bundle.bundle_no)}</td>
-                <td>${memberQtyFromMemberList(bundle.bundle_no)}</td>
                 <td>${bundle.total_weight ?? ""}</td>
                 <td>${statusLabel(deriveBundleStatus(bundle.bundle_no))}</td>
               </tr>
@@ -1496,16 +1478,16 @@ ${bodyHtml}
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-6 bg-slate-50 min-h-screen">
+    <div className="p-3 md:p-8 space-y-4 bg-slate-50 min-h-screen">
       {tower && <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />}
 
-      <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
-        <div className="p-4 md:p-6 border-b border-slate-200 sticky top-0 bg-white z-20">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-2xl md:rounded-3xl shadow-sm overflow-hidden">
+        <div className="p-4 md:p-5 border-b border-slate-200 sticky top-0 bg-white z-20">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Materials Register</h1>
-                <p className="text-slate-500 mt-1">
+                <p className="text-slate-500 mt-1 text-sm md:text-base">
                   Search bundles or members, confirm what arrived to site, and print filtered lists.
                 </p>
               </div>
@@ -1519,32 +1501,32 @@ ${bodyHtml}
 
                 <button
                   onClick={printCurrentView}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
+                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
                 >
                   Print
                 </button>
 
                 <button
                   onClick={exportCurrentViewCSV}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
+                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
                 >
                   Export CSV
                 </button>
 
                 <button
                   onClick={() => setManageMode((prev) => !prev)}
-                  className={`px-4 py-2 rounded-xl text-sm font-medium border ${
+                  className={`px-3 py-2 rounded-xl text-sm font-medium border ${
                     manageMode
                       ? "bg-slate-900 text-white border-slate-900"
                       : "bg-white text-slate-700 border-slate-300"
                   }`}
                 >
-                  {manageMode ? "Exit Manage Mode" : "Manage Data"}
+                  {manageMode ? "Exit Manage" : "Manage Data"}
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(280px,1fr)_auto_auto_auto_auto] gap-3">
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(240px,1fr)_auto_auto_auto_auto] gap-2 md:gap-3">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -1593,8 +1575,8 @@ ${bodyHtml}
               </select>
 
               <div className="flex gap-2 flex-wrap">
-                <label className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
-                  {bundleImporting ? "Uploading Bundles..." : "Reupload Bundles"}
+                <label className="px-3 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
+                  {bundleImporting ? "Uploading..." : "Reupload Bundles"}
                   <input
                     type="file"
                     accept=".csv"
@@ -1607,8 +1589,8 @@ ${bodyHtml}
                   />
                 </label>
 
-                <label className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
-                  {memberImporting ? "Uploading Members..." : "Reupload Members"}
+                <label className="px-3 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
+                  {memberImporting ? "Uploading..." : "Reupload Members"}
                   <input
                     type="file"
                     accept=".csv"
@@ -1624,52 +1606,52 @@ ${bodyHtml}
             </div>
 
             {manageMode && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
                 <div className="text-sm text-amber-800">
-                  Manage mode is on. Add, edit, save, or delete rows without cluttering the normal site view.
+                  Manage mode is on. Add, edit, save, or delete rows.
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={addBundleRow}
-                    className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
                   >
                     Add Bundle
                   </button>
 
                   <button
                     onClick={addMemberRow}
-                    className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
                   >
                     Add Member
                   </button>
 
                   <button
                     onClick={saveBundlesNow}
-                    className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
                   >
                     Save Bundles
                   </button>
 
                   <button
                     onClick={saveMembersNow}
-                    className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
                   >
                     Save Members
                   </button>
 
                   <button
                     onClick={deleteSelectedBundles}
-                    className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                   >
-                    Delete Selected Bundles
+                    Delete Bundles
                   </button>
 
                   <button
                     onClick={deleteSelectedMembers}
-                    className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                   >
-                    Delete Selected Members
+                    Delete Members
                   </button>
                 </div>
               </div>
@@ -1677,17 +1659,16 @@ ${bodyHtml}
           </div>
         </div>
 
-        <div className="p-4 md:p-6">
-          <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mb-6">
+        <div className="p-3 md:p-5">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3 mb-4">
             <StatCard label="Bundles" value={bundles.length} />
             <StatCard label="Members" value={members.length} />
-            <StatCard label="Bundle Member Qty" value={totalBundleMemberQty} />
-            <StatCard label="CSV Member Qty" value={totalMemberQtyFromMemberCsv} />
+            <StatCard label="Member Qty" value={totalBundleMemberQty} />
             <StatCard label="Delivered" value={overallDelivered} />
             <StatCard label="Progress" value={`${overallProgress.toFixed(1)}%`} />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3 mb-4">
             <StatusCard label="Not Checked" value={bundleStatusCounts.not_checked} tone="slate" />
             <StatusCard label="Arrived" value={bundleStatusCounts.arrived} tone="green" />
             <StatusCard label="Partial" value={bundleStatusCounts.partial} tone="amber" />
@@ -1696,7 +1677,7 @@ ${bodyHtml}
           </div>
 
           {viewMode === "bundles" && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {filteredBundles.length === 0 ? (
                 <EmptyState text="No bundles match the current filters." />
               ) : (
@@ -1706,17 +1687,16 @@ ${bodyHtml}
                   const expanded = !!expandedBundles[bundle.bundle_no];
                   const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
                   const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
-                  const csvMemberQty = memberQtyFromMemberList(bundle.bundle_no);
 
                   return (
                     <div
                       key={bundle.ui_id}
-                      className="border border-slate-200 rounded-3xl bg-white shadow-sm overflow-hidden"
+                      className="border border-slate-200 rounded-2xl bg-white shadow-sm overflow-hidden"
                     >
-                      <div className="p-4 md:p-5">
-                        <div className="flex flex-col gap-4">
-                          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-                            <div className="flex items-start gap-3">
+                      <div className="p-3 md:p-4">
+                        <div className="flex flex-col gap-3">
+                          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                            <div className="flex items-start gap-3 min-w-0">
                               {manageMode && (
                                 <input
                                   type="checkbox"
@@ -1731,9 +1711,11 @@ ${bodyHtml}
                                 />
                               )}
 
-                              <div>
+                              <div className="min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <h2 className="text-lg md:text-xl font-bold">{bundle.bundle_no}</h2>
+                                  <h2 className="text-base md:text-lg font-bold truncate">
+                                    {bundle.bundle_no}
+                                  </h2>
                                   <span
                                     className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
                                       status,
@@ -1743,11 +1725,10 @@ ${bodyHtml}
                                   </span>
                                 </div>
 
-                                <div className="text-sm text-slate-500 mt-1">
+                                <div className="text-sm text-slate-500 mt-1 leading-6">
                                   {bundle.section} • Bundle Qty {bundle.qty_required} • Member Qty{" "}
-                                  {bundle.member_qty} • Member Lines {relatedMembers.length} • CSV Member Qty{" "}
-                                  {csvMemberQty} • Delivered {deliveredQty(bundle.bundle_no)} • Remaining{" "}
-                                  {remainingQty(bundle)}
+                                  {bundle.member_qty} • Delivered {deliveredQty(bundle.bundle_no)} •
+                                  Remaining {remainingQty(bundle)}
                                 </div>
                               </div>
                             </div>
@@ -1760,42 +1741,40 @@ ${bodyHtml}
                                     [bundle.bundle_no]: !prev[bundle.bundle_no],
                                   }))
                                 }
-                                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"
+                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"
                               >
                                 {expanded ? "Hide Check" : "Open Check"}
                               </button>
 
                               <button
                                 onClick={() => void markWholeBundle(bundle.bundle_no, "arrived")}
-                                className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
+                                className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
                               >
-                                Mark Whole Bundle Arrived
+                                Mark Arrived
                               </button>
 
                               <button
                                 onClick={() => void markWholeBundle(bundle.bundle_no, "missing")}
-                                className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                                className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
                               >
-                                Mark Whole Bundle Missing
+                                Mark Missing
                               </button>
 
                               {(hasMemberStatuses || hasManualBundleStatus) && (
                                 <button
                                   onClick={() => void clearWholeBundleStatuses(bundle.bundle_no)}
-                                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                                  className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
                                 >
-                                  Clear Status
+                                  Clear
                                 </button>
                               )}
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
                             <MiniStat label="Weight" value={bundle.total_weight ?? "—"} />
                             <MiniStat label="Section" value={bundle.section} />
                             <MiniStat label="Member Qty" value={bundle.member_qty} />
-                            <MiniStat label="Member Lines" value={relatedMembers.length} />
-                            <MiniStat label="CSV Member Qty" value={csvMemberQty} />
                             <MiniStat label="Delivered" value={deliveredQty(bundle.bundle_no)} />
                             <MiniStat label="Remaining" value={remainingQty(bundle)} />
                           </div>
@@ -1847,7 +1826,7 @@ ${bodyHtml}
                           {expanded && (
                             <div className="pt-2 border-t border-slate-200 space-y-3">
                               {relatedMembers.length === 0 ? (
-                                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-2xl p-3">
                                   No linked members found for this bundle. It can still be marked manually.
                                 </div>
                               ) : (
@@ -1858,7 +1837,7 @@ ${bodyHtml}
                                   return (
                                     <div
                                       key={member.ui_id}
-                                      className="border border-slate-200 rounded-2xl p-4 bg-slate-50"
+                                      className="border border-slate-200 rounded-2xl p-3 bg-slate-50"
                                     >
                                       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                                         <div>
@@ -1935,7 +1914,7 @@ ${bodyHtml}
           )}
 
           {viewMode === "members" && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {filteredMatchedMembers.length === 0 ? (
                 <EmptyState text="No matched members match the current filters." />
               ) : (
@@ -1946,10 +1925,10 @@ ${bodyHtml}
                   return (
                     <div
                       key={member.ui_id}
-                      className="border border-slate-200 rounded-2xl bg-white p-4 shadow-sm"
+                      className="border border-slate-200 rounded-2xl bg-white p-3 md:p-4 shadow-sm"
                     >
-                      <div className="flex flex-col gap-4">
-                        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                           <div className="flex items-start gap-3">
                             {manageMode && (
                               <input
@@ -1967,7 +1946,7 @@ ${bodyHtml}
 
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
-                                <h3 className="font-bold text-lg">{member.mark_no}</h3>
+                                <h3 className="font-bold text-base md:text-lg">{member.mark_no}</h3>
                                 <span
                                   className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
                                     status,
@@ -1977,7 +1956,7 @@ ${bodyHtml}
                                 </span>
                               </div>
 
-                              <div className="text-sm text-slate-500 mt-1">
+                              <div className="text-sm text-slate-500 mt-1 leading-6">
                                 Bundle {member.bundle_reference} • Bundle Member Qty{" "}
                                 {matchingBundle?.member_qty ?? "—"} • PN {member.pn_final || "—"} •
                                 Drawing {member.drawing_number || "—"} • Member Qty{" "}
@@ -2073,11 +2052,11 @@ ${bodyHtml}
                 })
               )}
 
-              <div className="border border-slate-200 rounded-3xl bg-white overflow-hidden">
+              <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setShowUnmatchedMembers((prev) => !prev)}
-                  className="w-full px-4 py-4 text-left bg-slate-100 hover:bg-slate-200 flex items-center justify-between"
+                  className="w-full px-4 py-3 text-left bg-slate-100 hover:bg-slate-200 flex items-center justify-between"
                 >
                   <div>
                     <div className="font-semibold">Members not in bundle register</div>
@@ -2092,7 +2071,7 @@ ${bodyHtml}
                 </button>
 
                 {showUnmatchedMembers && (
-                  <div className="p-4 space-y-3">
+                  <div className="p-3 md:p-4 space-y-3">
                     {filteredUnmatchedMembers.length === 0 ? (
                       <EmptyState text="No unmatched members match the current filters." />
                     ) : (
@@ -2102,10 +2081,10 @@ ${bodyHtml}
                         return (
                           <div
                             key={member.ui_id}
-                            className="border border-rose-200 rounded-2xl bg-rose-50 p-4"
+                            className="border border-rose-200 rounded-2xl bg-rose-50 p-3 md:p-4"
                           >
-                            <div className="flex flex-col gap-4">
-                              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                            <div className="flex flex-col gap-3">
+                              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                                 <div className="flex items-start gap-3">
                                   {manageMode && (
                                     <input
@@ -2123,7 +2102,9 @@ ${bodyHtml}
 
                                   <div>
                                     <div className="flex items-center gap-2 flex-wrap">
-                                      <h3 className="font-bold text-lg">{member.mark_no}</h3>
+                                      <h3 className="font-bold text-base md:text-lg">
+                                        {member.mark_no}
+                                      </h3>
                                       <span
                                         className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
                                           status,
@@ -2133,7 +2114,7 @@ ${bodyHtml}
                                       </span>
                                     </div>
 
-                                    <div className="text-sm text-slate-600 mt-1">
+                                    <div className="text-sm text-slate-600 mt-1 leading-6">
                                       Bundle {member.bundle_reference} • PN {member.pn_final || "—"} •
                                       Drawing {member.drawing_number || "—"} • Qty{" "}
                                       {member.qty_per_tower} • {member.section}
@@ -2271,18 +2252,20 @@ function ModeButton({
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="bg-slate-100 rounded-2xl px-4 py-4 min-w-[110px]">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-bold text-lg mt-1">{value}</div>
+    <div className="bg-slate-100 rounded-xl px-3 py-3 min-w-0">
+      <div className="text-[11px] text-slate-500 truncate">{label}</div>
+      <div className="font-bold text-base md:text-lg mt-1 truncate">{value}</div>
     </div>
   );
 }
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="bg-slate-100 rounded-2xl px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="font-semibold mt-1 truncate">{value}</div>
+    <div className="bg-slate-100 rounded-xl px-3 py-2 min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate">
+        {label}
+      </div>
+      <div className="font-semibold text-sm mt-1 truncate">{value}</div>
     </div>
   );
 }
@@ -2305,16 +2288,16 @@ function StatusCard({
   };
 
   return (
-    <div className={`rounded-2xl px-4 py-4 ${toneMap[tone]}`}>
-      <div className="text-xs opacity-80">{label}</div>
-      <div className="font-bold text-lg mt-1">{value}</div>
+    <div className={`rounded-xl px-3 py-3 min-w-0 ${toneMap[tone]}`}>
+      <div className="text-[11px] opacity-80 truncate">{label}</div>
+      <div className="font-bold text-base md:text-lg mt-1">{value}</div>
     </div>
   );
 }
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="border border-dashed border-slate-300 rounded-3xl p-10 text-center text-slate-500 bg-slate-50">
+    <div className="border border-dashed border-slate-300 rounded-2xl p-8 text-center text-slate-500 bg-slate-50">
       {text}
     </div>
   );
