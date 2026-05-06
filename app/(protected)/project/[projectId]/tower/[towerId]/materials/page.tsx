@@ -965,89 +965,118 @@ export default function MaterialsPage() {
      IMPORTS
   ========================================================= */
 
-  async function importBundlesCSV(file: File) {
-    setBundleImporting(true);
+async function importBundlesCSV(file: File) {
+  setBundleImporting(true);
 
-    Papa.parse<CsvRow>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (res: ParseResult<CsvRow>) => {
-        const rows = res.data
-          .map((r): BundleImportRow | null => {
-            const bundleNo =
-              r.bundle_no ||
-              r["Bundle No"] ||
-              r["Bundle Number"] ||
-              r.bundle ||
-              r["Bundle Reference"];
+  Papa.parse<CsvRow>(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: async (res: ParseResult<CsvRow>) => {
+      const parsedRows = res.data
+        .map((r): BundleImportRow | null => {
+          const bundleNo =
+            r.bundle_no ||
+            r["Bundle No"] ||
+            r["Bundle Number"] ||
+            r.bundle ||
+            r["Bundle Reference"];
 
-            if (!bundleNo) return null;
+          if (!bundleNo) return null;
 
-            return {
-              tower_id: towerId,
-              bundle_no: String(bundleNo).trim(),
-              section: normaliseSection(
-                safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
-              ),
-              qty_required: safeNumber(
-                r.qty_required ||
-                  r["Bundle Qty"] ||
-                  r["Bundle Quantity"] ||
-                  r["Qty Required"] ||
-                  r["Qty/Tower"] ||
-                  r["Quantity of Bundles For Tower"] ||
-                  r["NO."] ||
-                  0,
+          const cleanBundleNo = String(bundleNo).trim();
+          const lowerBundleNo = cleanBundleNo.toLowerCase();
+
+          if (
+            cleanBundleNo === "" ||
+            lowerBundleNo === "bundle no" ||
+            lowerBundleNo === "bundle number" ||
+            lowerBundleNo === "pcs." ||
+            lowerBundleNo === "pcs" ||
+            lowerBundleNo === "kg's" ||
+            lowerBundleNo === "kgs" ||
+            lowerBundleNo === "kg" ||
+            lowerBundleNo === "basic body" ||
+            lowerBundleNo === "body extension" ||
+            lowerBundleNo === "common body" ||
+            cleanBundleNo.length < 3
+          ) {
+            return null;
+          }
+
+          return {
+            tower_id: towerId,
+            bundle_no: cleanBundleNo,
+            section: normaliseSection(
+              safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
+            ),
+            qty_required: safeNumber(
+              r.qty_required ||
+                r["Bundle Qty"] ||
+                r["Bundle Quantity"] ||
+                r["Qty Required"] ||
+                r["Qty/Tower"] ||
+                r["Quantity of Bundles For Tower"] ||
+                r["NO."] ||
                 0,
-              ),
-              member_qty: safeNumber(
-                r.member_qty ||
-                  r["Member Qty"] ||
-                  r["Member Quantity"] ||
-                  r["Members"] ||
-                  r["No. Members"] ||
-                  r["Member Count"] ||
-                  0,
+              0,
+            ),
+            member_qty: safeNumber(
+              r.member_qty ||
+                r["Member Qty"] ||
+                r["Member Quantity"] ||
+                r["Members"] ||
+                r["No. Members"] ||
+                r["Member Count"] ||
                 0,
-              ),
-              total_weight: (() => {
-                const n = Number(
-                  r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"],
-                );
-                return Number.isFinite(n) ? n : null;
-              })(),
-            };
-          })
-          .filter((row): row is BundleImportRow => row !== null);
+              0,
+            ),
+            total_weight: (() => {
+              const n = Number(
+                r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"],
+              );
+              return Number.isFinite(n) ? n : null;
+            })(),
+          };
+        })
+        .filter((row): row is BundleImportRow => row !== null);
 
-        if (!rows.length) {
-          alert("No valid bundle rows found in CSV.");
-          setBundleImporting(false);
-          return;
-        }
+      const rowMap = new Map<string, BundleImportRow>();
 
-        const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
-          onConflict: "tower_id,bundle_no",
-        });
+      parsedRows.forEach((row) => {
+        const key = `${row.tower_id}__${row.bundle_no}`;
+        rowMap.set(key, row);
+      });
 
+      const rows = Array.from(rowMap.values());
+
+      if (!rows.length) {
+        alert("No valid bundle rows found in CSV.");
         setBundleImporting(false);
+        return;
+      }
 
-        if (error) {
-          console.error("bundle import error", error);
-          alert("Bundle CSV import failed.");
-          return;
-        }
+      const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
+        onConflict: "tower_id,bundle_no",
+      });
 
-        await load();
-        alert("Bundle CSV imported.");
-      },
-      error: (err) => {
-        console.error("bundle parse error", err);
-        setBundleImporting(false);
-        alert("Failed to parse bundle CSV.");
-      },
-    });
-  }
+      setBundleImporting(false);
+
+      if (error) {
+        console.error("bundle import error", error);
+        alert(`Bundle CSV import failed: ${error.message}`);
+        return;
+      }
+
+      await load();
+      alert("Bundle CSV imported.");
+    },
+    error: (err) => {
+      console.error("bundle parse error", err);
+      setBundleImporting(false);
+      alert("Failed to parse bundle CSV.");
+    },
+  });
+}
 
   async function importMembersCSV(file: File) {
     setMemberImporting(true);
