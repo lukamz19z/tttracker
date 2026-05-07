@@ -20,6 +20,30 @@ type LabourRow = {
   production_hours: string;
 };
 
+type DelayScope = "entire_crew" | "selected_workers";
+
+type DelayType = "weather" | "lightning" | "toolbox" | "mobilisation" | "access" | "plant" | "materials" | "other";
+
+type DelayRow = {
+  ui_id: string;
+  id?: string;
+  delay_type: DelayType;
+  delay_reason: string;
+  delay_hours: string;
+  applies_to: DelayScope;
+  worker_names: string[];
+};
+
+type DbDelayRow = {
+  id?: string;
+  docket_id: string;
+  delay_type: DelayType | string | null;
+  delay_reason: string | null;
+  delay_hours: number | null;
+  applies_to: DelayScope | string | null;
+  worker_names: string[] | null;
+};
+
 type ProgressRow = {
   section_label: string;
   assembled_qty: string;
@@ -72,7 +96,7 @@ const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
 
 const BODY_EXTENSION_LABEL = "Body Extensions";
 
-function toStringValue(value: string | number | null | undefined) {
+function toStringValue(value: unknown) {
   if (value === null || value === undefined) return "";
   return String(value);
 }
@@ -117,13 +141,13 @@ function calculateHours(timeIn: string, timeOut: string) {
   return (diffMinutes / 60).toFixed(2);
 }
 
-function calculateProductionHours(row: LabourRow) {
+function calculateProductionHours(row: LabourRow, appliedDelayHours?: number) {
   const raw = toNumber(row.total_hours);
   const lunch = toNumber(row.lunch_minutes) / 60;
   const travelIn = toNumber(row.travel_in_minutes) / 60;
   const travelOut = toNumber(row.travel_out_minutes) / 60;
   const mobilisation = toNumber(row.mobilisation_hours);
-  const delay = toNumber(row.delay_hours);
+  const delay = appliedDelayHours ?? toNumber(row.delay_hours);
 
   return Math.max(0, raw - lunch - travelIn - travelOut - mobilisation - delay).toFixed(2);
 }
@@ -196,7 +220,13 @@ function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   if (value === null) return false;
   return value > 0;
 }
+function makeUiId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
 
+  return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
   const mapped: LabourRow = {
     worker_name: toStringValue(row?.worker_name),
@@ -237,6 +267,90 @@ function blankLabourRow(defaults?: {
   });
 }
 
+type DelayRowInput = {
+  id?: string;
+  delay_type?: DelayType | string | null;
+  delay_reason?: unknown;
+  delay_hours?: unknown;
+  applies_to?: DelayScope | string | null;
+  worker_names?: string[] | string | null;
+};
+
+function makeDelayRow(row?: DelayRowInput): DelayRow {
+  const workerNamesValue = row?.worker_names;
+
+  const rawWorkers: string[] = Array.isArray(workerNamesValue)
+    ? workerNamesValue
+    : typeof workerNamesValue === "string"
+    ? workerNamesValue.split(",")
+    : [];
+
+  const delayRow: DelayRow = {
+    ui_id: makeUiId(),
+    id: row?.id,
+    delay_type: (row?.delay_type || "weather") as DelayType,
+    delay_reason: toStringValue(row?.delay_reason),
+    delay_hours: toStringValue(row?.delay_hours),
+    applies_to: (row?.applies_to || "entire_crew") as DelayScope,
+    worker_names: rawWorkers.map((name) => toStringValue(name).trim()).filter(Boolean),
+  };
+
+  return delayRow;
+}
+
+function blankDelayRow(): DelayRow {
+  return makeDelayRow({
+    delay_type: "weather",
+    delay_reason: "",
+    delay_hours: "",
+    applies_to: "entire_crew",
+    worker_names: [],
+  });
+}
+
+function uniqueWorkerNames(rows: LabourRow[]) {
+  const seen = new Set<string>();
+  const names: string[] = [];
+
+  rows.forEach((row) => {
+    const name = row.worker_name.trim();
+    const key = normalizeWorkerName(name);
+    if (!name || seen.has(key)) return;
+    seen.add(key);
+    names.push(name);
+  });
+
+  return names;
+}
+
+function delayAppliesToWorker(delay: DelayRow, workerName: string) {
+  if (delay.applies_to === "entire_crew") return true;
+  const target = normalizeWorkerName(workerName);
+  return delay.worker_names.some((name) => normalizeWorkerName(name) === target);
+}
+
+function delayTypeLabel(type: DelayType) {
+  switch (type) {
+    case "weather":
+      return "Weather";
+    case "lightning":
+      return "Lightning";
+    case "toolbox":
+      return "Toolbox";
+    case "mobilisation":
+      return "Mobilisation";
+    case "access":
+      return "Access / Bogged";
+    case "plant":
+      return "Plant / Equipment";
+    case "materials":
+      return "Materials";
+    case "other":
+    default:
+      return "Other";
+  }
+}
+
 export default function DailyDocketForm({
   mode,
   projectId,
@@ -245,6 +359,7 @@ export default function DailyDocketForm({
   initialDocket,
   initialLabourRows,
   initialProgressRows,
+  initialDelayRows,
 }: {
   mode: "create" | "edit" | "view";
   projectId: string;
@@ -253,6 +368,7 @@ export default function DailyDocketForm({
   initialDocket?: Partial<DocketRecord> | null;
   initialLabourRows?: LabourRow[];
   initialProgressRows?: ProgressRow[];
+  initialDelayRows?: DelayRow[];
 }) {
   const router = useRouter();
   const supabase = createSupabaseBrowser();
@@ -326,6 +442,12 @@ export default function DailyDocketForm({
       : [blankLabourRow()]
   );
 
+  const [delayRows, setDelayRows] = useState<DelayRow[]>(
+    initialDelayRows && initialDelayRows.length > 0
+      ? initialDelayRows.map((r) => makeDelayRow(r))
+      : []
+  );
+
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
     initialProgressRows && initialProgressRows.length > 0
       ? initialProgressRows.map((r) => ({
@@ -390,6 +512,10 @@ export default function DailyDocketForm({
           setLabourRows(initialLabourRows.map((r) => makeLabourRow(r)));
         }
 
+        if (initialDelayRows?.length) {
+          setDelayRows(initialDelayRows.map((r) => makeDelayRow(r)));
+        }
+
         if (initialProgressRows?.length) {
           const mappedRows = initialProgressRows.map((r) => ({
             section_label: toStringValue(r.section_label),
@@ -447,10 +573,33 @@ export default function DailyDocketForm({
         setLabourRows(labour.map((r) => makeLabourRow(r)));
       }
 
+      const { data: delays } = await supabase
+        .from("tower_docket_delays")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (delays && delays.length > 0) {
+        setDelayRows((delays as DbDelayRow[]).map((r) => makeDelayRow(r)));
+      } else if (labour && labour.length > 0) {
+        const legacyDelayRows = (labour as any[])
+          .filter((r) => Number(r.delay_hours || 0) > 0)
+          .map((r) =>
+            makeDelayRow({
+              delay_type: "other",
+              delay_reason: r.delay_reason || "Legacy labour delay",
+              delay_hours: r.delay_hours,
+              applies_to: "selected_workers",
+              worker_names: [r.worker_name],
+            }),
+          );
+        setDelayRows(legacyDelayRows);
+      }
+
       const { data: progress } = await supabase
         .from("tower_docket_progress")
         .select("*")
         .eq("docket_id", docketId);
+
 
       if (progress && progress.length > 0) {
         const mappedRows = progress.map((r) => ({
@@ -472,6 +621,7 @@ export default function DailyDocketForm({
     initialDocket,
     initialLabourRows,
     initialProgressRows,
+    initialDelayRows,
     supabase,
   ]);
 
@@ -531,12 +681,38 @@ export default function DailyDocketForm({
     return Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5);
   }, [totalAssemblyPercent, totalErectionPercent]);
 
-  const labourRowsWithProduction = useMemo(() => {
-    return labourRows.map((row) => ({
-      ...row,
-      production_hours: calculateProductionHours(row),
-    }));
-  }, [labourRows]);
+  const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
+
+  function delayHoursForWorker(workerName: string) {
+    if (!workerName.trim()) return 0;
+    return delayRows.reduce((sum, delay) => {
+      if (!delayAppliesToWorker(delay, workerName)) return sum;
+      return sum + toNumber(delay.delay_hours);
+    }, 0);
+  }
+
+  function delayReasonsForWorker(workerName: string) {
+    if (!workerName.trim()) return "";
+    return delayRows
+      .filter((delay) => delayAppliesToWorker(delay, workerName) && toNumber(delay.delay_hours) > 0)
+      .map((delay) => `${delayTypeLabel(delay.delay_type)}: ${delay.delay_reason || "Delay"}`)
+      .join("; ");
+  }
+
+const labourRowsWithProduction = labourRows.map((row) => {
+  const appliedDelayHours = delayHoursForWorker(row.worker_name);
+
+  const next: LabourRow = {
+    ...row,
+    delay_hours: appliedDelayHours ? appliedDelayHours.toFixed(2) : "",
+    delay_reason: delayReasonsForWorker(row.worker_name),
+  };
+
+  return {
+    ...next,
+    production_hours: calculateProductionHours(next, appliedDelayHours),
+  };
+});
 
   const totalLabourHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
@@ -568,11 +744,26 @@ export default function DailyDocketForm({
     }, 0);
   }, [labourRowsWithProduction]);
 
-  const totalIndividualDelayHours = useMemo(() => {
+  const totalDelayManhours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
       return sum + toNumber(row.delay_hours);
     }, 0);
   }, [labourRowsWithProduction]);
+
+  const totalDelayEvents = useMemo(() => {
+    return delayRows.reduce((sum, row) => sum + toNumber(row.delay_hours), 0);
+  }, [delayRows]);
+
+  const delaySummaryByType = useMemo(() => {
+    return delayRows.reduce(
+      (acc, row) => {
+        const value = toNumber(row.delay_hours);
+        acc[row.delay_type] = (acc[row.delay_type] || 0) + value;
+        return acc;
+      },
+      {} as Record<DelayType, number>,
+    );
+  }, [delayRows]);
 
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
@@ -743,9 +934,77 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHours(next),
+          production_hours: calculateProductionHours(next, delayHoursForWorker(next.worker_name)),
         };
       })
+    );
+  }
+
+  function addDelayRow() {
+    if (isView || locked) return;
+    setDelayRows((prev) => [...prev, blankDelayRow()]);
+  }
+
+  function removeDelayRow(index: number) {
+    if (isView || locked) return;
+    setDelayRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateDelayRow(index: number, key: keyof DelayRow, value: string | string[]) {
+    if (isView || locked) return;
+
+    setDelayRows((prev) =>
+      prev.map((row, i) => {
+        if (i !== index) return row;
+
+        if (key === "delay_type") {
+          return { ...row, delay_type: value as DelayType };
+        }
+
+        if (key === "delay_reason") {
+          return { ...row, delay_reason: String(value) };
+        }
+
+        if (key === "delay_hours") {
+          return { ...row, delay_hours: String(value) };
+        }
+
+        if (key === "applies_to") {
+          const appliesTo = value as DelayScope;
+          return {
+            ...row,
+            applies_to: appliesTo,
+            worker_names: appliesTo === "entire_crew" ? [] : row.worker_names,
+          };
+        }
+
+        if (key === "worker_names") {
+          return { ...row, worker_names: Array.isArray(value) ? value : [] };
+        }
+
+        return row;
+      }),
+    );
+  }
+
+  function toggleDelayWorker(index: number, workerName: string) {
+    if (isView || locked) return;
+
+    setDelayRows((prev) =>
+      prev.map((row, i) => {
+        if (i !== index) return row;
+        const exists = row.worker_names.some(
+          (name) => normalizeWorkerName(name) === normalizeWorkerName(workerName),
+        );
+        return {
+          ...row,
+          worker_names: exists
+            ? row.worker_names.filter(
+                (name) => normalizeWorkerName(name) !== normalizeWorkerName(workerName),
+              )
+            : [...row.worker_names, workerName],
+        };
+      }),
     );
   }
 
@@ -775,10 +1034,10 @@ export default function DailyDocketForm({
       weather,
       assembly_percent: totalAssemblyPercent,
       erection_percent: totalErectionPercent,
-      weather_delay_hours: Number(weatherDelayHours || 0),
-      lightning_delay_hours: Number(lightningDelayHours || 0),
-      toolbox_delay_hours: Number(toolboxDelayHours || 0),
-      other_delay_hours: Number(otherDelayHours || 0),
+      weather_delay_hours: Number(weatherDelayHours || delaySummaryByType.weather || 0),
+      lightning_delay_hours: Number(lightningDelayHours || delaySummaryByType.lightning || 0),
+      toolbox_delay_hours: Number(toolboxDelayHours || delaySummaryByType.toolbox || 0),
+      other_delay_hours: Number(otherDelayHours || delaySummaryByType.other || 0),
       other_delay_reason: otherDelayReason,
       delays_comments: delaysComments,
       missing_items_bolts: missingItemsBolts,
@@ -812,6 +1071,19 @@ export default function DailyDocketForm({
         delay_hours: Number(row.delay_hours || 0),
         delay_reason: row.delay_reason || null,
         production_hours: Number(row.production_hours || 0),
+      }));
+  }
+
+  function buildDelayPayload(docketIdValue: string) {
+    return delayRows
+      .filter((row) => toNumber(row.delay_hours) > 0 || row.delay_reason.trim())
+      .map((row) => ({
+        docket_id: docketIdValue,
+        delay_type: row.delay_type,
+        delay_reason: row.delay_reason || null,
+        delay_hours: Number(row.delay_hours || 0),
+        applies_to: row.applies_to,
+        worker_names: row.applies_to === "selected_workers" ? row.worker_names : [],
       }));
   }
 
@@ -854,6 +1126,15 @@ export default function DailyDocketForm({
       const labourRes = await supabase.from("tower_docket_labour").insert(labourPayload);
       if (labourRes.error) {
         throw new Error("Daily docket saved, but labour rows failed. Check that the production hour columns exist on tower_docket_labour.");
+      }
+    }
+
+    const delayPayload = buildDelayPayload(docket.id);
+
+    if (delayPayload.length > 0) {
+      const delayRes = await supabase.from("tower_docket_delays").insert(delayPayload);
+      if (delayRes.error) {
+        throw new Error("Daily docket saved, but delay rows failed. Check that tower_docket_delays exists.");
       }
     }
 
@@ -911,6 +1192,15 @@ export default function DailyDocketForm({
       throw new Error("Failed to refresh labour rows.");
     }
 
+    const deleteDelayRes = await supabase
+      .from("tower_docket_delays")
+      .delete()
+      .eq("docket_id", docketId);
+
+    if (deleteDelayRes.error) {
+      throw new Error("Failed to refresh delay rows.");
+    }
+
     const deleteProgressRes = await supabase
       .from("tower_docket_progress")
       .delete()
@@ -929,6 +1219,18 @@ export default function DailyDocketForm({
 
       if (labourInsertRes.error) {
         throw new Error("Failed to save labour rows. Check that the production hour columns exist on tower_docket_labour.");
+      }
+    }
+
+    const delayPayload = buildDelayPayload(docketId);
+
+    if (delayPayload.length > 0) {
+      const delayInsertRes = await supabase
+        .from("tower_docket_delays")
+        .insert(delayPayload);
+
+      if (delayInsertRes.error) {
+        throw new Error("Failed to save delay rows. Check that tower_docket_delays exists.");
       }
     }
 
@@ -1077,6 +1379,9 @@ export default function DailyDocketForm({
         ]);
       }
 
+      // Do not carry previous day delay events by default. Delays should be entered for the actual day.
+      setDelayRows([]);
+
       if (progress && progress.length > 0) {
         const mappedRows = progress.map((r) => ({
           section_label: toStringValue(r.section_label),
@@ -1119,7 +1424,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHours(next),
+          production_hours: calculateProductionHours(next, delayHoursForWorker(next.worker_name)),
         };
       })
     );
@@ -1295,7 +1600,7 @@ export default function DailyDocketForm({
       <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
         <h2 className="text-xl font-semibold">Docket Production Defaults</h2>
         <p className="text-sm text-slate-500">
-          These are default deductions for the docket. Apply them to all workers, then adjust individual rows if only some people were delayed.
+          These are default non-productive deductions for the docket. Apply them to all workers, then use the Delays section below for whole-crew or selected-worker delays.
         </p>
 
         <div className="grid md:grid-cols-4 gap-4">
@@ -1350,64 +1655,163 @@ export default function DailyDocketForm({
       </section>
 
       <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Delay Hours & Issues</h2>
-        <p className="text-sm text-slate-500">
-          These fields remain as the general site delay summary. Individual worker delays are entered in the labour table for production hour calculations.
-        </p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold">Delays & Issues</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Add delay events separately from labour. Each delay can apply to the whole crew or selected people only.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-right">
+            <MiniSummary label="Delay Events" value={totalDelayEvents.toFixed(2)} />
+            <MiniSummary label="Delay MH" value={totalDelayManhours.toFixed(2)} />
+            <MiniSummary label="Rows" value={String(delayRows.length)} />
+          </div>
+        </div>
+
         <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="Weather Delay Hours"
-            type="number"
-            value={weatherDelayHours}
-            onChange={setWeatherDelayHours}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Lightning Delay Hours"
-            type="number"
-            value={lightningDelayHours}
-            onChange={setLightningDelayHours}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Toolbox Delay Hours"
-            type="number"
-            value={toolboxDelayHours}
-            onChange={setToolboxDelayHours}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Other Delay Hours"
-            type="number"
-            value={otherDelayHours}
-            onChange={setOtherDelayHours}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Other Delay Reason"
-            value={otherDelayReason}
-            onChange={setOtherDelayReason}
-            disabled={locked || isView}
-          />
           <Input
             label="Missing Items / Bolts"
             value={missingItemsBolts}
             onChange={setMissingItemsBolts}
             disabled={locked || isView}
           />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Delay / Site Comments
-          </label>
-          <textarea
-            className="border rounded-lg p-3 w-full min-h-28 disabled:bg-slate-100"
+          <Input
+            label="General Delay / Site Comment"
             value={delaysComments}
+            onChange={setDelaysComments}
             disabled={locked || isView}
-            onChange={(e) => setDelaysComments(e.target.value)}
           />
         </div>
+
+        <div className="space-y-3">
+          {delayRows.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+              No delay events added. Add one if weather, access, plant, materials, or selected workers were delayed.
+            </div>
+          ) : (
+            delayRows.map((delay, index) => {
+              const affectedCount =
+                delay.applies_to === "entire_crew" ? availableWorkerNames.length : delay.worker_names.length;
+              const delayManhours = toNumber(delay.delay_hours) * affectedCount;
+
+              return (
+                <div key={delay.ui_id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                  <div className="grid md:grid-cols-[150px_120px_1fr_170px_auto] gap-3 items-end">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Delay Type</label>
+                      <select
+                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
+                        value={delay.delay_type}
+                        disabled={locked || isView}
+                        onChange={(e) => updateDelayRow(index, "delay_type", e.target.value)}
+                      >
+                        <option value="weather">Weather</option>
+                        <option value="lightning">Lightning</option>
+                        <option value="toolbox">Toolbox</option>
+                        <option value="mobilisation">Mobilisation</option>
+                        <option value="access">Access / Bogged</option>
+                        <option value="plant">Plant / Equipment</option>
+                        <option value="materials">Materials</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+
+                    <Input
+                      label="Delay Hrs"
+                      type="number"
+                      value={delay.delay_hours}
+                      onChange={(v) => updateDelayRow(index, "delay_hours", v)}
+                      disabled={locked || isView}
+                    />
+
+                    <Input
+                      label="Reason"
+                      value={delay.delay_reason}
+                      onChange={(v) => updateDelayRow(index, "delay_reason", v)}
+                      disabled={locked || isView}
+                    />
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Applies To</label>
+                      <select
+                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
+                        value={delay.applies_to}
+                        disabled={locked || isView}
+                        onChange={(e) => updateDelayRow(index, "applies_to", e.target.value)}
+                      >
+                        <option value="entire_crew">Entire Crew</option>
+                        <option value="selected_workers">Selected Workers</option>
+                      </select>
+                    </div>
+
+                    {!locked && !isView ? (
+                      <button
+                        type="button"
+                        onClick={() => removeDelayRow(index)}
+                        className="border px-4 py-2 rounded-lg h-10 bg-white"
+                      >
+                        Remove
+                      </button>
+                    ) : (
+                      <div />
+                    )}
+                  </div>
+
+                  {delay.applies_to === "selected_workers" && (
+                    <div className="rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="text-sm font-medium mb-2">Affected Workers</div>
+                      {availableWorkerNames.length === 0 ? (
+                        <div className="text-sm text-slate-500">Add workers in the labour section first.</div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {availableWorkerNames.map((name) => {
+                            const checked = delay.worker_names.some(
+                              (worker) => normalizeWorkerName(worker) === normalizeWorkerName(name),
+                            );
+
+                            return (
+                              <label
+                                key={`${delay.ui_id}-${name}`}
+                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${
+                                  checked ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="hidden"
+                                  checked={checked}
+                                  disabled={locked || isView}
+                                  onChange={() => toggleDelayWorker(index, name)}
+                                />
+                                {name}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="text-xs text-slate-500">
+                    Production deduction: {toNumber(delay.delay_hours).toFixed(2)} hrs × {affectedCount} people = {delayManhours.toFixed(2)} delay manhours
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {!locked && !isView && (
+          <button
+            type="button"
+            onClick={addDelayRow}
+            className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium"
+          >
+            Add Delay Event
+          </button>
+        )}
       </section>
 
       <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
@@ -1420,7 +1824,7 @@ export default function DailyDocketForm({
             <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
             <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
             <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
-            <MiniSummary label="Delay" value={totalIndividualDelayHours.toFixed(2)} />
+            <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
           </div>
         </div>
 
@@ -1563,28 +1967,23 @@ export default function DailyDocketForm({
                     type="number"
                     value={row.mobilisation_hours}
                     disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-delay-${index}`)}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)}
                     onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)}
                   />
 
-                  <LabourInput
-                    label="Delay Hrs"
-                    id={`labour-delay-${index}`}
-                    type="number"
-                    value={row.delay_hours}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-delayreason-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "delay_hours", v)}
-                  />
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Delay Hrs</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-amber-50 text-amber-800 font-semibold">
+                      {row.delay_hours || "0.00"}
+                    </div>
+                  </div>
 
-                  <LabourInput
-                    label="Delay Reason"
-                    id={`labour-delayreason-${index}`}
-                    value={row.delay_reason}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)}
-                    onChange={(v) => updateLabourRow(index, "delay_reason", v)}
-                  />
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Delay Reason</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-slate-50 text-slate-700 min-h-10 truncate">
+                      {row.delay_reason || "—"}
+                    </div>
+                  </div>
 
                   {!locked && !isView ? (
                     <button
