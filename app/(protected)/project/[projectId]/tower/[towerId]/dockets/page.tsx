@@ -26,10 +26,6 @@ type DocketRecord = {
   weather: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
-  weather_delay_hours?: number | null;
-  lightning_delay_hours?: number | null;
-  toolbox_delay_hours?: number | null;
-  other_delay_hours?: number | null;
   lunch_break_minutes?: number | null;
   travel_in_minutes?: number | null;
   travel_out_minutes?: number | null;
@@ -40,7 +36,6 @@ type DocketRecord = {
   client_rep_name?: string | null;
   signed_date?: string | null;
   docket_file_url?: string | null;
-  created_at?: string | null;
 };
 
 type LabourRow = {
@@ -92,17 +87,16 @@ function formatDate(value: string | null | undefined): string {
   });
 }
 
-function getProgress(docket: DocketRecord): number {
-  const assembly = safeNumber(docket.assembly_percent, 0);
-  const erection = safeNumber(docket.erection_percent, 0);
-  return Math.round(assembly * 0.5 + erection * 0.5);
+function getAssembly(docket: DocketRecord): number {
+  return Math.round(safeNumber(docket.assembly_percent, 0));
 }
 
-function getProgressColour(progress: number): string {
-  if (progress >= 100) return "bg-emerald-500";
-  if (progress >= 60) return "bg-blue-500";
-  if (progress >= 30) return "bg-amber-500";
-  return "bg-slate-400";
+function getErection(docket: DocketRecord): number {
+  return Math.round(safeNumber(docket.erection_percent, 0));
+}
+
+function getProgress(docket: DocketRecord): number {
+  return Math.round(getAssembly(docket) * 0.5 + getErection(docket) * 0.5);
 }
 
 function getStatus(docket: DocketRecord): "closed" | "bc_signed" | "open" {
@@ -229,10 +223,10 @@ export default function TowerDocketsPage() {
       if (!totals[row.docket_id]) return;
 
       const delayHours = safeNumber(row.delay_hours, 0);
-      const people =
-        row.applies_to === "selected_workers" ? row.worker_names?.length || 0 : 1;
+      const people = row.applies_to === "selected_workers" ? row.worker_names?.length || 0 : 1;
 
       totals[row.docket_id].delayEvents += delayHours;
+
       if (totals[row.docket_id].delay === 0) {
         totals[row.docket_id].delay += delayHours * Math.max(people, 1);
       }
@@ -289,6 +283,8 @@ export default function TowerDocketsPage() {
         docket.leading_hand,
         docket.weather,
         getStatusLabel(getStatus(docket)),
+        getAssembly(docket),
+        getErection(docket),
         totals?.raw,
         totals?.production,
       ]
@@ -326,9 +322,7 @@ export default function TowerDocketsPage() {
         <div className="p-4 md:p-6 border-b border-slate-200">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-                Daily Dockets
-              </h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Daily Dockets</h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
                 Review raw hours, production hours, delays and progress for this tower.
               </p>
@@ -356,9 +350,7 @@ export default function TowerDocketsPage() {
             <SmallCard
               label="Avg Progress"
               value={
-                dockets.length > 0
-                  ? `${Math.round(summary.avgProgress / dockets.length)}%`
-                  : "0%"
+                dockets.length > 0 ? `${Math.round(summary.avgProgress / dockets.length)}%` : "0%"
               }
             />
             <SmallCard label="Open" value={summary.open} />
@@ -384,6 +376,8 @@ export default function TowerDocketsPage() {
             <div className="space-y-3">
               {filteredDockets.map((docket) => {
                 const progress = getProgress(docket);
+                const assembly = getAssembly(docket);
+                const erection = getErection(docket);
                 const status = getStatus(docket);
                 const totals = docketTotals[docket.id] || {
                   raw: 0,
@@ -430,16 +424,22 @@ export default function TowerDocketsPage() {
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="text-lg font-bold text-slate-900">{progress}%</div>
-                          <div className="text-[11px] text-slate-500">Progress</div>
+                          <div className="text-2xl font-black text-slate-900">{progress}%</div>
+                          <div className="text-[11px] text-slate-500">Overall</div>
                         </div>
                       </div>
 
-                      <div className="mt-3 h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${getProgressColour(progress)}`}
-                          style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
-                        />
+                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <div className="text-sm font-bold text-slate-800">Progress Breakdown</div>
+                          <div className="text-xs text-slate-500">50% Assembly + 50% Erection</div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <ProgressLine label="Assembly" value={assembly} tone="blue" />
+                          <ProgressLine label="Erection" value={erection} tone="emerald" />
+                          <ProgressLine label="Overall" value={progress} tone="slate" strong />
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mt-3">
@@ -454,9 +454,7 @@ export default function TowerDocketsPage() {
 
                     {isOpen && (
                       <div className="border-t border-slate-200 bg-slate-50 p-3 md:p-4 space-y-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          <DetailCard label="Assembly" value={`${safeNumber(docket.assembly_percent)}%`} />
-                          <DetailCard label="Erection" value={`${safeNumber(docket.erection_percent)}%`} />
+                        <div className="grid grid-cols-2 md:grid-cols-2 gap-2">
                           <DetailCard label="Delay Events" value={formatNumber(totals.delayEvents)} />
                           <DetailCard
                             label="Uploaded"
@@ -497,6 +495,51 @@ export default function TowerDocketsPage() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ProgressLine({
+  label,
+  value,
+  tone,
+  strong = false,
+}: {
+  label: string;
+  value: number;
+  tone: "blue" | "emerald" | "slate";
+  strong?: boolean;
+}) {
+  const barColour: Record<string, string> = {
+    blue: "bg-blue-500",
+    emerald: "bg-emerald-500",
+    slate: "bg-slate-900",
+  };
+
+  const labelColour: Record<string, string> = {
+    blue: "text-blue-700",
+    emerald: "text-emerald-700",
+    slate: "text-slate-900",
+  };
+
+  const clamped = Math.max(0, Math.min(100, value));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div
+          className={`text-xs font-bold uppercase tracking-wide ${
+            strong ? "text-slate-900" : "text-slate-500"
+          }`}
+        >
+          {label}
+        </div>
+        <div className={`text-sm font-black ${labelColour[tone]}`}>{clamped}%</div>
+      </div>
+
+      <div className={`${strong ? "h-4" : "h-3"} rounded-full bg-white border border-slate-200 overflow-hidden`}>
+        <div className={`h-full rounded-full ${barColour[tone]}`} style={{ width: `${clamped}%` }} />
       </div>
     </div>
   );
@@ -545,7 +588,7 @@ function MiniMetric({ label, value }: { label: string; value: string | number })
   );
 }
 
-function DetailCard({ label, value }: { label: string; value: string | number }) {
+function DetailCard({ label, value }: { label: string | number; value: string | number }) {
   return (
     <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
       <div className="text-[11px] text-slate-500">{label}</div>
