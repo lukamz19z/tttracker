@@ -1,23 +1,91 @@
-import { Sidebar } from "./sidebar";
-import { Topbar } from "./topbar";
+"use client";
 
-export function AppShell({
-  children,
-  title,
-  projectId,
-}: {
-  children: React.ReactNode;
-  title: string;
-  projectId?: string;
-}) {
+import Link from "next/link";
+import { ReactNode, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { getUserRole } from "@/lib/roles";
+
+type AppShellProps = {
+  title?: string;
+  children: ReactNode;
+};
+
+type Role = "admin" | "editor" | "viewer" | null;
+
+export function AppShell({ children }: AppShellProps) {
+  const pathname = usePathname();
+  const [role, setRole] = useState<Role>(null);
+
+  useEffect(() => {
+    async function loadRole() {
+      const userRole = await getUserRole();
+      setRole((userRole as Role) || null);
+    }
+
+    void loadRole();
+  }, []);
+
+  const isAdmin = role === "admin";
+
+  const navItems = [
+    {
+      label: "Projects",
+      href: "/",
+      show: true,
+    },
+    {
+      label: "User Management",
+      href: "/admin/users",
+      show: isAdmin,
+    },
+    {
+      label: "Safety",
+      href: "/safety",
+      show: isAdmin,
+    },
+    {
+      label: "Commercial",
+      href: "/commercial",
+      show: isAdmin,
+    },
+    {
+      label: "Assets",
+      href: "/assets",
+      show: isAdmin,
+    },
+  ];
+
   return (
-    <div className="flex bg-slate-100 min-h-screen">
-      <Sidebar projectId={projectId} />
+    <div className="min-h-screen bg-slate-50">
+      <div className="flex min-h-[calc(100vh-58px)]">
+        <aside className="hidden md:block w-64 border-r border-slate-300 bg-white">
+          <nav className="p-4 space-y-1">
+            {navItems
+              .filter((item) => item.show)
+              .map((item) => {
+                const active =
+                  item.href === "/"
+                    ? pathname === "/"
+                    : pathname.startsWith(item.href);
 
-      <div className="flex-1">
-        <Topbar title={title} />
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
+                      active
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+          </nav>
+        </aside>
 
-        <main className="p-6">{children}</main>
+        <main className="flex-1 p-4 md:p-6 overflow-x-hidden">{children}</main>
       </div>
     </div>
   );
