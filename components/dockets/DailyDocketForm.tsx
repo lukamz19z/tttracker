@@ -11,6 +11,13 @@ type LabourRow = {
   time_in: string;
   time_out: string;
   total_hours: string;
+  lunch_minutes: string;
+  travel_in_minutes: string;
+  travel_out_minutes: string;
+  mobilisation_hours: string;
+  delay_hours: string;
+  delay_reason: string;
+  production_hours: string;
 };
 
 type ProgressRow = {
@@ -40,6 +47,19 @@ type DocketRecord = {
   client_rep_name: string | null;
   signed_date: string | null;
   docket_file_url: string | null;
+  lunch_break_minutes?: number | null;
+  travel_in_minutes?: number | null;
+  travel_out_minutes?: number | null;
+  mobilisation_hours?: number | null;
+  mobilisation_notes?: string | null;
+  raw_manhours?: number | null;
+  production_manhours?: number | null;
+};
+
+type TowerRecord = {
+  id: string;
+  extra_data?: Record<string, unknown> | null;
+  [key: string]: unknown;
 };
 
 const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
@@ -55,6 +75,11 @@ const BODY_EXTENSION_LABEL = "Body Extensions";
 function toStringValue(value: string | number | null | undefined) {
   if (value === null || value === undefined) return "";
   return String(value);
+}
+
+function toNumber(value: string | number | null | undefined) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function clampPercent(value: string) {
@@ -92,6 +117,17 @@ function calculateHours(timeIn: string, timeOut: string) {
   return (diffMinutes / 60).toFixed(2);
 }
 
+function calculateProductionHours(row: LabourRow) {
+  const raw = toNumber(row.total_hours);
+  const lunch = toNumber(row.lunch_minutes) / 60;
+  const travelIn = toNumber(row.travel_in_minutes) / 60;
+  const travelOut = toNumber(row.travel_out_minutes) / 60;
+  const mobilisation = toNumber(row.mobilisation_hours);
+  const delay = toNumber(row.delay_hours);
+
+  return Math.max(0, raw - lunch - travelIn - travelOut - mobilisation - delay).toFixed(2);
+}
+
 function normalizeWorkerName(name: string) {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -121,6 +157,84 @@ function getDuplicateWorkerIndexes(rows: LabourRow[]) {
 
 function isBodyExtensionRow(row: ProgressRow) {
   return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
+}
+
+function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = extra[key];
+    if (value === null || value === undefined || value === "") continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+
+    const text = String(value).trim().toLowerCase();
+    if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
+    if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
+  }
+
+  return null;
+}
+
+function inferTowerHasBodyExtension(tower: TowerRecord | null) {
+  const extra = tower?.extra_data || {};
+
+  const value = readExtraNumber(extra, [
+    "Body Extension",
+    "Body Extensions",
+    "Body Extension Height",
+    "Body Extension Length",
+    "Body Extension Qty",
+    "Body Extension Required",
+    "BE",
+    "BE Height",
+    "Extension",
+    "Extension Height",
+    "body_extension",
+    "body_extensions",
+    "body_extension_height",
+  ]);
+
+  if (value === null) return false;
+  return value > 0;
+}
+
+function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
+  const mapped: LabourRow = {
+    worker_name: toStringValue(row?.worker_name),
+    time_in: toStringValue(row?.time_in),
+    time_out: toStringValue(row?.time_out),
+    total_hours: toStringValue(row?.total_hours),
+    lunch_minutes: toStringValue(row?.lunch_minutes),
+    travel_in_minutes: toStringValue(row?.travel_in_minutes),
+    travel_out_minutes: toStringValue(row?.travel_out_minutes),
+    mobilisation_hours: toStringValue(row?.mobilisation_hours),
+    delay_hours: toStringValue(row?.delay_hours),
+    delay_reason: toStringValue(row?.delay_reason),
+    production_hours: toStringValue(row?.production_hours),
+  };
+
+  mapped.production_hours = calculateProductionHours(mapped);
+  return mapped;
+}
+
+function blankLabourRow(defaults?: {
+  lunchBreakMinutes?: string;
+  travelInMinutes?: string;
+  travelOutMinutes?: string;
+  mobilisationHours?: string;
+}): LabourRow {
+  return makeLabourRow({
+    worker_name: "",
+    time_in: "",
+    time_out: "",
+    total_hours: "",
+    lunch_minutes: defaults?.lunchBreakMinutes || "",
+    travel_in_minutes: defaults?.travelInMinutes || "",
+    travel_out_minutes: defaults?.travelOutMinutes || "",
+    mobilisation_hours: defaults?.mobilisationHours || "",
+    delay_hours: "",
+    delay_reason: "",
+    production_hours: "",
+  });
 }
 
 export default function DailyDocketForm({
@@ -190,15 +304,26 @@ export default function DailyDocketForm({
   const [bulkTimeIn, setBulkTimeIn] = useState("");
   const [bulkTimeOut, setBulkTimeOut] = useState("");
 
+  const [lunchBreakMinutes, setLunchBreakMinutes] = useState(
+    toStringValue(initialDocket?.lunch_break_minutes)
+  );
+  const [travelInMinutes, setTravelInMinutes] = useState(
+    toStringValue(initialDocket?.travel_in_minutes)
+  );
+  const [travelOutMinutes, setTravelOutMinutes] = useState(
+    toStringValue(initialDocket?.travel_out_minutes)
+  );
+  const [mobilisationHours, setMobilisationHours] = useState(
+    toStringValue(initialDocket?.mobilisation_hours)
+  );
+  const [mobilisationNotes, setMobilisationNotes] = useState(
+    toStringValue(initialDocket?.mobilisation_notes)
+  );
+
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
     initialLabourRows && initialLabourRows.length > 0
-      ? initialLabourRows.map((r) => ({
-          worker_name: toStringValue(r.worker_name),
-          time_in: toStringValue(r.time_in),
-          time_out: toStringValue(r.time_out),
-          total_hours: toStringValue(r.total_hours),
-        }))
-      : [{ worker_name: "", time_in: "", time_out: "", total_hours: "" }]
+      ? initialLabourRows.map((r) => makeLabourRow(r))
+      : [blankLabourRow()]
   );
 
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
@@ -213,6 +338,22 @@ export default function DailyDocketForm({
 
   const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    async function loadTowerBodyExtensionDefault() {
+      if (mode !== "create" || initialProgressRows?.length) return;
+
+      const { data } = await supabase
+        .from("towers")
+        .select("*")
+        .eq("id", towerId)
+        .single();
+
+      setHasBodyExtension(inferTowerHasBodyExtension((data as TowerRecord | null) || null));
+    }
+
+    void loadTowerBodyExtensionDefault();
+  }, [mode, initialProgressRows, supabase, towerId]);
 
   useEffect(() => {
     if (!docketId && !initialDocket) return;
@@ -234,20 +375,19 @@ export default function DailyDocketForm({
         setMissingItemsBolts(toStringValue(initialDocket.missing_items_bolts));
         setDelaysComments(toStringValue(initialDocket.delays_comments));
 
+        setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
+        setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
+        setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
+        setMobilisationHours(toStringValue(initialDocket.mobilisation_hours));
+        setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
+
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
         setSignedDate(toStringValue(initialDocket.signed_date));
         setExistingDocketFileUrl(toStringValue(initialDocket.docket_file_url));
 
         if (initialLabourRows?.length) {
-          setLabourRows(
-            initialLabourRows.map((r) => ({
-              worker_name: toStringValue(r.worker_name),
-              time_in: toStringValue(r.time_in),
-              time_out: toStringValue(r.time_out),
-              total_hours: toStringValue(r.total_hours),
-            }))
-          );
+          setLabourRows(initialLabourRows.map((r) => makeLabourRow(r)));
         }
 
         if (initialProgressRows?.length) {
@@ -287,6 +427,12 @@ export default function DailyDocketForm({
       setMissingItemsBolts(toStringValue(data.missing_items_bolts));
       setDelaysComments(toStringValue(data.delays_comments));
 
+      setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
+      setTravelInMinutes(toStringValue(data.travel_in_minutes));
+      setTravelOutMinutes(toStringValue(data.travel_out_minutes));
+      setMobilisationHours(toStringValue(data.mobilisation_hours));
+      setMobilisationNotes(toStringValue(data.mobilisation_notes));
+
       setBcRepName(toStringValue(data.bc_rep_name));
       setClientRepName(toStringValue(data.client_rep_name));
       setSignedDate(toStringValue(data.signed_date));
@@ -298,14 +444,7 @@ export default function DailyDocketForm({
         .eq("docket_id", docketId);
 
       if (labour && labour.length > 0) {
-        setLabourRows(
-          labour.map((r) => ({
-            worker_name: toStringValue(r.worker_name),
-            time_in: toStringValue(r.time_in),
-            time_out: toStringValue(r.time_out),
-            total_hours: toStringValue(r.total_hours),
-          }))
-        );
+        setLabourRows(labour.map((r) => makeLabourRow(r)));
       }
 
       const { data: progress } = await supabase
@@ -392,11 +531,48 @@ export default function DailyDocketForm({
     return Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5);
   }, [totalAssemblyPercent, totalErectionPercent]);
 
+  const labourRowsWithProduction = useMemo(() => {
+    return labourRows.map((row) => ({
+      ...row,
+      production_hours: calculateProductionHours(row),
+    }));
+  }, [labourRows]);
+
   const totalLabourHours = useMemo(() => {
-    return labourRows.reduce((sum, row) => {
+    return labourRowsWithProduction.reduce((sum, row) => {
       return sum + (Number(row.total_hours) || 0);
     }, 0);
-  }, [labourRows]);
+  }, [labourRowsWithProduction]);
+
+  const totalProductionHours = useMemo(() => {
+    return labourRowsWithProduction.reduce((sum, row) => {
+      return sum + (Number(row.production_hours) || 0);
+    }, 0);
+  }, [labourRowsWithProduction]);
+
+  const totalLunchHours = useMemo(() => {
+    return labourRowsWithProduction.reduce((sum, row) => {
+      return sum + toNumber(row.lunch_minutes) / 60;
+    }, 0);
+  }, [labourRowsWithProduction]);
+
+  const totalTravelHours = useMemo(() => {
+    return labourRowsWithProduction.reduce((sum, row) => {
+      return sum + (toNumber(row.travel_in_minutes) + toNumber(row.travel_out_minutes)) / 60;
+    }, 0);
+  }, [labourRowsWithProduction]);
+
+  const totalMobilisationHours = useMemo(() => {
+    return labourRowsWithProduction.reduce((sum, row) => {
+      return sum + toNumber(row.mobilisation_hours);
+    }, 0);
+  }, [labourRowsWithProduction]);
+
+  const totalIndividualDelayHours = useMemo(() => {
+    return labourRowsWithProduction.reduce((sum, row) => {
+      return sum + toNumber(row.delay_hours);
+    }, 0);
+  }, [labourRowsWithProduction]);
 
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
@@ -441,16 +617,19 @@ export default function DailyDocketForm({
   function addLabourRow() {
     setLabourRows((prev) => [
       ...prev,
-      { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+      blankLabourRow({
+        lunchBreakMinutes,
+        travelInMinutes,
+        travelOutMinutes,
+        mobilisationHours,
+      }),
     ]);
   }
 
   function removeLabourRow(index: number) {
     setLabourRows((prev) => {
       const next = prev.filter((_, i) => i !== index);
-      return next.length > 0
-        ? next
-        : [{ worker_name: "", time_in: "", time_out: "", total_hours: "" }];
+      return next.length > 0 ? next : [blankLabourRow()];
     });
   }
 
@@ -487,6 +666,8 @@ export default function DailyDocketForm({
         current.total_hours = autoHours || current.total_hours;
       }
 
+      current.production_hours = calculateProductionHours(current);
+
       const last = updated[updated.length - 1];
       const hasBlankRow = updated.some(
         (row, i) =>
@@ -504,12 +685,14 @@ export default function DailyDocketForm({
         last.total_hours.trim() &&
         !hasBlankRow
       ) {
-        updated.push({
-          worker_name: "",
-          time_in: "",
-          time_out: "",
-          total_hours: "",
-        });
+        updated.push(
+          blankLabourRow({
+            lunchBreakMinutes,
+            travelInMinutes,
+            travelOutMinutes,
+            mobilisationHours,
+          })
+        );
       }
 
       return updated;
@@ -541,6 +724,31 @@ export default function DailyDocketForm({
     }
   }
 
+  function applyProductionDefaultsToAll() {
+    if (isView || locked) return;
+
+    setLabourRows((prev) =>
+      prev.map((row) => {
+        if (!row.worker_name.trim() && !row.time_in && !row.time_out && !row.total_hours) {
+          return row;
+        }
+
+        const next = {
+          ...row,
+          lunch_minutes: lunchBreakMinutes,
+          travel_in_minutes: travelInMinutes,
+          travel_out_minutes: travelOutMinutes,
+          mobilisation_hours: mobilisationHours,
+        };
+
+        return {
+          ...next,
+          production_hours: calculateProductionHours(next),
+        };
+      })
+    );
+  }
+
   async function uploadFileIfNeeded() {
     if (!docketFile) return existingDocketFileUrl || null;
 
@@ -559,58 +767,57 @@ export default function DailyDocketForm({
     return publicUrlRes.data.publicUrl;
   }
 
-  async function handleCreate() {
-    const docketFileUrl = await uploadFileIfNeeded();
+  function buildDocketPayload(docketFileUrl: string | null, existingSignedDate: string | null = null) {
+    return {
+      docket_date: docketDate,
+      crew: crewName,
+      leading_hand: leadingHand,
+      weather,
+      assembly_percent: totalAssemblyPercent,
+      erection_percent: totalErectionPercent,
+      weather_delay_hours: Number(weatherDelayHours || 0),
+      lightning_delay_hours: Number(lightningDelayHours || 0),
+      toolbox_delay_hours: Number(toolboxDelayHours || 0),
+      other_delay_hours: Number(otherDelayHours || 0),
+      other_delay_reason: otherDelayReason,
+      delays_comments: delaysComments,
+      missing_items_bolts: missingItemsBolts,
+      lunch_break_minutes: Number(lunchBreakMinutes || 0),
+      travel_in_minutes: Number(travelInMinutes || 0),
+      travel_out_minutes: Number(travelOutMinutes || 0),
+      mobilisation_hours: Number(mobilisationHours || 0),
+      mobilisation_notes: mobilisationNotes,
+      raw_manhours: totalLabourHours,
+      production_manhours: totalProductionHours,
+      bc_rep_name: bcRepName,
+      client_rep_name: clientRepName,
+      signed_date: existingSignedDate,
+      docket_file_url: docketFileUrl,
+    };
+  }
 
-    const { data: docket, error: docketError } = await supabase
-      .from("tower_daily_dockets")
-      .insert({
-        project_id: projectId,
-        tower_id: towerId,
-        docket_date: docketDate,
-        crew: crewName,
-        leading_hand: leadingHand,
-        weather,
-        assembly_percent: totalAssemblyPercent,
-        erection_percent: totalErectionPercent,
-        weather_delay_hours: Number(weatherDelayHours || 0),
-        lightning_delay_hours: Number(lightningDelayHours || 0),
-        toolbox_delay_hours: Number(toolboxDelayHours || 0),
-        other_delay_hours: Number(otherDelayHours || 0),
-        other_delay_reason: otherDelayReason,
-        delays_comments: delaysComments,
-        missing_items_bolts: missingItemsBolts,
-        bc_rep_name: bcRepName,
-        client_rep_name: clientRepName,
-        signed_date: null,
-        docket_file_url: docketFileUrl,
-      })
-      .select()
-      .single();
-
-    if (docketError || !docket) {
-      throw new Error("Failed to save daily docket");
-    }
-
-    const labourPayload = labourRows
+  function buildLabourPayload(docketIdValue: string) {
+    return labourRowsWithProduction
       .filter((row) => row.worker_name.trim())
       .map((row) => ({
-        docket_id: docket.id,
+        docket_id: docketIdValue,
         worker_name: row.worker_name.trim(),
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
+        lunch_minutes: Number(row.lunch_minutes || 0),
+        travel_in_minutes: Number(row.travel_in_minutes || 0),
+        travel_out_minutes: Number(row.travel_out_minutes || 0),
+        mobilisation_hours: Number(row.mobilisation_hours || 0),
+        delay_hours: Number(row.delay_hours || 0),
+        delay_reason: row.delay_reason || null,
+        production_hours: Number(row.production_hours || 0),
       }));
+  }
 
-    if (labourPayload.length > 0) {
-      const labourRes = await supabase.from("tower_docket_labour").insert(labourPayload);
-      if (labourRes.error) {
-        throw new Error("Daily docket saved, but labour rows failed.");
-      }
-    }
-
-    const progressPayload = progressRows.map((row) => ({
-      docket_id: docket.id,
+  function buildProgressPayload(docketIdValue: string) {
+    return progressRows.map((row) => ({
+      docket_id: docketIdValue,
       section: row.section_label,
       section_label: row.section_label,
       assembled_qty:
@@ -622,6 +829,35 @@ export default function DailyDocketForm({
           ? 0
           : Number(row.erected_qty || 0),
     }));
+  }
+
+  async function handleCreate() {
+    const docketFileUrl = await uploadFileIfNeeded();
+
+    const { data: docket, error: docketError } = await supabase
+      .from("tower_daily_dockets")
+      .insert({
+        project_id: projectId,
+        tower_id: towerId,
+        ...buildDocketPayload(docketFileUrl, null),
+      })
+      .select()
+      .single();
+
+    if (docketError || !docket) {
+      throw new Error("Failed to save daily docket");
+    }
+
+    const labourPayload = buildLabourPayload(docket.id);
+
+    if (labourPayload.length > 0) {
+      const labourRes = await supabase.from("tower_docket_labour").insert(labourPayload);
+      if (labourRes.error) {
+        throw new Error("Daily docket saved, but labour rows failed. Check that the production hour columns exist on tower_docket_labour.");
+      }
+    }
+
+    const progressPayload = buildProgressPayload(docket.id);
 
     if (progressPayload.length > 0) {
       const progressRes = await supabase
@@ -659,29 +895,11 @@ export default function DailyDocketForm({
 
     const updateRes = await supabase
       .from("tower_daily_dockets")
-      .update({
-        docket_date: docketDate,
-        crew: crewName,
-        leading_hand: leadingHand,
-        weather,
-        assembly_percent: totalAssemblyPercent,
-        erection_percent: totalErectionPercent,
-        weather_delay_hours: Number(weatherDelayHours || 0),
-        lightning_delay_hours: Number(lightningDelayHours || 0),
-        toolbox_delay_hours: Number(toolboxDelayHours || 0),
-        other_delay_hours: Number(otherDelayHours || 0),
-        other_delay_reason: otherDelayReason,
-        delays_comments: delaysComments,
-        missing_items_bolts: missingItemsBolts,
-        bc_rep_name: bcRepName,
-        client_rep_name: clientRepName,
-        signed_date: existing.signed_date,
-        docket_file_url: docketFileUrl,
-      })
+      .update(buildDocketPayload(docketFileUrl, existing.signed_date))
       .eq("id", docketId);
 
     if (updateRes.error) {
-      throw new Error("Failed to update docket.");
+      throw new Error("Failed to update docket. Check that the production manhour columns exist on tower_daily_dockets.");
     }
 
     const deleteLabourRes = await supabase
@@ -702,15 +920,7 @@ export default function DailyDocketForm({
       throw new Error("Failed to refresh progress rows.");
     }
 
-    const labourPayload = labourRows
-      .filter((row) => row.worker_name.trim())
-      .map((row) => ({
-        docket_id: docketId,
-        worker_name: row.worker_name.trim(),
-        time_in: row.time_in || null,
-        time_out: row.time_out || null,
-        total_hours: Number(row.total_hours || 0),
-      }));
+    const labourPayload = buildLabourPayload(docketId);
 
     if (labourPayload.length > 0) {
       const labourInsertRes = await supabase
@@ -718,23 +928,11 @@ export default function DailyDocketForm({
         .insert(labourPayload);
 
       if (labourInsertRes.error) {
-        throw new Error("Failed to save labour rows.");
+        throw new Error("Failed to save labour rows. Check that the production hour columns exist on tower_docket_labour.");
       }
     }
 
-    const progressPayload = progressRows.map((row) => ({
-      docket_id: docketId,
-      section: row.section_label,
-      section_label: row.section_label,
-      assembled_qty:
-        !hasBodyExtension && isBodyExtensionRow(row)
-          ? 0
-          : Number(row.assembled_qty || 0),
-      erected_qty:
-        !hasBodyExtension && isBodyExtensionRow(row)
-          ? 0
-          : Number(row.erected_qty || 0),
-    }));
+    const progressPayload = buildProgressPayload(docketId);
 
     if (progressPayload.length > 0) {
       const progressInsertRes = await supabase
@@ -834,6 +1032,12 @@ export default function DailyDocketForm({
       setMissingItemsBolts(toStringValue(lastDocket.missing_items_bolts));
       setDelaysComments(toStringValue(lastDocket.delays_comments));
 
+      setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
+      setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
+      setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
+      setMobilisationHours(toStringValue(lastDocket.mobilisation_hours));
+      setMobilisationNotes(toStringValue(lastDocket.mobilisation_notes));
+
       setBcRepName("");
       setClientRepName("");
       setSignedDate("");
@@ -841,12 +1045,7 @@ export default function DailyDocketForm({
       setExistingDocketFileUrl("");
 
       if (labour && labour.length > 0) {
-        const mappedLabour = labour.map((r) => ({
-          worker_name: toStringValue(r.worker_name),
-          time_in: toStringValue(r.time_in),
-          time_out: toStringValue(r.time_out),
-          total_hours: toStringValue(r.total_hours),
-        }));
+        const mappedLabour = labour.map((r) => makeLabourRow(r));
 
         const dedupedLabour: LabourRow[] = [];
         const seen = new Set<string>();
@@ -860,11 +1059,21 @@ export default function DailyDocketForm({
 
         setLabourRows([
           ...dedupedLabour,
-          { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+          blankLabourRow({
+            lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
+            travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
+            travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
+            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
+          }),
         ]);
       } else {
         setLabourRows([
-          { worker_name: "", time_in: "", time_out: "", total_hours: "" },
+          blankLabourRow({
+            lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
+            travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
+            travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
+            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
+          }),
         ]);
       }
 
@@ -876,12 +1085,17 @@ export default function DailyDocketForm({
         }));
 
         setProgressRows(mappedRows);
-        setHasBodyExtension(
-          mappedRows.some((row) => isBodyExtensionRow(row))
-        );
+        setHasBodyExtension(mappedRows.some((row) => isBodyExtensionRow(row)));
       } else {
         setProgressRows(DEFAULT_PROGRESS_ROWS);
-        setHasBodyExtension(true);
+
+        const { data: tower } = await supabase
+          .from("towers")
+          .select("*")
+          .eq("id", towerId)
+          .single();
+
+        setHasBodyExtension(inferTowerHasBodyExtension((tower as TowerRecord | null) || null));
       }
     } catch (err) {
       console.error(err);
@@ -894,20 +1108,26 @@ export default function DailyDocketForm({
       prev.map((row) => {
         const time_in = bulkTimeIn || row.time_in;
         const time_out = bulkTimeOut || row.time_out;
+        const total_hours = calculateHours(time_in, time_out) || row.total_hours;
 
-        return {
+        const next = {
           ...row,
           time_in,
           time_out,
-          total_hours: calculateHours(time_in, time_out) || row.total_hours,
+          total_hours,
+        };
+
+        return {
+          ...next,
+          production_hours: calculateProductionHours(next),
         };
       })
     );
   }
 
   return (
-    <div className="p-8 max-w-6xl space-y-8">
-      <div className="flex items-start justify-between gap-4">
+    <div className="p-4 md:p-8 max-w-7xl space-y-6">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl font-bold">
             {mode === "create"
@@ -917,11 +1137,11 @@ export default function DailyDocketForm({
               : "View Daily Docket"}
           </h1>
           <p className="text-slate-500 mt-1">
-            Enter labour, section percentages, delays, and upload the scanned docket.
+            Enter labour, progress, production deductions, delays, and upload the scanned docket.
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {mode === "create" && !isView && !locked && (
             <button
               type="button"
@@ -956,7 +1176,7 @@ export default function DailyDocketForm({
         </div>
       )}
 
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
         <h2 className="text-xl font-semibold">Header</h2>
         <div className="grid md:grid-cols-2 gap-4">
           <Input
@@ -987,9 +1207,14 @@ export default function DailyDocketForm({
         </div>
       </section>
 
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <h2 className="text-xl font-semibold">Section Quantities</h2>
+          <div>
+            <h2 className="text-xl font-semibold">Section Quantities</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Body extension is auto-detected from the tower CSV/extra data. You can still override it here if needed.
+            </p>
+          </div>
 
           <label className="inline-flex items-center gap-3 text-sm font-medium">
             <input
@@ -1059,27 +1284,76 @@ export default function DailyDocketForm({
             </tbody>
           </table>
 
-          <div className="flex justify-end gap-10 p-4 bg-slate-50 border-t">
-            <div className="text-right">
-              <p className="text-sm text-slate-500">Total Assembly</p>
-              <p className="text-2xl font-bold">{totalAssemblyPercent}%</p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-sm text-slate-500">Total Erection</p>
-              <p className="text-2xl font-bold">{totalErectionPercent}%</p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-sm text-slate-500">Tower Progress Used</p>
-              <p className="text-2xl font-bold">{displayProgress}%</p>
-            </div>
+          <div className="flex justify-end gap-6 md:gap-10 p-4 bg-slate-50 border-t flex-wrap">
+            <SummaryBlock label="Total Assembly" value={`${totalAssemblyPercent}%`} />
+            <SummaryBlock label="Total Erection" value={`${totalErectionPercent}%`} />
+            <SummaryBlock label="Tower Progress Used" value={`${displayProgress}%`} />
           </div>
         </div>
       </section>
 
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
+        <h2 className="text-xl font-semibold">Docket Production Defaults</h2>
+        <p className="text-sm text-slate-500">
+          These are default deductions for the docket. Apply them to all workers, then adjust individual rows if only some people were delayed.
+        </p>
+
+        <div className="grid md:grid-cols-4 gap-4">
+          <Input
+            label="Lunch Break Minutes"
+            type="number"
+            value={lunchBreakMinutes}
+            onChange={setLunchBreakMinutes}
+            disabled={locked || isView}
+          />
+          <Input
+            label="Travel In Minutes"
+            type="number"
+            value={travelInMinutes}
+            onChange={setTravelInMinutes}
+            disabled={locked || isView}
+          />
+          <Input
+            label="Travel Out Minutes"
+            type="number"
+            value={travelOutMinutes}
+            onChange={setTravelOutMinutes}
+            disabled={locked || isView}
+          />
+          <Input
+            label="Mobilisation Hours"
+            type="number"
+            value={mobilisationHours}
+            onChange={setMobilisationHours}
+            disabled={locked || isView}
+          />
+        </div>
+
+        <div className="grid md:grid-cols-[1fr_auto] gap-4 items-end">
+          <Input
+            label="Mobilisation Notes"
+            value={mobilisationNotes}
+            onChange={setMobilisationNotes}
+            disabled={locked || isView}
+          />
+
+          {!locked && !isView && (
+            <button
+              type="button"
+              onClick={applyProductionDefaultsToAll}
+              className="bg-slate-900 text-white px-4 py-3 rounded-xl text-sm font-medium"
+            >
+              Apply Defaults to Labour
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
         <h2 className="text-xl font-semibold">Delay Hours & Issues</h2>
+        <p className="text-sm text-slate-500">
+          These fields remain as the general site delay summary. Individual worker delays are entered in the labour table for production hour calculations.
+        </p>
         <div className="grid md:grid-cols-2 gap-4">
           <Input
             label="Weather Delay Hours"
@@ -1136,13 +1410,17 @@ export default function DailyDocketForm({
         </div>
       </section>
 
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
-        <div className="flex items-center justify-between">
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <h2 className="text-xl font-semibold">Labour</h2>
 
-          <div className="text-right">
-            <p className="text-sm text-slate-500">Total Labour Hours</p>
-            <p className="text-2xl font-bold">{totalLabourHours.toFixed(2)}</p>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
+            <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
+            <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
+            <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
+            <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
+            <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
+            <MiniSummary label="Delay" value={totalIndividualDelayHours.toFixed(2)} />
           </div>
         </div>
 
@@ -1167,112 +1445,159 @@ export default function DailyDocketForm({
               onClick={applyBulkTimes}
               className="bg-slate-800 text-white rounded p-2 text-sm"
             >
-              Apply to All
+              Apply Times to All
             </button>
           </div>
         )}
 
-        <div className="space-y-4">
-          {labourRows.map((row, index) => {
+        <div className="space-y-3">
+          {labourRowsWithProduction.map((row, index) => {
             const isDuplicate = duplicateWorkerIndexes.has(index);
 
             return (
               <div
                 key={index}
-                className={`grid grid-cols-2 md:grid-cols-5 gap-2 items-end border rounded-xl p-3 ${
+                className={`border rounded-xl p-3 space-y-3 ${
                   isDuplicate ? "border-red-300 bg-red-50" : ""
                 }`}
               >
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Worker Name
-                  </label>
-                  <input
-                    id={`labour-name-${index}`}
-                    className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
-                      isDuplicate ? "border-red-500 bg-white" : ""
-                    }`}
-                    value={row.worker_name}
-                    disabled={locked || isView}
-                    placeholder="Name"
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-timein-${index}`)
-                    }
-                    onChange={(e) =>
-                      updateLabourRow(index, "worker_name", e.target.value)
-                    }
-                  />
-                  {isDuplicate && row.worker_name.trim() && (
-                    <p className="text-xs text-red-600 mt-1">
-                      This worker name is already entered in this docket.
-                    </p>
-                  )}
-                </div>
+                <div className="grid grid-cols-2 md:grid-cols-[1.4fr_110px_110px_100px_100px] gap-2 items-end">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      Worker Name
+                    </label>
+                    <input
+                      id={`labour-name-${index}`}
+                      className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
+                        isDuplicate ? "border-red-500 bg-white" : ""
+                      }`}
+                      value={row.worker_name}
+                      disabled={locked || isView}
+                      placeholder="Name"
+                      onKeyDown={(e) =>
+                        handleLabourKeyDown(e, `labour-timein-${index}`)
+                      }
+                      onChange={(e) =>
+                        updateLabourRow(index, "worker_name", e.target.value)
+                      }
+                    />
+                    {isDuplicate && row.worker_name.trim() && (
+                      <p className="text-xs text-red-600 mt-1">
+                        This worker name is already entered in this docket.
+                      </p>
+                    )}
+                  </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Time In</label>
-                  <input
+                  <LabourInput
+                    label="Time In"
                     id={`labour-timein-${index}`}
-                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
                     type="time"
                     value={row.time_in}
                     disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-timeout-${index}`)
-                    }
-                    onChange={(e) =>
-                      updateLabourRow(index, "time_in", e.target.value)
-                    }
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-timeout-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "time_in", v)}
                   />
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Time Out</label>
-                  <input
+                  <LabourInput
+                    label="Time Out"
                     id={`labour-timeout-${index}`}
-                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
                     type="time"
                     value={row.time_out}
                     disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-hours-${index}`)
-                    }
-                    onChange={(e) =>
-                      updateLabourRow(index, "time_out", e.target.value)
-                    }
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-hours-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "time_out", v)}
                   />
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Total Hours</label>
-                  <input
+                  <LabourInput
+                    label="Raw Hrs"
                     id={`labour-hours-${index}`}
-                    className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
                     type="number"
-                    step="0.01"
                     value={row.total_hours}
                     disabled={locked || isView}
-                    placeholder="Hours"
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-name-${index + 1}`)
-                    }
-                    onChange={(e) =>
-                      updateLabourRow(index, "total_hours", e.target.value)
-                    }
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-lunch-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "total_hours", v)}
                   />
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Prod Hrs</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-emerald-50 text-emerald-800 font-semibold">
+                      {row.production_hours || "0.00"}
+                    </div>
+                  </div>
                 </div>
 
-                {!locked && !isView ? (
-                  <button
-                    type="button"
-                    onClick={() => removeLabourRow(index)}
-                    className="border px-4 py-2 rounded-lg h-10"
-                  >
-                    Remove
-                  </button>
-                ) : (
-                  <div />
-                )}
+                <div className="grid grid-cols-2 md:grid-cols-[110px_110px_110px_110px_110px_1fr_auto] gap-2 items-end">
+                  <LabourInput
+                    label="Lunch Min"
+                    id={`labour-lunch-${index}`}
+                    type="number"
+                    value={row.lunch_minutes}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "lunch_minutes", v)}
+                  />
+
+                  <LabourInput
+                    label="Travel In"
+                    id={`labour-travelin-${index}`}
+                    type="number"
+                    value={row.travel_in_minutes}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)}
+                  />
+
+                  <LabourInput
+                    label="Travel Out"
+                    id={`labour-travelout-${index}`}
+                    type="number"
+                    value={row.travel_out_minutes}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)}
+                  />
+
+                  <LabourInput
+                    label="Mob Hrs"
+                    id={`labour-mob-${index}`}
+                    type="number"
+                    value={row.mobilisation_hours}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-delay-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)}
+                  />
+
+                  <LabourInput
+                    label="Delay Hrs"
+                    id={`labour-delay-${index}`}
+                    type="number"
+                    value={row.delay_hours}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-delayreason-${index}`)}
+                    onChange={(v) => updateLabourRow(index, "delay_hours", v)}
+                  />
+
+                  <LabourInput
+                    label="Delay Reason"
+                    id={`labour-delayreason-${index}`}
+                    value={row.delay_reason}
+                    disabled={locked || isView}
+                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)}
+                    onChange={(v) => updateLabourRow(index, "delay_reason", v)}
+                  />
+
+                  {!locked && !isView ? (
+                    <button
+                      type="button"
+                      onClick={() => removeLabourRow(index)}
+                      className="border px-4 py-2 rounded-lg h-10"
+                    >
+                      Remove
+                    </button>
+                  ) : (
+                    <div />
+                  )}
+                </div>
               </div>
             );
           })}
@@ -1291,7 +1616,7 @@ export default function DailyDocketForm({
         )}
       </section>
 
-      <section className="bg-white border rounded-2xl p-6 space-y-4">
+      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
         <h2 className="text-xl font-semibold">Sign-Off & Upload</h2>
         <div className="grid md:grid-cols-2 gap-4">
           <Input
@@ -1391,6 +1716,58 @@ function Input({
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       />
+    </div>
+  );
+}
+
+function LabourInput({
+  label,
+  id,
+  value,
+  onChange,
+  onKeyDown,
+  type = "text",
+  disabled = false,
+}: {
+  label: string;
+  id?: string;
+  value: string;
+  onChange: (value: string) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  type?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1">{label}</label>
+      <input
+        id={id}
+        className="border rounded-lg p-2 text-sm w-full disabled:bg-slate-100"
+        type={type}
+        step={type === "number" ? "0.01" : undefined}
+        value={value}
+        disabled={disabled}
+        onKeyDown={onKeyDown}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+function SummaryBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="text-right">
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className="text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function MiniSummary({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-slate-100 px-3 py-2 min-w-[90px]">
+      <p className="text-[11px] text-slate-500">{label}</p>
+      <p className="text-lg font-bold">{value}</p>
     </div>
   );
 }
