@@ -1105,382 +1105,408 @@ export default function TowerOverviewPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8 space-y-6">
+    <div className="min-h-screen bg-slate-100 p-6 lg:p-8 space-y-6">
       <TowerHeader
         projectId={projectId}
         tower={towerForHeader}
         latestDate={stats.latestDate}
       />
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="Tower Performance"
-          subtitle="High-level delivery, progress and production metrics."
-        />
-
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
-          <MetricTile
-            title="Tower Progress"
-            value={`${stats.computedProgress}%`}
-            subtitle={`${stats.remainingProgress}% remaining`}
-            accent="blue"
-          />
-          <MetricTile
-            title="Manhours"
-            value={formatDecimal(stats.totalHours, 1)}
-            subtitle={`Dockets logged: ${stats.docketCount}`}
-            accent="purple"
-          />
-          <MetricTile
-            title="Delivery Progress"
-            value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-            subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
-            accent="emerald"
-          />
-          <MetricTile
-            title="Total MH / Tonne"
-            value={formatDecimal(stats.manhoursPerTonne, 2)}
-            subtitle={
-              stats.completedTonnes !== null
-                ? `${formatDecimal(stats.totalHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
-                : "Tower weight not found"
-            }
-            accent="amber"
-          />
-          <MetricTile
-            title="Production MH / Tonne"
-            value={formatDecimal(stats.productionManhoursPerTonne, 2)}
-            subtitle={
-              stats.completedTonnes !== null
-                ? `${formatDecimal(stats.productionHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
-                : "Tower weight not found"
-            }
-            accent="emerald"
-          />
-          <MetricTile
-            title="Completed Tonnes"
-            value={
-              stats.completedTonnes !== null
-                ? `${formatDecimal(stats.completedTonnes, 2)} t`
-                : "-"
-            }
-            subtitle={tower.status || stats.computedStatus}
-            accent="blue"
-          />
-        </div>
-
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <DonutWheel
-            value={stats.computedProgress}
-            label="Total Progress"
-            sublabel={`${stats.remainingProgress}% remaining`}
-            color="#2563eb"
-          />
-          <DonutWheel
-            value={stats.deliveryPercent}
-            label="Delivery Progress"
-            sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
-            color="#059669"
-          />
-          <DonutWheel
-            value={itcCompletionPercent}
-            label="ITC Completion"
-            sublabel={
-              itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"
-            }
-            color="#7c3aed"
-          />
-          <DonutWheel
-            value={safetyActivePercent}
-            label="Safety Docs Active"
-            sublabel={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active`}
-            color="#f59e0b"
-          />
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="ITC Overview"
-          subtitle="Latest ITC status and readiness summary for this tower."
-          action={
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              Open ITC
-            </Link>
-          }
-        />
-
-        {!itcMetrics.hasItc ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
-            No ITC has been created for this tower yet.
-          </div>
-        ) : (
-          <div className="mt-6 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-              <div
-                className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}
-              >
-                <div className="text-sm text-slate-500">Mode</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.itcMode}
-                </div>
-              </div>
-
-              <div
-                className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}
-              >
-                <div className="text-sm text-slate-500">Ready Status</div>
-                <div className="mt-3">
-                  <span
-                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
-                      itcMetrics.overallReady
-                        ? "bg-green-100 text-green-700 border-green-200"
-                        : "bg-yellow-100 text-yellow-800 border-yellow-200"
-                    }`}
-                  >
-                    {itcMetrics.overallReady ? "Ready" : "Pending"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Status</div>
-                <div className="mt-3">
-                  <span
-                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
-                      getItcStatusKind(itcMetrics.itcStatus),
-                    )}`}
-                  >
-                    {itcMetrics.itcStatus}
-                  </span>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Revision</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.revision}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Client Uploads</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">
-                  {itcMetrics.clientUploadCount}
-                </div>
-              </div>
+      <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-6 py-5 text-white">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-200">
+                Tower Overview Dashboard
+              </p>
+              <h1 className="mt-2 text-2xl font-black tracking-tight">
+                Performance Snapshot
+              </h1>
+              <p className="mt-1 text-sm text-slate-300">
+                Progress, production, delivery, QA and workpack metrics grouped for quick review.
+              </p>
             </div>
 
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-3 text-right sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
+                <div className="text-[11px] uppercase tracking-wide text-slate-300">Status</div>
+                <div className="mt-1 text-sm font-bold text-white">{stats.computedStatus}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
+                <div className="text-[11px] uppercase tracking-wide text-slate-300">Last docket</div>
+                <div className="mt-1 text-sm font-bold text-white">{stats.latestDate || "-"}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
+                <div className="text-[11px] uppercase tracking-wide text-slate-300">Dockets</div>
+                <div className="mt-1 text-sm font-bold text-white">{stats.docketCount}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 lg:p-6 space-y-6">
+          <section className="space-y-4">
+            <SectionHeader
+              title="Executive KPIs"
+              subtitle="Same core figures, now grouped as the main Power BI-style summary row."
+            />
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6">
               <MetricTile
-                title="Checklist Passed"
-                value={String(itcMetrics.checklistComplete)}
-                subtitle={`of ${itcMetrics.checklistTotal}`}
+                title="Tower Progress"
+                value={`${stats.computedProgress}%`}
+                subtitle={`${stats.remainingProgress}% remaining`}
                 accent="blue"
               />
               <MetricTile
-                title="Checklist Failed"
-                value={String(itcMetrics.checklistFailed)}
-                subtitle="items needing action"
-                accent="rose"
+                title="Total Manhours"
+                value={formatDecimal(stats.totalHours, 1)}
+                subtitle={`Dockets logged: ${stats.docketCount}`}
+                accent="purple"
               />
               <MetricTile
-                title="Checklist Pending"
-                value={String(itcMetrics.checklistPending)}
-                subtitle="unfinished items"
-                accent="amber"
-              />
-              <MetricTile
-                title="Torque Complete"
-                value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
-                subtitle="completed torque rows"
+                title="Production Hours"
+                value={formatDecimal(stats.productionHours, 1)}
+                subtitle="productive hours used for Prod MH/t"
                 accent="emerald"
               />
+              <MetricTile
+                title="Delivery Progress"
+                value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+                subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
+                accent="emerald"
+              />
+              <MetricTile
+                title="Open Defects"
+                value={String(stats.openDefectCount)}
+                subtitle={`${stats.defectCount} total defects`}
+                accent={stats.openDefectCount > 0 ? "rose" : "slate"}
+              />
+              <MetricTile
+                title="Completed Tonnes"
+                value={
+                  stats.completedTonnes !== null
+                    ? `${formatDecimal(stats.completedTonnes, 2)} t`
+                    : "-"
+                }
+                subtitle={
+                  stats.towerWeightTonnes !== null
+                    ? `${formatDecimal(stats.towerWeightTonnes, 2)} t total tower weight`
+                    : "Tower weight not found"
+                }
+                accent="blue"
+              />
             </div>
-          </div>
-        )}
-      </div>
+          </section>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Defects / Mods"
-            subtitle="Open issues and change tracking for this tower."
-          />
+          <section className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm xl:col-span-7">
+              <SectionHeader
+                title="Progress Wheels"
+                subtitle="Visual snapshot of progress, logistics, ITC and workpack health."
+              />
 
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Open Defects"
-              value={String(stats.openDefectCount)}
-              subtitle={`${stats.defectCount} total defects`}
-              accent="rose"
-            />
-            <MetricTile
-              title="Closed Defects"
-              value={String(stats.closedDefectCount)}
-              subtitle="resolved / closed out"
-              accent="emerald"
-            />
-            <MetricTile
-              title="Modifications"
-              value={String(stats.modificationCount)}
-              subtitle="logged tower modifications"
-              accent="blue"
-            />
-            <MetricTile
-              title="Computed Status"
-              value={stats.computedStatus}
-              subtitle="from latest progress"
-              accent="slate"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Delay Summary"
-            subtitle="Breakdown of downtime recorded in daily dockets."
-          />
-
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Weather Delay"
-              value={`${formatDecimal(stats.totalWeatherDelay, 1)} h`}
-              subtitle="weather-related downtime"
-              accent="blue"
-            />
-            <MetricTile
-              title="Lightning Delay"
-              value={`${formatDecimal(stats.totalLightningDelay, 1)} h`}
-              subtitle="lightning downtime"
-              accent="purple"
-            />
-            <MetricTile
-              title="Toolbox Delay"
-              value={`${formatDecimal(stats.totalToolboxDelay, 1)} h`}
-              subtitle="pre-start / toolbox delays"
-              accent="emerald"
-            />
-            <MetricTile
-              title="Total Delays"
-              value={`${formatDecimal(stats.totalDelayHours, 1)} h`}
-              subtitle="all delay categories"
-              accent="amber"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Workpack / Safety"
-            subtitle="Safety document health and workpack access."
-            action={
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/workpack`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-              >
-                Open Workpack
-              </Link>
-            }
-          />
-
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Safety Docs"
-              value={String(stats.totalSafetyDocs)}
-              subtitle="records linked to tower"
-              accent="blue"
-            />
-            <MetricTile
-              title="Active Docs"
-              value={String(stats.activeSafetyDocs)}
-              subtitle="currently valid / usable"
-              accent="emerald"
-            />
-            <MetricTile
-              title="Expired"
-              value={String(stats.expiredSafetyDocs)}
-              subtitle="needs replacement"
-              accent="rose"
-            />
-            <MetricTile
-              title="Expiring Soon"
-              value={String(stats.expiringSoonSafetyDocs)}
-              subtitle="within 14 days"
-              accent="amber"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Logistics / Materials"
-            subtitle="Combined delivery and materials overview for this tower."
-            action={
-              <div className="flex gap-2 flex-wrap">
-                <Link
-                  href={`/project/${projectId}/tower/${towerId}/deliveries`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-                >
-                  Open Deliveries
-                </Link>
-                <Link
-                  href={`/project/${projectId}/tower/${towerId}/bundles`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-                >
-                  Open Bundles
-                </Link>
+              <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <DonutWheel
+                  value={stats.computedProgress}
+                  label="Total Progress"
+                  sublabel={`${stats.remainingProgress}% remaining`}
+                  color="#2563eb"
+                />
+                <DonutWheel
+                  value={stats.deliveryPercent}
+                  label="Delivery Progress"
+                  sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
+                  color="#059669"
+                />
+                <DonutWheel
+                  value={itcCompletionPercent}
+                  label="ITC Completion"
+                  sublabel={
+                    itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"
+                  }
+                  color="#7c3aed"
+                />
+                <DonutWheel
+                  value={safetyActivePercent}
+                  label="Safety Docs Active"
+                  sublabel={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active`}
+                  color="#f59e0b"
+                />
               </div>
-            }
-          />
+            </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Bundle Delivery"
-              value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-              subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
-              accent="emerald"
-            />
-            <MetricTile
-              title="Materials Progress"
-              value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
-              subtitle={`${formatDecimal(stats.materialDeliveredQty, 0)} / ${formatDecimal(stats.materialRequiredQty, 0)} qty`}
-              accent="purple"
-            />
-            <MetricTile
-              title="Material Members"
-              value={String(stats.materialMemberCount)}
-              subtitle={`${stats.materialBundleCount} bundles • ${formatDecimal(stats.materialTotalWeight, 2)} total weight`}
-              accent="blue"
-            />
-            <MetricTile
-              title="Outstanding"
-              value={formatDecimal(
-                stats.materialOutstandingQty || stats.outstandingQty,
-                0,
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-5">
+              <SectionHeader
+                title="Production / Tonne"
+                subtitle="Total and production rates separated clearly."
+              />
+
+              <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <MetricTile
+                  title="Total MH / Tonne"
+                  value={formatDecimal(stats.manhoursPerTonne, 2)}
+                  subtitle={
+                    stats.completedTonnes !== null
+                      ? `${formatDecimal(stats.totalHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
+                      : "Tower weight not found"
+                  }
+                  accent="amber"
+                />
+                <MetricTile
+                  title="Production MH / Tonne"
+                  value={formatDecimal(stats.productionManhoursPerTonne, 2)}
+                  subtitle={
+                    stats.completedTonnes !== null
+                      ? `${formatDecimal(stats.productionHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
+                      : "Tower weight not found"
+                  }
+                  accent="emerald"
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700">Manhour Basis</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Total MH/t uses total hours. Prod MH/t uses production hours, matching TowerHeader logic.
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-white px-3 py-2 text-right shadow-sm">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">Completed</div>
+                    <div className="text-sm font-bold text-slate-900">
+                      {stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t` : "-"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                title="Logistics / Materials"
+                subtitle="Delivery and bundle status."
+                action={
+                  <div className="flex flex-wrap gap-2">
+                    <Link
+                      href={`/project/${projectId}/tower/${towerId}/deliveries`}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+                    >
+                      Deliveries
+                    </Link>
+                    <Link
+                      href={`/project/${projectId}/tower/${towerId}/bundles`}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+                    >
+                      Bundles
+                    </Link>
+                  </div>
+                }
+              />
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <MetricTile
+                  title="Bundle Delivery"
+                  value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+                  subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
+                  accent="emerald"
+                />
+                <MetricTile
+                  title="Outstanding"
+                  value={formatDecimal(stats.outstandingQty, 0)}
+                  subtitle="still to arrive"
+                  accent="rose"
+                />
+                <MetricTile
+                  title="Materials Progress"
+                  value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
+                  subtitle={`${formatDecimal(stats.materialDeliveredQty, 0)} / ${formatDecimal(stats.materialRequiredQty, 0)} qty`}
+                  accent="purple"
+                />
+                <MetricTile
+                  title="Material Members"
+                  value={String(stats.materialMemberCount)}
+                  subtitle={`${stats.materialBundleCount} bundles`}
+                  accent="blue"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                title="QA / ITC"
+                subtitle="Inspection and torque readiness."
+                action={
+                  <Link
+                    href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+                  >
+                    Open ITC
+                  </Link>
+                }
+              />
+
+              {!itcMetrics.hasItc ? (
+                <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">
+                  No ITC has been created for this tower yet.
+                </div>
+              ) : (
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <MetricTile
+                    title="ITC Mode"
+                    value={itcMetrics.itcMode}
+                    subtitle={`Rev: ${itcMetrics.revision}`}
+                    accent="purple"
+                  />
+                  <MetricTile
+                    title="Ready Status"
+                    value={itcMetrics.overallReady ? "Ready" : "Pending"}
+                    subtitle={itcMetrics.itcStatus}
+                    accent={itcMetrics.overallReady ? "emerald" : "amber"}
+                  />
+                  <MetricTile
+                    title="Checklist Passed"
+                    value={String(itcMetrics.checklistComplete)}
+                    subtitle={`of ${itcMetrics.checklistTotal}`}
+                    accent="blue"
+                  />
+                  <MetricTile
+                    title="Torque Complete"
+                    value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
+                    subtitle="completed torque rows"
+                    accent="emerald"
+                  />
+                  <MetricTile
+                    title="Failed Items"
+                    value={String(itcMetrics.checklistFailed)}
+                    subtitle="needs action"
+                    accent="rose"
+                  />
+                  <MetricTile
+                    title="Pending Items"
+                    value={String(itcMetrics.checklistPending)}
+                    subtitle="unfinished checks"
+                    accent="amber"
+                  />
+                </div>
               )}
-              subtitle="still to arrive"
-              accent="rose"
-            />
-          </div>
+            </div>
 
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <DonutWheel
-              value={stats.deliveryPercent}
-              label="Delivery Progress"
-              sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
-              color="#059669"
-            />
-            <DonutWheel
-              value={combinedLogisticsProgress}
-              label="Combined Logistics"
-              sublabel={`${formatDecimal(stats.materialOutstandingQty, 0)} materials qty outstanding`}
-              color="#7c3aed"
-            />
-          </div>
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                title="Workpack / Safety"
+                subtitle="Document status and safety pack health."
+                action={
+                  <Link
+                    href={`/project/${projectId}/tower/${towerId}/workpack`}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+                  >
+                    Workpack
+                  </Link>
+                }
+              />
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <MetricTile
+                  title="Safety Docs"
+                  value={String(stats.totalSafetyDocs)}
+                  subtitle="linked records"
+                  accent="blue"
+                />
+                <MetricTile
+                  title="Active Docs"
+                  value={String(stats.activeSafetyDocs)}
+                  subtitle="valid / usable"
+                  accent="emerald"
+                />
+                <MetricTile
+                  title="Expired"
+                  value={String(stats.expiredSafetyDocs)}
+                  subtitle="replace required"
+                  accent="rose"
+                />
+                <MetricTile
+                  title="Expiring Soon"
+                  value={String(stats.expiringSoonSafetyDocs)}
+                  subtitle="within 14 days"
+                  accent="amber"
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                title="Defects / Mods"
+                subtitle="Open issues and change tracking."
+              />
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <MetricTile
+                  title="Open Defects"
+                  value={String(stats.openDefectCount)}
+                  subtitle={`${stats.defectCount} total defects`}
+                  accent="rose"
+                />
+                <MetricTile
+                  title="Closed Defects"
+                  value={String(stats.closedDefectCount)}
+                  subtitle="closed out"
+                  accent="emerald"
+                />
+                <MetricTile
+                  title="Modifications"
+                  value={String(stats.modificationCount)}
+                  subtitle="tower changes logged"
+                  accent="blue"
+                />
+                <MetricTile
+                  title="Computed Status"
+                  value={stats.computedStatus}
+                  subtitle="from latest progress"
+                  accent="slate"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                title="Delay Summary"
+                subtitle="Downtime categories recorded in dockets."
+              />
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <MetricTile
+                  title="Weather Delay"
+                  value={`${formatDecimal(stats.totalWeatherDelay, 1)} h`}
+                  subtitle="weather downtime"
+                  accent="blue"
+                />
+                <MetricTile
+                  title="Lightning Delay"
+                  value={`${formatDecimal(stats.totalLightningDelay, 1)} h`}
+                  subtitle="lightning downtime"
+                  accent="purple"
+                />
+                <MetricTile
+                  title="Toolbox Delay"
+                  value={`${formatDecimal(stats.totalToolboxDelay, 1)} h`}
+                  subtitle="pre-start / toolbox"
+                  accent="emerald"
+                />
+                <MetricTile
+                  title="Total Delays"
+                  value={`${formatDecimal(stats.totalDelayHours, 1)} h`}
+                  subtitle="all categories"
+                  accent="amber"
+                />
+              </div>
+            </div>
+          </section>
         </div>
       </div>
 
@@ -1490,7 +1516,7 @@ export default function TowerOverviewPage() {
           subtitle="Imported tower overview fields and CSV-backed metadata."
         />
 
-        <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Tower Name</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">
@@ -1514,14 +1540,14 @@ export default function TowerOverviewPage() {
         </div>
 
         {extraFields.length > 0 && (
-          <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {extraFields.map(([key, value]) => (
               <div
                 key={key}
                 className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
               >
                 <div className="text-sm text-slate-500">{formatLabel(key)}</div>
-                <div className="mt-1 text-lg font-semibold text-slate-900 break-words">
+                <div className="mt-1 break-words text-lg font-semibold text-slate-900">
                   {formatValue(value)}
                 </div>
               </div>
