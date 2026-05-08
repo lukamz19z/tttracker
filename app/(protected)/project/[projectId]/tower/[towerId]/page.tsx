@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import TowerHeader from "@/components/towers/TowerHeader";
 
 type Tower = {
   id: string;
@@ -32,6 +31,12 @@ type DocketRow = {
 type LabourRow = {
   docket_id: string;
   total_hours?: number | null;
+  production_hours?: number | null;
+  productive_hours?: number | null;
+  prod_hours?: number | null;
+  regular_hours?: number | null;
+  delay_hours?: number | null;
+  [key: string]: unknown;
 };
 
 type DefectRow = {
@@ -213,7 +218,9 @@ function extractNumericValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null) {
+function getTowerWeightFromExtraData(
+  extraData?: Record<string, unknown> | null,
+) {
   if (!extraData) return null;
 
   const entries = Object.entries(extraData);
@@ -236,19 +243,25 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 
   const towerWeightLikeEntry = entries.find(([key]) => {
     const k = key.trim().toLowerCase();
-    return (k.includes("tower") || k.includes("structure")) && k.includes("weight");
+    return (
+      (k.includes("tower") || k.includes("structure")) && k.includes("weight")
+    );
   });
 
   if (towerWeightLikeEntry) {
     return extractNumericValue(towerWeightLikeEntry[1]);
   }
 
-  const genericWeightEntry = entries.find(([key]) => key.trim().toLowerCase().includes("weight"));
+  const genericWeightEntry = entries.find(([key]) =>
+    key.trim().toLowerCase().includes("weight"),
+  );
   if (genericWeightEntry) {
     return extractNumericValue(genericWeightEntry[1]);
   }
 
-  const massEntry = entries.find(([key]) => key.trim().toLowerCase().includes("mass"));
+  const massEntry = entries.find(([key]) =>
+    key.trim().toLowerCase().includes("mass"),
+  );
   if (massEntry) {
     return extractNumericValue(massEntry[1]);
   }
@@ -259,7 +272,9 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 function getOpenDefectCount(defects: DefectRow[]) {
   return defects.filter((d) => {
     const status = (d.status || "").trim().toLowerCase();
-    return status !== "closed" && status !== "complete" && status !== "completed";
+    return (
+      status !== "closed" && status !== "complete" && status !== "completed"
+    );
   }).length;
 }
 
@@ -290,9 +305,20 @@ function isSafetyDocument(doc: GenericDocumentRow) {
   if (values.length === 0) return true;
 
   return values.some((value) =>
-    ["safety", "permit", "swms", "itc", "checklist", "sign on", "sign-on", "lift", "study", "wms", "jsea", "jsa"].some(
-      (keyword) => value.includes(keyword),
-    ),
+    [
+      "safety",
+      "permit",
+      "swms",
+      "itc",
+      "checklist",
+      "sign on",
+      "sign-on",
+      "lift",
+      "study",
+      "wms",
+      "jsea",
+      "jsa",
+    ].some((keyword) => value.includes(keyword)),
   );
 }
 
@@ -305,8 +331,16 @@ function isDocumentExpired(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const expiryOnly = new Date(
+    expiry.getFullYear(),
+    expiry.getMonth(),
+    expiry.getDate(),
+  );
 
   return expiryOnly < todayOnly;
 }
@@ -316,11 +350,19 @@ function isDocumentExpiringSoon(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
   const soon = new Date(todayOnly);
   soon.setDate(soon.getDate() + 14);
 
-  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  const expiryOnly = new Date(
+    expiry.getFullYear(),
+    expiry.getMonth(),
+    expiry.getDate(),
+  );
 
   return expiryOnly >= todayOnly && expiryOnly <= soon;
 }
@@ -373,111 +415,145 @@ function getItcStatusKind(status: string) {
   return "slate";
 }
 
-function sectionCardClasses(tint: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate") {
-  switch (tint) {
-    case "blue":
-      return "bg-gradient-to-br from-blue-50 to-white border-blue-100";
-    case "purple":
-      return "bg-gradient-to-br from-violet-50 to-white border-violet-100";
-    case "emerald":
-      return "bg-gradient-to-br from-emerald-50 to-white border-emerald-100";
-    case "amber":
-      return "bg-gradient-to-br from-amber-50 to-white border-amber-100";
-    case "rose":
-      return "bg-gradient-to-br from-rose-50 to-white border-rose-100";
-    default:
-      return "bg-gradient-to-br from-slate-50 to-white border-slate-200";
-  }
+function statusPillClasses(status: string) {
+  const s = status.trim().toLowerCase();
+  if (s === "complete" || s === "completed" || s === "closed")
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (s.includes("progress") || s === "draft" || s === "pending")
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
-function MetricTile({
+function getTowerDisplayName(tower: Tower) {
+  return (
+    tower.name ||
+    tower.structure_number ||
+    tower.tower_number ||
+    tower.tower_no ||
+    "Tower"
+  );
+}
+
+function StatCard({
   title,
   value,
   subtitle,
-  accent,
+  tone = "blue",
+  large = false,
 }: {
   title: string;
   value: string;
   subtitle?: string;
-  accent: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate";
+  tone?: "blue" | "emerald" | "amber" | "rose" | "slate";
+  large?: boolean;
 }) {
-  const accentBar =
-    accent === "blue"
-      ? "bg-blue-500"
-      : accent === "purple"
-      ? "bg-violet-500"
-      : accent === "emerald"
-      ? "bg-emerald-500"
-      : accent === "amber"
-      ? "bg-amber-500"
-      : accent === "rose"
-      ? "bg-rose-500"
-      : "bg-slate-500";
+  const toneClasses =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50/60 text-emerald-700"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50/60 text-amber-700"
+        : tone === "rose"
+          ? "border-rose-200 bg-rose-50/60 text-rose-700"
+          : tone === "slate"
+            ? "border-slate-200 bg-slate-50 text-slate-700"
+            : "border-blue-200 bg-blue-50/60 text-blue-700";
 
   return (
-    <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses(accent)}`}>
-      <div className={`mb-4 h-1.5 w-14 rounded-full ${accentBar}`} />
-      <div className="text-sm font-medium text-slate-500">{title}</div>
-      <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
-      {subtitle ? <div className="mt-2 text-sm text-slate-600">{subtitle}</div> : null}
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {title}
+          </div>
+          <div
+            className={`${large ? "text-4xl" : "text-3xl"} mt-2 font-black tracking-tight text-slate-950`}
+          >
+            {value}
+          </div>
+        </div>
+        <div className={`h-9 w-9 shrink-0 rounded-xl border ${toneClasses}`} />
+      </div>
+      {subtitle ? (
+        <div className="mt-3 text-sm leading-5 text-slate-600">{subtitle}</div>
+      ) : null}
     </div>
   );
 }
 
-function DonutWheel({
+function MiniStat({
+  title,
+  value,
+  subtitle,
+}: {
+  title: string;
+  value: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {title}
+      </div>
+      <div className="mt-1 text-2xl font-black text-slate-950">{value}</div>
+      {subtitle ? (
+        <div className="mt-1 text-xs text-slate-500">{subtitle}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProgressBar({
   value,
   label,
-  sublabel,
-  color,
+  right,
 }: {
   value: number;
   label: string;
-  sublabel?: string;
-  color: string;
+  right?: string;
 }) {
   const safeValue = clampPercent(value);
-
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-4">
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium text-slate-700">{label}</span>
+        <span className="font-bold text-slate-950">
+          {right || `${formatDecimal(safeValue, 0)}%`}
+        </span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-slate-100">
         <div
-          className="relative h-20 w-20 rounded-full"
-          style={{
-            background: `conic-gradient(${color} 0deg ${safeValue * 3.6}deg, #e5e7eb ${safeValue * 3.6}deg 360deg)`,
-          }}
-        >
-          <div className="absolute inset-[8px] rounded-full bg-white flex items-center justify-center">
-            <span className="text-lg font-bold text-slate-900">{Math.round(safeValue)}%</span>
-          </div>
-        </div>
-
-        <div>
-          <div className="text-sm text-slate-500">{label}</div>
-          <div className="text-xl font-semibold text-slate-900 mt-1">{Math.round(safeValue)}%</div>
-          {sublabel ? <div className="text-sm text-slate-500 mt-1">{sublabel}</div> : null}
-        </div>
+          className="h-full rounded-full bg-blue-600"
+          style={{ width: `${safeValue}%` }}
+        />
       </div>
     </div>
   );
 }
 
-function SectionHeader({
+function SectionCard({
   title,
   subtitle,
   action,
+  children,
 }: {
   title: string;
   subtitle: string;
   action?: ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 flex-wrap">
-      <div>
-        <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
-        <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-5">
+        <div>
+          <h2 className="text-xl font-black tracking-tight text-slate-950">
+            {title}
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+        </div>
+        {action}
       </div>
-      {action}
-    </div>
+      <div className="pt-5">{children}</div>
+    </section>
   );
 }
 
@@ -530,8 +606,12 @@ export default function TowerOverviewPage() {
   const [bundles, setBundles] = useState<BundleRow[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItemRow[]>([]);
-  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>([]);
-  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>([]);
+  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>(
+    [],
+  );
+  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>(
+    [],
+  );
   const [documents, setDocuments] = useState<GenericDocumentRow[]>([]);
   const [itcMetrics, setItcMetrics] = useState<ItcMetrics>({
     hasItc: false,
@@ -557,7 +637,11 @@ export default function TowerOverviewPage() {
   async function load() {
     setLoading(true);
 
-    const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
+    const towerRes = await supabase
+      .from("towers")
+      .select("*")
+      .eq("id", towerId)
+      .single();
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
 
@@ -583,10 +667,16 @@ export default function TowerOverviewPage() {
     if (docketIds.length > 0) {
       labourData = await safeSelectFirstExisting<LabourRow>(
         supabase,
-        ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
-        "docket_id, total_hours",
+        [
+          "tower_docket_labour",
+          "tower_daily_docket_labour",
+          "tower_daily_docket_labour_rows",
+        ],
+        "*",
       );
-      labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
+      labourData = labourData.filter((row) =>
+        docketIds.includes(row.docket_id),
+      );
     }
 
     const [
@@ -621,7 +711,11 @@ export default function TowerOverviewPage() {
       ),
       safeSelectFirstExisting<GenericDocumentRow>(
         supabase,
-        ["tower_workpack_documents", "tower_documents", "tower_safety_documents"],
+        [
+          "tower_workpack_documents",
+          "tower_documents",
+          "tower_safety_documents",
+        ],
         "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active",
         [{ column: "tower_id", value: towerId }],
       ),
@@ -643,7 +737,9 @@ export default function TowerOverviewPage() {
     setDefects(defectsData);
     setModifications(modificationsData);
     setBundles(bundlesData);
-    const deliveryIdSet = new Set(deliveriesData.map((delivery) => delivery.id));
+    const deliveryIdSet = new Set(
+      deliveriesData.map((delivery) => delivery.id),
+    );
     const filteredDeliveryItemsData = deliveryItemsData.filter((item) =>
       deliveryIdSet.has(item.delivery_id),
     );
@@ -680,23 +776,35 @@ export default function TowerOverviewPage() {
       });
     } else {
       const [itcItems, torqueRows, clientUploads] = await Promise.all([
-        safeSelect<ItcItemRow>(supabase, "tower_itc_items", "id, itc_id, validation", [
-          { column: "itc_id", value: latestItc.id },
-        ]),
-        safeSelect<ItcTorqueRow>(supabase, "tower_itc_torque", "id, itc_id, torque_achieved", [
-          { column: "itc_id", value: latestItc.id },
-        ]),
-        safeSelect<ItcClientUploadRow>(supabase, "tower_itc_client_uploads", "id, tower_id", [
-          { column: "tower_id", value: towerId },
-        ]),
+        safeSelect<ItcItemRow>(
+          supabase,
+          "tower_itc_items",
+          "id, itc_id, validation",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcTorqueRow>(
+          supabase,
+          "tower_itc_torque",
+          "id, itc_id, torque_achieved",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcClientUploadRow>(
+          supabase,
+          "tower_itc_client_uploads",
+          "id, tower_id",
+          [{ column: "tower_id", value: towerId }],
+        ),
       ]);
 
       const checklistTotal = itcItems.length;
       const checklistComplete = itcItems.filter(
         (item) => item.validation === "Y" || item.validation === "NA",
       ).length;
-      const checklistFailed = itcItems.filter((item) => item.validation === "N").length;
-      const checklistPending = checklistTotal - checklistComplete - checklistFailed;
+      const checklistFailed = itcItems.filter(
+        (item) => item.validation === "N",
+      ).length;
+      const checklistPending =
+        checklistTotal - checklistComplete - checklistFailed;
 
       const torqueTotal = torqueRows.length;
       const torqueComplete = torqueRows.filter(
@@ -734,13 +842,32 @@ export default function TowerOverviewPage() {
   }
 
   const stats = useMemo<OverviewStats>(() => {
-    const totalHours = labourRows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
+    const totalHours = labourRows.reduce(
+      (sum, row) => sum + Number(row.total_hours || 0),
+      0,
+    );
 
-    const totalWeatherDelay = dockets.reduce((sum, row) => sum + Number(row.weather_delay_hours || 0), 0);
-    const totalLightningDelay = dockets.reduce((sum, row) => sum + Number(row.lightning_delay_hours || 0), 0);
-    const totalToolboxDelay = dockets.reduce((sum, row) => sum + Number(row.toolbox_delay_hours || 0), 0);
-    const totalOtherDelay = dockets.reduce((sum, row) => sum + Number(row.other_delay_hours || 0), 0);
-    const totalDelayHours = totalWeatherDelay + totalLightningDelay + totalToolboxDelay + totalOtherDelay;
+    const totalWeatherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.weather_delay_hours || 0),
+      0,
+    );
+    const totalLightningDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.lightning_delay_hours || 0),
+      0,
+    );
+    const totalToolboxDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.toolbox_delay_hours || 0),
+      0,
+    );
+    const totalOtherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.other_delay_hours || 0),
+      0,
+    );
+    const totalDelayHours =
+      totalWeatherDelay +
+      totalLightningDelay +
+      totalToolboxDelay +
+      totalOtherDelay;
 
     const defectCount = defects.length;
     const openDefectCount = getOpenDefectCount(defects);
@@ -748,18 +875,32 @@ export default function TowerOverviewPage() {
     const modificationCount = modifications.length;
 
     const totalRequiredBundles = bundles.length;
-    const totalRequiredQty = bundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
+    const totalRequiredQty = bundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
 
-    const deliveredQty = deliveryItems.reduce((sum, row) => sum + Number(row.qty_delivered || 0), 0);
+    const deliveredQty = deliveryItems.reduce(
+      (sum, row) => sum + Number(row.qty_delivered || 0),
+      0,
+    );
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
+    const deliveryPercent =
+      totalRequiredQty > 0
+        ? clampPercent((deliveredQty / totalRequiredQty) * 100)
+        : 0;
 
     const materialBundleCount = materialBundles.length;
     const materialMemberCount = materialMembers.length;
-    const materialRequiredQty = materialBundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
+    const materialRequiredQty = materialBundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
 
     const materialBundleSet = new Set(
-      materialBundles.map((row) => String(row.bundle_no || "").trim()).filter(Boolean),
+      materialBundles
+        .map((row) => String(row.bundle_no || "").trim())
+        .filter(Boolean),
     );
 
     const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
@@ -768,11 +909,19 @@ export default function TowerOverviewPage() {
       return sum + Number(row.qty_delivered || 0);
     }, 0);
 
-    const materialOutstandingQty = Math.max(0, materialRequiredQty - materialDeliveredQty);
+    const materialOutstandingQty = Math.max(
+      0,
+      materialRequiredQty - materialDeliveredQty,
+    );
     const materialProgressPercent =
-      materialRequiredQty > 0 ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100) : 0;
+      materialRequiredQty > 0
+        ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100)
+        : 0;
 
-    const materialTotalWeight = materialBundles.reduce((sum, row) => sum + Number(row.total_weight || 0), 0);
+    const materialTotalWeight = materialBundles.reduce(
+      (sum, row) => sum + Number(row.total_weight || 0),
+      0,
+    );
 
     const computedProgress = getProgressFromDockets(dockets);
     const remainingProgress = Math.max(0, 100 - computedProgress);
@@ -782,15 +931,33 @@ export default function TowerOverviewPage() {
 
     const towerWeightTonnes = getTowerWeightFromExtraData(tower?.extra_data);
     const completedTonnes =
-      towerWeightTonnes !== null ? towerWeightTonnes * (computedProgress / 100) : null;
+      towerWeightTonnes !== null
+        ? towerWeightTonnes * (computedProgress / 100)
+        : null;
 
-    const productionHours = Math.max(0, totalHours - totalDelayHours);
+    const explicitProductionHours = labourRows.reduce((sum, row) => {
+      const explicit =
+        extractNumericValue(row.production_hours) ??
+        extractNumericValue(row.productive_hours) ??
+        extractNumericValue(row.prod_hours) ??
+        extractNumericValue(row.regular_hours);
+      return sum + Number(explicit || 0);
+    }, 0);
+
+    const productionHours =
+      explicitProductionHours > 0
+        ? explicitProductionHours
+        : Math.max(0, totalHours - totalDelayHours);
 
     const totalManhoursPerTonne =
-      completedTonnes && completedTonnes > 0 ? totalHours / completedTonnes : null;
+      completedTonnes && completedTonnes > 0
+        ? totalHours / completedTonnes
+        : null;
 
     const productionManhoursPerTonne =
-      completedTonnes && completedTonnes > 0 ? productionHours / completedTonnes : null;
+      completedTonnes && completedTonnes > 0
+        ? productionHours / completedTonnes
+        : null;
 
     return {
       latestDate,
@@ -856,9 +1023,12 @@ export default function TowerOverviewPage() {
 
   const itcCompletionPercent = useMemo(() => {
     if (!itcMetrics.hasItc) return 0;
-    if (itcMetrics.itcMode === "Client") return itcMetrics.clientUploadCount > 0 ? 100 : 0;
+    if (itcMetrics.itcMode === "Client")
+      return itcMetrics.clientUploadCount > 0 ? 100 : 0;
     if (itcMetrics.checklistTotal <= 0) return 0;
-    return clampPercent((itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100);
+    return clampPercent(
+      (itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100,
+    );
   }, [
     itcMetrics.hasItc,
     itcMetrics.itcMode,
@@ -885,400 +1055,408 @@ export default function TowerOverviewPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8 space-y-6">
-      <TowerHeader projectId={projectId} tower={tower} latestDate={stats.latestDate} />
-
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="Tower Performance"
-          subtitle="High-level delivery, progress and production metrics."
-        />
-
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
-          <MetricTile
-            title="Tower Progress"
-            value={`${stats.computedProgress}%`}
-            subtitle={`${stats.remainingProgress}% remaining`}
-            accent="blue"
-          />
-          <MetricTile
-            title="Total Manhours"
-            value={formatDecimal(stats.totalHours, 1)}
-            subtitle={`Dockets logged: ${stats.docketCount}`}
-            accent="purple"
-          />
-          <MetricTile
-            title="Delivery Progress"
-            value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-            subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
-            accent="emerald"
-          />
-          <MetricTile
-            title="Total MH/t"
-            value={formatDecimal(stats.totalManhoursPerTonne, 2)}
-            subtitle={
-              stats.towerWeightTonnes !== null
-                ? `Total hours / completed tonnes`
-                : "Tower weight not found"
-            }
-            accent="amber"
-          />
-          <MetricTile
-            title="Production MH/t"
-            value={formatDecimal(stats.productionManhoursPerTonne, 2)}
-            subtitle={`${formatDecimal(stats.productionHours, 1)} production hours`}
-            accent="emerald"
-          />
-          <MetricTile
-            title="Completed Tonnes"
-            value={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t` : "-"}
-            subtitle={
-              stats.towerWeightTonnes !== null
-                ? `${formatDecimal(stats.towerWeightTonnes, 2)} t total tower weight`
-                : tower.status || stats.computedStatus
-            }
-            accent="blue"
-          />
-        </div>
-
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <DonutWheel
-            value={stats.computedProgress}
-            label="Total Progress"
-            sublabel={`${stats.remainingProgress}% remaining`}
-            color="#2563eb"
-          />
-          <DonutWheel
-            value={stats.deliveryPercent}
-            label="Delivery Progress"
-            sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
-            color="#059669"
-          />
-          <DonutWheel
-            value={itcCompletionPercent}
-            label="ITC Completion"
-            sublabel={itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"}
-            color="#7c3aed"
-          />
-          <DonutWheel
-            value={safetyActivePercent}
-            label="Safety Docs Active"
-            sublabel={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active`}
-            color="#f59e0b"
-          />
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="ITC Overview"
-          subtitle="Latest ITC status and readiness summary for this tower."
-          action={
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-            >
-              Open ITC
-            </Link>
-          }
-        />
-
-        {!itcMetrics.hasItc ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
-            No ITC has been created for this tower yet.
-          </div>
-        ) : (
-          <div className="mt-6 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}>
-                <div className="text-sm text-slate-500">Mode</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.itcMode}</div>
+    <div className="min-h-screen bg-slate-50 p-6 lg:p-8">
+      <div className="mx-auto max-w-[1700px] space-y-6">
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Tower
+                </span>
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs font-bold ${statusPillClasses(stats.computedStatus)}`}
+                >
+                  {stats.computedStatus}
+                </span>
               </div>
-
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}>
-                <div className="text-sm text-slate-500">Ready Status</div>
-                <div className="mt-3">
-                  <span
-                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
-                      itcMetrics.overallReady
-                        ? "bg-green-100 text-green-700 border-green-200"
-                        : "bg-yellow-100 text-yellow-800 border-yellow-200"
-                    }`}
-                  >
-                    {itcMetrics.overallReady ? "Ready" : "Pending"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Status</div>
-                <div className="mt-3">
-                  <span
-                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
-                      getItcStatusKind(itcMetrics.itcStatus),
-                    )}`}
-                  >
-                    {itcMetrics.itcStatus}
-                  </span>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Revision</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.revision}</div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <div className="text-sm text-slate-500">Client Uploads</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.clientUploadCount}</div>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-slate-950">
+                {getTowerDisplayName(tower)}
+              </h1>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-600">
+                <span>
+                  Line: <b className="text-slate-800">{tower.line || "—"}</b>
+                </span>
+                <span>
+                  Last docket:{" "}
+                  <b className="text-slate-800">{stats.latestDate || "—"}</b>
+                </span>
+                <span>
+                  Weight:{" "}
+                  <b className="text-slate-800">
+                    {stats.towerWeightTonnes !== null
+                      ? `${formatDecimal(stats.towerWeightTonnes, 2)} t`
+                      : "—"}
+                  </b>
+                </span>
+                <span>
+                  Dockets: <b className="text-slate-800">{stats.docketCount}</b>
+                </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-              <MetricTile
-                title="Checklist Passed"
-                value={String(itcMetrics.checklistComplete)}
-                subtitle={`of ${itcMetrics.checklistTotal}`}
-                accent="blue"
-              />
-              <MetricTile
-                title="Checklist Failed"
-                value={String(itcMetrics.checklistFailed)}
-                subtitle="items needing action"
-                accent="rose"
-              />
-              <MetricTile
-                title="Checklist Pending"
-                value={String(itcMetrics.checklistPending)}
-                subtitle="unfinished items"
-                accent="amber"
-              />
-              <MetricTile
-                title="Torque Complete"
-                value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
-                subtitle="completed torque rows"
-                accent="emerald"
-              />
+            <div className="grid min-w-full grid-cols-1 gap-3 sm:grid-cols-3 xl:min-w-[520px]">
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-center">
+                <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                  Overall
+                </div>
+                <div className="mt-1 text-3xl font-black text-blue-950">
+                  {stats.computedProgress}%
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Total MH/t
+                </div>
+                <div className="mt-1 text-3xl font-black text-slate-950">
+                  {formatDecimal(stats.totalManhoursPerTonne, 2)}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center">
+                <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                  Prod MH/t
+                </div>
+                <div className="mt-1 text-3xl font-black text-emerald-950">
+                  {formatDecimal(stats.productionManhoursPerTonne, 2)}
+                </div>
+              </div>
             </div>
           </div>
-        )}
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Defects / Mods"
-            subtitle="Open issues and change tracking for this tower."
-          />
-
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Open Defects"
-              value={String(stats.openDefectCount)}
-              subtitle={`${stats.defectCount} total defects`}
-              accent="rose"
-            />
-            <MetricTile
-              title="Closed Defects"
-              value={String(stats.closedDefectCount)}
-              subtitle="resolved / closed out"
-              accent="emerald"
-            />
-            <MetricTile
-              title="Modifications"
-              value={String(stats.modificationCount)}
-              subtitle="logged tower modifications"
-              accent="blue"
-            />
-            <MetricTile
-              title="Computed Status"
-              value={stats.computedStatus}
-              subtitle="from latest progress"
-              accent="slate"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Delay Summary"
-            subtitle="Breakdown of downtime recorded in daily dockets."
-          />
-
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Weather Delay"
-              value={`${formatDecimal(stats.totalWeatherDelay, 1)} h`}
-              subtitle="weather-related downtime"
-              accent="blue"
-            />
-            <MetricTile
-              title="Lightning Delay"
-              value={`${formatDecimal(stats.totalLightningDelay, 1)} h`}
-              subtitle="lightning downtime"
-              accent="purple"
-            />
-            <MetricTile
-              title="Toolbox Delay"
-              value={`${formatDecimal(stats.totalToolboxDelay, 1)} h`}
-              subtitle="pre-start / toolbox delays"
-              accent="emerald"
-            />
-            <MetricTile
-              title="Total Delays"
-              value={`${formatDecimal(stats.totalDelayHours, 1)} h`}
-              subtitle="all delay categories"
-              accent="amber"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Workpack / Safety"
-            subtitle="Safety document health and workpack access."
-            action={
+          <div className="mt-6 flex flex-wrap gap-2 border-t border-slate-100 pt-5">
+            {[
+              ["Overview", `/project/${projectId}/tower/${towerId}`],
+              [
+                "Daily Dockets",
+                `/project/${projectId}/tower/${towerId}/dockets`,
+              ],
+              ["Workpack", `/project/${projectId}/tower/${towerId}/workpack`],
+              [
+                "Deliveries",
+                `/project/${projectId}/tower/${towerId}/deliveries`,
+              ],
+              ["Materials", `/project/${projectId}/tower/${towerId}/materials`],
+              ["Defects", `/project/${projectId}/tower/${towerId}/defects`],
+              [
+                "Modifications",
+                `/project/${projectId}/tower/${towerId}/modifications`,
+              ],
+              ["Photos", `/project/${projectId}/tower/${towerId}/photos`],
+            ].map(([label, href]) => (
               <Link
-                href={`/project/${projectId}/tower/${towerId}/workpack`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                key={label}
+                href={href}
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
+                  label === "Overview"
+                    ? "border-blue-200 bg-blue-50 text-blue-800"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
               >
-                Open Workpack
+                {label}
               </Link>
-            }
-          />
+            ))}
+          </div>
+        </section>
 
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Safety Docs"
-              value={String(stats.totalSafetyDocs)}
-              subtitle="records linked to tower"
-              accent="blue"
+        <SectionCard
+          title="Tower Performance"
+          subtitle="Separated progress, productivity and delivery metrics using the same calculation source across this page."
+        >
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <StatCard
+              title="Tower Progress"
+              value={`${stats.computedProgress}%`}
+              subtitle={`${stats.remainingProgress}% remaining • ${stats.computedStatus}`}
+              tone="blue"
+              large
             />
-            <MetricTile
-              title="Active Docs"
-              value={String(stats.activeSafetyDocs)}
-              subtitle="currently valid / usable"
-              accent="emerald"
+            <StatCard
+              title="Total MH/t"
+              value={formatDecimal(stats.totalManhoursPerTonne, 2)}
+              subtitle={`${formatDecimal(stats.totalHours, 1)} total hrs / ${stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} completed t` : "completed tonnes"}`}
+              tone="slate"
+              large
             />
-            <MetricTile
-              title="Expired"
-              value={String(stats.expiredSafetyDocs)}
-              subtitle="needs replacement"
-              accent="rose"
-            />
-            <MetricTile
-              title="Expiring Soon"
-              value={String(stats.expiringSoonSafetyDocs)}
-              subtitle="within 14 days"
-              accent="amber"
+            <StatCard
+              title="Production MH/t"
+              value={formatDecimal(stats.productionManhoursPerTonne, 2)}
+              subtitle={`${formatDecimal(stats.productionHours, 1)} production hrs / ${stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} completed t` : "completed tonnes"}`}
+              tone="emerald"
+              large
             />
           </div>
-        </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader
-            title="Logistics / Materials"
-            subtitle="Combined delivery and materials overview for this tower."
+          <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-5">
+              <div className="mb-4 text-sm font-bold uppercase tracking-wide text-slate-500">
+                Progress
+              </div>
+              <div className="space-y-5">
+                <ProgressBar
+                  value={stats.computedProgress}
+                  label="Overall tower progress"
+                />
+                <ProgressBar
+                  value={stats.deliveryPercent}
+                  label="Steel delivery progress"
+                  right={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+                />
+                <ProgressBar
+                  value={itcCompletionPercent}
+                  label="ITC completion"
+                  right={`${formatDecimal(itcCompletionPercent, 0)}%`}
+                />
+                <ProgressBar
+                  value={safetyActivePercent}
+                  label="Safety docs active"
+                  right={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs}`}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <MiniStat
+                title="Total Hrs"
+                value={`${formatDecimal(stats.totalHours, 1)}h`}
+                subtitle={`Dockets logged: ${stats.docketCount}`}
+              />
+              <MiniStat
+                title="Prod Hrs"
+                value={`${formatDecimal(stats.productionHours, 1)}h`}
+                subtitle="Used for Prod MH/t"
+              />
+              <MiniStat
+                title="Delivery"
+                value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+                subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
+              />
+              <MiniStat
+                title="Completed Tonnes"
+                value={
+                  stats.completedTonnes !== null
+                    ? `${formatDecimal(stats.completedTonnes, 2)} t`
+                    : "—"
+                }
+                subtitle={
+                  stats.towerWeightTonnes !== null
+                    ? `${formatDecimal(stats.towerWeightTonnes, 2)} t total`
+                    : "Tower weight missing"
+                }
+              />
+              <MiniStat
+                title="Open Defects"
+                value={String(stats.openDefectCount)}
+                subtitle={`${stats.defectCount} total defects`}
+              />
+              <MiniStat
+                title="Outstanding Qty"
+                value={formatDecimal(stats.outstandingQty, 0)}
+                subtitle="still to deliver"
+              />
+            </div>
+          </div>
+        </SectionCard>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <SectionCard
+            title="Production + Delays"
+            subtitle="Manhours and delay breakdown from daily dockets."
+          >
+            <div className="grid grid-cols-2 gap-4">
+              <MiniStat
+                title="Total Manhours"
+                value={`${formatDecimal(stats.totalHours, 1)}h`}
+              />
+              <MiniStat
+                title="Production Hours"
+                value={`${formatDecimal(stats.productionHours, 1)}h`}
+              />
+              <MiniStat
+                title="Weather Delay"
+                value={`${formatDecimal(stats.totalWeatherDelay, 1)}h`}
+              />
+              <MiniStat
+                title="Lightning Delay"
+                value={`${formatDecimal(stats.totalLightningDelay, 1)}h`}
+              />
+              <MiniStat
+                title="Toolbox Delay"
+                value={`${formatDecimal(stats.totalToolboxDelay, 1)}h`}
+              />
+              <MiniStat
+                title="Total Delays"
+                value={`${formatDecimal(stats.totalDelayHours, 1)}h`}
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Delivery + Materials"
+            subtitle="Steel delivery, required bundles and material register counts."
             action={
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex flex-wrap gap-2">
                 <Link
                   href={`/project/${projectId}/tower/${towerId}/deliveries`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
                 >
                   Open Deliveries
                 </Link>
                 <Link
                   href={`/project/${projectId}/tower/${towerId}/materials`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
                 >
                   Open Materials
                 </Link>
               </div>
             }
-          />
+          >
+            <div className="space-y-5">
+              <ProgressBar
+                value={stats.deliveryPercent}
+                label="Bundle delivery"
+                right={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+              />
+              <ProgressBar
+                value={stats.materialProgressPercent}
+                label="Materials progress"
+                right={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                <MiniStat
+                  title="Delivered Qty"
+                  value={formatDecimal(stats.deliveredQty, 0)}
+                  subtitle={`of ${formatDecimal(stats.totalRequiredQty, 0)} required`}
+                />
+                <MiniStat
+                  title="Outstanding"
+                  value={formatDecimal(
+                    stats.materialOutstandingQty || stats.outstandingQty,
+                    0,
+                  )}
+                  subtitle="qty remaining"
+                />
+                <MiniStat
+                  title="Material Members"
+                  value={String(stats.materialMemberCount)}
+                  subtitle={`${stats.materialBundleCount} bundles`}
+                />
+                <MiniStat
+                  title="Material Weight"
+                  value={`${formatDecimal(stats.materialTotalWeight, 2)} t`}
+                  subtitle="from materials register"
+                />
+              </div>
+            </div>
+          </SectionCard>
 
-          <div className="mt-6 grid grid-cols-2 gap-4">
-            <MetricTile
-              title="Bundle Delivery"
-              value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-              subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
-              accent="emerald"
-            />
-            <MetricTile
-              title="Materials Progress"
-              value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
-              subtitle={`${formatDecimal(stats.materialDeliveredQty, 0)} / ${formatDecimal(stats.materialRequiredQty, 0)} qty`}
-              accent="purple"
-            />
-            <MetricTile
-              title="Material Members"
-              value={String(stats.materialMemberCount)}
-              subtitle={`${stats.materialBundleCount} bundles • ${formatDecimal(stats.materialTotalWeight, 2)} total weight`}
-              accent="blue"
-            />
-            <MetricTile
-              title="Outstanding"
-              value={formatDecimal(stats.materialOutstandingQty || stats.outstandingQty, 0)}
-              subtitle="still to arrive"
-              accent="rose"
-            />
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <DonutWheel
-              value={stats.deliveryPercent}
-              label="Delivery Progress"
-              sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
-              color="#059669"
-            />
-            <DonutWheel
-              value={combinedLogisticsProgress}
-              label="Combined Logistics"
-              sublabel={`${formatDecimal(stats.materialOutstandingQty, 0)} materials qty outstanding`}
-              color="#7c3aed"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <SectionHeader
-          title="Tower Details"
-          subtitle="Imported tower overview fields and CSV-backed metadata."
-        />
-
-        <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm text-slate-500">Tower Name</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.name || "-"}</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm text-slate-500">Line</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.line || "-"}</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm text-slate-500">Stored Status</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.status || "-"}</div>
-          </div>
-        </div>
-
-        {extraFields.length > 0 && (
-          <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {extraFields.map(([key, value]) => (
-              <div
-                key={key}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+          <SectionCard
+            title="ITC Overview"
+            subtitle="Latest ITC status and readiness summary."
+            action={
+              <Link
+                href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
               >
-                <div className="text-sm text-slate-500">{formatLabel(key)}</div>
-                <div className="mt-1 text-lg font-semibold text-slate-900 break-words">
-                  {formatValue(value)}
+                Open ITC
+              </Link>
+            }
+          >
+            {!itcMetrics.hasItc ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+                No ITC has been created for this tower yet.
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <ProgressBar
+                  value={itcCompletionPercent}
+                  label="ITC completion"
+                />
+                <div className="grid grid-cols-2 gap-4">
+                  <MiniStat title="Mode" value={itcMetrics.itcMode} />
+                  <MiniStat title="Status" value={itcMetrics.itcStatus} />
+                  <MiniStat title="Revision" value={itcMetrics.revision} />
+                  <MiniStat
+                    title="Ready"
+                    value={itcMetrics.overallReady ? "Ready" : "Pending"}
+                  />
+                  <MiniStat
+                    title="Checklist Passed"
+                    value={String(itcMetrics.checklistComplete)}
+                    subtitle={`of ${itcMetrics.checklistTotal}`}
+                  />
+                  <MiniStat
+                    title="Torque Complete"
+                    value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
+                  />
                 </div>
               </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Workpack + Quality"
+            subtitle="Safety documents, defects and modifications."
+            action={
+              <Link
+                href={`/project/${projectId}/tower/${towerId}/workpack`}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+              >
+                Open Workpack
+              </Link>
+            }
+          >
+            <div className="grid grid-cols-2 gap-4">
+              <MiniStat
+                title="Safety Docs"
+                value={String(stats.totalSafetyDocs)}
+                subtitle={`${stats.activeSafetyDocs} active`}
+              />
+              <MiniStat
+                title="Expiring Soon"
+                value={String(stats.expiringSoonSafetyDocs)}
+                subtitle="within 14 days"
+              />
+              <MiniStat
+                title="Expired"
+                value={String(stats.expiredSafetyDocs)}
+                subtitle="needs replacement"
+              />
+              <MiniStat
+                title="Open Defects"
+                value={String(stats.openDefectCount)}
+                subtitle={`${stats.closedDefectCount} closed`}
+              />
+              <MiniStat
+                title="Modifications"
+                value={String(stats.modificationCount)}
+                subtitle="logged changes"
+              />
+              <MiniStat
+                title="Stored Status"
+                value={tower.status || "—"}
+                subtitle="database field"
+              />
+            </div>
+          </SectionCard>
+        </div>
+
+        <SectionCard
+          title="Tower Details"
+          subtitle="Imported tower overview fields and CSV-backed metadata."
+        >
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <MiniStat title="Tower Name" value={tower.name || "—"} />
+            <MiniStat title="Line" value={tower.line || "—"} />
+            <MiniStat title="Stored Status" value={tower.status || "—"} />
+            {extraFields.map(([key, value]) => (
+              <MiniStat
+                key={key}
+                title={formatLabel(key)}
+                value={formatValue(value)}
+              />
             ))}
           </div>
-        )}
+        </SectionCard>
       </div>
     </div>
   );
