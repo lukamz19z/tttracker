@@ -58,9 +58,13 @@ type DeliveryRow = {
 };
 
 type DeliveryItemRow = {
-  delivery_id: string;
+  delivery_id?: string | null;
+  tower_id?: string | null;
   bundle_no: string;
   qty_delivered?: number | null;
+  quantity_delivered?: number | null;
+  delivered_qty?: number | null;
+  qty?: number | null;
 };
 
 type MaterialBundleRow = {
@@ -210,6 +214,15 @@ function safeNumber(value: unknown, fallback = 0) {
 
   const parsed = Number(String(value).replace(/,/g, "").trim());
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getDeliveredQty(row: DeliveryItemRow) {
+  return (
+    safeNumber(row.qty_delivered, Number.NaN) ||
+    safeNumber(row.quantity_delivered, Number.NaN) ||
+    safeNumber(row.delivered_qty, Number.NaN) ||
+    safeNumber(row.qty, 0)
+  );
 }
 
 function extractNumericValue(value: unknown): number | null {
@@ -724,10 +737,26 @@ export default function TowerOverviewPage() {
       ),
     ]);
 
-    const deliveryIds = new Set(deliveriesData.map((delivery) => delivery.id));
-    const towerDeliveryItemsData = deliveryItemsData.filter((item) =>
-      deliveryIds.has(item.delivery_id),
+    const requiredBundleNos = new Set(
+      [...bundlesData, ...materialBundlesData]
+        .map((row) => String(row.bundle_no || "").trim().toLowerCase())
+        .filter(Boolean),
     );
+
+    const deliveryIds = new Set(deliveriesData.map((delivery) => delivery.id));
+    const towerDeliveryItemsData = deliveryItemsData.filter((item) => {
+      const itemTowerId = String(item.tower_id || "").trim();
+      const itemDeliveryId = String(item.delivery_id || "").trim();
+      const itemBundleNo = String(item.bundle_no || "").trim().toLowerCase();
+
+      if (itemTowerId && itemTowerId === towerId) return true;
+      if (itemDeliveryId && deliveryIds.has(itemDeliveryId)) return true;
+
+      // Fallback for older delivery tables that do not store tower_id on the item rows.
+      // Your bundle numbers are tower-specific, so matching against this tower's bundle register
+      // keeps the dashboard aligned with the delivery page instead of returning 0%.
+      return requiredBundleNos.has(itemBundleNo);
+    });
 
     setLabourRows(labourData);
     setDefects(defectsData);
@@ -863,14 +892,25 @@ export default function TowerOverviewPage() {
     const closedDefectCount = defectCount - openDefectCount;
     const modificationCount = modifications.length;
 
-    const totalRequiredBundles = bundles.length;
-    const totalRequiredQty = bundles.reduce(
+    const materialBundleCount = materialBundles.length;
+    const materialMemberCount = materialMembers.length;
+    const materialRequiredQty = materialBundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
+
+    // Use the same bundle base as the materials/deliveries area.
+    // Some projects have the required bundle list in tower_required_bundles rather
+    // than tower_bundle_register, so falling back prevents the dashboard from showing 0%.
+    const deliveryRequiredRows = bundles.length > 0 ? bundles : materialBundles;
+    const totalRequiredBundles = deliveryRequiredRows.length;
+    const totalRequiredQty = deliveryRequiredRows.reduce(
       (sum, row) => sum + Number(row.qty_required || 0),
       0,
     );
 
     const deliveredQty = deliveryItems.reduce(
-      (sum, row) => sum + Number(row.qty_delivered || 0),
+      (sum, row) => sum + getDeliveredQty(row),
       0,
     );
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
@@ -879,23 +919,16 @@ export default function TowerOverviewPage() {
         ? clampPercent((deliveredQty / totalRequiredQty) * 100)
         : 0;
 
-    const materialBundleCount = materialBundles.length;
-    const materialMemberCount = materialMembers.length;
-    const materialRequiredQty = materialBundles.reduce(
-      (sum, row) => sum + Number(row.qty_required || 0),
-      0,
-    );
-
     const materialBundleSet = new Set(
       materialBundles
-        .map((row) => String(row.bundle_no || "").trim())
+        .map((row) => String(row.bundle_no || "").trim().toLowerCase())
         .filter(Boolean),
     );
 
     const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
-      const bundleNo = String(row.bundle_no || "").trim();
+      const bundleNo = String(row.bundle_no || "").trim().toLowerCase();
       if (!materialBundleSet.has(bundleNo)) return sum;
-      return sum + Number(row.qty_delivered || 0);
+      return sum + getDeliveredQty(row);
     }, 0);
 
     const materialOutstandingQty = Math.max(
@@ -932,25 +965,10 @@ export default function TowerOverviewPage() {
         ? totalHours / completedTonnes
         : null;
 
-    const docketProductionTotal = dockets.reduce(
-      (sum, docket) =>
-        sum +
-        safeNumber(docket.production_manhours, 0) +
-        safeNumber(docket.production_hours, 0),
-      0,
-    );
-
-    let productionHours = docketProductionTotal;
-
-    if (productionHours <= 0) {
-      productionHours = labourRows.reduce(
-        (sum, row) =>
-          sum +
-          safeNumber(row.production_hours, 0) +
-          safeNumber(row.production_manhours, 0),
-        0,
-      );
-    }
+    // Production manhours are the worked manhours excluding recorded delay hours.
+    // This uses the values that already exist on your dockets, so it displays even
+    // when there is no separate production_hours column in Supabase.
+    const productionHours = Math.max(0, totalHours - totalDelayHours);
 
     const productionManhoursPerTonne =
       completedTonnes && completedTonnes > 0
