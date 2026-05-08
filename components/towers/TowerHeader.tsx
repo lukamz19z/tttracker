@@ -14,10 +14,6 @@ type Tower = {
   structure_number?: string | null;
   tower_no?: string | null;
   cover_photo_path?: string | null;
-  weight?: number | string | null;
-  total_weight?: number | string | null;
-  tower_weight?: number | string | null;
-  structure_weight?: number | string | null;
   extra_data?: Record<string, unknown> | null;
 };
 
@@ -102,63 +98,65 @@ function formatDate(value?: string | null): string {
   });
 }
 
-function getExtraValue(extra: Record<string, unknown> | null | undefined, keys: string[]) {
-  if (!extra) return null;
+function extractNumericValue(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
 
-  const normalisedEntries = Object.entries(extra).map(([key, value]) => ({
-    normalisedKey: key.toLowerCase().replace(/[^a-z0-9]/g, ""),
-    value,
-  }));
+  const str = String(value).trim();
+  const cleaned = str.replace(/,/g, "");
+  const match = cleaned.match(/-?\d+(\.\d+)?/);
 
-  for (const key of keys) {
-    const target = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const found = normalisedEntries.find((entry) => entry.normalisedKey === target);
+  if (!match) return null;
 
-    if (found && found.value !== null && found.value !== undefined && found.value !== "") {
-      return found.value;
-    }
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null) {
+  if (!extraData) return null;
+
+  const entries = Object.entries(extraData);
+
+  const exactTowerWeightEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return (
+      k === "tower weight" ||
+      k === "tower weight (t)" ||
+      k === "tower_weight" ||
+      k === "towerweight" ||
+      k === "structure total weights" ||
+      k === "structure total weight"
+    );
+  });
+
+  if (exactTowerWeightEntry) {
+    return extractNumericValue(exactTowerWeightEntry[1]);
+  }
+
+  const towerWeightLikeEntry = entries.find(([key]) => {
+    const k = key.trim().toLowerCase();
+    return (k.includes("tower") || k.includes("structure")) && k.includes("weight");
+  });
+
+  if (towerWeightLikeEntry) {
+    return extractNumericValue(towerWeightLikeEntry[1]);
+  }
+
+  const genericWeightEntry = entries.find(([key]) =>
+    key.trim().toLowerCase().includes("weight"),
+  );
+
+  if (genericWeightEntry) {
+    return extractNumericValue(genericWeightEntry[1]);
+  }
+
+  const massEntry = entries.find(([key]) => key.trim().toLowerCase().includes("mass"));
+
+  if (massEntry) {
+    return extractNumericValue(massEntry[1]);
   }
 
   return null;
-}
-
-function getTowerWeightTonnes(tower: Tower): number {
-  const raw =
-    tower.weight ??
-    tower.total_weight ??
-    tower.tower_weight ??
-    tower.structure_weight ??
-    getExtraValue(tower.extra_data, [
-      "Weight",
-      "Tower Weight",
-      "Structure Weight",
-      "Total Weight",
-      "Total Structure Weight",
-      "Mass",
-      "Tower Mass",
-      "Structure Mass",
-      "Weight kg",
-      "Weight kgs",
-      "Weight tonnes",
-      "Weight tonne",
-      "Total Weight kg",
-      "Total Weight tonnes",
-      "Tower Weight kg",
-      "Tower Weight tonnes",
-      "Structure Weight kg",
-      "Structure Weight tonnes",
-    ]);
-
-  const value = safeNumber(raw, 0);
-  if (value <= 0) return 0;
-
-  const rawText = String(raw || "").toLowerCase();
-
-  if (rawText.includes("kg") || value > 500) {
-    return value / 1000;
-  }
-
-  return value;
 }
 
 function statusClass(status: string) {
@@ -194,7 +192,10 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
     "Tower";
 
   const towerLine = tower.line || tower.line_name || "—";
-  const towerWeightTonnes = useMemo(() => getTowerWeightTonnes(tower), [tower]);
+
+  const towerWeightTonnes = useMemo(() => {
+    return getTowerWeightFromExtraData(tower?.extra_data);
+  }, [tower?.extra_data]);
 
   const status = useMemo(() => {
     if (overallProgress >= 100) return "Complete";
@@ -202,14 +203,20 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
     return tower.status || "Not Started";
   }, [overallProgress, tower.status]);
 
-  const installedTonnes = useMemo(() => {
-    if (towerWeightTonnes <= 0 || overallProgress <= 0) return 0;
+  const completedTonnes = useMemo(() => {
+    if (towerWeightTonnes === null) return null;
     return towerWeightTonnes * (overallProgress / 100);
   }, [towerWeightTonnes, overallProgress]);
 
-  const totalMhPerTonne = installedTonnes > 0 ? totalHours / installedTonnes : null;
-  const productionMhPerTonne =
-    installedTonnes > 0 ? productionHours / installedTonnes : null;
+  const totalMhPerTonne = useMemo(() => {
+    if (!completedTonnes || completedTonnes <= 0) return null;
+    return totalHours / completedTonnes;
+  }, [totalHours, completedTonnes]);
+
+  const productionMhPerTonne = useMemo(() => {
+    if (!completedTonnes || completedTonnes <= 0) return null;
+    return productionHours / completedTonnes;
+  }, [productionHours, completedTonnes]);
 
   const coverUrl = tower.cover_photo_path
     ? supabase.storage.from("tower-photos").getPublicUrl(tower.cover_photo_path).data.publicUrl
@@ -389,7 +396,7 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
                 <span>Last docket: {formatDate(lastDocketDate)}</span>
                 <span>
                   Weight:{" "}
-                  {towerWeightTonnes > 0
+                  {towerWeightTonnes !== null && towerWeightTonnes > 0
                     ? `${formatNumber(towerWeightTonnes, 2)} t`
                     : "Not set"}
                 </span>
@@ -412,21 +419,21 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
             />
             <MetricCard
               label="Total MH/t"
-              value={formatNumber(totalMhPerTonne, 2)}
+              value={totalMhPerTonne === null ? "—" : formatNumber(totalMhPerTonne, 2)}
               hint={
-                installedTonnes > 0
-                  ? `${formatNumber(installedTonnes, 2)}t installed`
-                  : "Needs weight + progress"
+                completedTonnes !== null
+                  ? `${formatNumber(totalHours, 1)}h / ${formatNumber(completedTonnes, 2)}t`
+                  : "Tower weight not found"
               }
             />
             <MetricCard
               label="Prod MH/t"
-              value={formatNumber(productionMhPerTonne, 2)}
+              value={productionMhPerTonne === null ? "—" : formatNumber(productionMhPerTonne, 2)}
               tone="green"
               hint={
-                installedTonnes > 0
-                  ? `${formatNumber(installedTonnes, 2)}t installed`
-                  : "Needs weight + progress"
+                completedTonnes !== null
+                  ? `${formatNumber(productionHours, 1)}h / ${formatNumber(completedTonnes, 2)}t`
+                  : "Tower weight not found"
               }
             />
             <MetricCard
