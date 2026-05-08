@@ -21,31 +21,29 @@ type Tower = {
   extra_data?: Record<string, unknown> | null;
 };
 
-type TowerHeaderProps = {
+type Props = {
   projectId: string;
   tower: Tower;
   latestDate?: string | null;
 };
 
-type DocketProgressRow = {
-  assembly_percent: number | null;
-  erection_percent: number | null;
-};
-
-type DocketHourRow = {
+type DocketRow = {
   id: string;
+  docket_date?: string | null;
+  assembly_percent?: number | null;
+  erection_percent?: number | null;
   raw_manhours?: number | null;
   production_manhours?: number | null;
 };
 
-type LabourHourRow = {
+type LabourRow = {
   docket_id?: string | null;
-  total_hours: number | null;
+  total_hours?: number | null;
   production_hours?: number | null;
 };
 
 type DefectRow = {
-  status: string | null;
+  status?: string | null;
 };
 
 type RequiredBundleRow = {
@@ -64,12 +62,30 @@ type DeliveryItemRow = {
 };
 
 function safeNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
+  if (value === null || value === undefined || value === "") return fallback;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  const cleaned = String(value)
+    .toLowerCase()
+    .replace(/,/g, "")
+    .replace("tonnes", "")
+    .replace("tonne", "")
+    .replace("tons", "")
+    .replace("ton", "")
+    .replace("kgs", "")
+    .replace("kg", "")
+    .replace("t", "")
+    .trim();
+
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : fallback;
 }
 
-function formatNumber(value: number, decimals = 1): string {
-  if (!Number.isFinite(value)) return "—";
+function formatNumber(value: number | null, decimals = 1): string {
+  if (value === null || !Number.isFinite(value)) return "—";
   return value.toFixed(decimals);
 }
 
@@ -86,14 +102,20 @@ function formatDate(value?: string | null): string {
   });
 }
 
-function readExtraValue(extra: Record<string, unknown> | null | undefined, keys: string[]) {
+function getExtraValue(extra: Record<string, unknown> | null | undefined, keys: string[]) {
   if (!extra) return null;
 
-  for (const key of keys) {
-    const value = extra[key];
+  const normalisedEntries = Object.entries(extra).map(([key, value]) => ({
+    normalisedKey: key.toLowerCase().replace(/[^a-z0-9]/g, ""),
+    value,
+  }));
 
-    if (value !== null && value !== undefined && value !== "") {
-      return value;
+  for (const key of keys) {
+    const target = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const found = normalisedEntries.find((entry) => entry.normalisedKey === target);
+
+    if (found && found.value !== null && found.value !== undefined && found.value !== "") {
+      return found.value;
     }
   }
 
@@ -101,47 +123,45 @@ function readExtraValue(extra: Record<string, unknown> | null | undefined, keys:
 }
 
 function getTowerWeightTonnes(tower: Tower): number {
-  const direct =
+  const raw =
     tower.weight ??
     tower.total_weight ??
     tower.tower_weight ??
     tower.structure_weight ??
-    readExtraValue(tower.extra_data, [
+    getExtraValue(tower.extra_data, [
       "Weight",
-      "weight",
       "Tower Weight",
-      "tower_weight",
       "Structure Weight",
-      "structure_weight",
       "Total Weight",
-      "total_weight",
+      "Total Structure Weight",
       "Mass",
-      "mass",
       "Tower Mass",
-      "tower_mass",
       "Structure Mass",
-      "structure_mass",
+      "Weight kg",
+      "Weight kgs",
+      "Weight tonnes",
+      "Weight tonne",
+      "Total Weight kg",
+      "Total Weight tonnes",
+      "Tower Weight kg",
+      "Tower Weight tonnes",
+      "Structure Weight kg",
+      "Structure Weight tonnes",
     ]);
 
-  const value = safeNumber(direct, 0);
-
+  const value = safeNumber(raw, 0);
   if (value <= 0) return 0;
 
-  // If the imported value looks like kg, convert to tonnes.
-  // Example: 24462 kg becomes 24.462 t.
-  if (value > 500) return value / 1000;
+  const rawText = String(raw || "").toLowerCase();
+
+  if (rawText.includes("kg") || value > 500) {
+    return value / 1000;
+  }
 
   return value;
 }
 
-function getProgressColour(progress: number): string {
-  if (progress >= 100) return "bg-emerald-500";
-  if (progress >= 60) return "bg-blue-500";
-  if (progress >= 30) return "bg-amber-500";
-  return "bg-slate-400";
-}
-
-function getStatusClasses(status: string): string {
+function statusClass(status: string) {
   const s = status.toLowerCase();
 
   if (s === "complete") return "bg-emerald-100 text-emerald-700 border-emerald-200";
@@ -149,56 +169,49 @@ function getStatusClasses(status: string): string {
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-export default function TowerHeader({
-  projectId,
-  tower,
-  latestDate,
-}: TowerHeaderProps) {
-  const supabase = useMemo(() => createSupabaseBrowser(), []);
-  const towerId = tower?.id;
+function calcOverall(assembly: number, erection: number) {
+  return Math.round(assembly * 0.5 + erection * 0.5);
+}
 
-  const [progress, setProgress] = useState<number>(0);
-  const [assemblyProgress, setAssemblyProgress] = useState<number>(0);
-  const [erectionProgress, setErectionProgress] = useState<number>(0);
-  const [totalHours, setTotalHours] = useState<number>(0);
-  const [productionHours, setProductionHours] = useState<number>(0);
-  const [openDefects, setOpenDefects] = useState<number>(0);
-  const [deliveryProgress, setDeliveryProgress] = useState<number>(0);
+export default function TowerHeader({ projectId, tower, latestDate }: Props) {
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const towerId = tower.id;
+
+  const [assemblyProgress, setAssemblyProgress] = useState(0);
+  const [erectionProgress, setErectionProgress] = useState(0);
+  const [overallProgress, setOverallProgress] = useState(0);
+  const [totalHours, setTotalHours] = useState(0);
+  const [productionHours, setProductionHours] = useState(0);
+  const [openDefects, setOpenDefects] = useState(0);
+  const [deliveryProgress, setDeliveryProgress] = useState(0);
   const [lastDocketDate, setLastDocketDate] = useState<string | null>(latestDate || null);
 
   const towerLabel =
-    tower?.tower_number ||
-    tower?.structure_number ||
-    tower?.tower_no ||
-    tower?.name ||
+    tower.tower_number ||
+    tower.structure_number ||
+    tower.tower_no ||
+    tower.name ||
     "Tower";
 
-  const towerLine = tower?.line || tower?.line_name || "—";
-
+  const towerLine = tower.line || tower.line_name || "—";
   const towerWeightTonnes = useMemo(() => getTowerWeightTonnes(tower), [tower]);
 
-  const derivedStatus = useMemo(() => {
-    if (progress >= 100) return "Complete";
-    if (progress > 0) return "In Progress";
-    return "Not Started";
-  }, [progress]);
+  const status = useMemo(() => {
+    if (overallProgress >= 100) return "Complete";
+    if (overallProgress > 0) return "In Progress";
+    return tower.status || "Not Started";
+  }, [overallProgress, tower.status]);
 
   const installedTonnes = useMemo(() => {
-    if (towerWeightTonnes <= 0 || progress <= 0) return 0;
-    return towerWeightTonnes * (progress / 100);
-  }, [towerWeightTonnes, progress]);
+    if (towerWeightTonnes <= 0 || overallProgress <= 0) return 0;
+    return towerWeightTonnes * (overallProgress / 100);
+  }, [towerWeightTonnes, overallProgress]);
 
-  const totalMhPerTonne = useMemo(() => {
-    if (installedTonnes <= 0) return null;
-    return totalHours / installedTonnes;
-  }, [totalHours, installedTonnes]);
+  const totalMhPerTonne = installedTonnes > 0 ? totalHours / installedTonnes : null;
+  const productionMhPerTonne =
+    installedTonnes > 0 ? productionHours / installedTonnes : null;
 
-  const productionMhPerTonne = useMemo(() => {
-    if (installedTonnes <= 0) return null;
-    return productionHours / installedTonnes;
-  }, [productionHours, installedTonnes]);
-
-  const coverUrl = tower?.cover_photo_path
+  const coverUrl = tower.cover_photo_path
     ? supabase.storage.from("tower-photos").getPublicUrl(tower.cover_photo_path).data.publicUrl
     : null;
 
@@ -208,172 +221,136 @@ export default function TowerHeader({
     let cancelled = false;
 
     async function loadHeaderData() {
-      try {
-        const [
-          docketProgressRowsRes,
-          docketRowsRes,
-          defectsRes,
-          requiredBundlesRes,
-          deliveriesRes,
-        ] = await Promise.all([
-          supabase
-            .from("tower_daily_dockets")
-            .select("assembly_percent, erection_percent")
-            .eq("tower_id", towerId),
+      const [docketsRes, defectsRes, requiredBundlesRes, deliveriesRes] = await Promise.all([
+        supabase
+          .from("tower_daily_dockets")
+          .select("id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours")
+          .eq("tower_id", towerId)
+          .order("docket_date", { ascending: false }),
 
-          supabase
-            .from("tower_daily_dockets")
-            .select("id, docket_date, raw_manhours, production_manhours")
-            .eq("tower_id", towerId)
-            .order("docket_date", { ascending: false }),
+        supabase.from("tower_defects").select("status").eq("tower_id", towerId),
 
-          supabase.from("tower_defects").select("status").eq("tower_id", towerId),
+        supabase
+          .from("tower_required_bundles")
+          .select("bundle_no,qty_required")
+          .eq("tower_id", towerId),
 
-          supabase
-            .from("tower_required_bundles")
-            .select("bundle_no, qty_required")
-            .eq("tower_id", towerId),
+        supabase.from("tower_bundle_deliveries").select("id").eq("tower_id", towerId),
+      ]);
 
-          supabase.from("tower_bundle_deliveries").select("id").eq("tower_id", towerId),
-        ]);
+      if (cancelled) return;
 
-        if (cancelled) return;
+      const dockets = (docketsRes.data || []) as DocketRow[];
 
-        let nextProgress = 0;
-        let nextAssembly = 0;
-        let nextErection = 0;
+      let bestOverall = 0;
+      let bestAssembly = 0;
+      let bestErection = 0;
 
-        if (!docketProgressRowsRes.error && docketProgressRowsRes.data) {
-          const progressRows = docketProgressRowsRes.data as DocketProgressRow[];
+      dockets.forEach((docket) => {
+        const assembly = safeNumber(docket.assembly_percent, 0);
+        const erection = safeNumber(docket.erection_percent, 0);
+        const overall = calcOverall(assembly, erection);
 
-          progressRows.forEach((row) => {
-            const assembly = safeNumber(row.assembly_percent, 0);
-            const erection = safeNumber(row.erection_percent, 0);
-            const weighted = Math.round(assembly * 0.5 + erection * 0.5);
-
-            if (weighted >= nextProgress) {
-              nextProgress = weighted;
-              nextAssembly = Math.round(assembly);
-              nextErection = Math.round(erection);
-            }
-          });
+        if (overall >= bestOverall) {
+          bestOverall = overall;
+          bestAssembly = Math.round(assembly);
+          bestErection = Math.round(erection);
         }
+      });
 
-        let nextTotalHours = 0;
-        let nextProductionHours = 0;
-        let nextLastDocketDate: string | null = latestDate || null;
+      const docketRawTotal = dockets.reduce(
+        (sum, docket) => sum + safeNumber(docket.raw_manhours, 0),
+        0,
+      );
 
-        if (!docketRowsRes.error && docketRowsRes.data && docketRowsRes.data.length > 0) {
-          const docketRows = docketRowsRes.data as DocketHourRow[];
+      const docketProductionTotal = dockets.reduce(
+        (sum, docket) => sum + safeNumber(docket.production_manhours, 0),
+        0,
+      );
 
-          nextLastDocketDate = docketRows[0]?.id
-            ? ((docketRowsRes.data[0] as unknown as { docket_date?: string | null }).docket_date ||
-                latestDate ||
-                null)
-            : latestDate || null;
+      let nextTotalHours = docketRawTotal;
+      let nextProductionHours = docketProductionTotal;
 
-          const docketIds = docketRows.map((d) => d.id);
+      if (dockets.length > 0) {
+        setLastDocketDate(dockets[0]?.docket_date || latestDate || null);
 
-          const docketRawTotal = docketRows.reduce(
-            (sum, row) => sum + safeNumber(row.raw_manhours, 0),
+        const docketIds = dockets.map((docket) => docket.id);
+
+        const labourRes = await supabase
+          .from("tower_docket_labour")
+          .select("docket_id,total_hours,production_hours")
+          .in("docket_id", docketIds);
+
+        if (!cancelled && !labourRes.error) {
+          const labourRows = (labourRes.data || []) as LabourRow[];
+
+          const labourTotal = labourRows.reduce(
+            (sum, row) => sum + safeNumber(row.total_hours, 0),
             0,
           );
 
-          const docketProductionTotal = docketRows.reduce(
-            (sum, row) => sum + safeNumber(row.production_manhours, 0),
+          const labourProduction = labourRows.reduce(
+            (sum, row) => sum + safeNumber(row.production_hours, 0),
             0,
           );
 
-          if (docketRawTotal > 0 || docketProductionTotal > 0) {
-            nextTotalHours = docketRawTotal;
-            nextProductionHours = docketProductionTotal;
-          }
-
-          const labourRes = await supabase
-            .from("tower_docket_labour")
-            .select("docket_id, total_hours, production_hours")
-            .in("docket_id", docketIds);
-
-          if (!cancelled && !labourRes.error && labourRes.data) {
-            const labourRows = labourRes.data as LabourHourRow[];
-
-            const labourRawTotal = labourRows.reduce(
-              (sum, row) => sum + safeNumber(row.total_hours, 0),
-              0,
-            );
-
-            const labourProductionTotal = labourRows.reduce(
-              (sum, row) => sum + safeNumber(row.production_hours, 0),
-              0,
-            );
-
-            // Use docket stored totals where available, otherwise fall back to labour rows.
-            if (nextTotalHours <= 0) nextTotalHours = labourRawTotal;
-            if (nextProductionHours <= 0) nextProductionHours = labourProductionTotal;
-          }
+          if (nextTotalHours <= 0) nextTotalHours = labourTotal;
+          if (nextProductionHours <= 0) nextProductionHours = labourProduction;
         }
-
-        let nextOpenDefects = 0;
-
-        if (!defectsRes.error && defectsRes.data) {
-          nextOpenDefects = (defectsRes.data as DefectRow[]).filter((d) => {
-            const status = (d.status || "").trim().toLowerCase();
-            return status !== "closed" && status !== "complete" && status !== "completed";
-          }).length;
-        }
-
-        let nextDeliveryProgress = 0;
-
-        const requiredRows = (requiredBundlesRes.data || []) as RequiredBundleRow[];
-        const deliveryRows = (deliveriesRes.data || []) as DeliveryRow[];
-
-        if (!requiredBundlesRes.error && requiredRows.length > 0) {
-          const totalRequired = requiredRows.reduce(
-            (sum, row) => sum + safeNumber(row.qty_required, 0),
-            0,
-          );
-
-          if (totalRequired > 0 && deliveryRows.length > 0) {
-            const deliveryIds = deliveryRows.map((d) => d.id);
-
-            const itemsRes = await supabase
-              .from("tower_bundle_delivery_items")
-              .select("delivery_id, bundle_no, qty_delivered")
-              .in("delivery_id", deliveryIds);
-
-            if (!cancelled && !itemsRes.error && itemsRes.data) {
-              const deliveredByBundle: Record<string, number> = {};
-
-              (itemsRes.data as DeliveryItemRow[]).forEach((item) => {
-                deliveredByBundle[item.bundle_no] =
-                  (deliveredByBundle[item.bundle_no] || 0) +
-                  safeNumber(item.qty_delivered, 0);
-              });
-
-              const cappedDelivered = requiredRows.reduce((sum, bundle) => {
-                const required = safeNumber(bundle.qty_required, 0);
-                const delivered = deliveredByBundle[bundle.bundle_no] || 0;
-                return sum + Math.min(required, delivered);
-              }, 0);
-
-              nextDeliveryProgress = Math.round((cappedDelivered / totalRequired) * 100);
-            }
-          }
-        }
-
-        if (cancelled) return;
-
-        setProgress(nextProgress);
-        setAssemblyProgress(nextAssembly);
-        setErectionProgress(nextErection);
-        setTotalHours(Math.round(nextTotalHours * 100) / 100);
-        setProductionHours(Math.round(nextProductionHours * 100) / 100);
-        setOpenDefects(nextOpenDefects);
-        setDeliveryProgress(nextDeliveryProgress);
-        setLastDocketDate(nextLastDocketDate);
-      } catch (error) {
-        console.error("Failed to load tower header data:", error);
       }
+
+      const defects = (defectsRes.data || []) as DefectRow[];
+      const nextOpenDefects = defects.filter((defect) => {
+        const s = (defect.status || "").toLowerCase().trim();
+        return s !== "closed" && s !== "complete" && s !== "completed";
+      }).length;
+
+      let nextDeliveryProgress = 0;
+
+      const requiredRows = (requiredBundlesRes.data || []) as RequiredBundleRow[];
+      const deliveryRows = (deliveriesRes.data || []) as DeliveryRow[];
+
+      const totalRequired = requiredRows.reduce(
+        (sum, row) => sum + safeNumber(row.qty_required, 0),
+        0,
+      );
+
+      if (totalRequired > 0 && deliveryRows.length > 0) {
+        const deliveryIds = deliveryRows.map((row) => row.id);
+
+        const itemsRes = await supabase
+          .from("tower_bundle_delivery_items")
+          .select("delivery_id,bundle_no,qty_delivered")
+          .in("delivery_id", deliveryIds);
+
+        if (!cancelled && !itemsRes.error) {
+          const deliveredByBundle: Record<string, number> = {};
+
+          ((itemsRes.data || []) as DeliveryItemRow[]).forEach((item) => {
+            deliveredByBundle[item.bundle_no] =
+              (deliveredByBundle[item.bundle_no] || 0) +
+              safeNumber(item.qty_delivered, 0);
+          });
+
+          const deliveredCapped = requiredRows.reduce((sum, bundle) => {
+            const required = safeNumber(bundle.qty_required, 0);
+            const delivered = deliveredByBundle[bundle.bundle_no] || 0;
+            return sum + Math.min(required, delivered);
+          }, 0);
+
+          nextDeliveryProgress = Math.round((deliveredCapped / totalRequired) * 100);
+        }
+      }
+
+      if (cancelled) return;
+
+      setAssemblyProgress(bestAssembly);
+      setErectionProgress(bestErection);
+      setOverallProgress(bestOverall);
+      setTotalHours(Math.round(nextTotalHours * 100) / 100);
+      setProductionHours(Math.round(nextProductionHours * 100) / 100);
+      setOpenDefects(nextOpenDefects);
+      setDeliveryProgress(nextDeliveryProgress);
     }
 
     void loadHeaderData();
@@ -385,7 +362,7 @@ export default function TowerHeader({
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px]">
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px]">
         <div className="p-4 md:p-6 space-y-5">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div className="min-w-0">
@@ -395,11 +372,11 @@ export default function TowerHeader({
                 </span>
 
                 <span
-                  className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusClasses(
-                    derivedStatus,
+                  className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(
+                    status,
                   )}`}
                 >
-                  {derivedStatus}
+                  {status}
                 </span>
               </div>
 
@@ -412,38 +389,17 @@ export default function TowerHeader({
                 <span>Last docket: {formatDate(lastDocketDate)}</span>
                 <span>
                   Weight:{" "}
-                  {towerWeightTonnes > 0 ? `${formatNumber(towerWeightTonnes, 2)} t` : "Not set"}
+                  {towerWeightTonnes > 0
+                    ? `${formatNumber(towerWeightTonnes, 2)} t`
+                    : "Not set"}
                 </span>
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 min-w-full lg:min-w-[360px]">
-              <QuickStat label="Overall" value={`${progress}%`} tone="blue" />
+              <QuickStat label="Overall" value={`${overallProgress}%`} tone="blue" />
               <QuickStat label="Assembly" value={`${assemblyProgress}%`} />
               <QuickStat label="Erection" value={`${erectionProgress}%`} tone="green" />
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <div>
-                <div className="text-sm font-bold text-slate-900">Tower Progress</div>
-                <div className="text-xs text-slate-500">50% assembly + 50% erection</div>
-              </div>
-
-              <div className="text-2xl font-black text-slate-900">{progress}%</div>
-            </div>
-
-            <div className="h-4 rounded-full bg-white border border-slate-200 overflow-hidden">
-              <div
-                className={`h-full rounded-full ${getProgressColour(progress)}`}
-                style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <MiniProgress label="Assembly" value={assemblyProgress} colour="bg-blue-500" />
-              <MiniProgress label="Erection" value={erectionProgress} colour="bg-emerald-500" />
             </div>
           </div>
 
@@ -456,53 +412,46 @@ export default function TowerHeader({
             />
             <MetricCard
               label="Total MH/t"
-              value={totalMhPerTonne === null ? "—" : formatNumber(totalMhPerTonne, 2)}
-              hint={installedTonnes > 0 ? `${formatNumber(installedTonnes, 2)}t installed` : "Needs weight/progress"}
+              value={formatNumber(totalMhPerTonne, 2)}
+              hint={
+                installedTonnes > 0
+                  ? `${formatNumber(installedTonnes, 2)}t installed`
+                  : "Needs weight + progress"
+              }
             />
             <MetricCard
               label="Prod MH/t"
-              value={productionMhPerTonne === null ? "—" : formatNumber(productionMhPerTonne, 2)}
+              value={formatNumber(productionMhPerTonne, 2)}
               tone="green"
-              hint={installedTonnes > 0 ? `${formatNumber(installedTonnes, 2)}t installed` : "Needs weight/progress"}
+              hint={
+                installedTonnes > 0
+                  ? `${formatNumber(installedTonnes, 2)}t installed`
+                  : "Needs weight + progress"
+              }
             />
-            <MetricCard label="Defects" value={openDefects} tone={openDefects > 0 ? "amber" : "slate"} />
-            <MetricCard label="Steel" value={`${deliveryProgress}%`} />
+            <MetricCard
+              label="Open Defects"
+              value={openDefects}
+              tone={openDefects > 0 ? "amber" : "slate"}
+            />
+            <MetricCard label="Steel Delivery" value={`${deliveryProgress}%`} />
           </div>
 
           <div className="flex gap-2 flex-wrap">
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/dockets/new`}
-              className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-            >
-              Add Daily Docket
-            </Link>
-
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/workpack`}
-              className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              Open Workpack
-            </Link>
-
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/materials`}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Materials
-            </Link>
-
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/photos`}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Upload Photo
-            </Link>
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}`} label="Overview" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/dockets`} label="Daily Dockets" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/workpack`} label="Workpack" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/deliveries`} label="Deliveries" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/materials`} label="Materials" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/defects`} label="Defects" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/modifications`} label="Modifications" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/photos`} label="Photos" />
           </div>
         </div>
 
         <div className="border-t xl:border-t-0 xl:border-l border-slate-200 bg-slate-100">
           {coverUrl ? (
-            <div className="relative h-56 xl:h-full min-h-[260px]">
+            <div className="relative h-52 xl:h-full min-h-[240px]">
               <img
                 src={coverUrl}
                 alt={`${towerLabel} cover`}
@@ -517,14 +466,14 @@ export default function TowerHeader({
               </div>
             </div>
           ) : (
-            <div className="h-56 xl:h-full min-h-[260px] flex items-center justify-center p-6 text-center">
+            <div className="h-52 xl:h-full min-h-[240px] flex items-center justify-center p-6 text-center">
               <div>
                 <div className="mx-auto h-16 w-16 rounded-3xl bg-white border border-slate-200 flex items-center justify-center text-2xl">
                   🗼
                 </div>
                 <div className="mt-3 font-bold text-slate-800">No cover photo</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Upload a photo to make this tower header easier to identify.
+                  Upload a tower photo to make this easier to identify.
                 </div>
               </div>
             </div>
@@ -532,6 +481,17 @@ export default function TowerHeader({
         </div>
       </div>
     </div>
+  );
+}
+
+function HeaderLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+    >
+      {label}
+    </Link>
   );
 }
 
@@ -580,31 +540,6 @@ function MetricCard({
       <div className="text-[11px] opacity-75 truncate">{label}</div>
       <div className="font-black text-base md:text-lg mt-1 truncate">{value}</div>
       {hint && <div className="text-[10px] opacity-70 mt-1 truncate">{hint}</div>}
-    </div>
-  );
-}
-
-function MiniProgress({
-  label,
-  value,
-  colour,
-}: {
-  label: string;
-  value: number;
-  colour: string;
-}) {
-  const clamped = Math.max(0, Math.min(100, value));
-
-  return (
-    <div>
-      <div className="flex justify-between text-xs text-slate-500 mb-1">
-        <span className="font-semibold">{label}</span>
-        <span>{clamped}%</span>
-      </div>
-
-      <div className="h-2.5 rounded-full bg-white border border-slate-200 overflow-hidden">
-        <div className={`h-full rounded-full ${colour}`} style={{ width: `${clamped}%` }} />
-      </div>
     </div>
   );
 }
