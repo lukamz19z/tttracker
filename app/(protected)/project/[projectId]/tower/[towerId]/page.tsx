@@ -24,6 +24,8 @@ type DocketRow = {
   docket_date: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
+  raw_manhours?: number | null;
+  production_manhours?: number | null;
   weather_delay_hours?: number | null;
   lightning_delay_hours?: number | null;
   toolbox_delay_hours?: number | null;
@@ -33,6 +35,7 @@ type DocketRow = {
 type LabourRow = {
   docket_id: string;
   total_hours?: number | null;
+  production_hours?: number | null;
 };
 
 type DefectRow = {
@@ -643,7 +646,7 @@ export default function TowerOverviewPage() {
     const docketData = await safeSelect<DocketRow>(
       supabase,
       "tower_daily_dockets",
-      "id, docket_date, assembly_percent, erection_percent, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours",
+      "id, docket_date, assembly_percent, erection_percent, raw_manhours, production_manhours, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours",
       [{ column: "tower_id", value: towerId }],
     );
 
@@ -667,7 +670,7 @@ export default function TowerOverviewPage() {
           "tower_daily_docket_labour",
           "tower_daily_docket_labour_rows",
         ],
-        "docket_id, total_hours",
+        "docket_id, total_hours, production_hours",
       );
       labourData = labourData.filter((row) =>
         docketIds.includes(row.docket_id),
@@ -837,10 +840,30 @@ export default function TowerOverviewPage() {
   }
 
   const stats = useMemo<OverviewStats>(() => {
-    const totalHours = labourRows.reduce(
-      (sum, row) => sum + Number(row.total_hours || 0),
+    const docketRawTotal = dockets.reduce(
+      (sum, docket) => sum + safeNumber(docket.raw_manhours, 0),
       0,
     );
+
+    const docketProductionTotal = dockets.reduce(
+      (sum, docket) => sum + safeNumber(docket.production_manhours, 0),
+      0,
+    );
+
+    const labourTotal = labourRows.reduce(
+      (sum, row) => sum + safeNumber(row.total_hours, 0),
+      0,
+    );
+
+    const labourProduction = labourRows.reduce(
+      (sum, row) => sum + safeNumber(row.production_hours, 0),
+      0,
+    );
+
+    // Match TowerHeader exactly: use docket stored totals first, then labour rows as fallback.
+    const totalHours = docketRawTotal > 0 ? docketRawTotal : labourTotal;
+    const productionHours =
+      docketProductionTotal > 0 ? docketProductionTotal : labourProduction;
 
     const totalWeatherDelay = dockets.reduce(
       (sum, row) => sum + Number(row.weather_delay_hours || 0),
@@ -974,10 +997,10 @@ export default function TowerOverviewPage() {
         ? totalHours / completedTonnes
         : null;
 
-    // Production MH/t is displayed in TowerHeader. Keep these values neutral here
-    // so the overview does not duplicate or override the header's production logic.
-    const productionHours = 0;
-    const productionManhoursPerTonne = null;
+    const productionManhoursPerTonne =
+      completedTonnes && completedTonnes > 0
+        ? productionHours / completedTonnes
+        : null;
 
     return {
       latestDate,
@@ -1115,20 +1138,24 @@ export default function TowerOverviewPage() {
             accent="emerald"
           />
           <MetricTile
-            title="Manhours / Tonne"
+            title="Total MH / Tonne"
             value={formatDecimal(stats.manhoursPerTonne, 2)}
             subtitle={
-              stats.towerWeightTonnes !== null
-                ? `Tower weight: ${formatDecimal(stats.towerWeightTonnes, 2)} t`
+              stats.completedTonnes !== null
+                ? `${formatDecimal(stats.totalHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
                 : "Tower weight not found"
             }
             accent="amber"
           />
           <MetricTile
-            title="Last Docket"
-            value={stats.latestDate || "-"}
-            subtitle="latest submitted date"
-            accent="slate"
+            title="Production MH / Tonne"
+            value={formatDecimal(stats.productionManhoursPerTonne, 2)}
+            subtitle={
+              stats.completedTonnes !== null
+                ? `${formatDecimal(stats.productionHours, 1)}h / ${formatDecimal(stats.completedTonnes, 2)}t`
+                : "Tower weight not found"
+            }
+            accent="emerald"
           />
           <MetricTile
             title="Completed Tonnes"
