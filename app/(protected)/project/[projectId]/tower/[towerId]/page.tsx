@@ -16,6 +16,7 @@ type Tower = {
   structure_number?: string | null;
   tower_no?: string | null;
   extra_data?: Record<string, unknown> | null;
+  cover_photo_path?: string | null;
 };
 
 type DocketRow = {
@@ -27,11 +28,15 @@ type DocketRow = {
   lightning_delay_hours?: number | null;
   toolbox_delay_hours?: number | null;
   other_delay_hours?: number | null;
+  production_manhours?: number | null;
+  production_hours?: number | null;
 };
 
 type LabourRow = {
   docket_id: string;
   total_hours?: number | null;
+  production_hours?: number | null;
+  production_manhours?: number | null;
 };
 
 type DefectRow = {
@@ -48,19 +53,14 @@ type BundleRow = {
   qty_required?: number | null;
 };
 
-type DeliveryItemRow = {
-  delivery_id?: string | null;
-  bundle_no: string;
-  qty_delivered?: number | null;
-};
-
 type DeliveryRow = {
   id: string;
-  tower_id?: string | null;
-  delivered_by?: string | null;
-  vehicle?: string | null;
-  created_at?: string | null;
-  tower_bundle_delivery_items?: DeliveryItemRow[] | null;
+};
+
+type DeliveryItemRow = {
+  delivery_id: string;
+  bundle_no: string;
+  qty_delivered?: number | null;
 };
 
 type MaterialBundleRow = {
@@ -154,7 +154,6 @@ type OverviewStats = {
   totalToolboxDelay: number;
   totalOtherDelay: number;
   totalDelayHours: number;
-  productionHours: number;
   defectCount: number;
   openDefectCount: number;
   closedDefectCount: number;
@@ -181,6 +180,7 @@ type OverviewStats = {
   towerWeightTonnes: number | null;
   completedTonnes: number | null;
   manhoursPerTonne: number | null;
+  productionHours: number;
   productionManhoursPerTonne: number | null;
 };
 
@@ -203,6 +203,15 @@ function formatDecimal(value: number | null, decimals = 2) {
   return value.toFixed(decimals);
 }
 
+function safeNumber(value: unknown, fallback = 0) {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : fallback;
+
+  const parsed = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function extractNumericValue(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -218,7 +227,9 @@ function extractNumericValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null) {
+function getTowerWeightFromExtraData(
+  extraData?: Record<string, unknown> | null,
+) {
   if (!extraData) return null;
 
   const entries = Object.entries(extraData);
@@ -241,19 +252,25 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 
   const towerWeightLikeEntry = entries.find(([key]) => {
     const k = key.trim().toLowerCase();
-    return (k.includes("tower") || k.includes("structure")) && k.includes("weight");
+    return (
+      (k.includes("tower") || k.includes("structure")) && k.includes("weight")
+    );
   });
 
   if (towerWeightLikeEntry) {
     return extractNumericValue(towerWeightLikeEntry[1]);
   }
 
-  const genericWeightEntry = entries.find(([key]) => key.trim().toLowerCase().includes("weight"));
+  const genericWeightEntry = entries.find(([key]) =>
+    key.trim().toLowerCase().includes("weight"),
+  );
   if (genericWeightEntry) {
     return extractNumericValue(genericWeightEntry[1]);
   }
 
-  const massEntry = entries.find(([key]) => key.trim().toLowerCase().includes("mass"));
+  const massEntry = entries.find(([key]) =>
+    key.trim().toLowerCase().includes("mass"),
+  );
   if (massEntry) {
     return extractNumericValue(massEntry[1]);
   }
@@ -264,7 +281,9 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
 function getOpenDefectCount(defects: DefectRow[]) {
   return defects.filter((d) => {
     const status = (d.status || "").trim().toLowerCase();
-    return status !== "closed" && status !== "complete" && status !== "completed";
+    return (
+      status !== "closed" && status !== "complete" && status !== "completed"
+    );
   }).length;
 }
 
@@ -295,9 +314,20 @@ function isSafetyDocument(doc: GenericDocumentRow) {
   if (values.length === 0) return true;
 
   return values.some((value) =>
-    ["safety", "permit", "swms", "itc", "checklist", "sign on", "sign-on", "lift", "study", "wms", "jsea", "jsa"].some(
-      (keyword) => value.includes(keyword),
-    ),
+    [
+      "safety",
+      "permit",
+      "swms",
+      "itc",
+      "checklist",
+      "sign on",
+      "sign-on",
+      "lift",
+      "study",
+      "wms",
+      "jsea",
+      "jsa",
+    ].some((keyword) => value.includes(keyword)),
   );
 }
 
@@ -310,8 +340,16 @@ function isDocumentExpired(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const expiryOnly = new Date(
+    expiry.getFullYear(),
+    expiry.getMonth(),
+    expiry.getDate(),
+  );
 
   return expiryOnly < todayOnly;
 }
@@ -321,11 +359,19 @@ function isDocumentExpiringSoon(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
   const soon = new Date(todayOnly);
   soon.setDate(soon.getDate() + 14);
 
-  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  const expiryOnly = new Date(
+    expiry.getFullYear(),
+    expiry.getMonth(),
+    expiry.getDate(),
+  );
 
   return expiryOnly >= todayOnly && expiryOnly <= soon;
 }
@@ -378,7 +424,9 @@ function getItcStatusKind(status: string) {
   return "slate";
 }
 
-function sectionCardClasses(tint: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate") {
+function sectionCardClasses(
+  tint: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate",
+) {
   switch (tint) {
     case "blue":
       return "bg-gradient-to-br from-blue-50 to-white border-blue-100";
@@ -410,21 +458,27 @@ function MetricTile({
     accent === "blue"
       ? "bg-blue-500"
       : accent === "purple"
-      ? "bg-violet-500"
-      : accent === "emerald"
-      ? "bg-emerald-500"
-      : accent === "amber"
-      ? "bg-amber-500"
-      : accent === "rose"
-      ? "bg-rose-500"
-      : "bg-slate-500";
+        ? "bg-violet-500"
+        : accent === "emerald"
+          ? "bg-emerald-500"
+          : accent === "amber"
+            ? "bg-amber-500"
+            : accent === "rose"
+              ? "bg-rose-500"
+              : "bg-slate-500";
 
   return (
-    <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses(accent)}`}>
+    <div
+      className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses(accent)}`}
+    >
       <div className={`mb-4 h-1.5 w-14 rounded-full ${accentBar}`} />
       <div className="text-sm font-medium text-slate-500">{title}</div>
-      <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
-      {subtitle ? <div className="mt-2 text-sm text-slate-600">{subtitle}</div> : null}
+      <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
+        {value}
+      </div>
+      {subtitle ? (
+        <div className="mt-2 text-sm text-slate-600">{subtitle}</div>
+      ) : null}
     </div>
   );
 }
@@ -452,14 +506,20 @@ function DonutWheel({
           }}
         >
           <div className="absolute inset-[8px] rounded-full bg-white flex items-center justify-center">
-            <span className="text-lg font-bold text-slate-900">{Math.round(safeValue)}%</span>
+            <span className="text-lg font-bold text-slate-900">
+              {Math.round(safeValue)}%
+            </span>
           </div>
         </div>
 
         <div>
           <div className="text-sm text-slate-500">{label}</div>
-          <div className="text-xl font-semibold text-slate-900 mt-1">{Math.round(safeValue)}%</div>
-          {sublabel ? <div className="text-sm text-slate-500 mt-1">{sublabel}</div> : null}
+          <div className="text-xl font-semibold text-slate-900 mt-1">
+            {Math.round(safeValue)}%
+          </div>
+          {sublabel ? (
+            <div className="text-sm text-slate-500 mt-1">{sublabel}</div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -478,7 +538,9 @@ function SectionHeader({
   return (
     <div className="flex items-center justify-between gap-4 flex-wrap">
       <div>
-        <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
+        <h2 className="text-xl font-bold tracking-tight text-slate-900">
+          {title}
+        </h2>
         <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
       </div>
       {action}
@@ -535,8 +597,12 @@ export default function TowerOverviewPage() {
   const [bundles, setBundles] = useState<BundleRow[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItemRow[]>([]);
-  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>([]);
-  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>([]);
+  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>(
+    [],
+  );
+  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>(
+    [],
+  );
   const [documents, setDocuments] = useState<GenericDocumentRow[]>([]);
   const [itcMetrics, setItcMetrics] = useState<ItcMetrics>({
     hasItc: false,
@@ -562,7 +628,11 @@ export default function TowerOverviewPage() {
   async function load() {
     setLoading(true);
 
-    const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
+    const towerRes = await supabase
+      .from("towers")
+      .select("*")
+      .eq("id", towerId)
+      .single();
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
 
@@ -588,10 +658,16 @@ export default function TowerOverviewPage() {
     if (docketIds.length > 0) {
       labourData = await safeSelectFirstExisting<LabourRow>(
         supabase,
-        ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
+        [
+          "tower_docket_labour",
+          "tower_daily_docket_labour",
+          "tower_daily_docket_labour_rows",
+        ],
         "docket_id, total_hours",
       );
-      labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
+      labourData = labourData.filter((row) =>
+        docketIds.includes(row.docket_id),
+      );
     }
 
     const [
@@ -610,22 +686,27 @@ export default function TowerOverviewPage() {
       safeSelect<ModificationRow>(supabase, "tower_modifications", "id", [
         { column: "tower_id", value: towerId },
       ]),
-      safeSelect<BundleRow>(
+      safeSelectFirstExisting<BundleRow>(
         supabase,
-        "tower_required_bundles",
+        ["tower_bundle_register", "tower_bundles", "tower_delivery_bundles"],
         "bundle_no, qty_required",
         [{ column: "tower_id", value: towerId }],
       ),
-      safeSelect<DeliveryRow>(
+      safeSelect<DeliveryRow>(supabase, "tower_deliveries", "id", [
+        { column: "tower_id", value: towerId },
+      ]),
+      safeSelectFirstExisting<DeliveryItemRow>(
         supabase,
-        "tower_bundle_deliveries",
-        "id, tower_id, delivered_by, vehicle, created_at, tower_bundle_delivery_items(bundle_no, qty_delivered)",
-        [{ column: "tower_id", value: towerId }],
+        ["tower_delivery_items", "tower_delivered_items"],
+        "delivery_id, bundle_no, qty_delivered",
       ),
-      Promise.resolve([] as DeliveryItemRow[]),
       safeSelectFirstExisting<GenericDocumentRow>(
         supabase,
-        ["tower_workpack_documents", "tower_documents", "tower_safety_documents"],
+        [
+          "tower_workpack_documents",
+          "tower_documents",
+          "tower_safety_documents",
+        ],
         "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active",
         [{ column: "tower_id", value: towerId }],
       ),
@@ -643,19 +724,17 @@ export default function TowerOverviewPage() {
       ),
     ]);
 
+    const deliveryIds = new Set(deliveriesData.map((delivery) => delivery.id));
+    const towerDeliveryItemsData = deliveryItemsData.filter((item) =>
+      deliveryIds.has(item.delivery_id),
+    );
+
     setLabourRows(labourData);
     setDefects(defectsData);
     setModifications(modificationsData);
-    const linkedDeliveryItems = deliveriesData.flatMap((delivery) =>
-      (delivery.tower_bundle_delivery_items || []).map((item) => ({
-        ...item,
-        delivery_id: delivery.id,
-      })),
-    );
-
     setBundles(bundlesData);
     setDeliveries(deliveriesData);
-    setDeliveryItems(linkedDeliveryItems.length > 0 ? linkedDeliveryItems : deliveryItemsData);
+    setDeliveryItems(towerDeliveryItemsData);
     setDocuments(documentsData);
     setMaterialBundles(materialBundlesData);
     setMaterialMembers(materialMembersData);
@@ -686,23 +765,35 @@ export default function TowerOverviewPage() {
       });
     } else {
       const [itcItems, torqueRows, clientUploads] = await Promise.all([
-        safeSelect<ItcItemRow>(supabase, "tower_itc_items", "id, itc_id, validation", [
-          { column: "itc_id", value: latestItc.id },
-        ]),
-        safeSelect<ItcTorqueRow>(supabase, "tower_itc_torque", "id, itc_id, torque_achieved", [
-          { column: "itc_id", value: latestItc.id },
-        ]),
-        safeSelect<ItcClientUploadRow>(supabase, "tower_itc_client_uploads", "id, tower_id", [
-          { column: "tower_id", value: towerId },
-        ]),
+        safeSelect<ItcItemRow>(
+          supabase,
+          "tower_itc_items",
+          "id, itc_id, validation",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcTorqueRow>(
+          supabase,
+          "tower_itc_torque",
+          "id, itc_id, torque_achieved",
+          [{ column: "itc_id", value: latestItc.id }],
+        ),
+        safeSelect<ItcClientUploadRow>(
+          supabase,
+          "tower_itc_client_uploads",
+          "id, tower_id",
+          [{ column: "tower_id", value: towerId }],
+        ),
       ]);
 
       const checklistTotal = itcItems.length;
       const checklistComplete = itcItems.filter(
         (item) => item.validation === "Y" || item.validation === "NA",
       ).length;
-      const checklistFailed = itcItems.filter((item) => item.validation === "N").length;
-      const checklistPending = checklistTotal - checklistComplete - checklistFailed;
+      const checklistFailed = itcItems.filter(
+        (item) => item.validation === "N",
+      ).length;
+      const checklistPending =
+        checklistTotal - checklistComplete - checklistFailed;
 
       const torqueTotal = torqueRows.length;
       const torqueComplete = torqueRows.filter(
@@ -740,14 +831,32 @@ export default function TowerOverviewPage() {
   }
 
   const stats = useMemo<OverviewStats>(() => {
-    const totalHours = labourRows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
+    const totalHours = labourRows.reduce(
+      (sum, row) => sum + Number(row.total_hours || 0),
+      0,
+    );
 
-    const totalWeatherDelay = dockets.reduce((sum, row) => sum + Number(row.weather_delay_hours || 0), 0);
-    const totalLightningDelay = dockets.reduce((sum, row) => sum + Number(row.lightning_delay_hours || 0), 0);
-    const totalToolboxDelay = dockets.reduce((sum, row) => sum + Number(row.toolbox_delay_hours || 0), 0);
-    const totalOtherDelay = dockets.reduce((sum, row) => sum + Number(row.other_delay_hours || 0), 0);
-    const totalDelayHours = totalWeatherDelay + totalLightningDelay + totalToolboxDelay + totalOtherDelay;
-    const productionHours = Math.max(0, totalHours - totalDelayHours);
+    const totalWeatherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.weather_delay_hours || 0),
+      0,
+    );
+    const totalLightningDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.lightning_delay_hours || 0),
+      0,
+    );
+    const totalToolboxDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.toolbox_delay_hours || 0),
+      0,
+    );
+    const totalOtherDelay = dockets.reduce(
+      (sum, row) => sum + Number(row.other_delay_hours || 0),
+      0,
+    );
+    const totalDelayHours =
+      totalWeatherDelay +
+      totalLightningDelay +
+      totalToolboxDelay +
+      totalOtherDelay;
 
     const defectCount = defects.length;
     const openDefectCount = getOpenDefectCount(defects);
@@ -755,18 +864,32 @@ export default function TowerOverviewPage() {
     const modificationCount = modifications.length;
 
     const totalRequiredBundles = bundles.length;
-    const totalRequiredQty = bundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
+    const totalRequiredQty = bundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
 
-    const deliveredQty = deliveryItems.reduce((sum, row) => sum + Number(row.qty_delivered || 0), 0);
+    const deliveredQty = deliveryItems.reduce(
+      (sum, row) => sum + Number(row.qty_delivered || 0),
+      0,
+    );
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
+    const deliveryPercent =
+      totalRequiredQty > 0
+        ? clampPercent((deliveredQty / totalRequiredQty) * 100)
+        : 0;
 
     const materialBundleCount = materialBundles.length;
     const materialMemberCount = materialMembers.length;
-    const materialRequiredQty = materialBundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
+    const materialRequiredQty = materialBundles.reduce(
+      (sum, row) => sum + Number(row.qty_required || 0),
+      0,
+    );
 
     const materialBundleSet = new Set(
-      materialBundles.map((row) => String(row.bundle_no || "").trim()).filter(Boolean),
+      materialBundles
+        .map((row) => String(row.bundle_no || "").trim())
+        .filter(Boolean),
     );
 
     const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
@@ -775,13 +898,24 @@ export default function TowerOverviewPage() {
       return sum + Number(row.qty_delivered || 0);
     }, 0);
 
-    const materialOutstandingQty = Math.max(0, materialRequiredQty - materialDeliveredQty);
+    const materialOutstandingQty = Math.max(
+      0,
+      materialRequiredQty - materialDeliveredQty,
+    );
     const materialProgressPercent =
-      materialRequiredQty > 0 ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100) : 0;
+      materialRequiredQty > 0
+        ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100)
+        : 0;
 
-    const materialTotalWeight = materialBundles.reduce((sum, row) => sum + Number(row.total_weight || 0), 0);
+    const materialTotalWeight = materialBundles.reduce(
+      (sum, row) => sum + Number(row.total_weight || 0),
+      0,
+    );
 
-    const computedProgress = getProgressFromDockets(dockets);
+    const docketProgress = getProgressFromDockets(dockets);
+    const storedTowerProgress = clampPercent(safeNumber(tower?.progress, 0));
+    const computedProgress =
+      docketProgress > 0 ? docketProgress : storedTowerProgress;
     const remainingProgress = Math.max(0, 100 - computedProgress);
     const computedStatus = getStatusFromProgress(computedProgress);
 
@@ -789,11 +923,39 @@ export default function TowerOverviewPage() {
 
     const towerWeightTonnes = getTowerWeightFromExtraData(tower?.extra_data);
     const completedTonnes =
-      towerWeightTonnes !== null ? towerWeightTonnes * (computedProgress / 100) : null;
+      towerWeightTonnes !== null
+        ? towerWeightTonnes * (computedProgress / 100)
+        : null;
+
     const manhoursPerTonne =
-      completedTonnes && completedTonnes > 0 ? totalHours / completedTonnes : null;
+      completedTonnes && completedTonnes > 0
+        ? totalHours / completedTonnes
+        : null;
+
+    const docketProductionTotal = dockets.reduce(
+      (sum, docket) =>
+        sum +
+        safeNumber(docket.production_manhours, 0) +
+        safeNumber(docket.production_hours, 0),
+      0,
+    );
+
+    let productionHours = docketProductionTotal;
+
+    if (productionHours <= 0) {
+      productionHours = labourRows.reduce(
+        (sum, row) =>
+          sum +
+          safeNumber(row.production_hours, 0) +
+          safeNumber(row.production_manhours, 0),
+        0,
+      );
+    }
+
     const productionManhoursPerTonne =
-      completedTonnes && completedTonnes > 0 ? productionHours / completedTonnes : null;
+      completedTonnes && completedTonnes > 0
+        ? productionHours / completedTonnes
+        : null;
 
     return {
       latestDate,
@@ -804,7 +966,6 @@ export default function TowerOverviewPage() {
       totalToolboxDelay,
       totalOtherDelay,
       totalDelayHours,
-      productionHours,
       defectCount,
       openDefectCount,
       closedDefectCount,
@@ -831,6 +992,7 @@ export default function TowerOverviewPage() {
       towerWeightTonnes,
       completedTonnes,
       manhoursPerTonne,
+      productionHours,
       productionManhoursPerTonne,
     };
   }, [
@@ -859,9 +1021,12 @@ export default function TowerOverviewPage() {
 
   const itcCompletionPercent = useMemo(() => {
     if (!itcMetrics.hasItc) return 0;
-    if (itcMetrics.itcMode === "Client") return itcMetrics.clientUploadCount > 0 ? 100 : 0;
+    if (itcMetrics.itcMode === "Client")
+      return itcMetrics.clientUploadCount > 0 ? 100 : 0;
     if (itcMetrics.checklistTotal <= 0) return 0;
-    return clampPercent((itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100);
+    return clampPercent(
+      (itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100,
+    );
   }, [
     itcMetrics.hasItc,
     itcMetrics.itcMode,
@@ -889,7 +1054,11 @@ export default function TowerOverviewPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-8 space-y-6">
-      <TowerHeader projectId={projectId} tower={tower} latestDate={stats.latestDate} />
+      <TowerHeader
+        projectId={projectId}
+        tower={tower}
+        latestDate={stats.latestDate}
+      />
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
@@ -897,7 +1066,7 @@ export default function TowerOverviewPage() {
           subtitle="High-level delivery, progress and production metrics."
         />
 
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           <MetricTile
             title="Tower Progress"
             value={`${stats.computedProgress}%`}
@@ -905,34 +1074,52 @@ export default function TowerOverviewPage() {
             accent="blue"
           />
           <MetricTile
-            title="Steel Delivery"
+            title="Manhours"
+            value={formatDecimal(stats.totalHours, 1)}
+            subtitle={`Dockets logged: ${stats.docketCount}`}
+            accent="purple"
+          />
+          <MetricTile
+            title="Delivery Progress"
             value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-            subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty delivered`}
+            subtitle={`Outstanding qty: ${formatDecimal(stats.outstandingQty, 0)}`}
             accent="emerald"
           />
           <MetricTile
-            title="Total Manhours"
-            value={`${formatDecimal(stats.totalHours, 1)} h`}
-            subtitle={`Dockets logged: ${stats.docketCount}`}
-            accent="slate"
-          />
-          <MetricTile
-            title="Production Hours"
-            value={`${formatDecimal(stats.productionHours, 1)} h`}
-            subtitle={`Total less ${formatDecimal(stats.totalDelayHours, 1)} h delays`}
-            accent="slate"
-          />
-          <MetricTile
-            title="Total MH/t"
+            title="Manhours / Tonne"
             value={formatDecimal(stats.manhoursPerTonne, 2)}
-            subtitle={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t completed` : "Tower weight not found"}
+            subtitle={
+              stats.towerWeightTonnes !== null
+                ? `Tower weight: ${formatDecimal(stats.towerWeightTonnes, 2)} t`
+                : "Tower weight not found"
+            }
             accent="amber"
           />
           <MetricTile
-            title="Production MH/t"
+            title="Production MH / Tonne"
             value={formatDecimal(stats.productionManhoursPerTonne, 2)}
-            subtitle="Production hours / completed tonnes"
-            accent="amber"
+            subtitle={
+              stats.productionHours > 0
+                ? `${formatDecimal(stats.productionHours, 1)} production hours`
+                : "No production hours logged"
+            }
+            accent="emerald"
+          />
+          <MetricTile
+            title="Last Docket"
+            value={stats.latestDate || "-"}
+            subtitle="latest submitted date"
+            accent="slate"
+          />
+          <MetricTile
+            title="Completed Tonnes"
+            value={
+              stats.completedTonnes !== null
+                ? `${formatDecimal(stats.completedTonnes, 2)} t`
+                : "-"
+            }
+            subtitle={tower.status || stats.computedStatus}
+            accent="blue"
           />
         </div>
 
@@ -952,7 +1139,9 @@ export default function TowerOverviewPage() {
           <DonutWheel
             value={itcCompletionPercent}
             label="ITC Completion"
-            sublabel={itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"}
+            sublabel={
+              itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"
+            }
             color="#7c3aed"
           />
           <DonutWheel
@@ -985,12 +1174,18 @@ export default function TowerOverviewPage() {
         ) : (
           <div className="mt-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}>
+              <div
+                className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}
+              >
                 <div className="text-sm text-slate-500">Mode</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.itcMode}</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.itcMode}
+                </div>
               </div>
 
-              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}>
+              <div
+                className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}
+              >
                 <div className="text-sm text-slate-500">Ready Status</div>
                 <div className="mt-3">
                   <span
@@ -1020,12 +1215,16 @@ export default function TowerOverviewPage() {
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Revision</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.revision}</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.revision}
+                </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <div className="text-sm text-slate-500">Client Uploads</div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.clientUploadCount}</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {itcMetrics.clientUploadCount}
+                </div>
               </div>
             </div>
 
@@ -1183,10 +1382,10 @@ export default function TowerOverviewPage() {
                   Open Deliveries
                 </Link>
                 <Link
-                  href={`/project/${projectId}/tower/${towerId}/materials`}
+                  href={`/project/${projectId}/tower/${towerId}/bundles`}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
                 >
-                  Open Materials
+                  Open Bundles
                 </Link>
               </div>
             }
@@ -1213,7 +1412,10 @@ export default function TowerOverviewPage() {
             />
             <MetricTile
               title="Outstanding"
-              value={formatDecimal(stats.materialOutstandingQty || stats.outstandingQty, 0)}
+              value={formatDecimal(
+                stats.materialOutstandingQty || stats.outstandingQty,
+                0,
+              )}
               subtitle="still to arrive"
               accent="rose"
             />
@@ -1245,17 +1447,23 @@ export default function TowerOverviewPage() {
         <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Tower Name</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.name || "-"}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {tower.name || "-"}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Line</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.line || "-"}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {tower.line || "-"}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm text-slate-500">Stored Status</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.status || "-"}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {tower.status || "-"}
+            </div>
           </div>
         </div>
 
