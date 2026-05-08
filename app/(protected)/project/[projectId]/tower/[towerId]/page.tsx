@@ -16,7 +16,6 @@ type Tower = {
   structure_number?: string | null;
   tower_no?: string | null;
   extra_data?: Record<string, unknown> | null;
-  cover_photo_path?: string | null;
 };
 
 type DocketRow = {
@@ -175,7 +174,9 @@ type OverviewStats = {
   expiringSoonSafetyDocs: number;
   towerWeightTonnes: number | null;
   completedTonnes: number | null;
-  manhoursPerTonne: number | null;
+  totalManhoursPerTonne: number | null;
+  productionHours: number;
+  productionManhoursPerTonne: number | null;
 };
 
 function formatLabel(key: string) {
@@ -521,7 +522,6 @@ export default function TowerOverviewPage() {
 
   const [tower, setTower] = useState<Tower | null>(null);
   const [latestDate, setLatestDate] = useState<string | null>(null);
-  const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
 
   const [dockets, setDockets] = useState<DocketRow[]>([]);
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
@@ -560,13 +560,6 @@ export default function TowerOverviewPage() {
     const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
-
-    if (towerData?.cover_photo_path) {
-      const { data } = supabase.storage.from("tower-photos").getPublicUrl(towerData.cover_photo_path);
-      setCoverPhotoUrl(data.publicUrl);
-    } else {
-      setCoverPhotoUrl(null);
-    }
 
     const docketData = await safeSelect<DocketRow>(
       supabase,
@@ -650,8 +643,13 @@ export default function TowerOverviewPage() {
     setDefects(defectsData);
     setModifications(modificationsData);
     setBundles(bundlesData);
+    const deliveryIdSet = new Set(deliveriesData.map((delivery) => delivery.id));
+    const filteredDeliveryItemsData = deliveryItemsData.filter((item) =>
+      deliveryIdSet.has(item.delivery_id),
+    );
+
     setDeliveries(deliveriesData);
-    setDeliveryItems(deliveryItemsData);
+    setDeliveryItems(filteredDeliveryItemsData);
     setDocuments(documentsData);
     setMaterialBundles(materialBundlesData);
     setMaterialMembers(materialMembersData);
@@ -785,8 +783,14 @@ export default function TowerOverviewPage() {
     const towerWeightTonnes = getTowerWeightFromExtraData(tower?.extra_data);
     const completedTonnes =
       towerWeightTonnes !== null ? towerWeightTonnes * (computedProgress / 100) : null;
-    const manhoursPerTonne =
+
+    const productionHours = Math.max(0, totalHours - totalDelayHours);
+
+    const totalManhoursPerTonne =
       completedTonnes && completedTonnes > 0 ? totalHours / completedTonnes : null;
+
+    const productionManhoursPerTonne =
+      completedTonnes && completedTonnes > 0 ? productionHours / completedTonnes : null;
 
     return {
       latestDate,
@@ -822,7 +826,9 @@ export default function TowerOverviewPage() {
       expiringSoonSafetyDocs: documentMetrics.expiringSoonSafetyDocs,
       towerWeightTonnes,
       completedTonnes,
-      manhoursPerTonne,
+      totalManhoursPerTonne,
+      productionHours,
+      productionManhoursPerTonne,
     };
   }, [
     labourRows,
@@ -882,14 +888,6 @@ export default function TowerOverviewPage() {
     <div className="min-h-screen bg-slate-50 p-8 space-y-6">
       <TowerHeader projectId={projectId} tower={tower} latestDate={stats.latestDate} />
 
-      {(coverPhotoUrl || tower.cover_photo_path) && (
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          {coverPhotoUrl ? (
-            <img src={coverPhotoUrl} alt="Tower cover" className="h-72 w-full object-cover" />
-          ) : null}
-        </div>
-      )}
-
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
           title="Tower Performance"
@@ -904,7 +902,7 @@ export default function TowerOverviewPage() {
             accent="blue"
           />
           <MetricTile
-            title="Manhours"
+            title="Total Manhours"
             value={formatDecimal(stats.totalHours, 1)}
             subtitle={`Dockets logged: ${stats.docketCount}`}
             accent="purple"
@@ -916,25 +914,29 @@ export default function TowerOverviewPage() {
             accent="emerald"
           />
           <MetricTile
-            title="Manhours / Tonne"
-            value={formatDecimal(stats.manhoursPerTonne, 2)}
+            title="Total MH/t"
+            value={formatDecimal(stats.totalManhoursPerTonne, 2)}
             subtitle={
               stats.towerWeightTonnes !== null
-                ? `Tower weight: ${formatDecimal(stats.towerWeightTonnes, 2)} t`
+                ? `Total hours / completed tonnes`
                 : "Tower weight not found"
             }
             accent="amber"
           />
           <MetricTile
-            title="Last Docket"
-            value={stats.latestDate || "-"}
-            subtitle="latest submitted date"
-            accent="slate"
+            title="Production MH/t"
+            value={formatDecimal(stats.productionManhoursPerTonne, 2)}
+            subtitle={`${formatDecimal(stats.productionHours, 1)} production hours`}
+            accent="emerald"
           />
           <MetricTile
             title="Completed Tonnes"
             value={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t` : "-"}
-            subtitle={tower.status || stats.computedStatus}
+            subtitle={
+              stats.towerWeightTonnes !== null
+                ? `${formatDecimal(stats.towerWeightTonnes, 2)} t total tower weight`
+                : tower.status || stats.computedStatus
+            }
             accent="blue"
           />
         </div>
