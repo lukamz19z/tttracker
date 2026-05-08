@@ -32,12 +32,6 @@ type DocketRow = {
 type LabourRow = {
   docket_id: string;
   total_hours?: number | null;
-  production_hours?: number | null;
-  productive_hours?: number | null;
-  prod_hours?: number | null;
-  regular_hours?: number | null;
-  delay_hours?: number | null;
-  [key: string]: unknown;
 };
 
 type DefectRow = {
@@ -54,17 +48,19 @@ type BundleRow = {
   qty_required?: number | null;
 };
 
-type DeliveryRow = {
-  id: string;
-};
-
 type DeliveryItemRow = {
   delivery_id?: string | null;
-  tower_id?: string | null;
   bundle_no: string;
   qty_delivered?: number | null;
-  delivered_qty?: number | null;
-  quantity_delivered?: number | null;
+};
+
+type DeliveryRow = {
+  id: string;
+  tower_id?: string | null;
+  delivered_by?: string | null;
+  vehicle?: string | null;
+  created_at?: string | null;
+  tower_bundle_delivery_items?: DeliveryItemRow[] | null;
 };
 
 type MaterialBundleRow = {
@@ -158,6 +154,7 @@ type OverviewStats = {
   totalToolboxDelay: number;
   totalOtherDelay: number;
   totalDelayHours: number;
+  productionHours: number;
   defectCount: number;
   openDefectCount: number;
   closedDefectCount: number;
@@ -183,8 +180,7 @@ type OverviewStats = {
   expiringSoonSafetyDocs: number;
   towerWeightTonnes: number | null;
   completedTonnes: number | null;
-  totalManhoursPerTonne: number | null;
-  productionHours: number;
+  manhoursPerTonne: number | null;
   productionManhoursPerTonne: number | null;
 };
 
@@ -222,9 +218,7 @@ function extractNumericValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function getTowerWeightFromExtraData(
-  extraData?: Record<string, unknown> | null,
-) {
+function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null) {
   if (!extraData) return null;
 
   const entries = Object.entries(extraData);
@@ -247,25 +241,19 @@ function getTowerWeightFromExtraData(
 
   const towerWeightLikeEntry = entries.find(([key]) => {
     const k = key.trim().toLowerCase();
-    return (
-      (k.includes("tower") || k.includes("structure")) && k.includes("weight")
-    );
+    return (k.includes("tower") || k.includes("structure")) && k.includes("weight");
   });
 
   if (towerWeightLikeEntry) {
     return extractNumericValue(towerWeightLikeEntry[1]);
   }
 
-  const genericWeightEntry = entries.find(([key]) =>
-    key.trim().toLowerCase().includes("weight"),
-  );
+  const genericWeightEntry = entries.find(([key]) => key.trim().toLowerCase().includes("weight"));
   if (genericWeightEntry) {
     return extractNumericValue(genericWeightEntry[1]);
   }
 
-  const massEntry = entries.find(([key]) =>
-    key.trim().toLowerCase().includes("mass"),
-  );
+  const massEntry = entries.find(([key]) => key.trim().toLowerCase().includes("mass"));
   if (massEntry) {
     return extractNumericValue(massEntry[1]);
   }
@@ -276,9 +264,7 @@ function getTowerWeightFromExtraData(
 function getOpenDefectCount(defects: DefectRow[]) {
   return defects.filter((d) => {
     const status = (d.status || "").trim().toLowerCase();
-    return (
-      status !== "closed" && status !== "complete" && status !== "completed"
-    );
+    return status !== "closed" && status !== "complete" && status !== "completed";
   }).length;
 }
 
@@ -309,20 +295,9 @@ function isSafetyDocument(doc: GenericDocumentRow) {
   if (values.length === 0) return true;
 
   return values.some((value) =>
-    [
-      "safety",
-      "permit",
-      "swms",
-      "itc",
-      "checklist",
-      "sign on",
-      "sign-on",
-      "lift",
-      "study",
-      "wms",
-      "jsea",
-      "jsa",
-    ].some((keyword) => value.includes(keyword)),
+    ["safety", "permit", "swms", "itc", "checklist", "sign on", "sign-on", "lift", "study", "wms", "jsea", "jsa"].some(
+      (keyword) => value.includes(keyword),
+    ),
   );
 }
 
@@ -335,16 +310,8 @@ function isDocumentExpired(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-  );
-  const expiryOnly = new Date(
-    expiry.getFullYear(),
-    expiry.getMonth(),
-    expiry.getDate(),
-  );
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
 
   return expiryOnly < todayOnly;
 }
@@ -354,19 +321,11 @@ function isDocumentExpiringSoon(expiryDate: string | null, today: Date) {
   const expiry = new Date(expiryDate);
   if (Number.isNaN(expiry.getTime())) return false;
 
-  const todayOnly = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-  );
+  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const soon = new Date(todayOnly);
   soon.setDate(soon.getDate() + 14);
 
-  const expiryOnly = new Date(
-    expiry.getFullYear(),
-    expiry.getMonth(),
-    expiry.getDate(),
-  );
+  const expiryOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
 
   return expiryOnly >= todayOnly && expiryOnly <= soon;
 }
@@ -397,209 +356,133 @@ function getDocumentMetrics(documents: GenericDocumentRow[]): DocumentMetrics {
   };
 }
 
-function MiniStat({
+function getBadgeClasses(kind: "green" | "yellow" | "red" | "blue" | "slate") {
+  switch (kind) {
+    case "green":
+      return "bg-green-100 text-green-700 border-green-200";
+    case "yellow":
+      return "bg-yellow-100 text-yellow-800 border-yellow-200";
+    case "red":
+      return "bg-red-100 text-red-700 border-red-200";
+    case "blue":
+      return "bg-blue-100 text-blue-700 border-blue-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function getItcStatusKind(status: string) {
+  const s = status.trim().toLowerCase();
+  if (s === "approved" || s === "closed" || s === "submitted") return "green";
+  if (s === "draft") return "yellow";
+  return "slate";
+}
+
+function sectionCardClasses(tint: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate") {
+  switch (tint) {
+    case "blue":
+      return "bg-gradient-to-br from-blue-50 to-white border-blue-100";
+    case "purple":
+      return "bg-gradient-to-br from-violet-50 to-white border-violet-100";
+    case "emerald":
+      return "bg-gradient-to-br from-emerald-50 to-white border-emerald-100";
+    case "amber":
+      return "bg-gradient-to-br from-amber-50 to-white border-amber-100";
+    case "rose":
+      return "bg-gradient-to-br from-rose-50 to-white border-rose-100";
+    default:
+      return "bg-gradient-to-br from-slate-50 to-white border-slate-200";
+  }
+}
+
+function MetricTile({
   title,
   value,
   subtitle,
+  accent,
 }: {
   title: string;
   value: string;
   subtitle?: string;
+  accent: "blue" | "purple" | "emerald" | "amber" | "rose" | "slate";
 }) {
+  const accentBar =
+    accent === "blue"
+      ? "bg-blue-500"
+      : accent === "purple"
+      ? "bg-violet-500"
+      : accent === "emerald"
+      ? "bg-emerald-500"
+      : accent === "amber"
+      ? "bg-amber-500"
+      : accent === "rose"
+      ? "bg-rose-500"
+      : "bg-slate-500";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-        {title}
-      </div>
-      <div className="mt-1 text-2xl font-black text-slate-950">{value}</div>
-      {subtitle ? (
-        <div className="mt-1 text-xs text-slate-500">{subtitle}</div>
-      ) : null}
+    <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses(accent)}`}>
+      <div className={`mb-4 h-1.5 w-14 rounded-full ${accentBar}`} />
+      <div className="text-sm font-medium text-slate-500">{title}</div>
+      <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
+      {subtitle ? <div className="mt-2 text-sm text-slate-600">{subtitle}</div> : null}
     </div>
   );
 }
 
-function ProgressBar({
+function DonutWheel({
   value,
   label,
-  right,
+  sublabel,
+  color,
 }: {
   value: number;
   label: string;
-  right?: string;
+  sublabel?: string;
+  color: string;
 }) {
   const safeValue = clampPercent(value);
+
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-        <span className="font-medium text-slate-700">{label}</span>
-        <span className="font-bold text-slate-950">
-          {right || `${formatDecimal(safeValue, 0)}%`}
-        </span>
-      </div>
-      <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-4">
         <div
-          className="h-full rounded-full bg-blue-600"
-          style={{ width: `${safeValue}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DonutGauge({
-  label,
-  value,
-  detail,
-  tone = "blue",
-  size = "md",
-}: {
-  label: string;
-  value: number;
-  detail?: string;
-  tone?: "blue" | "emerald" | "amber" | "rose" | "violet" | "slate";
-  size?: "sm" | "md";
-}) {
-  const safeValue = clampPercent(value);
-  const stroke = size === "sm" ? 9 : 10;
-  const radius = size === "sm" ? 34 : 42;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (safeValue / 100) * circumference;
-
-  const toneStroke =
-    tone === "emerald"
-      ? "stroke-emerald-500"
-      : tone === "amber"
-        ? "stroke-amber-500"
-        : tone === "rose"
-          ? "stroke-rose-500"
-          : tone === "violet"
-            ? "stroke-violet-500"
-            : tone === "slate"
-              ? "stroke-slate-500"
-              : "stroke-blue-600";
-
-  const toneBg =
-    tone === "emerald"
-      ? "bg-emerald-50 border-emerald-100"
-      : tone === "amber"
-        ? "bg-amber-50 border-amber-100"
-        : tone === "rose"
-          ? "bg-rose-50 border-rose-100"
-          : tone === "violet"
-            ? "bg-violet-50 border-violet-100"
-            : tone === "slate"
-              ? "bg-slate-50 border-slate-100"
-              : "bg-blue-50 border-blue-100";
-
-  const box = size === "sm" ? "h-24 w-24" : "h-32 w-32";
-  const viewBox = size === "sm" ? "0 0 90 90" : "0 0 110 110";
-  const center = size === "sm" ? 45 : 55;
-
-  return (
-    <div className={`rounded-3xl border p-5 shadow-sm ${toneBg}`}>
-      <div className="flex items-center gap-5">
-        <div className={`relative shrink-0 ${box}`}>
-          <svg className="h-full w-full -rotate-90" viewBox={viewBox}>
-            <circle
-              cx={center}
-              cy={center}
-              r={radius}
-              fill="none"
-              strokeWidth={stroke}
-              className="stroke-white/80"
-            />
-            <circle
-              cx={center}
-              cy={center}
-              r={radius}
-              fill="none"
-              strokeWidth={stroke}
-              strokeLinecap="round"
-              className={toneStroke}
-              strokeDasharray={circumference}
-              strokeDashoffset={offset}
-            />
-          </svg>
-          <div className="absolute inset-0 flex items-center justify-center text-xl font-black text-slate-950">
-            {formatDecimal(safeValue, 0)}%
+          className="relative h-20 w-20 rounded-full"
+          style={{
+            background: `conic-gradient(${color} 0deg ${safeValue * 3.6}deg, #e5e7eb ${safeValue * 3.6}deg 360deg)`,
+          }}
+        >
+          <div className="absolute inset-[8px] rounded-full bg-white flex items-center justify-center">
+            <span className="text-lg font-bold text-slate-900">{Math.round(safeValue)}%</span>
           </div>
         </div>
-        <div className="min-w-0">
-          <div className="text-sm font-bold text-slate-900">{label}</div>
-          {detail ? (
-            <div className="mt-1 text-sm leading-5 text-slate-600">
-              {detail}
-            </div>
-          ) : null}
+
+        <div>
+          <div className="text-sm text-slate-500">{label}</div>
+          <div className="text-xl font-semibold text-slate-900 mt-1">{Math.round(safeValue)}%</div>
+          {sublabel ? <div className="text-sm text-slate-500 mt-1">{sublabel}</div> : null}
         </div>
       </div>
     </div>
   );
 }
 
-function PowerTile({
-  title,
-  value,
-  subtitle,
-  tone = "blue",
-}: {
-  title: string;
-  value: string;
-  subtitle?: string;
-  tone?: "blue" | "emerald" | "amber" | "rose" | "violet" | "slate";
-}) {
-  const strip =
-    tone === "emerald"
-      ? "bg-emerald-500"
-      : tone === "amber"
-        ? "bg-amber-500"
-        : tone === "rose"
-          ? "bg-rose-500"
-          : tone === "violet"
-            ? "bg-violet-500"
-            : tone === "slate"
-              ? "bg-slate-500"
-              : "bg-blue-600";
-
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className={`mb-5 h-1.5 w-16 rounded-full ${strip}`} />
-      <div className="text-sm font-semibold text-slate-600">{title}</div>
-      <div className="mt-2 text-3xl font-black tracking-tight text-slate-950">
-        {value}
-      </div>
-      {subtitle ? (
-        <div className="mt-2 text-sm leading-5 text-slate-500">{subtitle}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function SectionCard({
+function SectionHeader({
   title,
   subtitle,
   action,
-  children,
 }: {
   title: string;
   subtitle: string;
   action?: ReactNode;
-  children: ReactNode;
 }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-5">
-        <div>
-          <h2 className="text-xl font-black tracking-tight text-slate-950">
-            {title}
-          </h2>
-          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
-        </div>
-        {action}
+    <div className="flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
+        <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
       </div>
-      <div className="pt-5">{children}</div>
-    </section>
+      {action}
+    </div>
   );
 }
 
@@ -635,63 +518,6 @@ async function safeSelectFirstExisting<T>(
   return [] as T[];
 }
 
-function getDeliveredQty(row: DeliveryItemRow) {
-  return Number(
-    row.qty_delivered ?? row.delivered_qty ?? row.quantity_delivered ?? 0,
-  );
-}
-
-async function loadDeliveryItemsForTower(
-  supabase: ReturnType<typeof createSupabaseBrowser>,
-  towerId: string,
-) {
-  const deliveryTables = ["tower_deliveries", "deliveries"];
-  const itemTables = [
-    "tower_delivery_items",
-    "tower_delivered_items",
-    "delivery_items",
-  ];
-
-  let deliveriesData: DeliveryRow[] = [];
-  for (const table of deliveryTables) {
-    deliveriesData = await safeSelect<DeliveryRow>(supabase, table, "id", [
-      { column: "tower_id", value: towerId },
-    ]);
-    if (deliveriesData.length > 0) break;
-  }
-
-  const deliveryIdSet = new Set(
-    deliveriesData.map((delivery) => String(delivery.id)).filter(Boolean),
-  );
-
-  if (deliveryIdSet.size > 0) {
-    for (const table of itemTables) {
-      const rows = await safeSelect<DeliveryItemRow>(
-        supabase,
-        table,
-        "delivery_id, bundle_no, qty_delivered, delivered_qty, quantity_delivered",
-      );
-      const linkedRows = rows.filter((item) =>
-        deliveryIdSet.has(String(item.delivery_id || "")),
-      );
-      if (linkedRows.length > 0) return linkedRows;
-    }
-  }
-
-  // Fallback for delivery pages that store tower_id directly on the item row.
-  for (const table of itemTables) {
-    const rows = await safeSelect<DeliveryItemRow>(
-      supabase,
-      table,
-      "delivery_id, tower_id, bundle_no, qty_delivered, delivered_qty, quantity_delivered",
-      [{ column: "tower_id", value: towerId }],
-    );
-    if (rows.length > 0) return rows;
-  }
-
-  return [] as DeliveryItemRow[];
-}
-
 export default function TowerOverviewPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -707,13 +533,10 @@ export default function TowerOverviewPage() {
   const [defects, setDefects] = useState<DefectRow[]>([]);
   const [modifications, setModifications] = useState<ModificationRow[]>([]);
   const [bundles, setBundles] = useState<BundleRow[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItemRow[]>([]);
-  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>(
-    [],
-  );
-  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>(
-    [],
-  );
+  const [materialBundles, setMaterialBundles] = useState<MaterialBundleRow[]>([]);
+  const [materialMembers, setMaterialMembers] = useState<MaterialMemberRow[]>([]);
   const [documents, setDocuments] = useState<GenericDocumentRow[]>([]);
   const [itcMetrics, setItcMetrics] = useState<ItcMetrics>({
     hasItc: false,
@@ -739,11 +562,7 @@ export default function TowerOverviewPage() {
   async function load() {
     setLoading(true);
 
-    const towerRes = await supabase
-      .from("towers")
-      .select("*")
-      .eq("id", towerId)
-      .single();
+    const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
     const towerData = (towerRes.data as Tower | null) ?? null;
     setTower(towerData);
 
@@ -769,22 +588,18 @@ export default function TowerOverviewPage() {
     if (docketIds.length > 0) {
       labourData = await safeSelectFirstExisting<LabourRow>(
         supabase,
-        [
-          "tower_docket_labour",
-          "tower_daily_docket_labour",
-          "tower_daily_docket_labour_rows",
-        ],
-        "*",
+        ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
+        "docket_id, total_hours",
       );
-      labourData = labourData.filter((row) =>
-        docketIds.includes(row.docket_id),
-      );
+      labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
     }
 
     const [
       defectsData,
       modificationsData,
       bundlesData,
+      deliveriesData,
+      deliveryItemsData,
       documentsData,
       materialBundlesData,
       materialMembersData,
@@ -795,19 +610,22 @@ export default function TowerOverviewPage() {
       safeSelect<ModificationRow>(supabase, "tower_modifications", "id", [
         { column: "tower_id", value: towerId },
       ]),
-      safeSelectFirstExisting<BundleRow>(
+      safeSelect<BundleRow>(
         supabase,
-        ["tower_bundle_register", "tower_bundles", "tower_delivery_bundles"],
+        "tower_required_bundles",
         "bundle_no, qty_required",
         [{ column: "tower_id", value: towerId }],
       ),
+      safeSelect<DeliveryRow>(
+        supabase,
+        "tower_bundle_deliveries",
+        "id, tower_id, delivered_by, vehicle, created_at, tower_bundle_delivery_items(bundle_no, qty_delivered)",
+        [{ column: "tower_id", value: towerId }],
+      ),
+      Promise.resolve([] as DeliveryItemRow[]),
       safeSelectFirstExisting<GenericDocumentRow>(
         supabase,
-        [
-          "tower_workpack_documents",
-          "tower_documents",
-          "tower_safety_documents",
-        ],
+        ["tower_workpack_documents", "tower_documents", "tower_safety_documents"],
         "id, tower_id, status, category, type, document_type, expiry_date, valid_to, end_date, issue_date, start_date, is_active",
         [{ column: "tower_id", value: towerId }],
       ),
@@ -828,13 +646,16 @@ export default function TowerOverviewPage() {
     setLabourRows(labourData);
     setDefects(defectsData);
     setModifications(modificationsData);
-    setBundles(bundlesData);
-
-    const linkedDeliveryItems = await loadDeliveryItemsForTower(
-      supabase,
-      towerId,
+    const linkedDeliveryItems = deliveriesData.flatMap((delivery) =>
+      (delivery.tower_bundle_delivery_items || []).map((item) => ({
+        ...item,
+        delivery_id: delivery.id,
+      })),
     );
-    setDeliveryItems(linkedDeliveryItems);
+
+    setBundles(bundlesData);
+    setDeliveries(deliveriesData);
+    setDeliveryItems(linkedDeliveryItems.length > 0 ? linkedDeliveryItems : deliveryItemsData);
     setDocuments(documentsData);
     setMaterialBundles(materialBundlesData);
     setMaterialMembers(materialMembersData);
@@ -865,35 +686,23 @@ export default function TowerOverviewPage() {
       });
     } else {
       const [itcItems, torqueRows, clientUploads] = await Promise.all([
-        safeSelect<ItcItemRow>(
-          supabase,
-          "tower_itc_items",
-          "id, itc_id, validation",
-          [{ column: "itc_id", value: latestItc.id }],
-        ),
-        safeSelect<ItcTorqueRow>(
-          supabase,
-          "tower_itc_torque",
-          "id, itc_id, torque_achieved",
-          [{ column: "itc_id", value: latestItc.id }],
-        ),
-        safeSelect<ItcClientUploadRow>(
-          supabase,
-          "tower_itc_client_uploads",
-          "id, tower_id",
-          [{ column: "tower_id", value: towerId }],
-        ),
+        safeSelect<ItcItemRow>(supabase, "tower_itc_items", "id, itc_id, validation", [
+          { column: "itc_id", value: latestItc.id },
+        ]),
+        safeSelect<ItcTorqueRow>(supabase, "tower_itc_torque", "id, itc_id, torque_achieved", [
+          { column: "itc_id", value: latestItc.id },
+        ]),
+        safeSelect<ItcClientUploadRow>(supabase, "tower_itc_client_uploads", "id, tower_id", [
+          { column: "tower_id", value: towerId },
+        ]),
       ]);
 
       const checklistTotal = itcItems.length;
       const checklistComplete = itcItems.filter(
         (item) => item.validation === "Y" || item.validation === "NA",
       ).length;
-      const checklistFailed = itcItems.filter(
-        (item) => item.validation === "N",
-      ).length;
-      const checklistPending =
-        checklistTotal - checklistComplete - checklistFailed;
+      const checklistFailed = itcItems.filter((item) => item.validation === "N").length;
+      const checklistPending = checklistTotal - checklistComplete - checklistFailed;
 
       const torqueTotal = torqueRows.length;
       const torqueComplete = torqueRows.filter(
@@ -931,32 +740,14 @@ export default function TowerOverviewPage() {
   }
 
   const stats = useMemo<OverviewStats>(() => {
-    const totalHours = labourRows.reduce(
-      (sum, row) => sum + Number(row.total_hours || 0),
-      0,
-    );
+    const totalHours = labourRows.reduce((sum, row) => sum + Number(row.total_hours || 0), 0);
 
-    const totalWeatherDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.weather_delay_hours || 0),
-      0,
-    );
-    const totalLightningDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.lightning_delay_hours || 0),
-      0,
-    );
-    const totalToolboxDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.toolbox_delay_hours || 0),
-      0,
-    );
-    const totalOtherDelay = dockets.reduce(
-      (sum, row) => sum + Number(row.other_delay_hours || 0),
-      0,
-    );
-    const totalDelayHours =
-      totalWeatherDelay +
-      totalLightningDelay +
-      totalToolboxDelay +
-      totalOtherDelay;
+    const totalWeatherDelay = dockets.reduce((sum, row) => sum + Number(row.weather_delay_hours || 0), 0);
+    const totalLightningDelay = dockets.reduce((sum, row) => sum + Number(row.lightning_delay_hours || 0), 0);
+    const totalToolboxDelay = dockets.reduce((sum, row) => sum + Number(row.toolbox_delay_hours || 0), 0);
+    const totalOtherDelay = dockets.reduce((sum, row) => sum + Number(row.other_delay_hours || 0), 0);
+    const totalDelayHours = totalWeatherDelay + totalLightningDelay + totalToolboxDelay + totalOtherDelay;
+    const productionHours = Math.max(0, totalHours - totalDelayHours);
 
     const defectCount = defects.length;
     const openDefectCount = getOpenDefectCount(defects);
@@ -964,53 +755,31 @@ export default function TowerOverviewPage() {
     const modificationCount = modifications.length;
 
     const totalRequiredBundles = bundles.length;
-    const totalRequiredQty = bundles.reduce(
-      (sum, row) => sum + Number(row.qty_required || 0),
-      0,
-    );
+    const totalRequiredQty = bundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
 
-    const deliveredQty = deliveryItems.reduce(
-      (sum, row) => sum + getDeliveredQty(row),
-      0,
-    );
+    const deliveredQty = deliveryItems.reduce((sum, row) => sum + Number(row.qty_delivered || 0), 0);
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent =
-      totalRequiredQty > 0
-        ? clampPercent((deliveredQty / totalRequiredQty) * 100)
-        : 0;
+    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
 
     const materialBundleCount = materialBundles.length;
     const materialMemberCount = materialMembers.length;
-    const materialRequiredQty = materialBundles.reduce(
-      (sum, row) => sum + Number(row.qty_required || 0),
-      0,
-    );
+    const materialRequiredQty = materialBundles.reduce((sum, row) => sum + Number(row.qty_required || 0), 0);
 
     const materialBundleSet = new Set(
-      materialBundles
-        .map((row) => String(row.bundle_no || "").trim())
-        .filter(Boolean),
+      materialBundles.map((row) => String(row.bundle_no || "").trim()).filter(Boolean),
     );
 
     const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
       const bundleNo = String(row.bundle_no || "").trim();
       if (!materialBundleSet.has(bundleNo)) return sum;
-      return sum + getDeliveredQty(row);
+      return sum + Number(row.qty_delivered || 0);
     }, 0);
 
-    const materialOutstandingQty = Math.max(
-      0,
-      materialRequiredQty - materialDeliveredQty,
-    );
+    const materialOutstandingQty = Math.max(0, materialRequiredQty - materialDeliveredQty);
     const materialProgressPercent =
-      materialRequiredQty > 0
-        ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100)
-        : 0;
+      materialRequiredQty > 0 ? clampPercent((materialDeliveredQty / materialRequiredQty) * 100) : 0;
 
-    const materialTotalWeight = materialBundles.reduce(
-      (sum, row) => sum + Number(row.total_weight || 0),
-      0,
-    );
+    const materialTotalWeight = materialBundles.reduce((sum, row) => sum + Number(row.total_weight || 0), 0);
 
     const computedProgress = getProgressFromDockets(dockets);
     const remainingProgress = Math.max(0, 100 - computedProgress);
@@ -1020,32 +789,11 @@ export default function TowerOverviewPage() {
 
     const towerWeightTonnes = getTowerWeightFromExtraData(tower?.extra_data);
     const completedTonnes =
-      towerWeightTonnes !== null
-        ? towerWeightTonnes * (computedProgress / 100)
-        : null;
-
-    const explicitProductionHours = labourRows.reduce((sum, row) => {
-      const explicit =
-        extractNumericValue(row.production_hours) ??
-        extractNumericValue(row.productive_hours) ??
-        extractNumericValue(row.prod_hours);
-      return sum + Number(explicit || 0);
-    }, 0);
-
-    const productionHours =
-      explicitProductionHours > 0
-        ? explicitProductionHours
-        : Math.max(0, totalHours - totalDelayHours);
-
-    const totalManhoursPerTonne =
-      completedTonnes && completedTonnes > 0
-        ? totalHours / completedTonnes
-        : null;
-
+      towerWeightTonnes !== null ? towerWeightTonnes * (computedProgress / 100) : null;
+    const manhoursPerTonne =
+      completedTonnes && completedTonnes > 0 ? totalHours / completedTonnes : null;
     const productionManhoursPerTonne =
-      completedTonnes && completedTonnes > 0
-        ? productionHours / completedTonnes
-        : null;
+      completedTonnes && completedTonnes > 0 ? productionHours / completedTonnes : null;
 
     return {
       latestDate,
@@ -1056,6 +804,7 @@ export default function TowerOverviewPage() {
       totalToolboxDelay,
       totalOtherDelay,
       totalDelayHours,
+      productionHours,
       defectCount,
       openDefectCount,
       closedDefectCount,
@@ -1081,8 +830,7 @@ export default function TowerOverviewPage() {
       expiringSoonSafetyDocs: documentMetrics.expiringSoonSafetyDocs,
       towerWeightTonnes,
       completedTonnes,
-      totalManhoursPerTonne,
-      productionHours,
+      manhoursPerTonne,
       productionManhoursPerTonne,
     };
   }, [
@@ -1111,12 +859,9 @@ export default function TowerOverviewPage() {
 
   const itcCompletionPercent = useMemo(() => {
     if (!itcMetrics.hasItc) return 0;
-    if (itcMetrics.itcMode === "Client")
-      return itcMetrics.clientUploadCount > 0 ? 100 : 0;
+    if (itcMetrics.itcMode === "Client") return itcMetrics.clientUploadCount > 0 ? 100 : 0;
     if (itcMetrics.checklistTotal <= 0) return 0;
-    return clampPercent(
-      (itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100,
-    );
+    return clampPercent((itcMetrics.checklistComplete / itcMetrics.checklistTotal) * 100);
   }, [
     itcMetrics.hasItc,
     itcMetrics.itcMode,
@@ -1125,316 +870,410 @@ export default function TowerOverviewPage() {
     itcMetrics.checklistTotal,
   ]);
 
+  const combinedLogisticsProgress = useMemo(() => {
+    if (stats.totalRequiredQty > 0 && stats.materialRequiredQty > 0) {
+      return (stats.deliveryPercent + stats.materialProgressPercent) / 2;
+    }
+    if (stats.materialRequiredQty > 0) return stats.materialProgressPercent;
+    return stats.deliveryPercent;
+  }, [
+    stats.deliveryPercent,
+    stats.materialProgressPercent,
+    stats.totalRequiredQty,
+    stats.materialRequiredQty,
+  ]);
+
   if (loading || !tower) {
     return <div className="p-8">Loading tower overview...</div>;
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 lg:p-8">
-      <div className="mx-auto max-w-[1700px] space-y-6">
-        <TowerHeader
-          projectId={projectId}
-          tower={tower}
-          latestDate={stats.latestDate}
+    <div className="min-h-screen bg-slate-50 p-8 space-y-6">
+      <TowerHeader projectId={projectId} tower={tower} latestDate={stats.latestDate} />
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="Tower Performance"
+          subtitle="High-level delivery, progress and production metrics."
         />
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="text-xs font-black uppercase tracking-[0.25em] text-blue-600">
-                Tower Management Dashboard
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
+          <MetricTile
+            title="Tower Progress"
+            value={`${stats.computedProgress}%`}
+            subtitle={`${stats.remainingProgress}% remaining`}
+            accent="blue"
+          />
+          <MetricTile
+            title="Steel Delivery"
+            value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+            subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty delivered`}
+            accent="emerald"
+          />
+          <MetricTile
+            title="Total Manhours"
+            value={`${formatDecimal(stats.totalHours, 1)} h`}
+            subtitle={`Dockets logged: ${stats.docketCount}`}
+            accent="slate"
+          />
+          <MetricTile
+            title="Production Hours"
+            value={`${formatDecimal(stats.productionHours, 1)} h`}
+            subtitle={`Total less ${formatDecimal(stats.totalDelayHours, 1)} h delays`}
+            accent="slate"
+          />
+          <MetricTile
+            title="Total MH/t"
+            value={formatDecimal(stats.manhoursPerTonne, 2)}
+            subtitle={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} t completed` : "Tower weight not found"}
+            accent="amber"
+          />
+          <MetricTile
+            title="Production MH/t"
+            value={formatDecimal(stats.productionManhoursPerTonne, 2)}
+            subtitle="Production hours / completed tonnes"
+            accent="amber"
+          />
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <DonutWheel
+            value={stats.computedProgress}
+            label="Total Progress"
+            sublabel={`${stats.remainingProgress}% remaining`}
+            color="#2563eb"
+          />
+          <DonutWheel
+            value={stats.deliveryPercent}
+            label="Delivery Progress"
+            sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
+            color="#059669"
+          />
+          <DonutWheel
+            value={itcCompletionPercent}
+            label="ITC Completion"
+            sublabel={itcMetrics.hasItc ? `${itcMetrics.itcMode} mode` : "No ITC yet"}
+            color="#7c3aed"
+          />
+          <DonutWheel
+            value={safetyActivePercent}
+            label="Safety Docs Active"
+            sublabel={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active`}
+            color="#f59e0b"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="ITC Overview"
+          subtitle="Latest ITC status and readiness summary for this tower."
+          action={
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            >
+              Open ITC
+            </Link>
+          }
+        />
+
+        {!itcMetrics.hasItc ? (
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+            No ITC has been created for this tower yet.
+          </div>
+        ) : (
+          <div className="mt-6 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("purple")}`}>
+                <div className="text-sm text-slate-500">Mode</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.itcMode}</div>
               </div>
-              <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
-                Power BI Overview
-              </h1>
-              <p className="mt-1 text-sm text-slate-600">
-                One-page live summary for progress, productivity, steel delivery
-                and workpack readiness.
-              </p>
+
+              <div className={`rounded-2xl border p-5 shadow-sm ${sectionCardClasses("emerald")}`}>
+                <div className="text-sm text-slate-500">Ready Status</div>
+                <div className="mt-3">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${
+                      itcMetrics.overallReady
+                        ? "bg-green-100 text-green-700 border-green-200"
+                        : "bg-yellow-100 text-yellow-800 border-yellow-200"
+                    }`}
+                  >
+                    {itcMetrics.overallReady ? "Ready" : "Pending"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div className="text-sm text-slate-500">Status</div>
+                <div className="mt-3">
+                  <span
+                    className={`inline-flex px-3 py-1 rounded-full border text-xs font-semibold ${getBadgeClasses(
+                      getItcStatusKind(itcMetrics.itcStatus),
+                    )}`}
+                  >
+                    {itcMetrics.itcStatus}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div className="text-sm text-slate-500">Revision</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.revision}</div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div className="text-sm text-slate-500">Client Uploads</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">{itcMetrics.clientUploadCount}</div>
+              </div>
             </div>
-            <div className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm">
-              TTTracker
+
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+              <MetricTile
+                title="Checklist Passed"
+                value={String(itcMetrics.checklistComplete)}
+                subtitle={`of ${itcMetrics.checklistTotal}`}
+                accent="blue"
+              />
+              <MetricTile
+                title="Checklist Failed"
+                value={String(itcMetrics.checklistFailed)}
+                subtitle="items needing action"
+                accent="rose"
+              />
+              <MetricTile
+                title="Checklist Pending"
+                value={String(itcMetrics.checklistPending)}
+                subtitle="unfinished items"
+                accent="amber"
+              />
+              <MetricTile
+                title="Torque Complete"
+                value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
+                subtitle="completed torque rows"
+                accent="emerald"
+              />
             </div>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Defects / Mods"
+            subtitle="Open issues and change tracking for this tower."
+          />
+
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Open Defects"
+              value={String(stats.openDefectCount)}
+              subtitle={`${stats.defectCount} total defects`}
+              accent="rose"
+            />
+            <MetricTile
+              title="Closed Defects"
+              value={String(stats.closedDefectCount)}
+              subtitle="resolved / closed out"
+              accent="emerald"
+            />
+            <MetricTile
+              title="Modifications"
+              value={String(stats.modificationCount)}
+              subtitle="logged tower modifications"
+              accent="blue"
+            />
+            <MetricTile
+              title="Computed Status"
+              value={stats.computedStatus}
+              subtitle="from latest progress"
+              accent="slate"
+            />
           </div>
         </div>
 
-        <SectionCard
-          title="Tower Performance"
-          subtitle="Live tower dashboard fed from dockets, deliveries, materials, ITCs, safety documents and defects."
-        >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <DonutGauge
-              label="Tower Progress"
-              value={stats.computedProgress}
-              detail={`${stats.remainingProgress}% remaining • ${stats.computedStatus}`}
-              tone="blue"
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Delay Summary"
+            subtitle="Breakdown of downtime recorded in daily dockets."
+          />
+
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Weather Delay"
+              value={`${formatDecimal(stats.totalWeatherDelay, 1)} h`}
+              subtitle="weather-related downtime"
+              accent="blue"
             />
-            <DonutGauge
-              label="Delivery Progress"
-              value={stats.deliveryPercent}
-              detail={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty delivered`}
-              tone="emerald"
+            <MetricTile
+              title="Lightning Delay"
+              value={`${formatDecimal(stats.totalLightningDelay, 1)} h`}
+              subtitle="lightning downtime"
+              accent="purple"
             />
-            <DonutGauge
-              label="ITC Completion"
-              value={itcCompletionPercent}
-              detail={
-                itcMetrics.hasItc
-                  ? `${itcMetrics.itcMode} mode • ${itcMetrics.itcStatus}`
-                  : "No ITC created"
-              }
-              tone="violet"
+            <MetricTile
+              title="Toolbox Delay"
+              value={`${formatDecimal(stats.totalToolboxDelay, 1)} h`}
+              subtitle="pre-start / toolbox delays"
+              accent="emerald"
             />
-            <DonutGauge
-              label="Safety Docs Active"
-              value={safetyActivePercent}
-              detail={`${stats.activeSafetyDocs}/${stats.totalSafetyDocs} active documents`}
-              tone="amber"
+            <MetricTile
+              title="Total Delays"
+              value={`${formatDecimal(stats.totalDelayHours, 1)} h`}
+              subtitle="all delay categories"
+              accent="amber"
             />
           </div>
+        </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-            <PowerTile
-              title="Total Manhours"
-              value={`${formatDecimal(stats.totalHours, 1)}h`}
-              subtitle={`Dockets logged: ${stats.docketCount}`}
-              tone="violet"
-            />
-            <PowerTile
-              title="Production Hours"
-              value={`${formatDecimal(stats.productionHours, 1)}h`}
-              subtitle="Same source used for Prod MH/t"
-              tone="emerald"
-            />
-            <PowerTile
-              title="Total MH/t"
-              value={formatDecimal(stats.totalManhoursPerTonne, 2)}
-              subtitle={`${formatDecimal(stats.totalHours, 1)}h / ${stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} completed t` : "completed tonnes"}`}
-              tone="amber"
-            />
-            <PowerTile
-              title="Production MH/t"
-              value={formatDecimal(stats.productionManhoursPerTonne, 2)}
-              subtitle={`${formatDecimal(stats.productionHours, 1)}h / ${stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} completed t` : "completed tonnes"}`}
-              tone="emerald"
-            />
-            <PowerTile
-              title="Completed Tonnes"
-              value={
-                stats.completedTonnes !== null
-                  ? `${formatDecimal(stats.completedTonnes, 2)} t`
-                  : "—"
-              }
-              subtitle={
-                stats.towerWeightTonnes !== null
-                  ? `${formatDecimal(stats.towerWeightTonnes, 2)} t total tower weight`
-                  : "Tower weight missing"
-              }
-              tone="blue"
-            />
-          </div>
-        </SectionCard>
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <SectionCard
-            title="Production + Delays"
-            subtitle="Manhours and delay breakdown from daily dockets."
-          >
-            <div className="grid grid-cols-2 gap-4">
-              <MiniStat
-                title="Total Manhours"
-                value={`${formatDecimal(stats.totalHours, 1)}h`}
-              />
-              <MiniStat
-                title="Production Hours"
-                value={`${formatDecimal(stats.productionHours, 1)}h`}
-              />
-              <MiniStat
-                title="Weather Delay"
-                value={`${formatDecimal(stats.totalWeatherDelay, 1)}h`}
-              />
-              <MiniStat
-                title="Lightning Delay"
-                value={`${formatDecimal(stats.totalLightningDelay, 1)}h`}
-              />
-              <MiniStat
-                title="Toolbox Delay"
-                value={`${formatDecimal(stats.totalToolboxDelay, 1)}h`}
-              />
-              <MiniStat
-                title="Total Delays"
-                value={`${formatDecimal(stats.totalDelayHours, 1)}h`}
-              />
-            </div>
-          </SectionCard>
-
-          <SectionCard
-            title="Delivery + Materials"
-            subtitle="Steel delivery, required bundles and material register counts."
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Workpack / Safety"
+            subtitle="Safety document health and workpack access."
             action={
-              <div className="flex flex-wrap gap-2">
+              <Link
+                href={`/project/${projectId}/tower/${towerId}/workpack`}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+              >
+                Open Workpack
+              </Link>
+            }
+          />
+
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Safety Docs"
+              value={String(stats.totalSafetyDocs)}
+              subtitle="records linked to tower"
+              accent="blue"
+            />
+            <MetricTile
+              title="Active Docs"
+              value={String(stats.activeSafetyDocs)}
+              subtitle="currently valid / usable"
+              accent="emerald"
+            />
+            <MetricTile
+              title="Expired"
+              value={String(stats.expiredSafetyDocs)}
+              subtitle="needs replacement"
+              accent="rose"
+            />
+            <MetricTile
+              title="Expiring Soon"
+              value={String(stats.expiringSoonSafetyDocs)}
+              subtitle="within 14 days"
+              accent="amber"
+            />
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <SectionHeader
+            title="Logistics / Materials"
+            subtitle="Combined delivery and materials overview for this tower."
+            action={
+              <div className="flex gap-2 flex-wrap">
                 <Link
                   href={`/project/${projectId}/tower/${towerId}/deliveries`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
                 >
                   Open Deliveries
                 </Link>
                 <Link
                   href={`/project/${projectId}/tower/${towerId}/materials`}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
                 >
                   Open Materials
                 </Link>
               </div>
             }
-          >
-            <div className="space-y-5">
-              <ProgressBar
-                value={stats.deliveryPercent}
-                label="Bundle delivery"
-                right={`${formatDecimal(stats.deliveryPercent, 0)}%`}
-              />
-              <ProgressBar
-                value={stats.materialProgressPercent}
-                label="Materials progress"
-                right={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
-              />
-              <div className="grid grid-cols-2 gap-4">
-                <MiniStat
-                  title="Delivered Qty"
-                  value={formatDecimal(stats.deliveredQty, 0)}
-                  subtitle={`of ${formatDecimal(stats.totalRequiredQty, 0)} required`}
-                />
-                <MiniStat
-                  title="Outstanding"
-                  value={formatDecimal(
-                    stats.materialOutstandingQty || stats.outstandingQty,
-                    0,
-                  )}
-                  subtitle="qty remaining"
-                />
-                <MiniStat
-                  title="Material Members"
-                  value={String(stats.materialMemberCount)}
-                  subtitle={`${stats.materialBundleCount} bundles`}
-                />
-                <MiniStat
-                  title="Material Weight"
-                  value={`${formatDecimal(stats.materialTotalWeight, 2)} t`}
-                  subtitle="from materials register"
-                />
-              </div>
-            </div>
-          </SectionCard>
+          />
 
-          <SectionCard
-            title="ITC Overview"
-            subtitle="Latest ITC status and readiness summary."
-            action={
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/workpack/itc`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-              >
-                Open ITC
-              </Link>
-            }
-          >
-            {!itcMetrics.hasItc ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
-                No ITC has been created for this tower yet.
-              </div>
-            ) : (
-              <div className="space-y-5">
-                <ProgressBar
-                  value={itcCompletionPercent}
-                  label="ITC completion"
-                />
-                <div className="grid grid-cols-2 gap-4">
-                  <MiniStat title="Mode" value={itcMetrics.itcMode} />
-                  <MiniStat title="Status" value={itcMetrics.itcStatus} />
-                  <MiniStat title="Revision" value={itcMetrics.revision} />
-                  <MiniStat
-                    title="Ready"
-                    value={itcMetrics.overallReady ? "Ready" : "Pending"}
-                  />
-                  <MiniStat
-                    title="Checklist Passed"
-                    value={String(itcMetrics.checklistComplete)}
-                    subtitle={`of ${itcMetrics.checklistTotal}`}
-                  />
-                  <MiniStat
-                    title="Torque Complete"
-                    value={`${itcMetrics.torqueComplete}/${itcMetrics.torqueTotal}`}
-                  />
-                </div>
-              </div>
-            )}
-          </SectionCard>
+          <div className="mt-6 grid grid-cols-2 gap-4">
+            <MetricTile
+              title="Bundle Delivery"
+              value={`${formatDecimal(stats.deliveryPercent, 0)}%`}
+              subtitle={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} qty`}
+              accent="emerald"
+            />
+            <MetricTile
+              title="Materials Progress"
+              value={`${formatDecimal(stats.materialProgressPercent, 0)}%`}
+              subtitle={`${formatDecimal(stats.materialDeliveredQty, 0)} / ${formatDecimal(stats.materialRequiredQty, 0)} qty`}
+              accent="purple"
+            />
+            <MetricTile
+              title="Material Members"
+              value={String(stats.materialMemberCount)}
+              subtitle={`${stats.materialBundleCount} bundles • ${formatDecimal(stats.materialTotalWeight, 2)} total weight`}
+              accent="blue"
+            />
+            <MetricTile
+              title="Outstanding"
+              value={formatDecimal(stats.materialOutstandingQty || stats.outstandingQty, 0)}
+              subtitle="still to arrive"
+              accent="rose"
+            />
+          </div>
 
-          <SectionCard
-            title="Workpack + Quality"
-            subtitle="Safety documents, defects and modifications."
-            action={
-              <Link
-                href={`/project/${projectId}/tower/${towerId}/workpack`}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-              >
-                Open Workpack
-              </Link>
-            }
-          >
-            <div className="grid grid-cols-2 gap-4">
-              <MiniStat
-                title="Safety Docs"
-                value={String(stats.totalSafetyDocs)}
-                subtitle={`${stats.activeSafetyDocs} active`}
-              />
-              <MiniStat
-                title="Expiring Soon"
-                value={String(stats.expiringSoonSafetyDocs)}
-                subtitle="within 14 days"
-              />
-              <MiniStat
-                title="Expired"
-                value={String(stats.expiredSafetyDocs)}
-                subtitle="needs replacement"
-              />
-              <MiniStat
-                title="Open Defects"
-                value={String(stats.openDefectCount)}
-                subtitle={`${stats.closedDefectCount} closed`}
-              />
-              <MiniStat
-                title="Modifications"
-                value={String(stats.modificationCount)}
-                subtitle="logged changes"
-              />
-              <MiniStat
-                title="Stored Status"
-                value={tower.status || "—"}
-                subtitle="database field"
-              />
-            </div>
-          </SectionCard>
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <DonutWheel
+              value={stats.deliveryPercent}
+              label="Delivery Progress"
+              sublabel={`${formatDecimal(stats.outstandingQty, 0)} qty outstanding`}
+              color="#059669"
+            />
+            <DonutWheel
+              value={combinedLogisticsProgress}
+              label="Combined Logistics"
+              sublabel={`${formatDecimal(stats.materialOutstandingQty, 0)} materials qty outstanding`}
+              color="#7c3aed"
+            />
+          </div>
         </div>
+      </div>
 
-        <SectionCard
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
           title="Tower Details"
           subtitle="Imported tower overview fields and CSV-backed metadata."
-        >
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <MiniStat title="Tower Name" value={tower.name || "—"} />
-            <MiniStat title="Line" value={tower.line || "—"} />
-            <MiniStat title="Stored Status" value={tower.status || "—"} />
+        />
+
+        <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm text-slate-500">Tower Name</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.name || "-"}</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm text-slate-500">Line</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.line || "-"}</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm text-slate-500">Stored Status</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{tower.status || "-"}</div>
+          </div>
+        </div>
+
+        {extraFields.length > 0 && (
+          <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {extraFields.map(([key, value]) => (
-              <MiniStat
+              <div
                 key={key}
-                title={formatLabel(key)}
-                value={formatValue(value)}
-              />
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+              >
+                <div className="text-sm text-slate-500">{formatLabel(key)}</div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 break-words">
+                  {formatValue(value)}
+                </div>
+              </div>
             ))}
           </div>
-        </SectionCard>
+        )}
       </div>
     </div>
   );
