@@ -59,9 +59,12 @@ type DeliveryRow = {
 };
 
 type DeliveryItemRow = {
-  delivery_id: string;
+  delivery_id?: string | null;
+  tower_id?: string | null;
   bundle_no: string;
   qty_delivered?: number | null;
+  delivered_qty?: number | null;
+  quantity_delivered?: number | null;
 };
 
 type MaterialBundleRow = {
@@ -632,6 +635,63 @@ async function safeSelectFirstExisting<T>(
   return [] as T[];
 }
 
+function getDeliveredQty(row: DeliveryItemRow) {
+  return Number(
+    row.qty_delivered ?? row.delivered_qty ?? row.quantity_delivered ?? 0,
+  );
+}
+
+async function loadDeliveryItemsForTower(
+  supabase: ReturnType<typeof createSupabaseBrowser>,
+  towerId: string,
+) {
+  const deliveryTables = ["tower_deliveries", "deliveries"];
+  const itemTables = [
+    "tower_delivery_items",
+    "tower_delivered_items",
+    "delivery_items",
+  ];
+
+  let deliveriesData: DeliveryRow[] = [];
+  for (const table of deliveryTables) {
+    deliveriesData = await safeSelect<DeliveryRow>(supabase, table, "id", [
+      { column: "tower_id", value: towerId },
+    ]);
+    if (deliveriesData.length > 0) break;
+  }
+
+  const deliveryIdSet = new Set(
+    deliveriesData.map((delivery) => String(delivery.id)).filter(Boolean),
+  );
+
+  if (deliveryIdSet.size > 0) {
+    for (const table of itemTables) {
+      const rows = await safeSelect<DeliveryItemRow>(
+        supabase,
+        table,
+        "delivery_id, bundle_no, qty_delivered, delivered_qty, quantity_delivered",
+      );
+      const linkedRows = rows.filter((item) =>
+        deliveryIdSet.has(String(item.delivery_id || "")),
+      );
+      if (linkedRows.length > 0) return linkedRows;
+    }
+  }
+
+  // Fallback for delivery pages that store tower_id directly on the item row.
+  for (const table of itemTables) {
+    const rows = await safeSelect<DeliveryItemRow>(
+      supabase,
+      table,
+      "delivery_id, tower_id, bundle_no, qty_delivered, delivered_qty, quantity_delivered",
+      [{ column: "tower_id", value: towerId }],
+    );
+    if (rows.length > 0) return rows;
+  }
+
+  return [] as DeliveryItemRow[];
+}
+
 export default function TowerOverviewPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -725,8 +785,6 @@ export default function TowerOverviewPage() {
       defectsData,
       modificationsData,
       bundlesData,
-      deliveriesData,
-      deliveryItemsData,
       documentsData,
       materialBundlesData,
       materialMembersData,
@@ -742,14 +800,6 @@ export default function TowerOverviewPage() {
         ["tower_bundle_register", "tower_bundles", "tower_delivery_bundles"],
         "bundle_no, qty_required",
         [{ column: "tower_id", value: towerId }],
-      ),
-      safeSelect<DeliveryRow>(supabase, "tower_deliveries", "id", [
-        { column: "tower_id", value: towerId },
-      ]),
-      safeSelectFirstExisting<DeliveryItemRow>(
-        supabase,
-        ["tower_delivery_items", "tower_delivered_items"],
-        "delivery_id, bundle_no, qty_delivered",
       ),
       safeSelectFirstExisting<GenericDocumentRow>(
         supabase,
@@ -779,14 +829,12 @@ export default function TowerOverviewPage() {
     setDefects(defectsData);
     setModifications(modificationsData);
     setBundles(bundlesData);
-    const deliveryIdSet = new Set(
-      deliveriesData.map((delivery) => delivery.id),
-    );
-    const filteredDeliveryItemsData = deliveryItemsData.filter((item) =>
-      deliveryIdSet.has(item.delivery_id),
-    );
 
-    setDeliveryItems(filteredDeliveryItemsData);
+    const linkedDeliveryItems = await loadDeliveryItemsForTower(
+      supabase,
+      towerId,
+    );
+    setDeliveryItems(linkedDeliveryItems);
     setDocuments(documentsData);
     setMaterialBundles(materialBundlesData);
     setMaterialMembers(materialMembersData);
@@ -922,7 +970,7 @@ export default function TowerOverviewPage() {
     );
 
     const deliveredQty = deliveryItems.reduce(
-      (sum, row) => sum + Number(row.qty_delivered || 0),
+      (sum, row) => sum + getDeliveredQty(row),
       0,
     );
     const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
@@ -947,7 +995,7 @@ export default function TowerOverviewPage() {
     const materialDeliveredQty = deliveryItems.reduce((sum, row) => {
       const bundleNo = String(row.bundle_no || "").trim();
       if (!materialBundleSet.has(bundleNo)) return sum;
-      return sum + Number(row.qty_delivered || 0);
+      return sum + getDeliveredQty(row);
     }, 0);
 
     const materialOutstandingQty = Math.max(
@@ -1090,9 +1138,29 @@ export default function TowerOverviewPage() {
           latestDate={stats.latestDate}
         />
 
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.25em] text-blue-600">
+                Tower Management Dashboard
+              </div>
+              <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+                Power BI Overview
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">
+                One-page live summary for progress, productivity, steel delivery
+                and workpack readiness.
+              </p>
+            </div>
+            <div className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm">
+              TTTracker
+            </div>
+          </div>
+        </div>
+
         <SectionCard
           title="Tower Performance"
-          subtitle="Power BI style snapshot of progress, delivery, productivity and readiness."
+          subtitle="Live tower dashboard fed from dockets, deliveries, materials, ITCs, safety documents and defects."
         >
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             <DonutGauge
