@@ -224,6 +224,7 @@ const value = readExtraNumber(extra, [
   "Body Extension Required",
 
   "Body Ext (m)",
+  "BODY EXT (M)",
   "Body Ext",
   "Body Ext.",
   "BE",
