@@ -215,21 +215,29 @@ function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
 function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   const extra = tower?.extra_data || {};
 
-  const value = readExtraNumber(extra, [
-    "Body Extension",
-    "Body Extensions",
-    "Body Extension Height",
-    "Body Extension Length",
-    "Body Extension Qty",
-    "Body Extension Required",
-    "BE",
-    "BE Height",
-    "Extension",
-    "Extension Height",
-    "body_extension",
-    "body_extensions",
-    "body_extension_height",
-  ]);
+const value = readExtraNumber(extra, [
+  "Body Extension",
+  "Body Extensions",
+  "Body Extension Height",
+  "Body Extension Length",
+  "Body Extension Qty",
+  "Body Extension Required",
+
+  "Body Ext (m)",
+  "Body Ext",
+  "Body Ext.",
+  "BE",
+  "BE Height",
+
+  "Extension",
+  "Extension Height",
+
+  "body_extension",
+  "body_extensions",
+  "body_extension_height",
+  "body_ext_m",
+  "body_ext",
+]);
 
   if (value === null) return false;
   return value > 0;
