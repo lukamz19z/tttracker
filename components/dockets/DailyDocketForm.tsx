@@ -198,8 +198,15 @@ function isBodyExtensionRow(row: ProgressRow) {
 }
 
 function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
+  const normalisedExtra = Object.fromEntries(
+    Object.entries(extra).map(([key, value]) => [
+      key.trim().toLowerCase(),
+      value,
+    ])
+  );
+
   for (const key of keys) {
-    const value = extra[key];
+    const value = normalisedExtra[key.trim().toLowerCase()];
     if (value === null || value === undefined || value === "") continue;
 
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -209,9 +216,7 @@ function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
     if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
     if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
 
-    const cleaned = text.replace(/,/g, "");
-    const match = cleaned.match(/-?\d+(\.\d+)?/);
-
+    const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
     if (match) {
       const n = Number(match[0]);
       if (Number.isFinite(n)) return n;
@@ -536,21 +541,33 @@ export default function DailyDocketForm({
   const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    async function loadTowerBodyExtensionDefault() {
-      if (mode !== "create" || initialProgressRows?.length) return;
+useEffect(() => {
+  async function loadTowerBodyExtensionDefault() {
+    const { data } = await supabase
+      .from("towers")
+      .select("id, extra_data")
+      .eq("id", towerId)
+      .single();
 
-      const { data } = await supabase
-        .from("towers")
-        .select("*")
-        .eq("id", towerId)
-        .single();
+    const hasBodyExtFromCsv = inferTowerHasBodyExtension(
+      (data as TowerRecord | null) || null
+    );
 
-      setHasBodyExtension(inferTowerHasBodyExtension((data as TowerRecord | null) || null));
+    setHasBodyExtension(hasBodyExtFromCsv);
+
+    if (!hasBodyExtFromCsv) {
+      setProgressRows((prev) =>
+        prev.map((row) =>
+          isBodyExtensionRow(row)
+            ? { ...row, assembled_qty: "", erected_qty: "" }
+            : row
+        )
+      );
     }
+  }
 
-    void loadTowerBodyExtensionDefault();
-  }, [mode, initialProgressRows, supabase, towerId]);
+  void loadTowerBodyExtensionDefault();
+}, [supabase, towerId]);
 
   useEffect(() => {
     if (!docketId && !initialDocket) return;
