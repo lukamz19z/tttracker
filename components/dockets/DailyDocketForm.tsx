@@ -201,12 +201,21 @@ function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = extra[key];
     if (value === null || value === undefined || value === "") continue;
-    const n = Number(value);
-    if (Number.isFinite(n)) return n;
+
+    if (typeof value === "number" && Number.isFinite(value)) return value;
 
     const text = String(value).trim().toLowerCase();
+
     if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
     if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
+
+    const cleaned = text.replace(/,/g, "");
+    const match = cleaned.match(/-?\d+(\.\d+)?/);
+
+    if (match) {
+      const n = Number(match[0]);
+      if (Number.isFinite(n)) return n;
+    }
   }
 
   return null;
