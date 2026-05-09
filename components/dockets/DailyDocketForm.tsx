@@ -20,6 +20,19 @@ type LabourRow = {
   production_hours: string;
 };
 
+type DocketRateType = "tonnage_rate" | "schedule_of_rates";
+
+type PlantRow = {
+  plant_name: string;
+  plant_type: string;
+  asset_id: string;
+  operator_name: string;
+  time_in: string;
+  time_out: string;
+  total_hours: string;
+  notes: string;
+};
+
 type DelayScope = "entire_crew" | "selected_workers";
 
 type DelayType = "weather" | "lightning" | "toolbox" | "mobilisation" | "access" | "plant" | "materials" | "other";
@@ -58,6 +71,7 @@ type DocketRecord = {
   crew: string | null;
   leading_hand: string | null;
   weather: string | null;
+  rate_type?: DocketRateType | string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
   weather_delay_hours: number | null;
@@ -267,6 +281,38 @@ function blankLabourRow(defaults?: {
   });
 }
 
+function makePlantRow(row?: Partial<PlantRow> | any): PlantRow {
+  const mapped: PlantRow = {
+    plant_name: toStringValue(row?.plant_name),
+    plant_type: toStringValue(row?.plant_type),
+    asset_id: toStringValue(row?.asset_id),
+    operator_name: toStringValue(row?.operator_name),
+    time_in: toStringValue(row?.time_in),
+    time_out: toStringValue(row?.time_out),
+    total_hours: toStringValue(row?.total_hours),
+    notes: toStringValue(row?.notes),
+  };
+
+  if (!mapped.total_hours) {
+    mapped.total_hours = calculateHours(mapped.time_in, mapped.time_out);
+  }
+
+  return mapped;
+}
+
+function blankPlantRow(): PlantRow {
+  return makePlantRow({
+    plant_name: "",
+    plant_type: "",
+    asset_id: "",
+    operator_name: "",
+    time_in: "",
+    time_out: "",
+    total_hours: "",
+    notes: "",
+  });
+}
+
 type DelayRowInput = {
   id?: string;
   delay_type?: DelayType | string | null;
@@ -360,6 +406,7 @@ export default function DailyDocketForm({
   initialLabourRows,
   initialProgressRows,
   initialDelayRows,
+  initialPlantRows,
 }: {
   mode: "create" | "edit" | "view";
   projectId: string;
@@ -369,6 +416,7 @@ export default function DailyDocketForm({
   initialLabourRows?: LabourRow[];
   initialProgressRows?: ProgressRow[];
   initialDelayRows?: DelayRow[];
+  initialPlantRows?: PlantRow[];
 }) {
   const router = useRouter();
   const supabase = createSupabaseBrowser();
@@ -383,6 +431,9 @@ export default function DailyDocketForm({
     toStringValue(initialDocket?.leading_hand)
   );
   const [weather, setWeather] = useState(toStringValue(initialDocket?.weather));
+  const [rateType, setRateType] = useState<DocketRateType>(
+    initialDocket?.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate"
+  );
   const [weatherDelayHours, setWeatherDelayHours] = useState(
     toStringValue(initialDocket?.weather_delay_hours)
   );
@@ -442,6 +493,12 @@ export default function DailyDocketForm({
       : [blankLabourRow()]
   );
 
+  const [plantRows, setPlantRows] = useState<PlantRow[]>(
+    initialPlantRows && initialPlantRows.length > 0
+      ? initialPlantRows.map((r) => makePlantRow(r))
+      : [blankPlantRow()]
+  );
+
   const [delayRows, setDelayRows] = useState<DelayRow[]>(
     initialDelayRows && initialDelayRows.length > 0
       ? initialDelayRows.map((r) => makeDelayRow(r))
@@ -486,6 +543,7 @@ export default function DailyDocketForm({
         setCrewName(toStringValue(initialDocket.crew));
         setLeadingHand(toStringValue(initialDocket.leading_hand));
         setWeather(toStringValue(initialDocket.weather));
+        setRateType(initialDocket.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
 
         setWeatherDelayHours(toStringValue(initialDocket.weather_delay_hours));
         setLightningDelayHours(
@@ -516,6 +574,10 @@ export default function DailyDocketForm({
           setDelayRows(initialDelayRows.map((r) => makeDelayRow(r)));
         }
 
+        if (initialPlantRows?.length) {
+          setPlantRows(initialPlantRows.map((r) => makePlantRow(r)));
+        }
+
         if (initialProgressRows?.length) {
           const mappedRows = initialProgressRows.map((r) => ({
             section_label: toStringValue(r.section_label),
@@ -544,6 +606,7 @@ export default function DailyDocketForm({
       setCrewName(toStringValue(data.crew));
       setLeadingHand(toStringValue(data.leading_hand));
       setWeather(toStringValue(data.weather));
+      setRateType(data.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
 
       setWeatherDelayHours(toStringValue(data.weather_delay_hours));
       setLightningDelayHours(toStringValue(data.lightning_delay_hours));
@@ -595,6 +658,15 @@ export default function DailyDocketForm({
         setDelayRows(legacyDelayRows);
       }
 
+      const { data: plant } = await supabase
+        .from("tower_docket_plant")
+        .select("*")
+        .eq("docket_id", docketId);
+
+      if (plant && plant.length > 0) {
+        setPlantRows(plant.map((r) => makePlantRow(r)));
+      }
+
       const { data: progress } = await supabase
         .from("tower_docket_progress")
         .select("*")
@@ -622,6 +694,7 @@ export default function DailyDocketForm({
     initialLabourRows,
     initialProgressRows,
     initialDelayRows,
+    initialPlantRows,
     supabase,
   ]);
 
@@ -725,6 +798,17 @@ const labourRowsWithProduction = labourRows.map((row) => {
       return sum + (Number(row.production_hours) || 0);
     }, 0);
   }, [labourRowsWithProduction]);
+
+  const plantRowsWithTotals = useMemo(() => {
+    return plantRows.map((row) => {
+      const total_hours = calculateHours(row.time_in, row.time_out) || row.total_hours;
+      return { ...row, total_hours };
+    });
+  }, [plantRows]);
+
+  const totalPlantHours = useMemo(() => {
+    return plantRowsWithTotals.reduce((sum, row) => sum + toNumber(row.total_hours), 0);
+  }, [plantRowsWithTotals]);
 
   const totalLunchHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
@@ -1032,6 +1116,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       crew: crewName,
       leading_hand: leadingHand,
       weather,
+      rate_type: rateType,
       assembly_percent: totalAssemblyPercent,
       erection_percent: totalErectionPercent,
       weather_delay_hours: Number(weatherDelayHours || delaySummaryByType.weather || 0),
@@ -1071,6 +1156,24 @@ const labourRowsWithProduction = labourRows.map((row) => {
         delay_hours: Number(row.delay_hours || 0),
         delay_reason: row.delay_reason || null,
         production_hours: Number(row.production_hours || 0),
+      }));
+  }
+
+  function buildPlantPayload(docketIdValue: string) {
+    if (rateType !== "schedule_of_rates") return [];
+
+    return plantRowsWithTotals
+      .filter((row) => row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim())
+      .map((row) => ({
+        docket_id: docketIdValue,
+        plant_name: row.plant_name.trim() || null,
+        plant_type: row.plant_type.trim() || null,
+        asset_id: row.asset_id.trim() || null,
+        operator_name: row.operator_name.trim() || null,
+        time_in: row.time_in || null,
+        time_out: row.time_out || null,
+        total_hours: Number(row.total_hours || 0),
+        notes: row.notes || null,
       }));
   }
 
@@ -1126,6 +1229,15 @@ const labourRowsWithProduction = labourRows.map((row) => {
       const labourRes = await supabase.from("tower_docket_labour").insert(labourPayload);
       if (labourRes.error) {
         throw new Error("Daily docket saved, but labour rows failed. Check that the production hour columns exist on tower_docket_labour.");
+      }
+    }
+
+    const plantPayload = buildPlantPayload(docket.id);
+
+    if (plantPayload.length > 0) {
+      const plantRes = await supabase.from("tower_docket_plant").insert(plantPayload);
+      if (plantRes.error) {
+        throw new Error("Daily docket saved, but plant rows failed. Create the tower_docket_plant table before using Schedule of Rates plant tracking.");
       }
     }
 
@@ -1201,6 +1313,15 @@ const labourRowsWithProduction = labourRows.map((row) => {
       throw new Error("Failed to refresh delay rows.");
     }
 
+    const deletePlantRes = await supabase
+      .from("tower_docket_plant")
+      .delete()
+      .eq("docket_id", docketId);
+
+    if (deletePlantRes.error && rateType === "schedule_of_rates") {
+      throw new Error("Failed to refresh plant rows. Check that tower_docket_plant exists.");
+    }
+
     const deleteProgressRes = await supabase
       .from("tower_docket_progress")
       .delete()
@@ -1219,6 +1340,18 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
       if (labourInsertRes.error) {
         throw new Error("Failed to save labour rows. Check that the production hour columns exist on tower_docket_labour.");
+      }
+    }
+
+    const plantPayload = buildPlantPayload(docketId);
+
+    if (plantPayload.length > 0) {
+      const plantInsertRes = await supabase
+        .from("tower_docket_plant")
+        .insert(plantPayload);
+
+      if (plantInsertRes.error) {
+        throw new Error("Failed to save plant rows. Create the tower_docket_plant table before using Schedule of Rates plant tracking.");
       }
     }
 
@@ -1308,6 +1441,11 @@ const labourRowsWithProduction = labourRows.map((row) => {
         .select("*")
         .eq("docket_id", lastDocket.id);
 
+      const { data: plant } = await supabase
+        .from("tower_docket_plant")
+        .select("*")
+        .eq("docket_id", lastDocket.id);
+
       const { data: progress } = await supabase
         .from("tower_docket_progress")
         .select("*")
@@ -1325,6 +1463,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setCrewName(toStringValue(lastDocket.crew));
       setLeadingHand(toStringValue(lastDocket.leading_hand));
       setWeather(toStringValue(lastDocket.weather));
+      setRateType(lastDocket.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
 
       setWeatherDelayHours(toStringValue(lastDocket.weather_delay_hours));
       setLightningDelayHours(toStringValue(lastDocket.lightning_delay_hours));
@@ -1379,6 +1518,12 @@ const labourRowsWithProduction = labourRows.map((row) => {
         ]);
       }
 
+      if (plant && plant.length > 0) {
+        setPlantRows([...plant.map((r) => makePlantRow(r)), blankPlantRow()]);
+      } else {
+        setPlantRows([blankPlantRow()]);
+      }
+
       // Do not carry previous day delay events by default. Delays should be entered for the actual day.
       setDelayRows([]);
 
@@ -1430,11 +1575,55 @@ const labourRowsWithProduction = labourRows.map((row) => {
     );
   }
 
+  function addPlantRow() {
+    if (isView || locked) return;
+    setPlantRows((prev) => [...prev, blankPlantRow()]);
+  }
+
+  function removePlantRow(index: number) {
+    if (isView || locked) return;
+    setPlantRows((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [blankPlantRow()];
+    });
+  }
+
+  function updatePlantRow(index: number, key: keyof PlantRow, value: string) {
+    if (isView || locked) return;
+
+    setPlantRows((prev) => {
+      const updated = prev.map((row, i) =>
+        i === index ? { ...row, [key]: value } : row
+      );
+
+      const current = updated[index];
+      if (key === "time_in" || key === "time_out") {
+        current.total_hours = calculateHours(current.time_in, current.time_out) || current.total_hours;
+      }
+
+      const last = updated[updated.length - 1];
+      const hasBlankRow = updated.some(
+        (row, i) =>
+          i !== updated.length - 1 &&
+          !row.plant_name &&
+          !row.asset_id &&
+          !row.plant_type &&
+          !row.total_hours
+      );
+
+      if ((last.plant_name.trim() || last.asset_id.trim() || last.plant_type.trim()) && !hasBlankRow) {
+        updated.push(blankPlantRow());
+      }
+
+      return updated;
+    });
+  }
+
   return (
-    <div className="p-4 md:p-8 max-w-7xl space-y-6">
+    <div className="p-4 md:p-8 max-w-7xl space-y-6 bg-slate-50 min-h-screen">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold">
+          <h1 className="text-3xl font-bold text-slate-900">
             {mode === "create"
               ? "Add Daily Docket"
               : mode === "edit"
@@ -1442,7 +1631,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
               : "View Daily Docket"}
           </h1>
           <p className="text-slate-500 mt-1">
-            Enter labour, progress, production deductions, delays, and upload the scanned docket.
+            Enter section quantities, labour, rate type, plant usage, delays, production deductions, and sign-off.
           </p>
         </div>
 
@@ -1451,7 +1640,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             <button
               type="button"
               onClick={prefillFromLastDocket}
-              className="bg-slate-700 text-white px-5 py-3 rounded-xl"
+              className="bg-slate-800 text-white px-5 py-3 rounded-xl shadow-sm hover:bg-slate-900"
             >
               Prefill Yesterday
             </button>
@@ -1462,7 +1651,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             onClick={() =>
               router.push(`/project/${projectId}/tower/${towerId}/dockets`)
             }
-            className="border px-5 py-3 rounded-xl"
+            className="border border-slate-300 bg-white px-5 py-3 rounded-xl shadow-sm hover:bg-slate-100"
           >
             ← Back
           </button>
@@ -1481,47 +1670,67 @@ const labourRowsWithProduction = labourRows.map((row) => {
         </div>
       )}
 
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Header</h2>
-        <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="Date"
-            type="date"
-            value={docketDate}
-            onChange={setDocketDate}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Crew Name"
-            value={crewName}
-            onChange={setCrewName}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Leading Hand Name"
-            value={leadingHand}
-            onChange={setLeadingHand}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Weather"
-            value={weather}
-            onChange={setWeather}
-            disabled={locked || isView}
-          />
-        </div>
-      </section>
-
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold">Section Quantities</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Docket Header</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Body extension is auto-detected from the tower CSV/extra data. You can still override it here if needed.
+              Select whether this docket is claimed under tonnage rate or schedule of rates.
             </p>
           </div>
 
-          <label className="inline-flex items-center gap-3 text-sm font-medium">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2 flex gap-2">
+            <button
+              type="button"
+              disabled={locked || isView}
+              onClick={() => setRateType("tonnage_rate")}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                rateType === "tonnage_rate"
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "bg-white text-slate-700 border border-slate-200"
+              } disabled:opacity-60`}
+            >
+              Tonnage Rate
+            </button>
+            <button
+              type="button"
+              disabled={locked || isView}
+              onClick={() => setRateType("schedule_of_rates")}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                rateType === "schedule_of_rates"
+                  ? "bg-purple-600 text-white shadow-sm"
+                  : "bg-white text-slate-700 border border-slate-200"
+              } disabled:opacity-60`}
+            >
+              Schedule of Rates
+            </button>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} disabled={locked || isView} />
+          <Input label="Crew Name" value={crewName} onChange={setCrewName} disabled={locked || isView} />
+          <Input label="Leading Hand Name" value={leadingHand} onChange={setLeadingHand} disabled={locked || isView} />
+          <Input label="Weather" value={weather} onChange={setWeather} disabled={locked || isView} />
+        </div>
+
+        {rateType === "schedule_of_rates" && (
+          <div className="rounded-2xl border border-purple-200 bg-purple-50 text-purple-800 p-4 text-sm">
+            Schedule of Rates selected. The docket will include a Plant & Equipment section for cranes, telehandlers, EWP, trucks, or other hired plant used that day.
+          </div>
+        )}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Section Quantities</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              This drives assembly, erection and tower progress. Body extension is auto-detected but can be overridden.
+            </p>
+          </div>
+
+          <label className="inline-flex items-center gap-3 text-sm font-medium rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
             <input
               type="checkbox"
               checked={hasBodyExtension}
@@ -1539,9 +1748,9 @@ const labourRowsWithProduction = labourRows.map((row) => {
           </div>
         )}
 
-        <div className="border rounded-xl overflow-hidden">
+        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
           <table className="w-full">
-            <thead className="bg-slate-100 text-left">
+            <thead className="bg-slate-100 text-left text-sm text-slate-600">
               <tr>
                 <th className="p-3">Section</th>
                 <th className="p-3">Assembly %</th>
@@ -1555,8 +1764,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
                 );
 
                 return (
-                  <tr key={row.section_label} className="border-t">
-                    <td className="p-3">{row.section_label}</td>
+                  <tr key={row.section_label} className="border-t border-slate-100">
+                    <td className="p-3 font-medium text-slate-800">{row.section_label}</td>
                     <td className="p-3">
                       <input
                         className="border rounded-lg p-2 w-full disabled:bg-slate-100"
@@ -1565,9 +1774,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                         max="100"
                         value={row.assembled_qty}
                         disabled={locked || isView}
-                        onChange={(e) =>
-                          updateProgressRow(actualIndex, "assembled_qty", e.target.value)
-                        }
+                        onChange={(e) => updateProgressRow(actualIndex, "assembled_qty", e.target.value)}
                       />
                     </td>
                     <td className="p-3">
@@ -1578,9 +1785,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                         max="100"
                         value={row.erected_qty}
                         disabled={locked || isView}
-                        onChange={(e) =>
-                          updateProgressRow(actualIndex, "erected_qty", e.target.value)
-                        }
+                        onChange={(e) => updateProgressRow(actualIndex, "erected_qty", e.target.value)}
                       />
                     </td>
                   </tr>
@@ -1589,77 +1794,153 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </tbody>
           </table>
 
-          <div className="flex justify-end gap-6 md:gap-10 p-4 bg-slate-50 border-t flex-wrap">
-            <SummaryBlock label="Total Assembly" value={`${totalAssemblyPercent}%`} />
-            <SummaryBlock label="Total Erection" value={`${totalErectionPercent}%`} />
-            <SummaryBlock label="Tower Progress Used" value={`${displayProgress}%`} />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t border-slate-200">
+            <KpiPill label="Total Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
+            <KpiPill label="Total Erection" value={`${totalErectionPercent}%`} tone="emerald" />
+            <KpiPill label="Tower Progress Used" value={`${displayProgress}%`} tone="purple" />
           </div>
         </div>
       </section>
 
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Docket Production Defaults</h2>
-        <p className="text-sm text-slate-500">
-          These are default non-productive deductions for the docket. Apply them to all workers, then use the Delays section below for whole-crew or selected-worker delays.
-        </p>
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Labour</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Raw hours are captured for the docket. Production hours are calculated from defaults and delay events.
+            </p>
+          </div>
 
-        <div className="grid md:grid-cols-4 gap-4">
-          <Input
-            label="Lunch Break Minutes"
-            type="number"
-            value={lunchBreakMinutes}
-            onChange={setLunchBreakMinutes}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Travel In Minutes"
-            type="number"
-            value={travelInMinutes}
-            onChange={setTravelInMinutes}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Travel Out Minutes"
-            type="number"
-            value={travelOutMinutes}
-            onChange={setTravelOutMinutes}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Mobilisation Hours"
-            type="number"
-            value={mobilisationHours}
-            onChange={setMobilisationHours}
-            disabled={locked || isView}
-          />
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
+            <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
+            <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
+            <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
+            <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
+            <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
+            <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
+          </div>
         </div>
 
-        <div className="grid md:grid-cols-[1fr_auto] gap-4 items-end">
-          <Input
-            label="Mobilisation Notes"
-            value={mobilisationNotes}
-            onChange={setMobilisationNotes}
-            disabled={locked || isView}
-          />
-
-          {!locked && !isView && (
-            <button
-              type="button"
-              onClick={applyProductionDefaultsToAll}
-              className="bg-slate-900 text-white px-4 py-3 rounded-xl text-sm font-medium"
-            >
-              Apply Defaults to Labour
+        {!locked && !isView && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end">
+            <LabourInput label="Bulk Time In" type="time" value={bulkTimeIn} onChange={setBulkTimeIn} />
+            <LabourInput label="Bulk Time Out" type="time" value={bulkTimeOut} onChange={setBulkTimeOut} />
+            <button type="button" onClick={applyBulkTimes} className="bg-slate-800 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-slate-900">
+              Apply Times to All
             </button>
-          )}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          {labourRowsWithProduction.map((row, index) => {
+            const isDuplicate = duplicateWorkerIndexes.has(index);
+
+            return (
+              <div key={index} className={`border rounded-xl p-3 space-y-3 bg-white ${isDuplicate ? "border-red-300 bg-red-50" : "border-slate-200"}`}>
+                <div className="grid grid-cols-2 md:grid-cols-[1.4fr_110px_110px_100px_100px] gap-2 items-end">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Worker Name</label>
+                    <input
+                      id={`labour-name-${index}`}
+                      className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${isDuplicate ? "border-red-500 bg-white" : ""}`}
+                      value={row.worker_name}
+                      disabled={locked || isView}
+                      placeholder="Name"
+                      onKeyDown={(e) => handleLabourKeyDown(e, `labour-timein-${index}`)}
+                      onChange={(e) => updateLabourRow(index, "worker_name", e.target.value)}
+                    />
+                    {isDuplicate && row.worker_name.trim() && <p className="text-xs text-red-600 mt-1">This worker name is already entered in this docket.</p>}
+                  </div>
+
+                  <LabourInput label="Time In" id={`labour-timein-${index}`} type="time" value={row.time_in} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-timeout-${index}`)} onChange={(v) => updateLabourRow(index, "time_in", v)} />
+                  <LabourInput label="Time Out" id={`labour-timeout-${index}`} type="time" value={row.time_out} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-hours-${index}`)} onChange={(v) => updateLabourRow(index, "time_out", v)} />
+                  <LabourInput label="Raw Hrs" id={`labour-hours-${index}`} type="number" value={row.total_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-lunch-${index}`)} onChange={(v) => updateLabourRow(index, "total_hours", v)} />
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Prod Hrs</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-emerald-50 text-emerald-800 font-semibold">{row.production_hours || "0.00"}</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-[110px_110px_110px_110px_110px_1fr_auto] gap-2 items-end">
+                  <LabourInput label="Lunch Min" id={`labour-lunch-${index}`} type="number" value={row.lunch_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)} onChange={(v) => updateLabourRow(index, "lunch_minutes", v)} />
+                  <LabourInput label="Travel In" id={`labour-travelin-${index}`} type="number" value={row.travel_in_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)} onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)} />
+                  <LabourInput label="Travel Out" id={`labour-travelout-${index}`} type="number" value={row.travel_out_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)} onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)} />
+                  <LabourInput label="Mob Hrs" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Delay Hrs</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-amber-50 text-amber-800 font-semibold">{row.delay_hours || "0.00"}</div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Delay Reason</label>
+                    <div className="border rounded-lg p-2 text-sm w-full bg-slate-50 text-slate-700 min-h-10 truncate">{row.delay_reason || "—"}</div>
+                  </div>
+
+                  {!locked && !isView ? <button type="button" onClick={() => removeLabourRow(index)} className="border px-4 py-2 rounded-lg h-10 hover:bg-slate-50">Remove</button> : <div />}
+                </div>
+              </div>
+            );
+          })}
         </div>
+
+        {!locked && !isView && (
+          <div className="pt-2">
+            <button type="button" onClick={addLabourRow} className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-black">
+              Add Worker
+            </button>
+          </div>
+        )}
       </section>
 
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
+      {rateType === "schedule_of_rates" && (
+        <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Plant & Equipment</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Used for Schedule of Rates dockets. This can later link to the Assets page.
+              </p>
+            </div>
+            <MiniSummary label="Plant Hrs" value={totalPlantHours.toFixed(2)} />
+          </div>
+
+          <div className="space-y-3">
+            {plantRowsWithTotals.map((row, index) => (
+              <div key={index} className="border border-purple-100 bg-purple-50/40 rounded-xl p-3 space-y-3">
+                <div className="grid grid-cols-2 md:grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 items-end">
+                  <LabourInput label="Plant / Asset Name" value={row.plant_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_name", v)} />
+                  <LabourInput label="Plant Type" value={row.plant_type} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_type", v)} />
+                  <LabourInput label="Asset ID / Rego" value={row.asset_id} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "asset_id", v)} />
+                  <LabourInput label="Operator" value={row.operator_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "operator_name", v)} />
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-[120px_120px_110px_1fr_auto] gap-2 items-end">
+                  <LabourInput label="Time In" type="time" value={row.time_in} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_in", v)} />
+                  <LabourInput label="Time Out" type="time" value={row.time_out} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_out", v)} />
+                  <LabourInput label="Total Hrs" type="number" value={row.total_hours} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "total_hours", v)} />
+                  <LabourInput label="Notes" value={row.notes} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "notes", v)} />
+                  {!locked && !isView ? <button type="button" onClick={() => removePlantRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {!locked && !isView && (
+            <button type="button" onClick={addPlantRow} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700">
+              Add Plant / Equipment
+            </button>
+          )}
+        </section>
+      )}
+
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold">Delays & Issues</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Delays & Issues</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Add delay events separately from labour. Each delay can apply to the whole crew or selected people only.
+              Add delay events after labour so selected-worker delays can be assigned to the correct people.
             </p>
           </div>
 
@@ -1671,18 +1952,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="Missing Items / Bolts"
-            value={missingItemsBolts}
-            onChange={setMissingItemsBolts}
-            disabled={locked || isView}
-          />
-          <Input
-            label="General Delay / Site Comment"
-            value={delaysComments}
-            onChange={setDelaysComments}
-            disabled={locked || isView}
-          />
+          <Input label="Missing Items / Bolts" value={missingItemsBolts} onChange={setMissingItemsBolts} disabled={locked || isView} />
+          <Input label="General Delay / Site Comment" value={delaysComments} onChange={setDelaysComments} disabled={locked || isView} />
         </div>
 
         <div className="space-y-3">
@@ -1692,8 +1963,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </div>
           ) : (
             delayRows.map((delay, index) => {
-              const affectedCount =
-                delay.applies_to === "entire_crew" ? availableWorkerNames.length : delay.worker_names.length;
+              const affectedCount = delay.applies_to === "entire_crew" ? availableWorkerNames.length : delay.worker_names.length;
               const delayManhours = toNumber(delay.delay_hours) * affectedCount;
 
               return (
@@ -1701,12 +1971,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                   <div className="grid md:grid-cols-[150px_120px_1fr_170px_auto] gap-3 items-end">
                     <div>
                       <label className="block text-sm font-medium mb-1">Delay Type</label>
-                      <select
-                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
-                        value={delay.delay_type}
-                        disabled={locked || isView}
-                        onChange={(e) => updateDelayRow(index, "delay_type", e.target.value)}
-                      >
+                      <select className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100" value={delay.delay_type} disabled={locked || isView} onChange={(e) => updateDelayRow(index, "delay_type", e.target.value)}>
                         <option value="weather">Weather</option>
                         <option value="lightning">Lightning</option>
                         <option value="toolbox">Toolbox</option>
@@ -1718,45 +1983,18 @@ const labourRowsWithProduction = labourRows.map((row) => {
                       </select>
                     </div>
 
-                    <Input
-                      label="Delay Hrs"
-                      type="number"
-                      value={delay.delay_hours}
-                      onChange={(v) => updateDelayRow(index, "delay_hours", v)}
-                      disabled={locked || isView}
-                    />
-
-                    <Input
-                      label="Reason"
-                      value={delay.delay_reason}
-                      onChange={(v) => updateDelayRow(index, "delay_reason", v)}
-                      disabled={locked || isView}
-                    />
+                    <Input label="Delay Hrs" type="number" value={delay.delay_hours} onChange={(v) => updateDelayRow(index, "delay_hours", v)} disabled={locked || isView} />
+                    <Input label="Reason" value={delay.delay_reason} onChange={(v) => updateDelayRow(index, "delay_reason", v)} disabled={locked || isView} />
 
                     <div>
                       <label className="block text-sm font-medium mb-1">Applies To</label>
-                      <select
-                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
-                        value={delay.applies_to}
-                        disabled={locked || isView}
-                        onChange={(e) => updateDelayRow(index, "applies_to", e.target.value)}
-                      >
+                      <select className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100" value={delay.applies_to} disabled={locked || isView} onChange={(e) => updateDelayRow(index, "applies_to", e.target.value)}>
                         <option value="entire_crew">Entire Crew</option>
                         <option value="selected_workers">Selected Workers</option>
                       </select>
                     </div>
 
-                    {!locked && !isView ? (
-                      <button
-                        type="button"
-                        onClick={() => removeDelayRow(index)}
-                        className="border px-4 py-2 rounded-lg h-10 bg-white"
-                      >
-                        Remove
-                      </button>
-                    ) : (
-                      <div />
-                    )}
+                    {!locked && !isView ? <button type="button" onClick={() => removeDelayRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
                   </div>
 
                   {delay.applies_to === "selected_workers" && (
@@ -1767,24 +2005,10 @@ const labourRowsWithProduction = labourRows.map((row) => {
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {availableWorkerNames.map((name) => {
-                            const checked = delay.worker_names.some(
-                              (worker) => normalizeWorkerName(worker) === normalizeWorkerName(name),
-                            );
-
+                            const checked = delay.worker_names.some((worker) => normalizeWorkerName(worker) === normalizeWorkerName(name));
                             return (
-                              <label
-                                key={`${delay.ui_id}-${name}`}
-                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm ${
-                                  checked ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="hidden"
-                                  checked={checked}
-                                  disabled={locked || isView}
-                                  onChange={() => toggleDelayWorker(index, name)}
-                                />
+                              <label key={`${delay.ui_id}-${name}`} className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm cursor-pointer ${checked ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300"}`}>
+                                <input type="checkbox" className="hidden" checked={checked} disabled={locked || isView} onChange={() => toggleDelayWorker(index, name)} />
                                 {name}
                               </label>
                             );
@@ -1804,256 +2028,52 @@ const labourRowsWithProduction = labourRows.map((row) => {
         </div>
 
         {!locked && !isView && (
-          <button
-            type="button"
-            onClick={addDelayRow}
-            className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium"
-          >
+          <button type="button" onClick={addDelayRow} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-black">
             Add Delay Event
           </button>
         )}
       </section>
 
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <h2 className="text-xl font-semibold">Labour</h2>
-
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
-            <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
-            <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
-            <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
-            <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
-            <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
-            <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Docket Production Defaults</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row.
+            </p>
           </div>
-        </div>
-
-        {!locked && !isView && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
-            <input
-              type="time"
-              value={bulkTimeIn}
-              onChange={(e) => setBulkTimeIn(e.target.value)}
-              className="border p-2 rounded text-sm"
-            />
-
-            <input
-              type="time"
-              value={bulkTimeOut}
-              onChange={(e) => setBulkTimeOut(e.target.value)}
-              className="border p-2 rounded text-sm"
-            />
-
+          {!locked && !isView && (
             <button
               type="button"
-              onClick={applyBulkTimes}
-              className="bg-slate-800 text-white rounded p-2 text-sm"
+              onClick={applyProductionDefaultsToAll}
+              className="bg-amber-400 text-slate-950 border-2 border-amber-600 px-5 py-3 rounded-xl text-sm font-black shadow-md hover:bg-amber-300"
             >
-              Apply Times to All
+              ⚠ Apply Defaults to Workers
             </button>
-          </div>
-        )}
-
-        <div className="space-y-3">
-          {labourRowsWithProduction.map((row, index) => {
-            const isDuplicate = duplicateWorkerIndexes.has(index);
-
-            return (
-              <div
-                key={index}
-                className={`border rounded-xl p-3 space-y-3 ${
-                  isDuplicate ? "border-red-300 bg-red-50" : ""
-                }`}
-              >
-                <div className="grid grid-cols-2 md:grid-cols-[1.4fr_110px_110px_100px_100px] gap-2 items-end">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Worker Name
-                    </label>
-                    <input
-                      id={`labour-name-${index}`}
-                      className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
-                        isDuplicate ? "border-red-500 bg-white" : ""
-                      }`}
-                      value={row.worker_name}
-                      disabled={locked || isView}
-                      placeholder="Name"
-                      onKeyDown={(e) =>
-                        handleLabourKeyDown(e, `labour-timein-${index}`)
-                      }
-                      onChange={(e) =>
-                        updateLabourRow(index, "worker_name", e.target.value)
-                      }
-                    />
-                    {isDuplicate && row.worker_name.trim() && (
-                      <p className="text-xs text-red-600 mt-1">
-                        This worker name is already entered in this docket.
-                      </p>
-                    )}
-                  </div>
-
-                  <LabourInput
-                    label="Time In"
-                    id={`labour-timein-${index}`}
-                    type="time"
-                    value={row.time_in}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-timeout-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "time_in", v)}
-                  />
-
-                  <LabourInput
-                    label="Time Out"
-                    id={`labour-timeout-${index}`}
-                    type="time"
-                    value={row.time_out}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-hours-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "time_out", v)}
-                  />
-
-                  <LabourInput
-                    label="Raw Hrs"
-                    id={`labour-hours-${index}`}
-                    type="number"
-                    value={row.total_hours}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-lunch-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "total_hours", v)}
-                  />
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Prod Hrs</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-emerald-50 text-emerald-800 font-semibold">
-                      {row.production_hours || "0.00"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-[110px_110px_110px_110px_110px_1fr_auto] gap-2 items-end">
-                  <LabourInput
-                    label="Lunch Min"
-                    id={`labour-lunch-${index}`}
-                    type="number"
-                    value={row.lunch_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "lunch_minutes", v)}
-                  />
-
-                  <LabourInput
-                    label="Travel In"
-                    id={`labour-travelin-${index}`}
-                    type="number"
-                    value={row.travel_in_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)}
-                  />
-
-                  <LabourInput
-                    label="Travel Out"
-                    id={`labour-travelout-${index}`}
-                    type="number"
-                    value={row.travel_out_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)}
-                    onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)}
-                  />
-
-                  <LabourInput
-                    label="Mob Hrs"
-                    id={`labour-mob-${index}`}
-                    type="number"
-                    value={row.mobilisation_hours}
-                    disabled={locked || isView}
-                    onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)}
-                    onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)}
-                  />
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Delay Hrs</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-amber-50 text-amber-800 font-semibold">
-                      {row.delay_hours || "0.00"}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Delay Reason</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-slate-50 text-slate-700 min-h-10 truncate">
-                      {row.delay_reason || "—"}
-                    </div>
-                  </div>
-
-                  {!locked && !isView ? (
-                    <button
-                      type="button"
-                      onClick={() => removeLabourRow(index)}
-                      className="border px-4 py-2 rounded-lg h-10"
-                    >
-                      Remove
-                    </button>
-                  ) : (
-                    <div />
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          )}
         </div>
 
-        {!locked && !isView && (
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={addLabourRow}
-              className="bg-slate-900 text-white px-4 py-2 rounded-lg"
-            >
-              Add Worker
-            </button>
-          </div>
-        )}
+        <div className="grid md:grid-cols-4 gap-4">
+          <Input label="Lunch Break Minutes" type="number" value={lunchBreakMinutes} onChange={setLunchBreakMinutes} disabled={locked || isView} />
+          <Input label="Travel In Minutes" type="number" value={travelInMinutes} onChange={setTravelInMinutes} disabled={locked || isView} />
+          <Input label="Travel Out Minutes" type="number" value={travelOutMinutes} onChange={setTravelOutMinutes} disabled={locked || isView} />
+          <Input label="Mobilisation Hours" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
+        </div>
+
+        <Input label="Mobilisation Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
       </section>
 
-      <section className="bg-white border rounded-2xl p-5 md:p-6 space-y-4">
-        <h2 className="text-xl font-semibold">Sign-Off & Upload</h2>
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <h2 className="text-xl font-semibold text-slate-900">Sign-Off & Upload</h2>
         <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="BC Rep Name"
-            value={bcRepName}
-            onChange={setBcRepName}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Client Rep Name"
-            value={clientRepName}
-            onChange={setClientRepName}
-            disabled={locked || isView}
-          />
-          <Input
-            label="Signed Date"
-            type="date"
-            value={signedDate}
-            onChange={setSignedDate}
-            disabled
-          />
+          <Input label="BC Rep Name" value={bcRepName} onChange={setBcRepName} disabled={locked || isView} />
+          <Input label="Client Rep Name" value={clientRepName} onChange={setClientRepName} disabled={locked || isView} />
+          <Input label="Signed Date" type="date" value={signedDate} onChange={setSignedDate} disabled />
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Upload Docket Scan
-            </label>
-            <input
-              type="file"
-              disabled={locked || isView}
-              onChange={(e) => setDocketFile(e.target.files?.[0] || null)}
-              className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-            />
+            <label className="block text-sm font-medium mb-1">Upload Docket Scan</label>
+            <input type="file" disabled={locked || isView} onChange={(e) => setDocketFile(e.target.files?.[0] || null)} className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white" />
             {existingDocketFileUrl && (
-              <a
-                href={existingDocketFileUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-blue-600 text-sm font-medium mt-2 inline-block"
-              >
+              <a href={existingDocketFileUrl} target="_blank" rel="noreferrer" className="text-blue-600 text-sm font-medium mt-2 inline-block">
                 Open current uploaded docket
               </a>
             )}
@@ -2061,30 +2081,14 @@ const labourRowsWithProduction = labourRows.map((row) => {
         </div>
       </section>
 
-      <div className="flex gap-3">
+      <div className="sticky bottom-4 z-10 flex gap-3 bg-white/90 backdrop-blur border border-slate-200 rounded-2xl p-3 shadow-lg w-fit">
         {!locked && !isView && (
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl"
-          >
-            {saving
-              ? mode === "create"
-                ? "Saving..."
-                : "Updating..."
-              : mode === "create"
-              ? "Save Daily Docket"
-              : "Update Daily Docket"}
+          <button onClick={handleSubmit} disabled={saving} className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60">
+            {saving ? (mode === "create" ? "Saving..." : "Updating...") : mode === "create" ? "Save Daily Docket" : "Update Daily Docket"}
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={() =>
-            router.push(`/project/${projectId}/tower/${towerId}/dockets`)
-          }
-          className="border px-6 py-3 rounded-xl"
-        >
+        <button type="button" onClick={() => router.push(`/project/${projectId}/tower/${towerId}/dockets`)} className="border border-slate-300 bg-white px-6 py-3 rounded-xl hover:bg-slate-100">
           {locked || isView ? "Back" : "Cancel"}
         </button>
       </div>
@@ -2158,6 +2162,30 @@ function SummaryBlock({ label, value }: { label: string; value: string }) {
     <div className="text-right">
       <p className="text-sm text-slate-500">{label}</p>
       <p className="text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function KpiPill({
+  label,
+  value,
+  tone = "slate",
+}: {
+  label: string;
+  value: string;
+  tone?: "blue" | "emerald" | "purple" | "slate";
+}) {
+  const classes = {
+    blue: "bg-blue-50 border-blue-200 text-blue-800",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-800",
+    purple: "bg-purple-50 border-purple-200 text-purple-800",
+    slate: "bg-slate-50 border-slate-200 text-slate-800",
+  }[tone];
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${classes}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide opacity-75">{label}</p>
+      <p className="text-2xl font-black mt-1">{value}</p>
     </div>
   );
 }
