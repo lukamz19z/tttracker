@@ -100,6 +100,22 @@ type TowerRecord = {
   [key: string]: unknown;
 };
 
+type CrewRecord = {
+  id: string;
+  crew_number: string | null;
+  crew_name: string | null;
+  leading_hand: string | null;
+  active: boolean | null;
+};
+
+type EmployeeRecord = {
+  id: string;
+  full_name: string;
+  role: string | null;
+  crew_id: string | null;
+  active: boolean | null;
+};
+
 const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
   { section_label: "Legs", assembled_qty: "", erected_qty: "" },
   { section_label: "Body Extensions", assembled_qty: "", erected_qty: "" },
@@ -308,7 +324,7 @@ function makePlantRow(row?: Partial<PlantRow> | any): PlantRow {
   const mapped: PlantRow = {
     plant_name: toStringValue(row?.plant_name),
     plant_type: toStringValue(row?.plant_type),
-    asset_id: toStringValue(row?.asset_id),
+    asset_id: toStringValue(row?.asset_id ?? row?.asset_number),
     operator_name: toStringValue(row?.operator_name),
     time_in: toStringValue(row?.time_in),
     time_out: toStringValue(row?.time_out),
@@ -541,6 +557,53 @@ export default function DailyDocketForm({
   const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const [crews, setCrews] = useState<CrewRecord[]>([]);
+  const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
+  const [selectedCrewId, setSelectedCrewId] = useState("");
+
+useEffect(() => {
+  async function loadCrewData() {
+    const [{ data: crewData }, { data: employeeData }] = await Promise.all([
+      supabase
+        .from("crews")
+        .select("id, crew_number, crew_name, leading_hand, active")
+        .order("crew_number"),
+      supabase
+        .from("employees")
+        .select("id, full_name, role, crew_id, active")
+        .order("full_name"),
+    ]);
+
+    const nextCrews = ((crewData || []) as CrewRecord[]).filter(
+      (crew) => crew.active !== false,
+    );
+
+    setCrews(nextCrews);
+    setEmployees(((employeeData || []) as EmployeeRecord[]).filter(
+      (employee) => employee.active !== false,
+    ));
+
+    const savedCrewText = crewName.trim().toLowerCase();
+    if (savedCrewText) {
+      const matchedCrew = nextCrews.find((crew) => {
+        const crewNumber = String(crew.crew_number || "").trim().toLowerCase();
+        const crewNameValue = String(crew.crew_name || "").trim().toLowerCase();
+        return crewNumber === savedCrewText || crewNameValue === savedCrewText;
+      });
+
+      if (matchedCrew) {
+        setSelectedCrewId(matchedCrew.id);
+      }
+    }
+  }
+
+  const timer = window.setTimeout(() => {
+    void loadCrewData();
+  }, 0);
+
+  return () => window.clearTimeout(timer);
+}, [crewName, supabase]);
+
 useEffect(() => {
   async function loadTowerBodyExtensionDefault() {
     const { data } = await supabase
@@ -566,7 +629,11 @@ useEffect(() => {
     }
   }
 
-  void loadTowerBodyExtensionDefault();
+  const timer = window.setTimeout(() => {
+    void loadTowerBodyExtensionDefault();
+  }, 0);
+
+  return () => window.clearTimeout(timer);
 }, [supabase, towerId]);
 
   useEffect(() => {
@@ -621,9 +688,6 @@ useEffect(() => {
           }));
 
           setProgressRows(mappedRows);
-          setHasBodyExtension(
-            mappedRows.some((row) => isBodyExtensionRow(row))
-          );
         }
 
         return;
@@ -716,13 +780,14 @@ useEffect(() => {
         }));
 
         setProgressRows(mappedRows);
-        setHasBodyExtension(
-          mappedRows.some((row) => isBodyExtensionRow(row))
-        );
       }
     }
 
-    loadDocket();
+    const timer = window.setTimeout(() => {
+      void loadDocket();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [
     docketId,
     initialDocket,
@@ -883,6 +948,78 @@ const labourRowsWithProduction = labourRows.map((row) => {
       {} as Record<DelayType, number>,
     );
   }, [delayRows]);
+
+  const crewOptions = useMemo(() => {
+    return crews.map((crew) => ({
+      id: crew.id,
+      label: `${crew.crew_number || "Crew"}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`,
+    }));
+  }, [crews]);
+
+  function crewMembersForCrew(crewId: string) {
+    return employees.filter((employee) => employee.crew_id === crewId);
+  }
+
+  function handleCrewSelection(crewIdValue: string) {
+    if (isView || locked) return;
+
+    setSelectedCrewId(crewIdValue);
+
+    if (!crewIdValue) {
+      return;
+    }
+
+    const selectedCrew = crews.find((crew) => crew.id === crewIdValue);
+    if (!selectedCrew) return;
+
+    const members = crewMembersForCrew(crewIdValue);
+    const currentHasLabour = labourRows.some((row) =>
+      row.worker_name.trim() || row.time_in || row.time_out || row.total_hours,
+    );
+
+    if (currentHasLabour) {
+      const confirmed = window.confirm(
+        "Apply this crew to the labour section? This will replace the current worker names but you can still edit them afterwards.",
+      );
+
+      if (!confirmed) {
+        setCrewName(toStringValue(selectedCrew.crew_number));
+        if (selectedCrew.leading_hand) setLeadingHand(selectedCrew.leading_hand);
+        return;
+      }
+    }
+
+    setCrewName(toStringValue(selectedCrew.crew_number));
+    if (selectedCrew.leading_hand) {
+      setLeadingHand(selectedCrew.leading_hand);
+    }
+
+    if (members.length > 0) {
+      const mappedWorkers = members.map((employee) =>
+        blankLabourRow({
+          lunchBreakMinutes,
+          travelInMinutes,
+          travelOutMinutes,
+          mobilisationHours,
+        }),
+      );
+
+      mappedWorkers.forEach((row, index) => {
+        row.worker_name = members[index]?.full_name || "";
+        row.production_hours = calculateProductionHours(row);
+      });
+
+      setLabourRows([
+        ...mappedWorkers,
+        blankLabourRow({
+          lunchBreakMinutes,
+          travelInMinutes,
+          travelOutMinutes,
+          mobilisationHours,
+        }),
+      ]);
+    }
+  }
 
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
@@ -1203,8 +1340,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
         docket_id: docketIdValue,
         plant_name: row.plant_name.trim() || null,
         plant_type: row.plant_type.trim() || null,
-        asset_id: row.asset_id.trim() || null,
-        operator_name: row.operator_name.trim() || null,
+        asset_number: row.asset_id.trim() || null,
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
@@ -1570,7 +1706,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
         }));
 
         setProgressRows(mappedRows);
-        setHasBodyExtension(mappedRows.some((row) => isBodyExtensionRow(row)));
       } else {
         setProgressRows(DEFAULT_PROGRESS_ROWS);
 
@@ -1744,7 +1879,28 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
         <div className="grid md:grid-cols-2 gap-4">
           <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} disabled={locked || isView} />
-          <Input label="Crew Name" value={crewName} onChange={setCrewName} disabled={locked || isView} />
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Crew Number</label>
+            <select
+              className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
+              value={selectedCrewId}
+              disabled={locked || isView}
+              onChange={(e) => handleCrewSelection(e.target.value)}
+            >
+              <option value="">Select crew...</option>
+              {crewOptions.map((crew) => (
+                <option key={crew.id} value={crew.id}>
+                  {crew.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              Selecting a crew auto-fills labour from Admin → Crews. You can still edit workers below.
+            </p>
+          </div>
+
+          <Input label="Crew Number / Manual Override" value={crewName} onChange={setCrewName} disabled={locked || isView} />
           <Input label="Leading Hand Name" value={leadingHand} onChange={setLeadingHand} disabled={locked || isView} />
           <Input label="Weather" value={weather} onChange={setWeather} disabled={locked || isView} />
         </div>
@@ -2227,7 +2383,7 @@ function KpiPill({
 
 function MiniSummary({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-slate-100 px-3 py-2 min-w-[90px]">
+    <div className="rounded-xl bg-slate-100 px-3 py-2 min-w-22.5">
       <p className="text-[11px] text-slate-500">{label}</p>
       <p className="text-lg font-bold">{value}</p>
     </div>
