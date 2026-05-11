@@ -8,7 +8,7 @@ export default async function MapPage({
   const { projectId } = await params;
 
   return (
-    <AppShell title="Map" projectId={projectId}>
+<AppShell projectId={projectId}>
       <div className="bg-white p-6 rounded-2xl shadow-sm">
         Map module coming next.
       </div>
