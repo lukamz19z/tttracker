@@ -300,14 +300,14 @@ export default function AdminUsersPage() {
 
   if (checkingRole) {
     return (
-      <AppShell title="User Management">
+  <AppShell>
         <div className="p-6">Checking permissions...</div>
       </AppShell>
     );
   }
 
   return (
-    <AppShell title="User Management">
+<AppShell>
       <div className="space-y-6">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
