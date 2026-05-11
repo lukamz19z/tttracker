@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -26,7 +26,6 @@ export default function CrewsPage() {
 
   const [crews, setCrews] = useState<Crew[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
-
   const [crewPanelOpen, setCrewPanelOpen] = useState(true);
   const [assignmentPanelOpen, setAssignmentPanelOpen] = useState(true);
 
@@ -36,8 +35,23 @@ export default function CrewsPage() {
   const [leadingHand, setLeadingHand] = useState("");
   const [active, setActive] = useState(true);
 
-  const [bulkCount, setBulkCount] = useState("3");
-  const [bulkPrefix, setBulkPrefix] = useState("Crew");
+  const loadData = useCallback(async () => {
+    const [{ data: crewData }, { data: employeeData }] = await Promise.all([
+      supabase.from("crews").select("*").order("crew_number"),
+      supabase.from("employees").select("*").order("full_name"),
+    ]);
+
+    setCrews((crewData || []) as Crew[]);
+    setEmployees((employeeData || []) as Employee[]);
+  }, [supabase]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [loadData]);
 
   const activeEmployees = useMemo(
     () => employees.filter((e) => e.active !== false),
@@ -48,20 +62,6 @@ export default function CrewsPage() {
     () => activeEmployees.filter((e) => !e.crew_id),
     [activeEmployees]
   );
-
-  async function loadData() {
-    const [{ data: crewData }, { data: employeeData }] = await Promise.all([
-      supabase.from("crews").select("*").order("crew_number"),
-      supabase.from("employees").select("*").order("full_name"),
-    ]);
-
-    setCrews((crewData || []) as Crew[]);
-    setEmployees((employeeData || []) as Employee[]);
-  }
-
-  useEffect(() => {
-    void loadData();
-  }, []);
 
   function resetCrewForm() {
     setEditingCrewId(null);
@@ -115,43 +115,6 @@ export default function CrewsPage() {
     }
 
     resetCrewForm();
-    await loadData();
-  }
-
-  async function bulkCreateCrews() {
-    const count = Number(bulkCount);
-
-    if (!Number.isFinite(count) || count <= 0) {
-      alert("Enter a valid number of crews.");
-      return;
-    }
-
-    const existingNumbers = new Set(
-      crews.map((c) => c.crew_number.trim().toLowerCase())
-    );
-
-    const rows = Array.from({ length: count }, (_, index) => {
-      const crewNo = `${bulkPrefix.trim() || "Crew"} ${index + 1}`;
-      return {
-        crew_number: crewNo,
-        crew_name: null,
-        leading_hand: null,
-        active: true,
-      };
-    }).filter((row) => !existingNumbers.has(row.crew_number.toLowerCase()));
-
-    if (rows.length === 0) {
-      alert("Those crews already exist.");
-      return;
-    }
-
-    const { error } = await supabase.from("crews").insert(rows);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
     await loadData();
   }
 
@@ -219,10 +182,14 @@ export default function CrewsPage() {
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <Link href="/admin" className="text-sm text-slate-500 hover:underline">
-              ← Admin
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-2 rounded-2xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 transition"
+            >
+              ← Back to Admin
             </Link>
-            <h1 className="text-3xl font-bold mt-2">Crews</h1>
+
+            <h1 className="text-3xl font-bold mt-4">Crews</h1>
             <p className="text-slate-500">
               Build flexible crews. Workers can only be assigned to one crew at a time.
             </p>
@@ -244,14 +211,14 @@ export default function CrewsPage() {
             <div>
               <h2 className="text-xl font-bold">Crew Setup</h2>
               <p className="text-sm text-slate-500">
-                Create individual crews or bulk create Crew 1, Crew 2, Crew 3, etc.
+                Create and edit crews one at a time.
               </p>
             </div>
             <span className="text-xl">{crewPanelOpen ? "−" : "+"}</span>
           </button>
 
           {crewPanelOpen && (
-            <div className="border-t p-5 space-y-5">
+            <div className="border-t p-5">
               <div className="rounded-2xl border bg-slate-50 p-4">
                 <h3 className="font-bold mb-3">
                   {editingCrewId ? "Edit Crew" : "Create Crew"}
@@ -280,7 +247,7 @@ export default function CrewsPage() {
                       onClick={saveCrew}
                       className="bg-slate-900 text-white px-5 py-3 rounded-xl font-semibold w-full"
                     >
-                      {editingCrewId ? "Update" : "Create"}
+                      {editingCrewId ? "Update Crew" : "Create Crew"}
                     </button>
 
                     {editingCrewId && (
@@ -293,23 +260,6 @@ export default function CrewsPage() {
                       </button>
                     )}
                   </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border bg-white p-4">
-                <h3 className="font-bold mb-3">Bulk Create Crews</h3>
-
-                <div className="grid md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
-                  <Input label="Prefix" value={bulkPrefix} onChange={setBulkPrefix} />
-                  <Input label="How Many Crews?" value={bulkCount} onChange={setBulkCount} type="number" />
-
-                  <button
-                    type="button"
-                    onClick={bulkCreateCrews}
-                    className="bg-slate-900 text-white px-5 py-3 rounded-xl font-semibold"
-                  >
-                    Create Crews
-                  </button>
                 </div>
               </div>
             </div>
@@ -474,7 +424,7 @@ function Input({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white border rounded-2xl px-5 py-4 shadow-sm min-w-[120px]">
+    <div className="bg-white border rounded-2xl px-5 py-4 shadow-sm min-w-30">
       <p className="text-xs uppercase text-slate-400">{label}</p>
       <p className="text-3xl font-bold">{value}</p>
     </div>

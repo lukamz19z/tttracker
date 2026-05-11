@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -36,27 +36,34 @@ export default function EmployeesPage() {
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
 
-  const activeCount = useMemo(
-    () => employees.filter((e) => e.active !== false).length,
-    [employees]
-  );
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
 
     const [{ data: employeeData }, { data: crewData }] = await Promise.all([
       supabase.from("employees").select("*").order("full_name"),
-      supabase.from("crews").select("id, crew_number, crew_name").order("crew_number"),
+      supabase
+        .from("crews")
+        .select("id, crew_number, crew_name")
+        .order("crew_number"),
     ]);
 
     setEmployees((employeeData || []) as Employee[]);
     setCrews((crewData || []) as Crew[]);
     setLoading(false);
-  }
+  }, [supabase]);
 
   useEffect(() => {
-    void loadData();
-  }, []);
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [loadData]);
+
+  const activeCount = useMemo(
+    () => employees.filter((e) => e.active !== false).length,
+    [employees]
+  );
 
   function resetForm() {
     setEditingId(null);
@@ -131,8 +138,10 @@ export default function EmployeesPage() {
 
   function crewLabel(crewIdValue: string | null) {
     if (!crewIdValue) return "Unassigned";
+
     const crew = crews.find((c) => c.id === crewIdValue);
     if (!crew) return "Unassigned";
+
     return `${crew.crew_number}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`;
   }
 
@@ -141,10 +150,14 @@ export default function EmployeesPage() {
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <Link href="/admin" className="text-sm text-slate-500 hover:underline">
-              ← Admin
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-2 rounded-2xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 transition"
+            >
+              ← Back to Admin
             </Link>
-            <h1 className="text-3xl font-bold mt-2">Worker Profiles</h1>
+
+            <h1 className="text-3xl font-bold mt-4">Worker Profiles</h1>
             <p className="text-slate-500">
               Basic operational worker profiles used for crews and daily dockets.
             </p>
@@ -170,6 +183,7 @@ export default function EmployeesPage() {
                 Full name, role, linked crew and basic notes only.
               </p>
             </div>
+
             <span className="text-xl">{formOpen ? "−" : "+"}</span>
           </button>
 
@@ -180,7 +194,9 @@ export default function EmployeesPage() {
                 <Input label="Role / Trade" value={role} onChange={setRole} />
 
                 <div>
-                  <label className="block text-sm font-medium mb-1">Linked Crew</label>
+                  <label className="block text-sm font-medium mb-1">
+                    Linked Crew
+                  </label>
                   <select
                     className="border rounded-xl p-3 w-full"
                     value={crewId}
@@ -246,6 +262,7 @@ export default function EmployeesPage() {
                 View, edit or delete worker profiles.
               </p>
             </div>
+
             <span className="text-xl">{registerOpen ? "−" : "+"}</span>
           </button>
 
@@ -266,6 +283,7 @@ export default function EmployeesPage() {
                         <th className="p-3 text-right">Actions</th>
                       </tr>
                     </thead>
+
                     <tbody>
                       {employees.map((employee) => (
                         <tr key={employee.id} className="border-t">
@@ -293,6 +311,7 @@ export default function EmployeesPage() {
                               >
                                 Edit
                               </button>
+
                               <button
                                 type="button"
                                 onClick={() => deleteEmployee(employee.id)}
@@ -347,7 +366,7 @@ function Input({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white border rounded-2xl px-5 py-4 shadow-sm min-w-[140px]">
+    <div className="bg-white border rounded-2xl px-5 py-4 shadow-sm min-w-35">
       <p className="text-xs uppercase text-slate-400">{label}</p>
       <p className="text-3xl font-bold">{value}</p>
     </div>
