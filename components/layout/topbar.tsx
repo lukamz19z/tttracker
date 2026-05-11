@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-export function Topbar({ title }: { title?: string }) {
+export function Topbar() {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createSupabaseBrowser();
@@ -21,38 +21,22 @@ export function Topbar({ title }: { title?: string }) {
         ? pathname === "/"
         : pathname === href || pathname.startsWith(href + "/");
 
-    return `
-      px-4 py-2 rounded-xl text-sm font-medium transition
-      ${
-        isActive
-          ? "bg-slate-900 text-white"
-          : "text-slate-600 hover:bg-slate-100"
-      }
-    `;
+    return `px-4 py-2 rounded-xl text-sm font-semibold transition ${
+      isActive
+        ? "bg-slate-900 text-white"
+        : "text-slate-600 hover:bg-slate-100"
+    }`;
   }
 
   return (
-    <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b">
-      <div className="px-6 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-6 min-w-0">
-          <Link
-            href="/"
-            className="text-2xl font-bold tracking-tight whitespace-nowrap hover:text-slate-700 transition"
-          >
-            TTTracker
-          </Link>
-
-          {title && (
-            <div className="hidden lg:block border-l pl-5 min-w-0">
-              <p className="text-xs uppercase tracking-wider text-slate-400">
-                Current Page
-              </p>
-              <h1 className="text-sm font-semibold text-slate-700 truncate">
-                {title}
-              </h1>
-            </div>
-          )}
-        </div>
+    <header className="sticky top-0 z-50 bg-white border-b">
+      <div className="h-16 px-6 flex items-center justify-between">
+        <Link
+          href="/"
+          className="text-2xl font-bold tracking-tight text-slate-900 hover:text-slate-700"
+        >
+          TTTracker
+        </Link>
 
         <nav className="hidden md:flex items-center gap-2">
           <Link href="/" className={navStyle("/")}>
@@ -70,7 +54,7 @@ export function Topbar({ title }: { title?: string }) {
           <button
             type="button"
             onClick={handleLogout}
-            className="ml-2 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-slate-800 transition"
+            className="ml-3 bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-slate-800"
           >
             Logout
           </button>

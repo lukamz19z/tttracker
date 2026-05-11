@@ -10,10 +10,7 @@ export default async function ProjectLayout({
   const { projectId } = await params;
 
   return (
-    <AppShell
-      title="Project"
-      projectId={projectId}
-    >
+    <AppShell projectId={projectId}>
       {children}
     </AppShell>
   );

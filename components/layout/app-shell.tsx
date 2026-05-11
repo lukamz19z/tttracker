@@ -5,21 +5,19 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 
 type AppShellProps = {
-  title?: string;
   projectId?: string;
   towerId?: string;
   children: ReactNode;
 };
 
 export function AppShell({
-  title = "TTTracker",
   projectId,
   towerId,
   children,
 }: AppShellProps) {
   return (
     <div className="min-h-screen bg-slate-50">
-      <Topbar title={title} />
+      <Topbar />
 
       <div className="flex">
         {projectId && (

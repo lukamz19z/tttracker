@@ -86,14 +86,7 @@ export function Sidebar({
   return (
     <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-0 h-screen overflow-y-auto">
       
-      {/* LOGO / TITLE */}
-      <div className="p-5 border-b">
-        <h1 className="text-2xl font-bold tracking-tight">
-          TTTracker
-        </h1>
-      </div>
-
-      <div className="flex-1 p-4 space-y-6">
+     <div className="flex-1 p-4 space-y-6">
 
         {/* CURRENT PROJECT */}
         {projectId && (
