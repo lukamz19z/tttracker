@@ -23,6 +23,9 @@ export function Sidebar({
   const [projectName, setProjectName] = useState<string | null>(null);
   const [towers, setTowers] = useState<Tower[]>([]);
 
+  const towerMatch = pathname.match(/\/tower\/([^/]+)/);
+  const activeTowerId = towerId || towerMatch?.[1] || null;
+
   useEffect(() => {
     if (!projectId) return;
 
@@ -44,34 +47,25 @@ export function Sidebar({
       if (towerData) setTowers(towerData);
     }
 
-    loadProject();
+    void loadProject();
   }, [projectId, supabase]);
 
   const currentTowerIndex = useMemo(() => {
-    return towers.findIndex((t) => t.id === towerId);
-  }, [towers, towerId]);
+    if (!activeTowerId) return -1;
+    return towers.findIndex((t) => t.id === activeTowerId);
+  }, [towers, activeTowerId]);
 
   const previousTower =
     currentTowerIndex > 0 ? towers[currentTowerIndex - 1] : null;
 
   const nextTower =
-    currentTowerIndex >= 0 &&
-    currentTowerIndex < towers.length - 1
+    currentTowerIndex >= 0 && currentTowerIndex < towers.length - 1
       ? towers[currentTowerIndex + 1]
       : null;
 
   function linkStyle(href: string) {
-    let isActive = false;
-
-    if (href === "/") {
-      isActive = pathname === "/";
-    } else if (projectId && href === `/project/${projectId}`) {
-      isActive = pathname === href;
-    } else {
-      isActive =
-        pathname === href ||
-        pathname.startsWith(href + "/");
-    }
+    const isActive =
+      pathname === href || pathname.startsWith(href + "/");
 
     return `
       flex items-center gap-2 px-3 py-2 rounded-xl transition text-sm
@@ -84,11 +78,8 @@ export function Sidebar({
   }
 
   return (
-    <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-0 h-screen overflow-y-auto">
-      
-     <div className="flex-1 p-4 space-y-6">
-
-        {/* CURRENT PROJECT */}
+    <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
+      <div className="flex-1 p-4 space-y-6">
         {projectId && (
           <div>
             <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
@@ -103,7 +94,6 @@ export function Sidebar({
           </div>
         )}
 
-        {/* MAIN NAV */}
         <div>
           <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
             Navigation
@@ -133,56 +123,44 @@ export function Sidebar({
           </nav>
         </div>
 
-        {/* TOWER NAVIGATION */}
-        {towerId && (
+        {activeTowerId && (
           <div>
             <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
               Tower Navigation
             </div>
 
             <div className="space-y-2">
-
-              {previousTower ? (
+              {previousTower && (
                 <Link
                   href={`/project/${projectId}/tower/${previousTower.id}`}
                   className="flex items-center justify-between rounded-2xl border px-4 py-3 hover:bg-slate-50 transition"
                 >
                   <div>
-                    <div className="text-xs text-slate-400">
-                      Previous
-                    </div>
-
+                    <div className="text-xs text-slate-400">Previous</div>
                     <div className="font-medium text-sm">
                       {previousTower.name}
                     </div>
                   </div>
 
-                  <span className="text-slate-500 text-lg">
-                    ←
-                  </span>
+                  <span className="text-slate-500 text-lg">←</span>
                 </Link>
-              ) : null}
+              )}
 
-              {nextTower ? (
+              {nextTower && (
                 <Link
                   href={`/project/${projectId}/tower/${nextTower.id}`}
                   className="flex items-center justify-between rounded-2xl border px-4 py-3 hover:bg-slate-50 transition"
                 >
                   <div>
-                    <div className="text-xs text-slate-400">
-                      Next
-                    </div>
-
+                    <div className="text-xs text-slate-400">Next</div>
                     <div className="font-medium text-sm">
                       {nextTower.name}
                     </div>
                   </div>
 
-                  <span className="text-slate-500 text-lg">
-                    →
-                  </span>
+                  <span className="text-slate-500 text-lg">→</span>
                 </Link>
-              ) : null}
+              )}
             </div>
           </div>
         )}

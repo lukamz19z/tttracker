@@ -1,22 +1,16 @@
 import { AppShell } from "@/components/layout/app-shell";
 
-export default async function TowerLayout({
+export default async function ProjectLayout({
   children,
   params,
 }: {
   children: React.ReactNode;
-  params: Promise<{
-    projectId: string;
-    towerId: string;
-  }>;
+  params: Promise<{ projectId: string }>;
 }) {
-  const { projectId, towerId } = await params;
+  const { projectId } = await params;
 
   return (
-    <AppShell
-      projectId={projectId}
-      towerId={towerId}
-    >
+    <AppShell projectId={projectId}>
       {children}
     </AppShell>
   );
