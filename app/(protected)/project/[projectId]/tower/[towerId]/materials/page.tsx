@@ -162,6 +162,16 @@ type MemberImportRow = {
   section: string;
 };
 
+type OutstandingBundle = {
+  bundle: Bundle;
+  status: BundleCheckStatus;
+  delivered: number;
+  required: number;
+  remaining: number;
+  progress: number;
+  reason: string;
+};
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -302,6 +312,16 @@ function percentage(part: number, total: number): number {
   return Math.min((part / total) * 100, 100);
 }
 
+function htmlEscape(value: string | number | null | undefined): string {
+  const str = value === null || value === undefined ? "" : String(value);
+  return str
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -332,6 +352,7 @@ export default function MaterialsPage() {
 
   const [expandedBundleNo, setExpandedBundleNo] = useState<string | null>(null);
   const [showAdvancedActions, setShowAdvancedActions] = useState(false);
+  const [showOutstandingDetails, setShowOutstandingDetails] = useState(true);
   const [showUnmatchedMembers, setShowUnmatchedMembers] = useState(false);
   const [selectedBundleRows, setSelectedBundleRows] = useState<Record<string, boolean>>({});
   const [selectedMemberRows, setSelectedMemberRows] = useState<Record<string, boolean>>({});
@@ -417,8 +438,8 @@ export default function MaterialsPage() {
       tower_id: towerId,
       bundle_no: safeString(row.bundle_no),
       section: normaliseSection(safeString(row.section, "General")),
-      qty_required: safeNumber(row.qty_required, 0),
-      member_qty: safeNumber(row.member_qty, 0),
+      qty_required: Math.max(safeNumber(row.qty_required, 0), 0),
+      member_qty: Math.max(safeNumber(row.member_qty, 0), 0),
       total_weight:
         row.total_weight === null || row.total_weight === undefined
           ? null
@@ -433,7 +454,7 @@ export default function MaterialsPage() {
       drawing_number: safeString(row.drawing_number),
       mark_no: safeString(row.mark_no),
       pn_final: safeString(row.pn_final),
-      qty_per_tower: safeNumber(row.qty_per_tower, 0),
+      qty_per_tower: Math.max(safeNumber(row.qty_per_tower, 0), 0),
       section: normaliseSection(safeString(row.section, "General")),
     }));
 
@@ -480,7 +501,7 @@ export default function MaterialsPage() {
     deliveries.forEach((delivery) => {
       delivery.tower_bundle_delivery_items.forEach((item) => {
         if (safeString(item.bundle_no).trim() === bundleNo.trim()) {
-          total += safeNumber(item.qty_delivered, 0);
+          total += Math.max(safeNumber(item.qty_delivered, 0), 0);
         }
       });
     });
@@ -490,6 +511,10 @@ export default function MaterialsPage() {
 
   function remainingQty(bundle: Bundle): number {
     return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
+  }
+
+  function overDeliveredQty(bundle: Bundle): number {
+    return Math.max(deliveredQty(bundle.bundle_no) - bundle.qty_required, 0);
   }
 
   /* =========================================================
@@ -602,6 +627,21 @@ export default function MaterialsPage() {
     return status === filter;
   }
 
+  function getOutstandingReason(bundle: Bundle, status: BundleCheckStatus): string {
+    const remaining = remainingQty(bundle);
+    const overDelivered = overDeliveredQty(bundle);
+    const reasons: string[] = [];
+
+    if (remaining > 0) reasons.push(`${remaining} bundle(s) still required`);
+    if (overDelivered > 0) reasons.push(`${overDelivered} extra delivered`);
+    if (status === "not_checked") reasons.push("Not checked on site");
+    if (status === "partial") reasons.push("Partially checked");
+    if (status === "missing") reasons.push("Marked missing");
+    if (status === "issue") reasons.push("Issue / review");
+
+    return reasons.join(" • ") || "Outstanding";
+  }
+
   /* =========================================================
      AUTO SAVE
   ========================================================= */
@@ -621,8 +661,8 @@ export default function MaterialsPage() {
         tower_id: towerId,
         bundle_no: row.bundle_no.trim(),
         section: normaliseSection(row.section),
-        qty_required: safeNumber(row.qty_required, 0),
-        member_qty: safeNumber(row.member_qty, 0),
+        qty_required: Math.max(safeNumber(row.qty_required, 0), 0),
+        member_qty: Math.max(safeNumber(row.member_qty, 0), 0),
         total_weight:
           row.total_weight === null || row.total_weight === undefined
             ? null
@@ -651,7 +691,7 @@ export default function MaterialsPage() {
         drawing_number: safeString(row.drawing_number),
         mark_no: row.mark_no.trim(),
         pn_final: safeString(row.pn_final),
-        qty_per_tower: safeNumber(row.qty_per_tower, 0),
+        qty_per_tower: Math.max(safeNumber(row.qty_per_tower, 0), 0),
         section: normaliseSection(row.section),
       }));
 
@@ -1034,25 +1074,31 @@ export default function MaterialsPage() {
               section: normaliseSection(
                 safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
               ),
-              qty_required: safeNumber(
-                r.qty_required ||
-                  r["Bundle Qty"] ||
-                  r["Bundle Quantity"] ||
-                  r["Qty Required"] ||
-                  r["Qty/Tower"] ||
-                  r["Quantity of Bundles For Tower"] ||
-                  r["NO."] ||
+              qty_required: Math.max(
+                safeNumber(
+                  r.qty_required ||
+                    r["Bundle Qty"] ||
+                    r["Bundle Quantity"] ||
+                    r["Qty Required"] ||
+                    r["Qty/Tower"] ||
+                    r["Quantity of Bundles For Tower"] ||
+                    r["NO."] ||
+                    0,
                   0,
+                ),
                 0,
               ),
-              member_qty: safeNumber(
-                r.member_qty ||
-                  r["Member Qty"] ||
-                  r["Member Quantity"] ||
-                  r["Members"] ||
-                  r["No. Members"] ||
-                  r["Member Count"] ||
+              member_qty: Math.max(
+                safeNumber(
+                  r.member_qty ||
+                    r["Member Qty"] ||
+                    r["Member Quantity"] ||
+                    r["Members"] ||
+                    r["No. Members"] ||
+                    r["Member Count"] ||
+                    0,
                   0,
+                ),
                 0,
               ),
               total_weight: (() => {
@@ -1129,8 +1175,8 @@ export default function MaterialsPage() {
                   r["Standardised PN Final"] ||
                   r["PN"],
               ),
-              qty_per_tower: safeNumber(
-                r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0,
+              qty_per_tower: Math.max(
+                safeNumber(r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0, 0),
                 0,
               ),
               section: normaliseSection(safeString(r.section || r["Section"] || "General")),
@@ -1253,7 +1299,7 @@ export default function MaterialsPage() {
   }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
 
   const overallRequired = useMemo(
-    () => bundles.reduce((sum, row) => sum + safeNumber(row.qty_required, 0), 0),
+    () => bundles.reduce((sum, row) => sum + Math.max(safeNumber(row.qty_required, 0), 0), 0),
     [bundles],
   );
 
@@ -1287,6 +1333,49 @@ export default function MaterialsPage() {
     );
   }, [bundles, memberChecks, bundleChecks]);
 
+  const outstandingBundles = useMemo<OutstandingBundle[]>(() => {
+    return bundles
+      .map((bundle) => {
+        const status = deriveBundleStatus(bundle.bundle_no);
+        const delivered = deliveredQty(bundle.bundle_no);
+        const required = Math.max(bundle.qty_required, 0);
+        const remaining = Math.max(required - delivered, 0);
+        const progress = percentage(delivered, required);
+        const isOutstanding =
+          remaining > 0 ||
+          status === "not_checked" ||
+          status === "partial" ||
+          status === "missing" ||
+          status === "issue";
+
+        if (!isOutstanding) return null;
+
+        return {
+          bundle,
+          status,
+          delivered,
+          required,
+          remaining,
+          progress,
+          reason: getOutstandingReason(bundle, status),
+        };
+      })
+      .filter((item): item is OutstandingBundle => item !== null)
+      .sort((a, b) => {
+        if (a.remaining !== b.remaining) return b.remaining - a.remaining;
+        return a.bundle.bundle_no.localeCompare(b.bundle.bundle_no);
+      });
+  }, [bundles, deliveries, memberChecks, bundleChecks]);
+
+  const completedBundles = useMemo(() => {
+    return bundles
+      .filter((bundle) => {
+        const status = deriveBundleStatus(bundle.bundle_no);
+        return remainingQty(bundle) === 0 && status === "arrived";
+      })
+      .sort((a, b) => a.bundle_no.localeCompare(b.bundle_no));
+  }, [bundles, deliveries, memberChecks, bundleChecks]);
+
   /* =========================================================
      EXPORT / PRINT
   ========================================================= */
@@ -1297,9 +1386,10 @@ export default function MaterialsPage() {
         [
           "Bundle No",
           "Section",
-          "Bundle Qty",
-          "Delivered",
-          "Remaining",
+          "Required Bundles",
+          "Delivered Bundles",
+          "Remaining Bundles",
+          "Over Delivered",
           "Bundle Member Qty",
           "Total Weight",
           "Status",
@@ -1310,6 +1400,7 @@ export default function MaterialsPage() {
           bundle.qty_required,
           deliveredQty(bundle.bundle_no),
           remainingQty(bundle),
+          overDeliveredQty(bundle),
           bundle.member_qty,
           bundle.total_weight ?? "",
           statusLabel(deriveBundleStatus(bundle.bundle_no)),
@@ -1338,116 +1429,339 @@ export default function MaterialsPage() {
     downloadTextFile("materials_members.csv", csv, "text/csv;charset=utf-8;");
   }
 
-  function printCurrentView() {
-    let title = "Materials";
-    let bodyHtml = "";
+  function exportOutstandingCSV() {
+    const rows = [
+      [
+        "Bundle No",
+        "Section",
+        "Required Bundles",
+        "Delivered Bundles",
+        "Remaining Bundles",
+        "Progress",
+        "Status",
+        "Reason",
+      ],
+      ...outstandingBundles.map((item) => [
+        item.bundle.bundle_no,
+        item.bundle.section,
+        item.required,
+        item.delivered,
+        item.remaining,
+        `${item.progress.toFixed(1)}%`,
+        statusLabel(item.status),
+        item.reason,
+      ]),
+    ];
 
-    const towerLabel = getTowerPrintLabel(tower);
-    const towerLine = safeString(tower?.line, "");
+    const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+    downloadTextFile("materials_outstanding_items.csv", csv, "text/csv;charset=utf-8;");
+  }
 
-    if (viewMode === "bundles") {
-      title = "Bundle List";
-      bodyHtml = `
-        <table>
-          <thead>
-            <tr>
-              <th>Bundle No</th>
-              <th>Section</th>
-              <th>Bundle Qty</th>
-              <th>Delivered</th>
-              <th>Remaining</th>
-              <th>Bundle Member Qty</th>
-              <th>Weight</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filteredBundles
-              .map(
-                (bundle) => `
-              <tr>
-                <td>${bundle.bundle_no}</td>
-                <td>${bundle.section}</td>
-                <td>${bundle.qty_required}</td>
-                <td>${deliveredQty(bundle.bundle_no)}</td>
-                <td>${remainingQty(bundle)}</td>
-                <td>${bundle.member_qty}</td>
-                <td>${bundle.total_weight ?? ""}</td>
-                <td>${statusLabel(deriveBundleStatus(bundle.bundle_no))}</td>
-              </tr>
-            `,
-              )
-              .join("")}
-          </tbody>
-        </table>
-      `;
-    } else {
-      title = "Member List";
-      bodyHtml = `
-        <table>
-          <thead>
-            <tr>
-              <th>Mark No</th>
-              <th>PN</th>
-              <th>Drawing No</th>
-              <th>Bundle Ref</th>
-              <th>Qty</th>
-              <th>Section</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${filteredMatchedMembers
-              .map(
-                (member) => `
-              <tr>
-                <td>${member.mark_no}</td>
-                <td>${member.pn_final}</td>
-                <td>${member.drawing_number}</td>
-                <td>${member.bundle_reference}</td>
-                <td>${member.qty_per_tower}</td>
-                <td>${member.section}</td>
-                <td>${statusLabel(getMemberCheck(member)?.status || "not_checked")}</td>
-              </tr>
-            `,
-              )
-              .join("")}
-          </tbody>
-        </table>
+  function printOutstandingItems() {
+    printMaterialsReport("outstanding");
+  }
+
+  function printFullTowerReport() {
+    printMaterialsReport("full");
+  }
+
+  function buildBundleRowsHtml(rows: Bundle[]) {
+    if (!rows.length) {
+      return `
+        <tr>
+          <td colspan="9" class="empty-cell">No items in this section.</td>
+        </tr>
       `;
     }
+
+    return rows
+      .map((bundle) => {
+        const status = deriveBundleStatus(bundle.bundle_no);
+        const delivered = deliveredQty(bundle.bundle_no);
+        const remaining = remainingQty(bundle);
+        const over = overDeliveredQty(bundle);
+        const required = Math.max(bundle.qty_required, 0);
+        const progress = percentage(delivered, required);
+
+        return `
+          <tr>
+            <td>${htmlEscape(bundle.bundle_no)}</td>
+            <td>${htmlEscape(bundle.section)}</td>
+            <td>${required}</td>
+            <td>${delivered}</td>
+            <td>${remaining}</td>
+            <td>${over}</td>
+            <td>${bundle.member_qty}</td>
+            <td>${progress.toFixed(1)}%</td>
+            <td>${htmlEscape(statusLabel(status))}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function buildOutstandingRowsHtml(rows: OutstandingBundle[]) {
+    if (!rows.length) {
+      return `
+        <tr>
+          <td colspan="8" class="empty-cell">No outstanding items.</td>
+        </tr>
+      `;
+    }
+
+    return rows
+      .map((item) => {
+        return `
+          <tr>
+            <td>${htmlEscape(item.bundle.bundle_no)}</td>
+            <td>${htmlEscape(item.bundle.section)}</td>
+            <td>${item.required}</td>
+            <td>${item.delivered}</td>
+            <td>${item.remaining}</td>
+            <td>${item.progress.toFixed(1)}%</td>
+            <td>${htmlEscape(statusLabel(item.status))}</td>
+            <td>${htmlEscape(item.reason)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function printMaterialsReport(mode: "full" | "outstanding") {
+    const towerLabel = getTowerPrintLabel(tower);
+    const towerLine = safeString(tower?.line, "");
+    const title = mode === "outstanding" ? "Outstanding Materials" : "Materials Register";
+
+    const outstandingHtml = `
+      <h2>Outstanding Items</h2>
+      <p class="section-note">
+        Items listed here are not fully delivered, not checked, partially checked, missing, or marked as an issue.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Bundle No</th>
+            <th>Section</th>
+            <th>Required</th>
+            <th>Delivered</th>
+            <th>Remaining</th>
+            <th>Progress</th>
+            <th>Status</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${buildOutstandingRowsHtml(outstandingBundles)}
+        </tbody>
+      </table>
+    `;
+
+    const completedHtml = `
+      <h2>Completed Items</h2>
+      <p class="section-note">
+        Items listed here are fully delivered and marked arrived.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Bundle No</th>
+            <th>Section</th>
+            <th>Required</th>
+            <th>Delivered</th>
+            <th>Remaining</th>
+            <th>Over</th>
+            <th>Member Qty</th>
+            <th>Progress</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${buildBundleRowsHtml(completedBundles)}
+        </tbody>
+      </table>
+    `;
+
+    const fullRegisterHtml = `
+      <h2>Full Bundle Register</h2>
+      <p class="section-note">
+        Complete register for the tower. Outstanding section is shown first for driver and crew reference.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Bundle No</th>
+            <th>Section</th>
+            <th>Required</th>
+            <th>Delivered</th>
+            <th>Remaining</th>
+            <th>Over</th>
+            <th>Member Qty</th>
+            <th>Progress</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${buildBundleRowsHtml(bundles)}
+        </tbody>
+      </table>
+    `;
+
+    const bodyHtml =
+      mode === "outstanding"
+        ? outstandingHtml
+        : `${outstandingHtml}<div class="page-break"></div>${completedHtml}<div class="page-break"></div>${fullRegisterHtml}`;
 
     const html = `
 <html>
 <head>
-<title>${title} - ${towerLabel}</title>
+<title>${htmlEscape(title)} - ${htmlEscape(towerLabel)}</title>
 <style>
-body{font-family:Arial,sans-serif;padding:24px;color:#0f172a;}
-.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:18px;}
-h1{margin:0;font-size:22px;}
-.tower-label{font-size:18px;font-weight:700;}
-.meta{font-size:12px;color:#64748b;margin-top:4px;}
-table{border-collapse:collapse;width:100%;}
-th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px;text-align:left;}
-th{background:#f1f5f9;}
-.print-footer{margin-top:20px;padding-top:8px;border-top:1px solid #cbd5e1;font-size:11px;color:#64748b;display:flex;justify-content:space-between;}
+body{
+  font-family:Arial,sans-serif;
+  padding:24px;
+  color:#0f172a;
+}
+.print-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  border-bottom:2px solid #0f172a;
+  padding-bottom:12px;
+  margin-bottom:18px;
+}
+h1{
+  margin:0;
+  font-size:22px;
+}
+h2{
+  font-size:16px;
+  margin:22px 0 6px;
+}
+.tower-label{
+  font-size:18px;
+  font-weight:700;
+}
+.meta{
+  font-size:12px;
+  color:#64748b;
+  margin-top:4px;
+}
+.summary-grid{
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  gap:8px;
+  margin:14px 0 18px;
+}
+.summary-card{
+  border:1px solid #cbd5e1;
+  background:#f8fafc;
+  padding:8px;
+  border-radius:8px;
+}
+.summary-label{
+  font-size:10px;
+  color:#64748b;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+.summary-value{
+  font-size:16px;
+  font-weight:800;
+  margin-top:3px;
+}
+.section-note{
+  font-size:12px;
+  color:#64748b;
+  margin:0 0 8px;
+}
+table{
+  border-collapse:collapse;
+  width:100%;
+  margin-bottom:16px;
+}
+th,td{
+  border:1px solid #cbd5e1;
+  padding:7px;
+  font-size:11px;
+  text-align:left;
+  vertical-align:top;
+}
+th{
+  background:#f1f5f9;
+  font-weight:700;
+}
+.empty-cell{
+  text-align:center;
+  color:#64748b;
+  padding:16px;
+}
+.print-footer{
+  margin-top:20px;
+  padding-top:8px;
+  border-top:1px solid #cbd5e1;
+  font-size:11px;
+  color:#64748b;
+  display:flex;
+  justify-content:space-between;
+}
+.page-break{
+  page-break-before:always;
+}
+@media print{
+  body{
+    padding:12px;
+  }
+  .page-break{
+    page-break-before:always;
+  }
+}
 </style>
 </head>
+
 <body>
 <div class="print-header">
-<div>
-<h1>${title}</h1>
-<div class="meta">Printed ${new Date().toLocaleString()}</div>
+  <div>
+    <h1>${htmlEscape(title)}</h1>
+    <div class="meta">Printed ${new Date().toLocaleString()}</div>
+  </div>
+
+  <div style="text-align:right">
+    <div class="tower-label">Tower: ${htmlEscape(towerLabel)}</div>
+    <div class="meta">${towerLine ? `Line: ${htmlEscape(towerLine)}` : ""}</div>
+  </div>
 </div>
-<div style="text-align:right">
-<div class="tower-label">Tower: ${towerLabel}</div>
-<div class="meta">${towerLine ? `Line: ${towerLine}` : ""}</div>
+
+<div class="summary-grid">
+  <div class="summary-card">
+    <div class="summary-label">Bundles</div>
+    <div class="summary-value">${bundles.length}</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-label">Required</div>
+    <div class="summary-value">${overallRequired}</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-label">Delivered</div>
+    <div class="summary-value">${overallDelivered}</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-label">Outstanding</div>
+    <div class="summary-value">${outstandingBundles.length}</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-label">Progress</div>
+    <div class="summary-value">${overallProgress.toFixed(1)}%</div>
+  </div>
 </div>
-</div>
+
 ${bodyHtml}
+
 <div class="print-footer">
-<span>${title} - Tower ${towerLabel}</span>
-<span>TTTracker</span>
+  <span>${htmlEscape(title)} - Tower ${htmlEscape(towerLabel)}</span>
+  <span>TTTracker</span>
 </div>
 </body>
 </html>
@@ -1484,7 +1798,7 @@ ${bodyHtml}
                   Materials Register
                 </h1>
                 <p className="text-xs md:text-sm text-slate-500">
-                  Site check bundles or members, update arrival status, import and export registers.
+                  Site check bundles or members, update arrival status, and print outstanding items.
                 </p>
               </div>
 
@@ -1495,12 +1809,20 @@ ${bodyHtml}
                   </span>
                 )}
 
-                <button onClick={printCurrentView} className="compact-secondary-btn">
-                  Print
+                <button onClick={printFullTowerReport} className="compact-secondary-btn">
+                  Print Full
+                </button>
+
+                <button onClick={printOutstandingItems} className="compact-secondary-btn">
+                  Print Outstanding
+                </button>
+
+                <button onClick={exportOutstandingCSV} className="compact-secondary-btn">
+                  Export Outstanding
                 </button>
 
                 <button onClick={exportCurrentViewCSV} className="compact-secondary-btn">
-                  Export
+                  Export CSV
                 </button>
 
                 <button
@@ -1531,11 +1853,21 @@ ${bodyHtml}
               required={overallRequired}
               remaining={overallRemaining}
               progress={overallProgress}
+              outstanding={outstandingBundles.length}
+              completed={completedBundles.length}
               notChecked={bundleStatusCounts.not_checked}
               arrived={bundleStatusCounts.arrived}
               partial={bundleStatusCounts.partial}
               missing={bundleStatusCounts.missing}
               issues={bundleStatusCounts.issue}
+            />
+
+            <OutstandingPanel
+              outstanding={outstandingBundles}
+              showDetails={showOutstandingDetails}
+              setShowDetails={setShowOutstandingDetails}
+              onPrint={printOutstandingItems}
+              onExport={exportOutstandingCSV}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_auto_auto_auto] gap-2">
@@ -1547,8 +1879,16 @@ ${bodyHtml}
               />
 
               <div className="grid grid-cols-2 bg-slate-100 rounded-xl p-1">
-                <ModeButton active={viewMode === "bundles"} onClick={() => setViewMode("bundles")} label="Bundles" />
-                <ModeButton active={viewMode === "members"} onClick={() => setViewMode("members")} label="Members" />
+                <ModeButton
+                  active={viewMode === "bundles"}
+                  onClick={() => setViewMode("bundles")}
+                  label="Bundles"
+                />
+                <ModeButton
+                  active={viewMode === "members"}
+                  onClick={() => setViewMode("members")}
+                  label="Members"
+                />
               </div>
 
               <select
@@ -1614,7 +1954,7 @@ ${bodyHtml}
             {manageMode && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
                 <div className="text-xs md:text-sm text-amber-800 font-medium">
-                  Manage mode on. Select rows to delete, or edit fields inline.
+                  Manage mode on. Bundle Qty now represents total required quantity, for example 3 of the same bundle.
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1661,6 +2001,7 @@ ${bodyHtml}
                   const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
                   const delivered = deliveredQty(bundle.bundle_no);
                   const remaining = remainingQty(bundle);
+                  const overDelivered = overDeliveredQty(bundle);
                   const deliveryProgress = percentage(delivered, bundle.qty_required);
 
                   return (
@@ -1701,11 +2042,23 @@ ${bodyHtml}
                                   >
                                     {statusLabel(status)}
                                   </span>
+
+                                  {remaining > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-rose-50 text-rose-700 border-rose-200">
+                                      {remaining} Outstanding
+                                    </span>
+                                  )}
+
+                                  {overDelivered > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-blue-50 text-blue-700 border-blue-200">
+                                      {overDelivered} Over
+                                    </span>
+                                  )}
                                 </div>
 
                                 <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
-                                  {bundle.section} • Qty {bundle.qty_required} • Members{" "}
-                                  {bundle.member_qty} • Delivered {delivered} • Remaining {remaining}
+                                  {bundle.section} • Required {bundle.qty_required} • Delivered{" "}
+                                  {delivered} • Remaining {remaining} • Members {bundle.member_qty}
                                   {bundle.total_weight !== null ? ` • ${bundle.total_weight} kg` : ""}
                                 </div>
 
@@ -1770,10 +2123,38 @@ ${bodyHtml}
 
                           {manageMode && (
                             <div className="grid grid-cols-1 md:grid-cols-5 gap-2 pt-2 border-t border-slate-200">
-                              <Field label="Bundle No" value={bundle.bundle_no} onChange={(v) => updateBundleRow(bundle.ui_id, "bundle_no", v)} />
-                              <Field label="Section" value={bundle.section} onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)} />
-                              <Field label="Bundle Qty" value={bundle.qty_required} onChange={(v) => updateBundleRow(bundle.ui_id, "qty_required", safeNumber(v, 0))} />
-                              <Field label="Member Qty" value={bundle.member_qty} onChange={(v) => updateBundleRow(bundle.ui_id, "member_qty", safeNumber(v, 0))} />
+                              <Field
+                                label="Bundle No"
+                                value={bundle.bundle_no}
+                                onChange={(v) => updateBundleRow(bundle.ui_id, "bundle_no", v)}
+                              />
+                              <Field
+                                label="Section"
+                                value={bundle.section}
+                                onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)}
+                              />
+                              <Field
+                                label="Required Bundle Qty"
+                                value={bundle.qty_required}
+                                onChange={(v) =>
+                                  updateBundleRow(
+                                    bundle.ui_id,
+                                    "qty_required",
+                                    Math.max(safeNumber(v, 0), 0),
+                                  )
+                                }
+                              />
+                              <Field
+                                label="Member Qty"
+                                value={bundle.member_qty}
+                                onChange={(v) =>
+                                  updateBundleRow(
+                                    bundle.ui_id,
+                                    "member_qty",
+                                    Math.max(safeNumber(v, 0), 0),
+                                  )
+                                }
+                              />
                               <Field
                                 label="Total Weight"
                                 value={bundle.total_weight ?? ""}
@@ -1790,11 +2171,15 @@ ${bodyHtml}
 
                           {expanded && (
                             <div className="pt-2 border-t border-slate-200 space-y-2">
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                                <MiniInfo label="Member lines" value={relatedMembers.length} />
-                                <MiniInfo label="Member qty from list" value={memberQtyFromMemberList(bundle.bundle_no)} />
+                              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
                                 <MiniInfo label="Required" value={bundle.qty_required} />
                                 <MiniInfo label="Delivered" value={delivered} />
+                                <MiniInfo label="Remaining" value={remaining} />
+                                <MiniInfo label="Member lines" value={relatedMembers.length} />
+                                <MiniInfo
+                                  label="Member qty list"
+                                  value={memberQtyFromMemberList(bundle.bundle_no)}
+                                />
                               </div>
 
                               {relatedMembers.length === 0 ? (
@@ -1838,20 +2223,40 @@ ${bodyHtml}
                                           </div>
 
                                           <div className="grid grid-cols-5 gap-1.5">
-                                            <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                                            <button
+                                              onClick={() => void updateMemberStatus(member, "arrived")}
+                                              className="mini-action bg-emerald-600 text-white"
+                                              title="Arrived"
+                                            >
                                               ✓
                                             </button>
-                                            <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                                            <button
+                                              onClick={() => void updateMemberStatus(member, "not_here")}
+                                              className="mini-action bg-orange-500 text-white"
+                                              title="Not Here"
+                                            >
                                               —
                                             </button>
-                                            <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                                            <button
+                                              onClick={() => void updateMemberStatus(member, "missing")}
+                                              className="mini-action bg-rose-600 text-white"
+                                              title="Missing"
+                                            >
                                               ✕
                                             </button>
-                                            <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                                            <button
+                                              onClick={() => void updateMemberStatus(member, "issue")}
+                                              className="mini-action bg-purple-600 text-white"
+                                              title="Issue"
+                                            >
                                               !
                                             </button>
                                             {hasStatus ? (
-                                              <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                                              <button
+                                                onClick={() => void clearMemberStatus(member)}
+                                                className="mini-action bg-slate-200 text-slate-800"
+                                                title="Clear"
+                                              >
                                                 C
                                               </button>
                                             ) : (
@@ -1924,8 +2329,8 @@ ${bodyHtml}
                               </div>
 
                               <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
-                                Bundle {member.bundle_reference} • Bundle Member Qty{" "}
-                                {matchingBundle?.member_qty ?? "—"} • PN {member.pn_final || "—"} •
+                                Bundle {member.bundle_reference} • Bundle Qty{" "}
+                                {matchingBundle?.qty_required ?? "—"} • PN {member.pn_final || "—"} •
                                 Drawing {member.drawing_number || "—"} • Qty {member.qty_per_tower} •{" "}
                                 {member.section}
                               </div>
@@ -1933,20 +2338,40 @@ ${bodyHtml}
                           </div>
 
                           <div className="grid grid-cols-5 gap-1.5">
-                            <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                            <button
+                              onClick={() => void updateMemberStatus(member, "arrived")}
+                              className="mini-action bg-emerald-600 text-white"
+                              title="Arrived"
+                            >
                               ✓
                             </button>
-                            <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                            <button
+                              onClick={() => void updateMemberStatus(member, "not_here")}
+                              className="mini-action bg-orange-500 text-white"
+                              title="Not Here"
+                            >
                               —
                             </button>
-                            <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                            <button
+                              onClick={() => void updateMemberStatus(member, "missing")}
+                              className="mini-action bg-rose-600 text-white"
+                              title="Missing"
+                            >
                               ✕
                             </button>
-                            <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                            <button
+                              onClick={() => void updateMemberStatus(member, "issue")}
+                              className="mini-action bg-purple-600 text-white"
+                              title="Issue"
+                            >
                               !
                             </button>
                             {!!getMemberCheck(member) ? (
-                              <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                              <button
+                                onClick={() => void clearMemberStatus(member)}
+                                className="mini-action bg-slate-200 text-slate-800"
+                                title="Clear"
+                              >
                                 C
                               </button>
                             ) : (
@@ -1957,12 +2382,42 @@ ${bodyHtml}
 
                         {manageMode && (
                           <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-slate-200">
-                            <Field label="Bundle Ref" value={member.bundle_reference} onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)} />
-                            <Field label="Mark No" value={member.mark_no} onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)} />
-                            <Field label="PN" value={member.pn_final} onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)} />
-                            <Field label="Drawing" value={member.drawing_number} onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)} />
-                            <Field label="Qty" value={member.qty_per_tower} onChange={(v) => updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))} />
-                            <Field label="Section" value={member.section} onChange={(v) => updateMemberRow(member.ui_id, "section", v)} />
+                            <Field
+                              label="Bundle Ref"
+                              value={member.bundle_reference}
+                              onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
+                            />
+                            <Field
+                              label="Mark No"
+                              value={member.mark_no}
+                              onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
+                            />
+                            <Field
+                              label="PN"
+                              value={member.pn_final}
+                              onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
+                            />
+                            <Field
+                              label="Drawing"
+                              value={member.drawing_number}
+                              onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
+                            />
+                            <Field
+                              label="Qty"
+                              value={member.qty_per_tower}
+                              onChange={(v) =>
+                                updateMemberRow(
+                                  member.ui_id,
+                                  "qty_per_tower",
+                                  Math.max(safeNumber(v, 0), 0),
+                                )
+                              }
+                            />
+                            <Field
+                              label="Section"
+                              value={member.section}
+                              onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                            />
                           </div>
                         )}
                       </div>
@@ -2049,20 +2504,40 @@ ${bodyHtml}
                                 </div>
 
                                 <div className="grid grid-cols-5 gap-1.5">
-                                  <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "arrived")}
+                                    className="mini-action bg-emerald-600 text-white"
+                                    title="Arrived"
+                                  >
                                     ✓
                                   </button>
-                                  <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "not_here")}
+                                    className="mini-action bg-orange-500 text-white"
+                                    title="Not Here"
+                                  >
                                     —
                                   </button>
-                                  <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "missing")}
+                                    className="mini-action bg-rose-600 text-white"
+                                    title="Missing"
+                                  >
                                     ✕
                                   </button>
-                                  <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                                  <button
+                                    onClick={() => void updateMemberStatus(member, "issue")}
+                                    className="mini-action bg-purple-600 text-white"
+                                    title="Issue"
+                                  >
                                     !
                                   </button>
                                   {!!getMemberCheck(member) ? (
-                                    <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                                    <button
+                                      onClick={() => void clearMemberStatus(member)}
+                                      className="mini-action bg-slate-200 text-slate-800"
+                                      title="Clear"
+                                    >
                                       C
                                     </button>
                                   ) : (
@@ -2073,12 +2548,46 @@ ${bodyHtml}
 
                               {manageMode && (
                                 <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-rose-200">
-                                  <Field label="Bundle Ref" value={member.bundle_reference} onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)} />
-                                  <Field label="Mark No" value={member.mark_no} onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)} />
-                                  <Field label="PN" value={member.pn_final} onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)} />
-                                  <Field label="Drawing" value={member.drawing_number} onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)} />
-                                  <Field label="Qty" value={member.qty_per_tower} onChange={(v) => updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))} />
-                                  <Field label="Section" value={member.section} onChange={(v) => updateMemberRow(member.ui_id, "section", v)} />
+                                  <Field
+                                    label="Bundle Ref"
+                                    value={member.bundle_reference}
+                                    onChange={(v) =>
+                                      updateMemberRow(member.ui_id, "bundle_reference", v)
+                                    }
+                                  />
+                                  <Field
+                                    label="Mark No"
+                                    value={member.mark_no}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
+                                  />
+                                  <Field
+                                    label="PN"
+                                    value={member.pn_final}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
+                                  />
+                                  <Field
+                                    label="Drawing"
+                                    value={member.drawing_number}
+                                    onChange={(v) =>
+                                      updateMemberRow(member.ui_id, "drawing_number", v)
+                                    }
+                                  />
+                                  <Field
+                                    label="Qty"
+                                    value={member.qty_per_tower}
+                                    onChange={(v) =>
+                                      updateMemberRow(
+                                        member.ui_id,
+                                        "qty_per_tower",
+                                        Math.max(safeNumber(v, 0), 0),
+                                      )
+                                    }
+                                  />
+                                  <Field
+                                    label="Section"
+                                    value={member.section}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                                  />
                                 </div>
                               )}
                             </div>
@@ -2197,6 +2706,8 @@ function CompactSummary({
   required,
   remaining,
   progress,
+  outstanding,
+  completed,
   notChecked,
   arrived,
   partial,
@@ -2210,6 +2721,8 @@ function CompactSummary({
   required: number;
   remaining: number;
   progress: number;
+  outstanding: number;
+  completed: number;
   notChecked: number;
   arrived: number;
   partial: number;
@@ -2224,6 +2737,8 @@ function CompactSummary({
         <SummaryPill label="Member Qty" value={memberQty} />
         <SummaryPill label="Delivered" value={`${delivered}/${required}`} />
         <SummaryPill label="Remaining" value={remaining} />
+        <SummaryPill label="Outstanding" value={outstanding} tone="red" strong />
+        <SummaryPill label="Completed" value={completed} tone="green" />
         <SummaryPill label="Progress" value={`${progress.toFixed(1)}%`} strong />
         <SummaryPill label="Not Checked" value={notChecked} />
         <SummaryPill label="Arrived" value={arrived} tone="green" />
@@ -2262,6 +2777,117 @@ function SummaryPill({
     <div className={`border rounded-full px-2.5 py-1 ${tones[tone]}`}>
       <span className="opacity-70">{label}: </span>
       <span className={strong ? "font-black" : "font-bold"}>{value}</span>
+    </div>
+  );
+}
+
+function OutstandingPanel({
+  outstanding,
+  showDetails,
+  setShowDetails,
+  onPrint,
+  onExport,
+}: {
+  outstanding: OutstandingBundle[];
+  showDetails: boolean;
+  setShowDetails: (value: boolean) => void;
+  onPrint: () => void;
+  onExport: () => void;
+}) {
+  const topOutstanding = outstanding.slice(0, 8);
+
+  return (
+    <div className="rounded-xl border border-rose-200 bg-rose-50 overflow-hidden">
+      <div className="p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+        <div>
+          <div className="text-sm md:text-base font-bold text-rose-900">
+            Outstanding Deliveries / Items
+          </div>
+          <div className="text-xs text-rose-700">
+            Quick list for drivers and crews. Shows bundles not fully delivered, unchecked, missing, partial, or issues.
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button onClick={onPrint} className="compact-secondary-btn">
+            Print Outstanding
+          </button>
+          <button onClick={onExport} className="compact-secondary-btn">
+            Export Outstanding
+          </button>
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className="compact-secondary-btn"
+          >
+            {showDetails ? "Hide" : "Show"}
+          </button>
+        </div>
+      </div>
+
+      {showDetails && (
+        <div className="border-t border-rose-200 bg-white p-2">
+          {outstanding.length === 0 ? (
+            <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+              No outstanding items. All required bundles are delivered and checked.
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {topOutstanding.map((item) => (
+                <div
+                  key={item.bundle.ui_id}
+                  className="rounded-xl border border-slate-200 bg-white p-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-bold text-sm text-slate-900">
+                        {item.bundle.bundle_no}
+                      </div>
+
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusClasses(
+                          item.status,
+                        )}`}
+                      >
+                        {statusLabel(item.status)}
+                      </span>
+
+                      {item.remaining > 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-rose-50 text-rose-700 border-rose-200">
+                          {item.remaining} outstanding
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-xs text-slate-500 mt-1">
+                      {item.bundle.section} • Required {item.required} • Delivered {item.delivered} •{" "}
+                      Remaining {item.remaining} • {item.reason}
+                    </div>
+                  </div>
+
+                  <div className="w-full md:w-40">
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-rose-600 rounded-full"
+                        style={{ width: `${item.progress}%` }}
+                      />
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 text-right">
+                      {item.progress.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {outstanding.length > topOutstanding.length && (
+                <div className="text-xs text-slate-500 px-2 py-1">
+                  Showing first {topOutstanding.length} of {outstanding.length}. Use Print Outstanding
+                  or Export Outstanding for the full list.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
