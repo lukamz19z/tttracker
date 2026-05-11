@@ -7,22 +7,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-slate-100">
-
-        {/* TOP BAR */}
-        <div className="h-14 bg-white border-b shadow-sm flex items-center justify-between px-6">
-          <h1 className="text-xl font-bold text-slate-800">
-            TTTracker
-          </h1>
-
-          <button className="bg-slate-900 text-white px-4 py-1 rounded-lg">
-            Logout
-          </button>
-        </div>
-
-        {/* PAGE CONTENT — NO GAP */}
+      <body className="bg-slate-100 min-h-screen">
         {children}
-
       </body>
     </html>
   );
