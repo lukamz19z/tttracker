@@ -1,4 +1,4 @@
-import { Sidebar } from "@/components/layout/sidebar";
+import { AppShell } from "@/components/layout/app-shell";
 
 export default async function ProjectLayout({
   children,
@@ -10,14 +10,11 @@ export default async function ProjectLayout({
   const { projectId } = await params;
 
   return (
-    <div className="flex">
-
-      <Sidebar projectId={projectId} />
-
-      <main className="flex-1 p-6">
-        {children}
-      </main>
-
-    </div>
+    <AppShell
+      title="Project"
+      projectId={projectId}
+    >
+      {children}
+    </AppShell>
   );
 }
