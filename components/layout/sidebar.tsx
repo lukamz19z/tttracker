@@ -63,19 +63,24 @@ export function Sidebar({
       ? towers[currentTowerIndex + 1]
       : null;
 
-  function linkStyle(href: string) {
-    const isActive =
-      pathname === href || pathname.startsWith(href + "/");
+function linkStyle(href: string) {
+  let isActive = false;
 
-    return `
-      flex items-center gap-2 px-3 py-2 rounded-xl transition text-sm
-      ${
-        isActive
-          ? "bg-slate-900 text-white font-semibold shadow-sm"
-          : "hover:bg-slate-100 text-slate-700"
-      }
-    `;
+  if (projectId && href === `/project/${projectId}`) {
+    isActive = pathname === href;
+  } else {
+    isActive = pathname === href || pathname.startsWith(href + "/");
   }
+
+  return `
+    flex items-center gap-2 px-3 py-2 rounded-xl transition text-sm
+    ${
+      isActive
+        ? "bg-slate-900 text-white font-semibold shadow-sm"
+        : "hover:bg-slate-100 text-slate-700"
+    }
+  `;
+}
 
   return (
     <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
