@@ -69,7 +69,7 @@ export default function CreateProjectPage() {
   }
 
   return (
-    <AppShell title="Create Project">
+<AppShell>
       <div className="bg-white p-6 rounded-2xl shadow-sm max-w-xl">
         <h2 className="text-xl font-semibold mb-4">New Project</h2>
 
