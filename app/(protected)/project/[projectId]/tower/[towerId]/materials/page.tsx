@@ -63,8 +63,19 @@ type Delivery = {
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
-type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue";
-type MemberCheckStatus = "not_checked" | "arrived" | "not_here" | "missing" | "issue";
+type BundleCheckStatus =
+  | "not_checked"
+  | "arrived"
+  | "partial"
+  | "missing"
+  | "issue";
+
+type MemberCheckStatus =
+  | "not_checked"
+  | "arrived"
+  | "not_here"
+  | "missing"
+  | "issue";
 
 type DbBundleCheckRow = {
   id?: string;
@@ -208,13 +219,13 @@ function statusLabel(status: BundleCheckStatus | MemberCheckStatus): string {
     case "arrived":
       return "Arrived";
     case "partial":
-      return "Partially Here";
+      return "Partial";
     case "missing":
       return "Missing";
     case "not_here":
       return "Not Here";
     case "issue":
-      return "Issue / Review";
+      return "Issue";
     case "not_checked":
     default:
       return "Not Checked";
@@ -239,13 +250,22 @@ function statusClasses(status: BundleCheckStatus | MemberCheckStatus): string {
   }
 }
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-
-  return d.toLocaleString();
+function statusBorderClasses(status: BundleCheckStatus | MemberCheckStatus): string {
+  switch (status) {
+    case "arrived":
+      return "border-l-emerald-500";
+    case "partial":
+      return "border-l-amber-500";
+    case "missing":
+      return "border-l-rose-500";
+    case "not_here":
+      return "border-l-orange-500";
+    case "issue":
+      return "border-l-purple-500";
+    case "not_checked":
+    default:
+      return "border-l-slate-300";
+  }
 }
 
 function csvEscape(value: string | number | null | undefined): string {
@@ -277,6 +297,11 @@ function matchesText(...values: Array<string | number | null | undefined>) {
     .toLowerCase();
 }
 
+function percentage(part: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min((part / total) * 100, 100);
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
@@ -305,7 +330,8 @@ export default function MaterialsPage() {
   const [search, setSearch] = useState("");
   const [manageMode, setManageMode] = useState(false);
 
-  const [expandedBundles, setExpandedBundles] = useState<Record<string, boolean>>({});
+  const [expandedBundleNo, setExpandedBundleNo] = useState<string | null>(null);
+  const [showAdvancedActions, setShowAdvancedActions] = useState(false);
   const [showUnmatchedMembers, setShowUnmatchedMembers] = useState(false);
   const [selectedBundleRows, setSelectedBundleRows] = useState<Record<string, boolean>>({});
   const [selectedMemberRows, setSelectedMemberRows] = useState<Record<string, boolean>>({});
@@ -610,9 +636,7 @@ export default function MaterialsPage() {
         onConflict: "tower_id,bundle_no",
       });
 
-      if (error) {
-        console.error("bundle auto save error", error);
-      }
+      if (error) console.error("bundle auto save error", error);
     }
 
     setSaving(false);
@@ -638,9 +662,7 @@ export default function MaterialsPage() {
         onConflict: "tower_id,bundle_reference,mark_no",
       });
 
-      if (error) {
-        console.error("member save error", error);
-      }
+      if (error) console.error("member save error", error);
     }
 
     setSaving(false);
@@ -663,6 +685,8 @@ export default function MaterialsPage() {
         total_weight: null,
       },
     ]);
+
+    setManageMode(true);
   }
 
   function updateBundleRow(ui_id: string, field: keyof Bundle, value: string | number | null) {
@@ -718,6 +742,9 @@ export default function MaterialsPage() {
         section: "General",
       },
     ]);
+
+    setManageMode(true);
+    setViewMode("members");
   }
 
   function updateMemberRow(ui_id: string, field: keyof Member, value: string | number) {
@@ -796,9 +823,7 @@ export default function MaterialsPage() {
 
     setMemberChecks((prev) => {
       const key = `${payload.bundle_no}__${payload.mark_no}`;
-      const next = prev.filter(
-        (row) => `${row.bundle_no.trim()}__${row.mark_no.trim()}` !== key,
-      );
+      const next = prev.filter((row) => `${row.bundle_no.trim()}__${row.mark_no.trim()}` !== key);
       next.push(payload);
       return next;
     });
@@ -965,118 +990,118 @@ export default function MaterialsPage() {
      IMPORTS
   ========================================================= */
 
-async function importBundlesCSV(file: File) {
-  setBundleImporting(true);
+  async function importBundlesCSV(file: File) {
+    setBundleImporting(true);
 
-  Papa.parse<CsvRow>(file, {
-    header: true,
-    skipEmptyLines: true,
-    complete: async (res: ParseResult<CsvRow>) => {
-      const parsedRows = res.data
-        .map((r): BundleImportRow | null => {
-          const bundleNo =
-            r.bundle_no ||
-            r["Bundle No"] ||
-            r["Bundle Number"] ||
-            r.bundle ||
-            r["Bundle Reference"];
+    Papa.parse<CsvRow>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (res: ParseResult<CsvRow>) => {
+        const parsedRows = res.data
+          .map((r): BundleImportRow | null => {
+            const bundleNo =
+              r.bundle_no ||
+              r["Bundle No"] ||
+              r["Bundle Number"] ||
+              r.bundle ||
+              r["Bundle Reference"];
 
-          if (!bundleNo) return null;
+            if (!bundleNo) return null;
 
-          const cleanBundleNo = String(bundleNo).trim();
-          const lowerBundleNo = cleanBundleNo.toLowerCase();
+            const cleanBundleNo = String(bundleNo).trim();
+            const lowerBundleNo = cleanBundleNo.toLowerCase();
 
-          if (
-            cleanBundleNo === "" ||
-            lowerBundleNo === "bundle no" ||
-            lowerBundleNo === "bundle number" ||
-            lowerBundleNo === "pcs." ||
-            lowerBundleNo === "pcs" ||
-            lowerBundleNo === "kg's" ||
-            lowerBundleNo === "kgs" ||
-            lowerBundleNo === "kg" ||
-            lowerBundleNo === "basic body" ||
-            lowerBundleNo === "body extension" ||
-            lowerBundleNo === "common body" ||
-            cleanBundleNo.length < 3
-          ) {
-            return null;
-          }
+            if (
+              cleanBundleNo === "" ||
+              lowerBundleNo === "bundle no" ||
+              lowerBundleNo === "bundle number" ||
+              lowerBundleNo === "pcs." ||
+              lowerBundleNo === "pcs" ||
+              lowerBundleNo === "kg's" ||
+              lowerBundleNo === "kgs" ||
+              lowerBundleNo === "kg" ||
+              lowerBundleNo === "basic body" ||
+              lowerBundleNo === "body extension" ||
+              lowerBundleNo === "common body" ||
+              cleanBundleNo.length < 3
+            ) {
+              return null;
+            }
 
-          return {
-            tower_id: towerId,
-            bundle_no: cleanBundleNo,
-            section: normaliseSection(
-              safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
-            ),
-            qty_required: safeNumber(
-              r.qty_required ||
-                r["Bundle Qty"] ||
-                r["Bundle Quantity"] ||
-                r["Qty Required"] ||
-                r["Qty/Tower"] ||
-                r["Quantity of Bundles For Tower"] ||
-                r["NO."] ||
+            return {
+              tower_id: towerId,
+              bundle_no: cleanBundleNo,
+              section: normaliseSection(
+                safeString(r.section || r["Section"] || r["Bundle Group"] || "General"),
+              ),
+              qty_required: safeNumber(
+                r.qty_required ||
+                  r["Bundle Qty"] ||
+                  r["Bundle Quantity"] ||
+                  r["Qty Required"] ||
+                  r["Qty/Tower"] ||
+                  r["Quantity of Bundles For Tower"] ||
+                  r["NO."] ||
+                  0,
                 0,
-              0,
-            ),
-            member_qty: safeNumber(
-              r.member_qty ||
-                r["Member Qty"] ||
-                r["Member Quantity"] ||
-                r["Members"] ||
-                r["No. Members"] ||
-                r["Member Count"] ||
+              ),
+              member_qty: safeNumber(
+                r.member_qty ||
+                  r["Member Qty"] ||
+                  r["Member Quantity"] ||
+                  r["Members"] ||
+                  r["No. Members"] ||
+                  r["Member Count"] ||
+                  0,
                 0,
-              0,
-            ),
-            total_weight: (() => {
-              const n = Number(
-                r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"],
-              );
-              return Number.isFinite(n) ? n : null;
-            })(),
-          };
-        })
-        .filter((row): row is BundleImportRow => row !== null);
+              ),
+              total_weight: (() => {
+                const n = Number(
+                  r.total_weight || r["Total Weight"] || r["Bundle Mass"] || r["Bundle Weight"],
+                );
+                return Number.isFinite(n) ? n : null;
+              })(),
+            };
+          })
+          .filter((row): row is BundleImportRow => row !== null);
 
-      const rowMap = new Map<string, BundleImportRow>();
+        const rowMap = new Map<string, BundleImportRow>();
 
-      parsedRows.forEach((row) => {
-        const key = `${row.tower_id}__${row.bundle_no}`;
-        rowMap.set(key, row);
-      });
+        parsedRows.forEach((row) => {
+          const key = `${row.tower_id}__${row.bundle_no}`;
+          rowMap.set(key, row);
+        });
 
-      const rows = Array.from(rowMap.values());
+        const rows = Array.from(rowMap.values());
 
-      if (!rows.length) {
-        alert("No valid bundle rows found in CSV.");
+        if (!rows.length) {
+          alert("No valid bundle rows found in CSV.");
+          setBundleImporting(false);
+          return;
+        }
+
+        const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
+          onConflict: "tower_id,bundle_no",
+        });
+
         setBundleImporting(false);
-        return;
-      }
 
-      const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
-        onConflict: "tower_id,bundle_no",
-      });
+        if (error) {
+          console.error("bundle import error", error);
+          alert(`Bundle CSV import failed: ${error.message}`);
+          return;
+        }
 
-      setBundleImporting(false);
-
-      if (error) {
-        console.error("bundle import error", error);
-        alert(`Bundle CSV import failed: ${error.message}`);
-        return;
-      }
-
-      await load();
-      alert("Bundle CSV imported.");
-    },
-    error: (err) => {
-      console.error("bundle parse error", err);
-      setBundleImporting(false);
-      alert("Failed to parse bundle CSV.");
-    },
-  });
-}
+        await load();
+        alert("Bundle CSV imported.");
+      },
+      error: (err) => {
+        console.error("bundle parse error", err);
+        setBundleImporting(false);
+        alert("Failed to parse bundle CSV.");
+      },
+    });
+  }
 
   async function importMembersCSV(file: File) {
     setMemberImporting(true);
@@ -1087,13 +1112,7 @@ async function importBundlesCSV(file: File) {
       complete: async (res: ParseResult<CsvRow>) => {
         const rows = res.data
           .map((r): MemberImportRow | null => {
-            const markNo =
-              r.mark_no ||
-              r["Mark No"] ||
-              r["Mark No."] ||
-              r.mark ||
-              r["Member Mark"];
-
+            const markNo = r.mark_no || r["Mark No"] || r["Mark No."] || r.mark || r["Member Mark"];
             const bundleReference =
               r.bundle_reference || r["Bundle Reference"] || r.bundle_no || r["Bundle No"];
 
@@ -1402,88 +1421,34 @@ async function importBundlesCSV(file: File) {
 <html>
 <head>
 <title>${title} - ${towerLabel}</title>
-
 <style>
-body{
-font-family:Arial,sans-serif;
-padding:24px;
-color:#0f172a;
-}
-
-.print-header{
-display:flex;
-justify-content:space-between;
-align-items:flex-start;
-border-bottom:2px solid #0f172a;
-padding-bottom:12px;
-margin-bottom:18px;
-}
-
-h1{
-margin:0;
-font-size:22px;
-}
-
-.tower-label{
-font-size:18px;
-font-weight:700;
-}
-
-.meta{
-font-size:12px;
-color:#64748b;
-margin-top:4px;
-}
-
-table{
-border-collapse:collapse;
-width:100%;
-}
-
-th,td{
-border:1px solid #cbd5e1;
-padding:8px;
-font-size:12px;
-text-align:left;
-}
-
-th{
-background:#f1f5f9;
-}
-
-.print-footer{
-margin-top:20px;
-padding-top:8px;
-border-top:1px solid #cbd5e1;
-font-size:11px;
-color:#64748b;
-display:flex;
-justify-content:space-between;
-}
+body{font-family:Arial,sans-serif;padding:24px;color:#0f172a;}
+.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:18px;}
+h1{margin:0;font-size:22px;}
+.tower-label{font-size:18px;font-weight:700;}
+.meta{font-size:12px;color:#64748b;margin-top:4px;}
+table{border-collapse:collapse;width:100%;}
+th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px;text-align:left;}
+th{background:#f1f5f9;}
+.print-footer{margin-top:20px;padding-top:8px;border-top:1px solid #cbd5e1;font-size:11px;color:#64748b;display:flex;justify-content:space-between;}
 </style>
 </head>
-
 <body>
-
 <div class="print-header">
 <div>
 <h1>${title}</h1>
 <div class="meta">Printed ${new Date().toLocaleString()}</div>
 </div>
-
 <div style="text-align:right">
 <div class="tower-label">Tower: ${towerLabel}</div>
 <div class="meta">${towerLine ? `Line: ${towerLine}` : ""}</div>
 </div>
 </div>
-
 ${bodyHtml}
-
 <div class="print-footer">
 <span>${title} - Tower ${towerLabel}</span>
 <span>TTTracker</span>
 </div>
-
 </body>
 </html>
 `;
@@ -1503,97 +1468,107 @@ ${bodyHtml}
   ========================================================= */
 
   if (loading) {
-    return <div className="p-8">Loading materials register...</div>;
+    return <div className="p-4 md:p-8 text-sm text-slate-600">Loading materials register...</div>;
   }
 
   return (
-    <div className="p-3 md:p-8 space-y-4 bg-slate-50 min-h-screen">
+    <div className="min-h-screen bg-slate-50 p-2 md:p-6 space-y-3">
       {tower && <TowerHeader projectId={projectId} tower={tower} latestDate={latestDate} />}
 
-      <div className="bg-white border border-slate-200 rounded-2xl md:rounded-3xl shadow-sm overflow-hidden">
-        <div className="p-4 md:p-5 border-b border-slate-200 sticky top-0 bg-white z-20">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
-              <div>
-                <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Materials Register</h1>
-                <p className="text-slate-500 mt-1 text-sm md:text-base">
-                  Search bundles or members, confirm what arrived to site, and print filtered lists.
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
+          <div className="p-3 md:p-4 space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+              <div className="min-w-0">
+                <h1 className="text-xl md:text-2xl font-bold tracking-tight text-slate-900">
+                  Materials Register
+                </h1>
+                <p className="text-xs md:text-sm text-slate-500">
+                  Site check bundles or members, update arrival status, import and export registers.
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap gap-2">
                 {saving && (
-                  <div className="text-sm text-blue-600 font-medium px-3 py-2 bg-blue-50 rounded-xl border border-blue-100">
+                  <span className="px-3 py-2 rounded-xl bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold">
                     Saving…
-                  </div>
+                  </span>
                 )}
 
-                <button
-                  onClick={printCurrentView}
-                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
-                >
+                <button onClick={printCurrentView} className="compact-secondary-btn">
                   Print
                 </button>
 
+                <button onClick={exportCurrentViewCSV} className="compact-secondary-btn">
+                  Export
+                </button>
+
                 <button
-                  onClick={exportCurrentViewCSV}
-                  className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium"
+                  onClick={() => setShowAdvancedActions((prev) => !prev)}
+                  className="compact-secondary-btn"
                 >
-                  Export CSV
+                  {showAdvancedActions ? "Hide Tools" : "Tools"}
                 </button>
 
                 <button
                   onClick={() => setManageMode((prev) => !prev)}
-                  className={`px-3 py-2 rounded-xl text-sm font-medium border ${
+                  className={`px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border ${
                     manageMode
                       ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-white text-slate-700 border-slate-300"
+                      : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
                   }`}
                 >
-                  {manageMode ? "Exit Manage" : "Manage Data"}
+                  {manageMode ? "Exit Manage" : "Manage"}
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(240px,1fr)_auto_auto_auto_auto] gap-2 md:gap-3">
+            <CompactSummary
+              bundles={bundles.length}
+              members={members.length}
+              memberQty={totalBundleMemberQty}
+              delivered={overallDelivered}
+              required={overallRequired}
+              remaining={overallRemaining}
+              progress={overallProgress}
+              notChecked={bundleStatusCounts.not_checked}
+              arrived={bundleStatusCounts.arrived}
+              partial={bundleStatusCounts.partial}
+              missing={bundleStatusCounts.missing}
+              issues={bundleStatusCounts.issue}
+            />
+
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(240px,1fr)_auto_auto_auto] gap-2">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search bundle no, member mark, PN, drawing no..."
-                className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Search bundle, mark, PN, drawing..."
+                className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
               />
 
-              <div className="grid grid-cols-2 bg-slate-100 rounded-2xl p-1">
-                <ModeButton
-                  active={viewMode === "bundles"}
-                  onClick={() => setViewMode("bundles")}
-                  label="Bundles"
-                />
-                <ModeButton
-                  active={viewMode === "members"}
-                  onClick={() => setViewMode("members")}
-                  label="Members"
-                />
+              <div className="grid grid-cols-2 bg-slate-100 rounded-xl p-1">
+                <ModeButton active={viewMode === "bundles"} onClick={() => setViewMode("bundles")} label="Bundles" />
+                <ModeButton active={viewMode === "members"} onClick={() => setViewMode("members")} label="Members" />
               </div>
 
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                className="border border-slate-300 rounded-2xl px-4 py-3 text-sm bg-white"
+                className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm bg-white"
               >
                 <option value="all">All Statuses</option>
                 <option value="not_checked">Not Checked</option>
                 <option value="arrived">Arrived</option>
-                <option value="partial">Partially Here</option>
+                <option value="partial">Partial</option>
                 <option value="missing">Missing</option>
                 <option value="not_here">Not Here</option>
-                <option value="issue">Issue / Review</option>
+                <option value="issue">Issue</option>
               </select>
 
               <select
                 value={sectionFilter}
                 onChange={(e) => setSectionFilter(e.target.value)}
-                className="border border-slate-300 rounded-2xl px-4 py-3 text-sm bg-white"
+                className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm bg-white"
               >
                 <option value="all">All Sections</option>
                 {allSections.map((section) => (
@@ -1602,9 +1577,11 @@ ${bodyHtml}
                   </option>
                 ))}
               </select>
+            </div>
 
-              <div className="flex gap-2 flex-wrap">
-                <label className="px-3 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
+            {showAdvancedActions && (
+              <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                <label className="compact-secondary-btn cursor-pointer">
                   {bundleImporting ? "Uploading..." : "Reupload Bundles"}
                   <input
                     type="file"
@@ -1618,7 +1595,7 @@ ${bodyHtml}
                   />
                 </label>
 
-                <label className="px-3 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-sm font-medium cursor-pointer">
+                <label className="compact-secondary-btn cursor-pointer">
                   {memberImporting ? "Uploading..." : "Reupload Members"}
                   <input
                     type="file"
@@ -1632,54 +1609,36 @@ ${bodyHtml}
                   />
                 </label>
               </div>
-            </div>
+            )}
 
             {manageMode && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-                <div className="text-sm text-amber-800">
-                  Manage mode is on. Add, edit, save, or delete rows.
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
+                <div className="text-xs md:text-sm text-amber-800 font-medium">
+                  Manage mode on. Select rows to delete, or edit fields inline.
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={addBundleRow}
-                    className="px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
-                  >
+                  <button onClick={addBundleRow} className="compact-white-btn">
                     Add Bundle
                   </button>
 
-                  <button
-                    onClick={addMemberRow}
-                    className="px-3 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium"
-                  >
+                  <button onClick={addMemberRow} className="compact-white-btn">
                     Add Member
                   </button>
 
-                  <button
-                    onClick={saveBundlesNow}
-                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
-                  >
+                  <button onClick={saveBundlesNow} className="compact-primary-btn">
                     Save Bundles
                   </button>
 
-                  <button
-                    onClick={saveMembersNow}
-                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium"
-                  >
+                  <button onClick={saveMembersNow} className="compact-primary-btn">
                     Save Members
                   </button>
 
-                  <button
-                    onClick={deleteSelectedBundles}
-                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
-                  >
+                  <button onClick={deleteSelectedBundles} className="compact-danger-btn">
                     Delete Bundles
                   </button>
 
-                  <button
-                    onClick={deleteSelectedMembers}
-                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
-                  >
+                  <button onClick={deleteSelectedMembers} className="compact-danger-btn">
                     Delete Members
                   </button>
                 </div>
@@ -1688,44 +1647,33 @@ ${bodyHtml}
           </div>
         </div>
 
-        <div className="p-3 md:p-5">
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3 mb-4">
-            <StatCard label="Bundles" value={bundles.length} />
-            <StatCard label="Members" value={members.length} />
-            <StatCard label="Member Qty" value={totalBundleMemberQty} />
-            <StatCard label="Delivered" value={overallDelivered} />
-            <StatCard label="Progress" value={`${overallProgress.toFixed(1)}%`} />
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3 mb-4">
-            <StatusCard label="Not Checked" value={bundleStatusCounts.not_checked} tone="slate" />
-            <StatusCard label="Arrived" value={bundleStatusCounts.arrived} tone="green" />
-            <StatusCard label="Partial" value={bundleStatusCounts.partial} tone="amber" />
-            <StatusCard label="Missing" value={bundleStatusCounts.missing} tone="red" />
-            <StatusCard label="Issues" value={bundleStatusCounts.issue} tone="purple" />
-          </div>
-
+        <div className="p-2 md:p-4">
           {viewMode === "bundles" && (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {filteredBundles.length === 0 ? (
                 <EmptyState text="No bundles match the current filters." />
               ) : (
                 filteredBundles.map((bundle) => {
                   const relatedMembers = membersByBundle[bundle.bundle_no.trim()] || [];
                   const status = deriveBundleStatus(bundle.bundle_no);
-                  const expanded = !!expandedBundles[bundle.bundle_no];
+                  const expanded = expandedBundleNo === bundle.bundle_no;
                   const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
                   const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
+                  const delivered = deliveredQty(bundle.bundle_no);
+                  const remaining = remainingQty(bundle);
+                  const deliveryProgress = percentage(delivered, bundle.qty_required);
 
                   return (
                     <div
                       key={bundle.ui_id}
-                      className="border border-slate-200 rounded-2xl bg-white shadow-sm overflow-hidden"
+                      className={`border border-l-4 ${statusBorderClasses(
+                        status,
+                      )} border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden`}
                     >
-                      <div className="p-3 md:p-4">
-                        <div className="flex flex-col gap-3">
-                          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                            <div className="flex items-start gap-3 min-w-0">
+                      <div className="p-2.5 md:p-3">
+                        <div className="flex flex-col gap-2">
+                          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
+                            <div className="flex items-start gap-2 min-w-0">
                               {manageMode && (
                                 <input
                                   type="checkbox"
@@ -1740,13 +1688,14 @@ ${bodyHtml}
                                 />
                               )}
 
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <h2 className="text-base md:text-lg font-bold truncate">
-                                    {bundle.bundle_no}
+                                  <h2 className="text-base md:text-lg font-bold truncate text-slate-900">
+                                    {bundle.bundle_no || "New Bundle"}
                                   </h2>
+
                                   <span
-                                    className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
+                                    className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusClasses(
                                       status,
                                     )}`}
                                   >
@@ -1754,45 +1703,64 @@ ${bodyHtml}
                                   </span>
                                 </div>
 
-                                <div className="text-sm text-slate-500 mt-1 leading-6">
-                                  {bundle.section} • Bundle Qty {bundle.qty_required} • Member Qty{" "}
-                                  {bundle.member_qty} • Delivered {deliveredQty(bundle.bundle_no)} •
-                                  Remaining {remainingQty(bundle)}
+                                <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
+                                  {bundle.section} • Qty {bundle.qty_required} • Members{" "}
+                                  {bundle.member_qty} • Delivered {delivered} • Remaining {remaining}
+                                  {bundle.total_weight !== null ? ` • ${bundle.total_weight} kg` : ""}
+                                </div>
+
+                                <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-slate-900 rounded-full"
+                                    style={{ width: `${deliveryProgress}%` }}
+                                  />
                                 </div>
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                onClick={() =>
-                                  setExpandedBundles((prev) => ({
-                                    ...prev,
-                                    [bundle.bundle_no]: !prev[bundle.bundle_no],
-                                  }))
-                                }
-                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"
-                              >
-                                {expanded ? "Hide Check" : "Open Check"}
-                              </button>
-
+                            <div className="grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5">
                               <button
                                 onClick={() => void markWholeBundle(bundle.bundle_no, "arrived")}
-                                className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
+                                className="site-action-btn bg-emerald-600 text-white"
+                                title="Mark arrived"
                               >
-                                Mark Arrived
+                                ✓
+                                <span className="hidden sm:inline ml-1">Arrived</span>
                               </button>
 
                               <button
                                 onClick={() => void markWholeBundle(bundle.bundle_no, "missing")}
-                                className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
+                                className="site-action-btn bg-rose-600 text-white"
+                                title="Mark missing"
                               >
-                                Mark Missing
+                                ✕
+                                <span className="hidden sm:inline ml-1">Missing</span>
+                              </button>
+
+                              <button
+                                onClick={() => void updateBundleManualStatus(bundle.bundle_no, "issue")}
+                                className="site-action-btn bg-purple-600 text-white"
+                                title="Mark issue"
+                              >
+                                !
+                                <span className="hidden sm:inline ml-1">Issue</span>
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  setExpandedBundleNo((prev) =>
+                                    prev === bundle.bundle_no ? null : bundle.bundle_no,
+                                  )
+                                }
+                                className="site-action-btn bg-slate-100 text-slate-800 border border-slate-200"
+                              >
+                                {expanded ? "Hide" : "Open"}
                               </button>
 
                               {(hasMemberStatuses || hasManualBundleStatus) && (
                                 <button
                                   onClick={() => void clearWholeBundleStatuses(bundle.bundle_no)}
-                                  className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
+                                  className="site-action-btn bg-slate-200 text-slate-800"
                                 >
                                   Clear
                                 </button>
@@ -1800,44 +1768,12 @@ ${bodyHtml}
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
-                            <MiniStat label="Weight" value={bundle.total_weight ?? "—"} />
-                            <MiniStat label="Section" value={bundle.section} />
-                            <MiniStat label="Member Qty" value={bundle.member_qty} />
-                            <MiniStat label="Delivered" value={deliveredQty(bundle.bundle_no)} />
-                            <MiniStat label="Remaining" value={remainingQty(bundle)} />
-                          </div>
-
                           {manageMode && (
-                            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-2 border-t border-slate-200">
-                              <Field
-                                label="Bundle No"
-                                value={bundle.bundle_no}
-                                onChange={(v) => updateBundleRow(bundle.ui_id, "bundle_no", v)}
-                              />
-
-                              <Field
-                                label="Section"
-                                value={bundle.section}
-                                onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)}
-                              />
-
-                              <Field
-                                label="Bundle Qty"
-                                value={bundle.qty_required}
-                                onChange={(v) =>
-                                  updateBundleRow(bundle.ui_id, "qty_required", safeNumber(v, 0))
-                                }
-                              />
-
-                              <Field
-                                label="Member Qty"
-                                value={bundle.member_qty}
-                                onChange={(v) =>
-                                  updateBundleRow(bundle.ui_id, "member_qty", safeNumber(v, 0))
-                                }
-                              />
-
+                            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 pt-2 border-t border-slate-200">
+                              <Field label="Bundle No" value={bundle.bundle_no} onChange={(v) => updateBundleRow(bundle.ui_id, "bundle_no", v)} />
+                              <Field label="Section" value={bundle.section} onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)} />
+                              <Field label="Bundle Qty" value={bundle.qty_required} onChange={(v) => updateBundleRow(bundle.ui_id, "qty_required", safeNumber(v, 0))} />
+                              <Field label="Member Qty" value={bundle.member_qty} onChange={(v) => updateBundleRow(bundle.ui_id, "member_qty", safeNumber(v, 0))} />
                               <Field
                                 label="Total Weight"
                                 value={bundle.total_weight ?? ""}
@@ -1853,83 +1789,80 @@ ${bodyHtml}
                           )}
 
                           {expanded && (
-                            <div className="pt-2 border-t border-slate-200 space-y-3">
+                            <div className="pt-2 border-t border-slate-200 space-y-2">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                                <MiniInfo label="Member lines" value={relatedMembers.length} />
+                                <MiniInfo label="Member qty from list" value={memberQtyFromMemberList(bundle.bundle_no)} />
+                                <MiniInfo label="Required" value={bundle.qty_required} />
+                                <MiniInfo label="Delivered" value={delivered} />
+                              </div>
+
                               {relatedMembers.length === 0 ? (
-                                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-2xl p-3">
+                                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
                                   No linked members found for this bundle. It can still be marked manually.
                                 </div>
                               ) : (
-                                relatedMembers.map((member) => {
-                                  const memberStatus = getMemberCheck(member)?.status || "not_checked";
-                                  const hasStatus = !!getMemberCheck(member);
+                                <div className="space-y-1.5">
+                                  {relatedMembers.map((member) => {
+                                    const memberStatus = getMemberCheck(member)?.status || "not_checked";
+                                    const hasStatus = !!getMemberCheck(member);
 
-                                  return (
-                                    <div
-                                      key={member.ui_id}
-                                      className="border border-slate-200 rounded-2xl p-3 bg-slate-50"
-                                    >
-                                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                                        <div>
-                                          <div className="flex items-center gap-2 flex-wrap">
-                                            <div className="font-semibold">{member.mark_no}</div>
-                                            <span
-                                              className={`px-2 py-1 rounded-full text-xs font-medium border ${statusClasses(
-                                                memberStatus,
-                                              )}`}
-                                            >
-                                              {statusLabel(memberStatus)}
-                                            </span>
+                                    return (
+                                      <div
+                                        key={member.ui_id}
+                                        className={`border border-l-4 ${statusBorderClasses(
+                                          memberStatus,
+                                        )} border-slate-200 rounded-xl p-2 bg-slate-50`}
+                                      >
+                                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                                          <div className="min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <div className="font-semibold text-sm text-slate-900">
+                                                {member.mark_no}
+                                              </div>
+
+                                              <span
+                                                className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusClasses(
+                                                  memberStatus,
+                                                )}`}
+                                              >
+                                                {statusLabel(memberStatus)}
+                                              </span>
+                                            </div>
+
+                                            <div className="text-xs text-slate-500 mt-1">
+                                              PN {member.pn_final || "—"} • Drawing{" "}
+                                              {member.drawing_number || "—"} • Qty{" "}
+                                              {member.qty_per_tower} • {member.section}
+                                            </div>
                                           </div>
 
-                                          <div className="text-sm text-slate-500 mt-1">
-                                            PN {member.pn_final || "—"} • Drawing{" "}
-                                            {member.drawing_number || "—"} • Qty{" "}
-                                            {member.qty_per_tower} • {member.section}
-                                          </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                                          <button
-                                            onClick={() => void updateMemberStatus(member, "arrived")}
-                                            className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
-                                          >
-                                            Arrived
-                                          </button>
-
-                                          <button
-                                            onClick={() => void updateMemberStatus(member, "not_here")}
-                                            className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
-                                          >
-                                            Not Here
-                                          </button>
-
-                                          <button
-                                            onClick={() => void updateMemberStatus(member, "missing")}
-                                            className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
-                                          >
-                                            Missing
-                                          </button>
-
-                                          <button
-                                            onClick={() => void updateMemberStatus(member, "issue")}
-                                            className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
-                                          >
-                                            Issue
-                                          </button>
-
-                                          {hasStatus && (
-                                            <button
-                                              onClick={() => void clearMemberStatus(member)}
-                                              className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
-                                            >
-                                              Clear
+                                          <div className="grid grid-cols-5 gap-1.5">
+                                            <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                                              ✓
                                             </button>
-                                          )}
+                                            <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                                              —
+                                            </button>
+                                            <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                                              ✕
+                                            </button>
+                                            <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                                              !
+                                            </button>
+                                            {hasStatus ? (
+                                              <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                                                C
+                                              </button>
+                                            ) : (
+                                              <div />
+                                            )}
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
-                                  );
-                                })
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           )}
@@ -1943,7 +1876,7 @@ ${bodyHtml}
           )}
 
           {viewMode === "members" && (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {filteredMatchedMembers.length === 0 ? (
                 <EmptyState text="No matched members match the current filters." />
               ) : (
@@ -1954,11 +1887,13 @@ ${bodyHtml}
                   return (
                     <div
                       key={member.ui_id}
-                      className="border border-slate-200 rounded-2xl bg-white p-3 md:p-4 shadow-sm"
+                      className={`border border-l-4 ${statusBorderClasses(
+                        status,
+                      )} border-slate-200 rounded-xl bg-white p-2.5 md:p-3 shadow-sm`}
                     >
-                      <div className="flex flex-col gap-3">
-                        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                          <div className="flex items-start gap-3">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
+                          <div className="flex items-start gap-2 min-w-0">
                             {manageMode && (
                               <input
                                 type="checkbox"
@@ -1973,11 +1908,14 @@ ${bodyHtml}
                               />
                             )}
 
-                            <div>
+                            <div className="min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <h3 className="font-bold text-base md:text-lg">{member.mark_no}</h3>
+                                <h3 className="font-bold text-base text-slate-900">
+                                  {member.mark_no || "New Member"}
+                                </h3>
+
                                 <span
-                                  className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
+                                  className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusClasses(
                                     status,
                                   )}`}
                                 >
@@ -1985,94 +1923,46 @@ ${bodyHtml}
                                 </span>
                               </div>
 
-                              <div className="text-sm text-slate-500 mt-1 leading-6">
+                              <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
                                 Bundle {member.bundle_reference} • Bundle Member Qty{" "}
                                 {matchingBundle?.member_qty ?? "—"} • PN {member.pn_final || "—"} •
-                                Drawing {member.drawing_number || "—"} • Member Qty{" "}
-                                {member.qty_per_tower} • {member.section}
+                                Drawing {member.drawing_number || "—"} • Qty {member.qty_per_tower} •{" "}
+                                {member.section}
                               </div>
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                            <button
-                              onClick={() => void updateMemberStatus(member, "arrived")}
-                              className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
-                            >
-                              Arrived
+                          <div className="grid grid-cols-5 gap-1.5">
+                            <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                              ✓
                             </button>
-
-                            <button
-                              onClick={() => void updateMemberStatus(member, "not_here")}
-                              className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
-                            >
-                              Not Here
+                            <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                              —
                             </button>
-
-                            <button
-                              onClick={() => void updateMemberStatus(member, "missing")}
-                              className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
-                            >
-                              Missing
+                            <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                              ✕
                             </button>
-
-                            <button
-                              onClick={() => void updateMemberStatus(member, "issue")}
-                              className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
-                            >
-                              Issue
+                            <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                              !
                             </button>
-
-                            {!!getMemberCheck(member) && (
-                              <button
-                                onClick={() => void clearMemberStatus(member)}
-                                className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
-                              >
-                                Clear
+                            {!!getMemberCheck(member) ? (
+                              <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                                C
                               </button>
+                            ) : (
+                              <div />
                             )}
                           </div>
                         </div>
 
                         {manageMode && (
-                          <div className="grid grid-cols-1 md:grid-cols-6 gap-3 pt-2 border-t border-slate-200">
-                            <Field
-                              label="Bundle Ref"
-                              value={member.bundle_reference}
-                              onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
-                            />
-
-                            <Field
-                              label="Mark No"
-                              value={member.mark_no}
-                              onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
-                            />
-
-                            <Field
-                              label="PN"
-                              value={member.pn_final}
-                              onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
-                            />
-
-                            <Field
-                              label="Drawing"
-                              value={member.drawing_number}
-                              onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
-                            />
-
-                            <Field
-                              label="Qty"
-                              value={member.qty_per_tower}
-                              onChange={(v) =>
-                                updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))
-                              }
-                            />
-
-                            <Field
-                              label="Section"
-                              value={member.section}
-                              onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
-                            />
+                          <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-slate-200">
+                            <Field label="Bundle Ref" value={member.bundle_reference} onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)} />
+                            <Field label="Mark No" value={member.mark_no} onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)} />
+                            <Field label="PN" value={member.pn_final} onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)} />
+                            <Field label="Drawing" value={member.drawing_number} onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)} />
+                            <Field label="Qty" value={member.qty_per_tower} onChange={(v) => updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))} />
+                            <Field label="Section" value={member.section} onChange={(v) => updateMemberRow(member.ui_id, "section", v)} />
                           </div>
                         )}
                       </div>
@@ -2081,26 +1971,26 @@ ${bodyHtml}
                 })
               )}
 
-              <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden">
+              <div className="border border-slate-200 rounded-xl bg-white overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setShowUnmatchedMembers((prev) => !prev)}
-                  className="w-full px-4 py-3 text-left bg-slate-100 hover:bg-slate-200 flex items-center justify-between"
+                  className="w-full px-3 py-2.5 text-left bg-slate-100 hover:bg-slate-200 flex items-center justify-between"
                 >
                   <div>
-                    <div className="font-semibold">Members not in bundle register</div>
-                    <div className="text-sm text-slate-500">
+                    <div className="font-semibold text-sm">Members not in bundle register</div>
+                    <div className="text-xs text-slate-500">
                       {filteredUnmatchedMembers.length} filtered • {unmatchedMembers.length} total
                     </div>
                   </div>
 
-                  <div className="text-sm font-medium text-slate-700">
+                  <div className="text-xs font-semibold text-slate-700">
                     {showUnmatchedMembers ? "Hide" : "Show"}
                   </div>
                 </button>
 
                 {showUnmatchedMembers && (
-                  <div className="p-3 md:p-4 space-y-3">
+                  <div className="p-2 md:p-3 space-y-2">
                     {filteredUnmatchedMembers.length === 0 ? (
                       <EmptyState text="No unmatched members match the current filters." />
                     ) : (
@@ -2110,11 +2000,13 @@ ${bodyHtml}
                         return (
                           <div
                             key={member.ui_id}
-                            className="border border-rose-200 rounded-2xl bg-rose-50 p-3 md:p-4"
+                            className={`border border-l-4 ${statusBorderClasses(
+                              status,
+                            )} border-rose-200 rounded-xl bg-rose-50 p-2.5 md:p-3`}
                           >
-                            <div className="flex flex-col gap-3">
-                              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                                <div className="flex items-start gap-3">
+                            <div className="flex flex-col gap-2">
+                              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
+                                <div className="flex items-start gap-2 min-w-0">
                                   {manageMode && (
                                     <input
                                       type="checkbox"
@@ -2129,13 +2021,14 @@ ${bodyHtml}
                                     />
                                   )}
 
-                                  <div>
+                                  <div className="min-w-0">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                      <h3 className="font-bold text-base md:text-lg">
+                                      <h3 className="font-bold text-base text-slate-900">
                                         {member.mark_no}
                                       </h3>
+
                                       <span
-                                        className={`px-2.5 py-1 rounded-full text-xs font-medium border ${statusClasses(
+                                        className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusClasses(
                                           status,
                                         )}`}
                                       >
@@ -2143,99 +2036,49 @@ ${bodyHtml}
                                       </span>
                                     </div>
 
-                                    <div className="text-sm text-slate-600 mt-1 leading-6">
+                                    <div className="text-xs md:text-sm text-slate-600 mt-1 leading-5">
                                       Bundle {member.bundle_reference} • PN {member.pn_final || "—"} •
                                       Drawing {member.drawing_number || "—"} • Qty{" "}
                                       {member.qty_per_tower} • {member.section}
                                     </div>
 
-                                    <div className="text-xs text-rose-700 mt-2 font-medium">
+                                    <div className="text-xs text-rose-700 mt-1 font-medium">
                                       This member does not currently match any uploaded bundle number.
                                     </div>
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                                  <button
-                                    onClick={() => void updateMemberStatus(member, "arrived")}
-                                    className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium"
-                                  >
-                                    Arrived
+                                <div className="grid grid-cols-5 gap-1.5">
+                                  <button onClick={() => void updateMemberStatus(member, "arrived")} className="mini-action bg-emerald-600 text-white" title="Arrived">
+                                    ✓
                                   </button>
-
-                                  <button
-                                    onClick={() => void updateMemberStatus(member, "not_here")}
-                                    className="px-3 py-2 rounded-xl bg-orange-500 text-white text-sm font-medium"
-                                  >
-                                    Not Here
+                                  <button onClick={() => void updateMemberStatus(member, "not_here")} className="mini-action bg-orange-500 text-white" title="Not Here">
+                                    —
                                   </button>
-
-                                  <button
-                                    onClick={() => void updateMemberStatus(member, "missing")}
-                                    className="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium"
-                                  >
-                                    Missing
+                                  <button onClick={() => void updateMemberStatus(member, "missing")} className="mini-action bg-rose-600 text-white" title="Missing">
+                                    ✕
                                   </button>
-
-                                  <button
-                                    onClick={() => void updateMemberStatus(member, "issue")}
-                                    className="px-3 py-2 rounded-xl bg-purple-600 text-white text-sm font-medium"
-                                  >
-                                    Issue
+                                  <button onClick={() => void updateMemberStatus(member, "issue")} className="mini-action bg-purple-600 text-white" title="Issue">
+                                    !
                                   </button>
-
-                                  {!!getMemberCheck(member) && (
-                                    <button
-                                      onClick={() => void clearMemberStatus(member)}
-                                      className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium"
-                                    >
-                                      Clear
+                                  {!!getMemberCheck(member) ? (
+                                    <button onClick={() => void clearMemberStatus(member)} className="mini-action bg-slate-200 text-slate-800" title="Clear">
+                                      C
                                     </button>
+                                  ) : (
+                                    <div />
                                   )}
                                 </div>
                               </div>
 
                               {manageMode && (
-                                <div className="grid grid-cols-1 md:grid-cols-6 gap-3 pt-2 border-t border-rose-200">
-                                  <Field
-                                    label="Bundle Ref"
-                                    value={member.bundle_reference}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
-                                  />
-
-                                  <Field
-                                    label="Mark No"
-                                    value={member.mark_no}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
-                                  />
-
-                                  <Field
-                                    label="PN"
-                                    value={member.pn_final}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
-                                  />
-
-                                  <Field
-                                    label="Drawing"
-                                    value={member.drawing_number}
-                                    onChange={(v) =>
-                                      updateMemberRow(member.ui_id, "drawing_number", v)
-                                    }
-                                  />
-
-                                  <Field
-                                    label="Qty"
-                                    value={member.qty_per_tower}
-                                    onChange={(v) =>
-                                      updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))
-                                    }
-                                  />
-
-                                  <Field
-                                    label="Section"
-                                    value={member.section}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
-                                  />
+                                <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-rose-200">
+                                  <Field label="Bundle Ref" value={member.bundle_reference} onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)} />
+                                  <Field label="Mark No" value={member.mark_no} onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)} />
+                                  <Field label="PN" value={member.pn_final} onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)} />
+                                  <Field label="Drawing" value={member.drawing_number} onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)} />
+                                  <Field label="Qty" value={member.qty_per_tower} onChange={(v) => updateMemberRow(member.ui_id, "qty_per_tower", safeNumber(v, 0))} />
+                                  <Field label="Section" value={member.section} onChange={(v) => updateMemberRow(member.ui_id, "section", v)} />
                                 </div>
                               )}
                             </div>
@@ -2250,6 +2093,73 @@ ${bodyHtml}
           )}
         </div>
       </div>
+
+      <style jsx global>{`
+        .compact-secondary-btn {
+          border-radius: 0.75rem;
+          background: #f1f5f9;
+          color: #334155;
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 700;
+          border: 1px solid #e2e8f0;
+        }
+
+        .compact-secondary-btn:hover {
+          background: #e2e8f0;
+        }
+
+        .compact-white-btn {
+          border-radius: 0.75rem;
+          background: white;
+          color: #334155;
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 700;
+          border: 1px solid #cbd5e1;
+        }
+
+        .compact-primary-btn {
+          border-radius: 0.75rem;
+          background: #2563eb;
+          color: white;
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 700;
+        }
+
+        .compact-danger-btn {
+          border-radius: 0.75rem;
+          background: #e11d48;
+          color: white;
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 700;
+        }
+
+        .site-action-btn {
+          min-height: 2.25rem;
+          border-radius: 0.75rem;
+          padding: 0.45rem 0.65rem;
+          font-size: 0.75rem;
+          font-weight: 800;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          white-space: nowrap;
+        }
+
+        .mini-action {
+          min-height: 2rem;
+          min-width: 2rem;
+          border-radius: 0.65rem;
+          font-size: 0.75rem;
+          font-weight: 900;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+      `}</style>
     </div>
   );
 }
@@ -2270,7 +2180,7 @@ function ModeButton({
   return (
     <button
       onClick={onClick}
-      className={`px-4 py-2 rounded-xl text-sm font-medium transition ${
+      className={`px-3 py-1.5 rounded-lg text-xs md:text-sm font-semibold transition ${
         active ? "bg-white shadow text-slate-900" : "text-slate-600"
       }`}
     >
@@ -2279,54 +2189,95 @@ function ModeButton({
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
+function CompactSummary({
+  bundles,
+  members,
+  memberQty,
+  delivered,
+  required,
+  remaining,
+  progress,
+  notChecked,
+  arrived,
+  partial,
+  missing,
+  issues,
+}: {
+  bundles: number;
+  members: number;
+  memberQty: number;
+  delivered: number;
+  required: number;
+  remaining: number;
+  progress: number;
+  notChecked: number;
+  arrived: number;
+  partial: number;
+  missing: number;
+  issues: number;
+}) {
   return (
-    <div className="bg-slate-100 rounded-xl px-3 py-3 min-w-0">
-      <div className="text-[11px] text-slate-500 truncate">{label}</div>
-      <div className="font-bold text-base md:text-lg mt-1 truncate">{value}</div>
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-slate-100 rounded-xl px-3 py-2 min-w-0">
-      <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate">
-        {label}
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        <SummaryPill label="Bundles" value={bundles} />
+        <SummaryPill label="Members" value={members} />
+        <SummaryPill label="Member Qty" value={memberQty} />
+        <SummaryPill label="Delivered" value={`${delivered}/${required}`} />
+        <SummaryPill label="Remaining" value={remaining} />
+        <SummaryPill label="Progress" value={`${progress.toFixed(1)}%`} strong />
+        <SummaryPill label="Not Checked" value={notChecked} />
+        <SummaryPill label="Arrived" value={arrived} tone="green" />
+        <SummaryPill label="Partial" value={partial} tone="amber" />
+        <SummaryPill label="Missing" value={missing} tone="red" />
+        <SummaryPill label="Issues" value={issues} tone="purple" />
       </div>
-      <div className="font-semibold text-sm mt-1 truncate">{value}</div>
+
+      <div className="mt-2 h-1.5 bg-white rounded-full overflow-hidden border border-slate-200">
+        <div className="h-full bg-slate-900 rounded-full" style={{ width: `${Math.min(progress, 100)}%` }} />
+      </div>
     </div>
   );
 }
 
-function StatusCard({
+function SummaryPill({
   label,
   value,
-  tone,
+  strong,
+  tone = "slate",
 }: {
   label: string;
   value: string | number;
-  tone: "slate" | "green" | "amber" | "red" | "purple";
+  strong?: boolean;
+  tone?: "slate" | "green" | "amber" | "red" | "purple";
 }) {
-  const toneMap: Record<string, string> = {
-    slate: "bg-slate-100 text-slate-800",
-    green: "bg-emerald-100 text-emerald-800",
-    amber: "bg-amber-100 text-amber-800",
-    red: "bg-rose-100 text-rose-800",
-    purple: "bg-purple-100 text-purple-800",
+  const tones = {
+    slate: "bg-white text-slate-700 border-slate-200",
+    green: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+    red: "bg-rose-50 text-rose-700 border-rose-200",
+    purple: "bg-purple-50 text-purple-700 border-purple-200",
   };
 
   return (
-    <div className={`rounded-xl px-3 py-3 min-w-0 ${toneMap[tone]}`}>
-      <div className="text-[11px] opacity-80 truncate">{label}</div>
-      <div className="font-bold text-base md:text-lg mt-1">{value}</div>
+    <div className={`border rounded-full px-2.5 py-1 ${tones[tone]}`}>
+      <span className="opacity-70">{label}: </span>
+      <span className={strong ? "font-black" : "font-bold"}>{value}</span>
+    </div>
+  );
+}
+
+function MiniInfo({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg bg-slate-100 px-2 py-1.5 min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate">{label}</div>
+      <div className="text-sm font-bold text-slate-900 truncate">{value}</div>
     </div>
   );
 }
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="border border-dashed border-slate-300 rounded-2xl p-8 text-center text-slate-500 bg-slate-50">
+    <div className="border border-dashed border-slate-300 rounded-xl p-6 text-center text-sm text-slate-500 bg-slate-50">
       {text}
     </div>
   );
@@ -2343,9 +2294,9 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-xs text-slate-500 mb-1">{label}</label>
+      <label className="block text-[11px] text-slate-500 mb-1 font-medium">{label}</label>
       <input
-        className="border border-slate-300 p-2.5 rounded-xl w-full text-sm"
+        className="border border-slate-300 p-2 rounded-lg w-full text-sm bg-white"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
