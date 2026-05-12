@@ -12,9 +12,9 @@ type Tower = {
   extra_data?: Record<string, unknown> | null;
 };
 
-type TowerRun = {
-  label: string;
-  count: number;
+type TowerIdentity = {
+  number: string;
+  group: string;
 };
 
 function safeString(value: unknown): string {
@@ -23,33 +23,49 @@ function safeString(value: unknown): string {
   return String(value).trim();
 }
 
-function extractGroupFromTowerName(name?: string | null): string {
-  const clean = safeString(name);
-  if (!clean) return "";
-
-  // Handles: "1R/2R-10" -> "1R-2R"
-  const slashRunMatch = clean.match(/^([A-Za-z0-9]+R)\s*\/\s*([A-Za-z0-9]+R)\s*-\s*\d+$/i);
-  if (slashRunMatch?.[1] && slashRunMatch?.[2]) {
-    return `${slashRunMatch[1].toUpperCase()}-${slashRunMatch[2].toUpperCase()}`;
-  }
-
-  // Handles: "1R-2R-10" -> "1R-2R"
-  const dashRunMatch = clean.match(/^([A-Za-z0-9]+R)\s*-\s*([A-Za-z0-9]+R)\s*-\s*\d+$/i);
-  if (dashRunMatch?.[1] && dashRunMatch?.[2]) {
-    return `${dashRunMatch[1].toUpperCase()}-${dashRunMatch[2].toUpperCase()}`;
-  }
-
-  // Handles: "10 1R-2R" -> "1R-2R"
-  const numberThenGroup = clean.match(/^\s*\S+\s+(.+)$/);
-  if (numberThenGroup?.[1]) return numberThenGroup[1].trim().replace("/", "-").toUpperCase();
-
-  return "";
+function normaliseGroup(value: string): string {
+  return value.trim().replaceAll("/", "-").replace(/\s+/g, " ");
 }
 
-function getTowerRun(tower: Tower): string {
+function parseComparableTowerName(name?: string | null): TowerIdentity | null {
+  const clean = safeString(name);
+  if (!clean) return null;
+
+  // Handles: "1R/2R-10", "3R/4R-10", "North-10", "Circuit A-10"
+  const endingNumber = clean.match(/^(.*?)[\s_-]*(\d+)$/);
+  if (endingNumber?.[1] && endingNumber?.[2]) {
+    return {
+      group: normaliseGroup(endingNumber[1]),
+      number: endingNumber[2],
+    };
+  }
+
+  // Handles: "10 1R-2R", "10 North", "10 Circuit A"
+  const startingNumber = clean.match(/^(\d+)[\s_-]+(.+)$/);
+  if (startingNumber?.[1] && startingNumber?.[2]) {
+    return {
+      number: startingNumber[1],
+      group: normaliseGroup(startingNumber[2]),
+    };
+  }
+
+  return null;
+}
+
+function getTowerIdentity(tower: Tower): TowerIdentity | null {
   const extra = tower.extra_data || {};
 
-  return (
+  const number =
+    safeString(extra["Navigation Number"]) ||
+    safeString(extra["navigation_number"]) ||
+    safeString(extra["Tower Number"]) ||
+    safeString(extra["tower_number"]) ||
+    safeString(extra["Tower No"]) ||
+    safeString(extra["tower_no"]) ||
+    safeString(extra["Structure Number"]) ||
+    safeString(extra["structure_number"]);
+
+  const group =
     safeString(extra["Navigation Group"]) ||
     safeString(extra["navigation_group"]) ||
     safeString(extra["Tower Group"]) ||
@@ -60,9 +76,16 @@ function getTowerRun(tower: Tower): string {
     safeString(extra["run"]) ||
     safeString(extra["Section"]) ||
     safeString(extra["section"]) ||
-    safeString(tower.line) ||
-    extractGroupFromTowerName(tower.name)
-  );
+    safeString(tower.line);
+
+  if (number && group) {
+    return {
+      number,
+      group: normaliseGroup(group),
+    };
+  }
+
+  return parseComparableTowerName(tower.name);
 }
 
 export function Sidebar({
@@ -73,7 +96,7 @@ export function Sidebar({
   towerId?: string;
 }) {
   const pathname = usePathname();
-  const supabase = createSupabaseBrowser();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [projectName, setProjectName] = useState<string | null>(null);
   const [towers, setTowers] = useState<Tower[]>([]);
@@ -105,33 +128,56 @@ export function Sidebar({
     void loadProject();
   }, [projectId, supabase]);
 
-  const towerRuns = useMemo<TowerRun[]>(() => {
-    const map = new Map<string, number>();
-
-    towers.forEach((tower) => {
-      const group = getTowerRun(tower);
-
-      if (!group) return;
-      map.set(group, (map.get(group) || 0) + 1);
-    });
-
-    return Array.from(map.entries())
-      .map(([label, count]) => ({ label, count }))
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
-  }, [towers]);
+  const currentTower = useMemo(() => {
+    if (!activeTowerId) return null;
+    return towers.find((tower) => tower.id === activeTowerId) || null;
+  }, [towers, activeTowerId]);
 
   const currentTowerIndex = useMemo(() => {
     if (!activeTowerId) return -1;
     return towers.findIndex((t) => t.id === activeTowerId);
   }, [towers, activeTowerId]);
 
-  const previousTower =
-    currentTowerIndex > 0 ? towers[currentTowerIndex - 1] : null;
+  const previousTower = currentTowerIndex > 0 ? towers[currentTowerIndex - 1] : null;
 
   const nextTower =
     currentTowerIndex >= 0 && currentTowerIndex < towers.length - 1
       ? towers[currentTowerIndex + 1]
       : null;
+
+  const matchingTowers = useMemo(() => {
+    if (!currentTower) return [];
+
+    const currentIdentity = getTowerIdentity(currentTower);
+    if (!currentIdentity) return [];
+
+    return towers
+      .map((tower) => {
+        const identity = getTowerIdentity(tower);
+
+        if (!identity) return null;
+        if (tower.id === currentTower.id) return null;
+        if (identity.number !== currentIdentity.number) return null;
+
+        return {
+          id: tower.id,
+          name: tower.name || "Unnamed Tower",
+          number: identity.number,
+          group: identity.group,
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          id: string;
+          name: string;
+          number: string;
+          group: string;
+        } => item !== null,
+      )
+      .sort((a, b) => a.group.localeCompare(b.group, undefined, { numeric: true }));
+  }, [towers, currentTower]);
 
   function linkStyle(href: string) {
     let isActive = false;
@@ -144,24 +190,6 @@ export function Sidebar({
 
     return `
       flex items-center gap-2 px-3 py-2 rounded-xl transition text-sm
-      ${
-        isActive
-          ? "bg-slate-900 text-white font-semibold shadow-sm"
-          : "hover:bg-slate-100 text-slate-700"
-      }
-    `;
-  }
-
-  function runLinkStyle(group: string) {
-    const encoded = encodeURIComponent(group);
-    const href = `/project/${projectId}/towers?group=${encoded}`;
-    const isActive =
-      pathname === `/project/${projectId}/towers` &&
-      typeof window !== "undefined" &&
-      window.location.search.includes(`group=${encoded}`);
-
-    return `
-      flex items-center justify-between gap-2 px-3 py-2 rounded-xl transition text-sm
       ${
         isActive
           ? "bg-slate-900 text-white font-semibold shadow-sm"
@@ -216,31 +244,23 @@ export function Sidebar({
           </nav>
         </div>
 
-        {projectId && towerRuns.length > 0 && (
+        {activeTowerId && matchingTowers.length > 0 && (
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[11px] uppercase tracking-wider text-slate-400">
-                Tower Runs
-              </div>
-
-              <div className="text-[10px] text-slate-400">
-                {towerRuns.length}
-              </div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
+              Matching Towers
             </div>
 
             <div className="space-y-1">
-              {towerRuns.map((run) => (
+              {matchingTowers.map((tower) => (
                 <Link
-                  key={run.label}
-                  href={`/project/${projectId}/towers?group=${encodeURIComponent(
-                    run.label,
-                  )}`}
-                  className={runLinkStyle(run.label)}
+                  key={tower.id}
+                  href={`/project/${projectId}/tower/${tower.id}`}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm hover:bg-slate-100 text-slate-700 transition"
                 >
-                  <span className="truncate">{run.label}</span>
+                  <span className="truncate">{tower.name}</span>
 
                   <span className="shrink-0 text-[11px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
-                    {run.count}
+                    {tower.group}
                   </span>
                 </Link>
               ))}
