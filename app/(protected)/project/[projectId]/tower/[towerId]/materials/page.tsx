@@ -4,6 +4,7 @@
   - Adds bundle quantity +/- site check controls.
   - Keeps delivery-register quantities separate from site-confirmed received quantities.
   - Outstanding section now uses site received qty against required bundle qty.
+  - Adds searchable bolts register with CSV import/export.
 */
 
 "use client";
@@ -62,6 +63,27 @@ type Member = {
   section: string;
 };
 
+type DbBoltRow = {
+  id?: string;
+  tower_id: string;
+  tower_segment: string | null;
+  bolt_diameter: string | null;
+  dn_sn: string | null;
+  length: string | null;
+  qty: number | null;
+};
+
+type Bolt = {
+  ui_id: string;
+  id?: string;
+  tower_id: string;
+  tower_segment: string;
+  bolt_diameter: string;
+  dn_sn: string;
+  length: string;
+  qty: number;
+};
+
 type DeliveryItem = {
   bundle_no: string;
   qty_delivered: number;
@@ -118,7 +140,7 @@ type MemberCheck = {
   checked_at: string | null;
 };
 
-type ViewMode = "bundles" | "members";
+type ViewMode = "bundles" | "members" | "bolts";
 
 type StatusFilter =
   | "all"
@@ -159,6 +181,15 @@ type MemberImportRow = {
   pn_final: string;
   qty_per_tower: number;
   section: string;
+};
+
+type BoltImportRow = {
+  tower_id: string;
+  tower_segment: string;
+  bolt_diameter: string;
+  dn_sn: string;
+  length: string;
+  qty: number;
 };
 
 type OutstandingBundle = {
@@ -209,6 +240,12 @@ function getTowerPrintLabel(tower: TowerRecord | null): string {
 function normaliseSection(value: string): string {
   const trimmed = value.trim();
   return trimmed === "" ? "General" : trimmed;
+}
+
+function normaliseBoltDiameter(value: string): string {
+  const trimmed = value.trim().toUpperCase();
+  if (trimmed === "") return "";
+  return trimmed.startsWith("M") ? trimmed : `M${trimmed}`;
 }
 
 function makeUiId(): string {
@@ -330,6 +367,7 @@ export default function MaterialsPage() {
   const [tower, setTower] = useState<TowerRecord | null>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [bolts, setBolts] = useState<Bolt[]>([]);
   const [bundleChecks, setBundleChecks] = useState<BundleCheck[]>([]);
   const [memberChecks, setMemberChecks] = useState<MemberCheck[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -350,9 +388,11 @@ export default function MaterialsPage() {
   const [showUnmatchedMembers, setShowUnmatchedMembers] = useState(false);
   const [selectedBundleRows, setSelectedBundleRows] = useState<Record<string, boolean>>({});
   const [selectedMemberRows, setSelectedMemberRows] = useState<Record<string, boolean>>({});
+  const [selectedBoltRows, setSelectedBoltRows] = useState<Record<string, boolean>>({});
 
   const [bundleImporting, setBundleImporting] = useState(false);
   const [memberImporting, setMemberImporting] = useState(false);
+  const [boltImporting, setBoltImporting] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -372,6 +412,7 @@ export default function MaterialsPage() {
       towerRes,
       bundlesRes,
       membersRes,
+      boltsRes,
       deliveriesRes,
       docketRes,
       bundleChecksRes,
@@ -391,6 +432,13 @@ export default function MaterialsPage() {
         .order("section", { ascending: true })
         .order("bundle_reference", { ascending: true })
         .order("mark_no", { ascending: true }),
+      supabase
+        .from("tower_material_bolts")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("tower_segment", { ascending: true })
+        .order("bolt_diameter", { ascending: true })
+        .order("length", { ascending: true }),
       supabase
         .from("tower_bundle_deliveries")
         .select("tower_bundle_delivery_items(*)")
@@ -414,6 +462,7 @@ export default function MaterialsPage() {
     if (towerRes.error) console.error("tower load error", towerRes.error);
     if (bundlesRes.error) console.error("bundles load error", bundlesRes.error);
     if (membersRes.error) console.error("members load error", membersRes.error);
+    if (boltsRes.error) console.error("bolts load error", boltsRes.error);
     if (deliveriesRes.error) console.error("deliveries load error", deliveriesRes.error);
     if (docketRes.error) console.error("dockets load error", docketRes.error);
     if (bundleChecksRes.error) console.error("bundle checks load error", bundleChecksRes.error);
@@ -448,6 +497,17 @@ export default function MaterialsPage() {
       section: normaliseSection(safeString(row.section, "General")),
     }));
 
+    const loadedBolts: Bolt[] = ((boltsRes.data || []) as DbBoltRow[]).map((row) => ({
+      ui_id: makeUiId(),
+      id: row.id,
+      tower_id: towerId,
+      tower_segment: normaliseSection(safeString(row.tower_segment, "General")),
+      bolt_diameter: normaliseBoltDiameter(safeString(row.bolt_diameter)),
+      dn_sn: safeString(row.dn_sn),
+      length: safeString(row.length),
+      qty: Math.max(safeNumber(row.qty, 0), 0),
+    }));
+
     const loadedBundleChecks: BundleCheck[] = ((bundleChecksRes.data || []) as DbBundleCheckRow[]).map(
       (row) => ({
         id: row.id,
@@ -476,6 +536,7 @@ export default function MaterialsPage() {
 
     setBundles(loadedBundles);
     setMembers(loadedMembers);
+    setBolts(loadedBolts);
     setBundleChecks(loadedBundleChecks);
     setMemberChecks(loadedMemberChecks);
     setDeliveries((deliveriesRes.data || []) as Delivery[]);
@@ -574,9 +635,10 @@ export default function MaterialsPage() {
 
     bundles.forEach((b) => set.add(normaliseSection(b.section)));
     members.forEach((m) => set.add(normaliseSection(m.section)));
+    bolts.forEach((b) => set.add(normaliseSection(b.tower_segment)));
 
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [bundles, members]);
+  }, [bundles, members, bolts]);
 
   function getMemberCheck(member: Member): MemberCheck | undefined {
     return memberCheckMap[`${member.bundle_reference.trim()}__${member.mark_no.trim()}`];
@@ -716,6 +778,31 @@ export default function MaterialsPage() {
     setSaving(false);
   }
 
+  async function persistBolts(rows: Bolt[]) {
+    const payload = rows
+      .filter((row) => row.tower_segment.trim() !== "" || row.bolt_diameter.trim() !== "")
+      .map((row) => ({
+        tower_id: towerId,
+        tower_segment: normaliseSection(row.tower_segment),
+        bolt_diameter: normaliseBoltDiameter(row.bolt_diameter),
+        dn_sn: safeString(row.dn_sn).trim(),
+        length: safeString(row.length).trim(),
+        qty: Math.max(safeNumber(row.qty, 0), 0),
+      }));
+
+    setSaving(true);
+
+    if (payload.length > 0) {
+      const { error } = await supabase.from("tower_material_bolts").upsert(payload, {
+        onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length",
+      });
+
+      if (error) console.error("bolt save error", error);
+    }
+
+    setSaving(false);
+  }
+
   function addBundleRow() {
     setBundles((prev) => [
       ...prev,
@@ -800,6 +887,34 @@ export default function MaterialsPage() {
     );
   }
 
+  function addBoltRow() {
+    setBolts((prev) => [
+      ...prev,
+      {
+        ui_id: makeUiId(),
+        tower_id: towerId,
+        tower_segment: "General",
+        bolt_diameter: "",
+        dn_sn: "",
+        length: "",
+        qty: 0,
+      },
+    ]);
+
+    setManageMode(true);
+    setViewMode("bolts");
+  }
+
+  function updateBoltRow(ui_id: string, field: keyof Bolt, value: string | number) {
+    setBolts((prev) =>
+      prev.map((row) => {
+        if (row.ui_id !== ui_id) return row;
+        const nextValue = field === "bolt_diameter" ? normaliseBoltDiameter(String(value)) : value;
+        return { ...row, [field]: nextValue };
+      }),
+    );
+  }
+
   async function saveBundlesNow() {
     await persistBundles(bundles);
     alert("Bundle register saved.");
@@ -809,6 +924,12 @@ export default function MaterialsPage() {
   async function saveMembersNow() {
     await persistMembers(members);
     alert("Members saved.");
+    await load();
+  }
+
+  async function saveBoltsNow() {
+    await persistBolts(bolts);
+    alert("Bolts saved.");
     await load();
   }
 
@@ -837,6 +958,34 @@ export default function MaterialsPage() {
     }
 
     setSelectedMemberRows({});
+    await load();
+  }
+
+  async function deleteSelectedBolts() {
+    const selected = bolts.filter((row) => selectedBoltRows[row.ui_id]);
+
+    if (!selected.length) {
+      alert("No bolt rows selected.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${selected.length} selected bolt row(s)?`);
+    if (!confirmed) return;
+
+    for (const row of selected) {
+      const { error } = await supabase
+        .from("tower_material_bolts")
+        .delete()
+        .eq("tower_id", towerId)
+        .eq("tower_segment", normaliseSection(row.tower_segment))
+        .eq("bolt_diameter", normaliseBoltDiameter(row.bolt_diameter))
+        .eq("dn_sn", row.dn_sn.trim())
+        .eq("length", row.length.trim());
+
+      if (error) console.error("delete bolt error", error);
+    }
+
+    setSelectedBoltRows({});
     await load();
   }
 
@@ -1173,6 +1322,100 @@ export default function MaterialsPage() {
     });
   }
 
+
+  async function importBoltsCSV(file: File) {
+    setBoltImporting(true);
+
+    Papa.parse<CsvRow>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (res: ParseResult<CsvRow>) => {
+        const parsedRows = res.data
+          .map((r): BoltImportRow | null => {
+            const segment =
+              r.tower_segment ||
+              r["Tower Segment"] ||
+              r.segment ||
+              r["Segment"] ||
+              r.section ||
+              r["Section"];
+
+            const diameter =
+              r.bolt_diameter ||
+              r["Bolt Diameter"] ||
+              r.diameter ||
+              r["Diameter"] ||
+              r.bolt ||
+              r["Bolt"];
+
+            const dnSn = r.dn_sn || r["DN/SN"] || r["DN / SN"] || r["DN-SN"] || r.type || r["Type"];
+            const length = r.length || r["Length"] || r["Bolt Length"];
+            const qty = r.qty || r["Qty"] || r["QTY"] || r.quantity || r["Quantity"];
+
+            if (!segment && !diameter && !dnSn && !length && !qty) return null;
+            if (!diameter || !length) return null;
+
+            return {
+              tower_id: towerId,
+              tower_segment: normaliseSection(safeString(segment, "General")),
+              bolt_diameter: normaliseBoltDiameter(safeString(diameter)),
+              dn_sn: safeString(dnSn),
+              length: safeString(length),
+              qty: Math.max(safeNumber(qty, 0), 0),
+            };
+          })
+          .filter((row): row is BoltImportRow => row !== null);
+
+        const rowMap = new Map<string, BoltImportRow>();
+
+        parsedRows.forEach((row) => {
+          const key = [
+            row.tower_id,
+            row.tower_segment,
+            row.bolt_diameter,
+            row.dn_sn,
+            row.length,
+          ].join("__");
+
+          const existing = rowMap.get(key);
+          if (existing) {
+            rowMap.set(key, { ...existing, qty: existing.qty + row.qty });
+          } else {
+            rowMap.set(key, row);
+          }
+        });
+
+        const rows = Array.from(rowMap.values());
+
+        if (!rows.length) {
+          alert("No valid bolt rows found in CSV.");
+          setBoltImporting(false);
+          return;
+        }
+
+        const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
+          onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length",
+        });
+
+        setBoltImporting(false);
+
+        if (error) {
+          console.error("bolt import error", error);
+          alert(`Bolt CSV import failed: ${error.message}`);
+          return;
+        }
+
+        await load();
+        alert("Bolt CSV imported.");
+      },
+      error: (err) => {
+        console.error("bolt parse error", err);
+        setBoltImporting(false);
+        alert("Failed to parse bolt CSV.");
+      },
+    });
+  }
+
   const filteredBundles = useMemo(() => {
     const q = normaliseSearch(search);
 
@@ -1256,6 +1499,31 @@ export default function MaterialsPage() {
       return text.includes(q);
     });
   }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
+
+  const filteredBolts = useMemo(() => {
+    const q = normaliseSearch(search);
+
+    return bolts.filter((bolt) => {
+      if (sectionFilter !== "all" && bolt.tower_segment !== sectionFilter) return false;
+
+      if (!q) return true;
+
+      const text = matchesText(
+        bolt.tower_segment,
+        bolt.bolt_diameter,
+        bolt.dn_sn,
+        bolt.length,
+        bolt.qty,
+      );
+
+      return text.includes(q);
+    });
+  }, [bolts, search, sectionFilter]);
+
+  const totalBoltQty = useMemo(
+    () => bolts.reduce((sum, row) => sum + Math.max(safeNumber(row.qty, 0), 0), 0),
+    [bolts],
+  );
 
   const overallRequired = useMemo(
     () => bundles.reduce((sum, row) => sum + Math.max(safeNumber(row.qty_required, 0), 0), 0),
@@ -1373,6 +1641,23 @@ export default function MaterialsPage() {
 
       const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
       downloadTextFile("materials_bundles.csv", csv, "text/csv;charset=utf-8;");
+      return;
+    }
+
+    if (viewMode === "bolts") {
+      const rows = [
+        ["Tower Segment", "Bolt Diameter", "DN/SN", "Length", "Qty"],
+        ...filteredBolts.map((bolt) => [
+          bolt.tower_segment,
+          bolt.bolt_diameter,
+          bolt.dn_sn,
+          bolt.length,
+          bolt.qty,
+        ]),
+      ];
+
+      const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+      downloadTextFile("materials_bolts.csv", csv, "text/csv;charset=utf-8;");
       return;
     }
 
@@ -1699,6 +1984,20 @@ ${bodyHtml}
                   />
                 </label>
 
+                <label className="compact-secondary-btn cursor-pointer">
+                  {boltImporting ? "Uploading Bolts..." : "Reupload Bolts"}
+                  <input
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void importBoltsCSV(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+
                 <button
                   onClick={() => setShowAdvancedActions((prev) => !prev)}
                   className="compact-secondary-btn"
@@ -1722,6 +2021,8 @@ ${bodyHtml}
             <CompactSummary
               bundles={bundles.length}
               members={members.length}
+              bolts={bolts.length}
+              boltQty={totalBoltQty}
               memberQty={totalBundleMemberQty}
               delivered={overallDelivered}
               received={overallReceived}
@@ -1749,11 +2050,11 @@ ${bodyHtml}
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search bundle, mark, PN, drawing..."
+                placeholder="Search bundle, mark, PN, drawing, bolt, segment..."
                 className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
               />
 
-              <div className="grid grid-cols-2 bg-slate-100 rounded-xl p-1">
+              <div className="grid grid-cols-3 bg-slate-100 rounded-xl p-1">
                 <ModeButton
                   active={viewMode === "bundles"}
                   onClick={() => setViewMode("bundles")}
@@ -1763,6 +2064,11 @@ ${bodyHtml}
                   active={viewMode === "members"}
                   onClick={() => setViewMode("members")}
                   label="Members"
+                />
+                <ModeButton
+                  active={viewMode === "bolts"}
+                  onClick={() => setViewMode("bolts")}
+                  label="Bolts"
                 />
               </div>
 
@@ -1823,6 +2129,20 @@ ${bodyHtml}
                     }}
                   />
                 </label>
+
+                <label className="compact-secondary-btn cursor-pointer">
+                  {boltImporting ? "Uploading..." : "Reupload Bolts"}
+                  <input
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void importBoltsCSV(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
               </div>
             )}
 
@@ -1841,6 +2161,10 @@ ${bodyHtml}
                     Add Member
                   </button>
 
+                  <button onClick={addBoltRow} className="compact-white-btn">
+                    Add Bolt
+                  </button>
+
                   <button onClick={saveBundlesNow} className="compact-primary-btn">
                     Save Bundles
                   </button>
@@ -1849,12 +2173,20 @@ ${bodyHtml}
                     Save Members
                   </button>
 
+                  <button onClick={saveBoltsNow} className="compact-primary-btn">
+                    Save Bolts
+                  </button>
+
                   <button onClick={deleteSelectedBundles} className="compact-danger-btn">
                     Delete Bundles
                   </button>
 
                   <button onClick={deleteSelectedMembers} className="compact-danger-btn">
                     Delete Members
+                  </button>
+
+                  <button onClick={deleteSelectedBolts} className="compact-danger-btn">
+                    Delete Bolts
                   </button>
                 </div>
               </div>
@@ -2500,6 +2832,103 @@ ${bodyHtml}
               </div>
             </div>
           )}
+
+          {viewMode === "bolts" && (
+            <div className="space-y-2">
+              <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2 text-xs">
+                <SummaryPill label="Bolt Rows" value={filteredBolts.length} strong />
+                <SummaryPill label="Total Bolt Qty" value={filteredBolts.reduce((sum, row) => sum + row.qty, 0)} strong />
+                <SummaryPill label="All Bolt Rows" value={bolts.length} />
+                <SummaryPill label="All Bolt Qty" value={totalBoltQty} />
+              </div>
+
+              {filteredBolts.length === 0 ? (
+                <EmptyState text="No bolts match the current filters." />
+              ) : (
+                filteredBolts.map((bolt) => (
+                  <div
+                    key={bolt.ui_id}
+                    className="border border-l-4 border-l-slate-400 border-slate-200 rounded-xl bg-white p-2.5 md:p-3 shadow-sm"
+                  >
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
+                          {manageMode && (
+                            <input
+                              type="checkbox"
+                              className="mt-1 h-4 w-4"
+                              checked={!!selectedBoltRows[bolt.ui_id]}
+                              onChange={(e) =>
+                                setSelectedBoltRows((prev) => ({
+                                  ...prev,
+                                  [bolt.ui_id]: e.target.checked,
+                                }))
+                              }
+                            />
+                          )}
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-bold text-base text-slate-900">
+                                {bolt.tower_segment || "General"}
+                              </h3>
+
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-slate-100 text-slate-700 border-slate-200">
+                                {bolt.bolt_diameter || "M—"}
+                              </span>
+                            </div>
+
+                            <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
+                              Tower Segment {bolt.tower_segment || "—"} • Bolt Diameter {bolt.bolt_diameter || "—"} • DN/SN {bolt.dn_sn || "—"} • Length {bolt.length || "—"} • Qty {bolt.qty}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 min-w-[160px] text-center">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">
+                            Bolt Qty
+                          </div>
+                          <div className="text-xl font-black text-slate-900">{bolt.qty}</div>
+                        </div>
+                      </div>
+
+                      {manageMode && (
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 pt-2 border-t border-slate-200">
+                          <Field
+                            label="Tower Segment"
+                            value={bolt.tower_segment}
+                            onChange={(v) => updateBoltRow(bolt.ui_id, "tower_segment", v)}
+                          />
+                          <Field
+                            label="Bolt Diameter"
+                            value={bolt.bolt_diameter}
+                            onChange={(v) => updateBoltRow(bolt.ui_id, "bolt_diameter", v)}
+                          />
+                          <Field
+                            label="DN/SN"
+                            value={bolt.dn_sn}
+                            onChange={(v) => updateBoltRow(bolt.ui_id, "dn_sn", v)}
+                          />
+                          <Field
+                            label="Length"
+                            value={bolt.length}
+                            onChange={(v) => updateBoltRow(bolt.ui_id, "length", v)}
+                          />
+                          <Field
+                            label="Qty"
+                            value={bolt.qty}
+                            onChange={(v) =>
+                              updateBoltRow(bolt.ui_id, "qty", Math.max(safeNumber(v, 0), 0))
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2612,6 +3041,8 @@ function ModeButton({
 function CompactSummary({
   bundles,
   members,
+  bolts,
+  boltQty,
   memberQty,
   delivered,
   received,
@@ -2628,6 +3059,8 @@ function CompactSummary({
 }: {
   bundles: number;
   members: number;
+  bolts: number;
+  boltQty: number;
   memberQty: number;
   delivered: number;
   received: number;
@@ -2647,6 +3080,8 @@ function CompactSummary({
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <SummaryPill label="Bundles" value={bundles} />
         <SummaryPill label="Members" value={members} />
+        <SummaryPill label="Bolts" value={bolts} />
+        <SummaryPill label="Bolt Qty" value={boltQty} />
         <SummaryPill label="Member Qty" value={memberQty} />
         <SummaryPill label="Delivered" value={`${delivered}/${required}`} />
         <SummaryPill label="Site Received" value={`${received}/${required}`} strong />
