@@ -141,7 +141,7 @@ type MemberCheck = {
 };
 
 type ViewMode = "bundles" | "members" | "bolts";
-
+type ImportMode = "replace" | "merge";
 type StatusFilter =
   | "all"
   | "not_checked"
@@ -237,9 +237,31 @@ function getTowerPrintLabel(tower: TowerRecord | null): string {
   );
 }
 
+function normaliseSegmentName(value: string): string {
+  const raw = value.trim();
+  if (!raw) return "General";
+
+  const compact = raw
+    .toLowerCase()
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const legMatch = compact.match(/^(\d+)\s*m?\s*leg(s)?$/i);
+  if (legMatch) return `${legMatch[1]} Leg`;
+
+  return compact
+    .replace(/\blegs\b/g, "leg")
+    .replace(/\bbody ext\b/g, "body extension")
+    .replace(/\bcommon body\b/g, "common body")
+    .replace(/\bcrossarms?\b/g, "crossarms")
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 function normaliseSection(value: string): string {
-  const trimmed = value.trim();
-  return trimmed === "" ? "General" : trimmed;
+  return normaliseSegmentName(value);
 }
 
 function normaliseBoltDiameter(value: string): string {
@@ -395,7 +417,7 @@ export default function MaterialsPage() {
   const [boltImporting, setBoltImporting] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+const [importMode, setImportMode] = useState<ImportMode>("replace");
   useEffect(() => {
     void load();
 
@@ -1225,9 +1247,22 @@ export default function MaterialsPage() {
           return;
         }
 
-        const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
-          onConflict: "tower_id,bundle_no",
-        });
+if (importMode === "replace") {
+  const deleteRes = await supabase
+    .from("tower_required_bundles")
+    .delete()
+    .eq("tower_id", towerId);
+
+  if (deleteRes.error) {
+    setBundleImporting(false);
+    alert(`Could not clear existing bundles: ${deleteRes.error.message}`);
+    return;
+  }
+}
+
+const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
+  onConflict: "tower_id,bundle_no",
+});
 
         setBundleImporting(false);
 
@@ -1299,9 +1334,21 @@ export default function MaterialsPage() {
           return;
         }
 
-        const { error } = await supabase.from("tower_material_members").upsert(rows, {
-          onConflict: "tower_id,bundle_reference,mark_no",
-        });
+if (importMode === "replace") {
+  const deleteRes = await supabase
+    .from("tower_material_members")
+    .delete()
+    .eq("tower_id", towerId);
+
+  if (deleteRes.error) {
+    alert(`Could not clear existing members: ${deleteRes.error.message}`);
+    return;
+  }
+}
+
+const { error } = await supabase.from("tower_material_members").upsert(rows, {
+  onConflict: "tower_id,bundle_reference,mark_no",
+});
 
         setMemberImporting(false);
 
@@ -1393,9 +1440,21 @@ export default function MaterialsPage() {
           return;
         }
 
-        const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
-          onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length",
-        });
+if (importMode === "replace") {
+  const deleteRes = await supabase
+    .from("tower_material_bolts")
+    .delete()
+    .eq("tower_id", towerId);
+
+  if (deleteRes.error) {
+    alert(`Could not clear existing bolts: ${deleteRes.error.message}`);
+    return;
+  }
+}
+
+const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
+  onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length",
+});
 
         setBoltImporting(false);
 
@@ -2052,7 +2111,14 @@ ${bodyHtml}
                 <button onClick={exportCurrentViewCSV} className="compact-secondary-btn">
                   Export CSV
                 </button>
-
+<select
+  value={importMode}
+  onChange={(e) => setImportMode(e.target.value as ImportMode)}
+  className="compact-secondary-btn bg-white"
+>
+  <option value="replace">Replace existing data</option>
+  <option value="merge">Add / merge only</option>
+</select>
                 <label className="compact-secondary-btn cursor-pointer">
                   {bundleImporting ? "Uploading Bundles..." : "Reupload Bundles"}
                   <input
