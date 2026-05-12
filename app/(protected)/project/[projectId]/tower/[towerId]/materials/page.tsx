@@ -417,7 +417,7 @@ export default function MaterialsPage() {
   const [boltImporting, setBoltImporting] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-const [importMode, setImportMode] = useState<ImportMode>("replace");
+  const [importMode, setImportMode] = useState<ImportMode>("replace");
   useEffect(() => {
     void load();
 
@@ -652,23 +652,26 @@ const [importMode, setImportMode] = useState<ImportMode>("replace");
     return map;
   }, [memberChecks]);
 
+  const matchedMembersForBoltSections = useMemo(() => {
+    return members.filter((member) => !!bundleMap[member.bundle_reference.trim()]);
+  }, [members, bundleMap]);
+
+  const materialSectionSet = useMemo(() => {
+    return new Set(
+      matchedMembersForBoltSections
+        .map((member) => normaliseSection(member.section))
+        .filter((section) => section !== "General"),
+    );
+  }, [matchedMembersForBoltSections]);
+
   const allSections = useMemo(() => {
-    
     const set = new Set<string>();
 
     bundles.forEach((b) => set.add(normaliseSection(b.section)));
-    members.forEach((m) => set.add(normaliseSection(m.section)));
-    bolts.forEach((b) => set.add(normaliseSection(b.tower_segment)));
+    matchedMembersForBoltSections.forEach((m) => set.add(normaliseSection(m.section)));
 
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [bundles, members, bolts]);
-
-const materialSectionSet = useMemo(() => {
-  return new Set([
-    ...bundles.map((b) => normaliseSection(b.section)),
-    ...members.map((m) => normaliseSection(m.section)),
-  ]);
-}, [bundles, members]);
+  }, [bundles, matchedMembersForBoltSections]);
   function getMemberCheck(member: Member): MemberCheck | undefined {
     return memberCheckMap[`${member.bundle_reference.trim()}__${member.mark_no.trim()}`];
   }
@@ -1512,10 +1515,7 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     });
   }, [bundles, search, sectionFilter, statusFilter, membersByBundle, deliveries, bundleChecks]);
 
-  const matchedMembers = useMemo(
-    () => members.filter((member) => !!bundleMap[member.bundle_reference.trim()]),
-    [members, bundleMap],
-  );
+  const matchedMembers = matchedMembersForBoltSections;
 
   const unmatchedMembers = useMemo(
     () => members.filter((member) => !bundleMap[member.bundle_reference.trim()]),
@@ -1566,30 +1566,38 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     });
   }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
 
-const filteredBolts = useMemo(() => {
-  const q = normaliseSearch(search);
+  const applicableBolts = useMemo(() => {
+    return bolts.filter((bolt) => materialSectionSet.has(normaliseSection(bolt.tower_segment)));
+  }, [bolts, materialSectionSet]);
 
-  return bolts.filter((bolt) => {
-    const boltSegment = normaliseSection(bolt.tower_segment);
+  const filteredBolts = useMemo(() => {
+    const q = normaliseSearch(search);
 
-    if (!materialSectionSet.has(boltSegment)) return false;
-    if (sectionFilter !== "all" && boltSegment !== sectionFilter) return false;
+    return applicableBolts.filter((bolt) => {
+      const boltSegment = normaliseSection(bolt.tower_segment);
 
-    if (!q) return true;
+      if (sectionFilter !== "all" && boltSegment !== sectionFilter) return false;
 
-    const text = matchesText(
-      boltSegment,
-      bolt.bolt_diameter,
-      bolt.dn_sn,
-      bolt.length,
-      bolt.qty,
-    );
+      if (!q) return true;
 
-    return text.includes(q);
-  });
-}, [bolts, search, sectionFilter, materialSectionSet]);
+      const text = matchesText(
+        boltSegment,
+        bolt.bolt_diameter,
+        bolt.dn_sn,
+        bolt.length,
+        bolt.qty,
+      );
+
+      return text.includes(q);
+    });
+  }, [applicableBolts, search, sectionFilter]);
 
   const totalBoltQty = useMemo(
+    () => applicableBolts.reduce((sum, row) => sum + Math.max(safeNumber(row.qty, 0), 0), 0),
+    [applicableBolts],
+  );
+
+  const allBoltQty = useMemo(
     () => bolts.reduce((sum, row) => sum + Math.max(safeNumber(row.qty, 0), 0), 0),
     [bolts],
   );
@@ -1817,7 +1825,7 @@ body{font-family:Arial,sans-serif;padding:22px;color:#0f172a;}
 h1{margin:0;font-size:22px;}
 .tower-label{font-size:18px;font-weight:800;}
 .meta{font-size:12px;color:#64748b;margin-top:4px;}
-.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 16px;}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0 16px;}
 .summary-card{border:1px solid #cbd5e1;background:#f8fafc;padding:8px;border-radius:8px;}
 .summary-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;}
 .summary-value{font-size:18px;font-weight:900;margin-top:3px;}
@@ -1846,7 +1854,8 @@ tr:nth-child(even) td{background:#f8fafc;}
 <div class="summary-grid">
   <div class="summary-card"><div class="summary-label">Filtered Rows</div><div class="summary-value">${rows.length}</div></div>
   <div class="summary-card"><div class="summary-label">Filtered Bolt Qty</div><div class="summary-value">${totalQty}</div></div>
-  <div class="summary-card"><div class="summary-label">Total Bolt Qty</div><div class="summary-value">${totalBoltQty}</div></div>
+  <div class="summary-card"><div class="summary-label">Applicable Bolt Qty</div><div class="summary-value">${totalBoltQty}</div></div>
+  <div class="summary-card"><div class="summary-label">Master Bolt Qty</div><div class="summary-value">${allBoltQty}</div></div>
 </div>
 <table>
   <thead>
@@ -2194,7 +2203,7 @@ ${bodyHtml}
             <CompactSummary
               bundles={bundles.length}
               members={members.length}
-              bolts={bolts.length}
+              bolts={applicableBolts.length}
               boltQty={totalBoltQty}
               memberQty={totalBundleMemberQty}
               delivered={overallDelivered}
@@ -3016,8 +3025,9 @@ ${bodyHtml}
                     value={filteredBolts.reduce((sum, row) => sum + row.qty, 0)}
                     strong
                   />
-                  <SummaryPill label="All Bolt Rows" value={bolts.length} />
-                  <SummaryPill label="All Bolt Qty" value={totalBoltQty} />
+                  <SummaryPill label="Applicable Rows" value={applicableBolts.length} />
+                  <SummaryPill label="Master Rows" value={bolts.length} />
+                  <SummaryPill label="Master Bolt Qty" value={allBoltQty} />
                 </div>
 
                 <button onClick={printBoltsList} className="compact-secondary-btn">
@@ -3025,8 +3035,12 @@ ${bodyHtml}
                 </button>
               </div>
 
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                Bolts shown here are filtered from the bolt master list using the tower segments found on matched members for this tower.
+              </div>
+
               {filteredBolts.length === 0 ? (
-                <EmptyState text="No bolts match the current filters." />
+                <EmptyState text="No bolts match the current filters or required member segments for this tower." />
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                   <table className="min-w-full text-sm">
