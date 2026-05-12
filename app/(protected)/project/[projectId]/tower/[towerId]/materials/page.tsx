@@ -653,6 +653,7 @@ const [importMode, setImportMode] = useState<ImportMode>("replace");
   }, [memberChecks]);
 
   const allSections = useMemo(() => {
+    
     const set = new Set<string>();
 
     bundles.forEach((b) => set.add(normaliseSection(b.section)));
@@ -662,6 +663,12 @@ const [importMode, setImportMode] = useState<ImportMode>("replace");
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [bundles, members, bolts]);
 
+const materialSectionSet = useMemo(() => {
+  return new Set([
+    ...bundles.map((b) => normaliseSection(b.section)),
+    ...members.map((m) => normaliseSection(m.section)),
+  ]);
+}, [bundles, members]);
   function getMemberCheck(member: Member): MemberCheck | undefined {
     return memberCheckMap[`${member.bundle_reference.trim()}__${member.mark_no.trim()}`];
   }
@@ -1559,25 +1566,28 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     });
   }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
 
-  const filteredBolts = useMemo(() => {
-    const q = normaliseSearch(search);
+const filteredBolts = useMemo(() => {
+  const q = normaliseSearch(search);
 
-    return bolts.filter((bolt) => {
-      if (sectionFilter !== "all" && bolt.tower_segment !== sectionFilter) return false;
+  return bolts.filter((bolt) => {
+    const boltSegment = normaliseSection(bolt.tower_segment);
 
-      if (!q) return true;
+    if (!materialSectionSet.has(boltSegment)) return false;
+    if (sectionFilter !== "all" && boltSegment !== sectionFilter) return false;
 
-      const text = matchesText(
-        bolt.tower_segment,
-        bolt.bolt_diameter,
-        bolt.dn_sn,
-        bolt.length,
-        bolt.qty,
-      );
+    if (!q) return true;
 
-      return text.includes(q);
-    });
-  }, [bolts, search, sectionFilter]);
+    const text = matchesText(
+      boltSegment,
+      bolt.bolt_diameter,
+      bolt.dn_sn,
+      bolt.length,
+      bolt.qty,
+    );
+
+    return text.includes(q);
+  });
+}, [bolts, search, sectionFilter, materialSectionSet]);
 
   const totalBoltQty = useMemo(
     () => bolts.reduce((sum, row) => sum + Math.max(safeNumber(row.qty, 0), 0), 0),
