@@ -1716,6 +1716,99 @@ export default function MaterialsPage() {
     printMaterialsReport("full");
   }
 
+  function printBoltsList() {
+    const towerLabel = getTowerPrintLabel(tower);
+    const towerLine = safeString(tower?.line, "");
+    const rows = filteredBolts;
+    const totalQty = rows.reduce((sum, row) => sum + Math.max(safeNumber(row.qty, 0), 0), 0);
+
+    const boltRowsHtml = rows.length
+      ? rows
+          .map(
+            (bolt) => `
+              <tr>
+                <td>${htmlEscape(bolt.tower_segment || "—")}</td>
+                <td class="diameter">${htmlEscape(bolt.bolt_diameter || "—")}</td>
+                <td class="dnsn">${htmlEscape(bolt.dn_sn || "—")}</td>
+                <td class="length">${htmlEscape(bolt.length || "—")}</td>
+                <td class="qty">${htmlEscape(bolt.qty)}</td>
+              </tr>
+            `,
+          )
+          .join("")
+      : `<tr><td colspan="5" class="empty-cell">No bolts match the current filters.</td></tr>`;
+
+    const html = `
+<html>
+<head>
+<title>Bolts List - ${htmlEscape(towerLabel)}</title>
+<style>
+body{font-family:Arial,sans-serif;padding:22px;color:#0f172a;}
+.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:16px;}
+h1{margin:0;font-size:22px;}
+.tower-label{font-size:18px;font-weight:800;}
+.meta{font-size:12px;color:#64748b;margin-top:4px;}
+.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 16px;}
+.summary-card{border:1px solid #cbd5e1;background:#f8fafc;padding:8px;border-radius:8px;}
+.summary-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;}
+.summary-value{font-size:18px;font-weight:900;margin-top:3px;}
+table{border-collapse:collapse;width:100%;}
+th,td{border:1px solid #94a3b8;padding:8px 9px;font-size:12px;text-align:left;vertical-align:middle;}
+th{background:#e2e8f0;font-weight:900;text-transform:uppercase;font-size:10px;letter-spacing:.04em;}
+tr:nth-child(even) td{background:#f8fafc;}
+.diameter,.dnsn,.length,.qty{text-align:center;font-weight:900;font-size:14px;}
+.qty{font-size:16px;}
+.empty-cell{text-align:center;color:#64748b;padding:16px;}
+.print-footer{margin-top:18px;padding-top:8px;border-top:1px solid #cbd5e1;font-size:11px;color:#64748b;display:flex;justify-content:space-between;}
+@media print{body{padding:12px;}th,td{font-size:11px;padding:6px 7px;}.diameter,.dnsn,.length{font-size:13px;}.qty{font-size:15px;}}
+</style>
+</head>
+<body>
+<div class="print-header">
+  <div>
+    <h1>Bolts List</h1>
+    <div class="meta">Printed ${new Date().toLocaleString()}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="tower-label">Tower: ${htmlEscape(towerLabel)}</div>
+    <div class="meta">${towerLine ? `Line: ${htmlEscape(towerLine)}` : ""}</div>
+  </div>
+</div>
+<div class="summary-grid">
+  <div class="summary-card"><div class="summary-label">Filtered Rows</div><div class="summary-value">${rows.length}</div></div>
+  <div class="summary-card"><div class="summary-label">Filtered Bolt Qty</div><div class="summary-value">${totalQty}</div></div>
+  <div class="summary-card"><div class="summary-label">Total Bolt Qty</div><div class="summary-value">${totalBoltQty}</div></div>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Tower Segment</th>
+      <th>Bolt Diameter</th>
+      <th>DN/SN</th>
+      <th>Length</th>
+      <th>Qty</th>
+    </tr>
+  </thead>
+  <tbody>${boltRowsHtml}</tbody>
+</table>
+<div class="print-footer">
+  <span>Bolts List - Tower ${htmlEscape(towerLabel)}</span>
+  <span>TTTracker</span>
+</div>
+</body>
+</html>
+`;
+
+    const win = window.open("", "_blank", "width=1200,height=800");
+    if (!win) return;
+
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   function buildBundleRowsHtml(rows: Bundle[]) {
     if (!rows.length) {
       return `<tr><td colspan="10" class="empty-cell">No items in this section.</td></tr>`;
@@ -1946,6 +2039,10 @@ ${bodyHtml}
 
                 <button onClick={printOutstandingItems} className="compact-secondary-btn">
                   Print Outstanding
+                </button>
+
+                <button onClick={printBoltsList} className="compact-secondary-btn">
+                  Print Bolts
                 </button>
 
                 <button onClick={exportOutstandingCSV} className="compact-secondary-btn">
@@ -2835,97 +2932,156 @@ ${bodyHtml}
 
           {viewMode === "bolts" && (
             <div className="space-y-2">
-              <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2 text-xs">
-                <SummaryPill label="Bolt Rows" value={filteredBolts.length} strong />
-                <SummaryPill label="Total Bolt Qty" value={filteredBolts.reduce((sum, row) => sum + row.qty, 0)} strong />
-                <SummaryPill label="All Bolt Rows" value={bolts.length} />
-                <SummaryPill label="All Bolt Qty" value={totalBoltQty} />
+              <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <SummaryPill label="Bolt Rows" value={filteredBolts.length} strong />
+                  <SummaryPill
+                    label="Filtered Bolt Qty"
+                    value={filteredBolts.reduce((sum, row) => sum + row.qty, 0)}
+                    strong
+                  />
+                  <SummaryPill label="All Bolt Rows" value={bolts.length} />
+                  <SummaryPill label="All Bolt Qty" value={totalBoltQty} />
+                </div>
+
+                <button onClick={printBoltsList} className="compact-secondary-btn">
+                  Print Bolts List
+                </button>
               </div>
 
               {filteredBolts.length === 0 ? (
                 <EmptyState text="No bolts match the current filters." />
               ) : (
-                filteredBolts.map((bolt) => (
-                  <div
-                    key={bolt.ui_id}
-                    className="border border-l-4 border-l-slate-400 border-slate-200 rounded-xl bg-white p-2.5 md:p-3 shadow-sm"
-                  >
-                    <div className="flex flex-col gap-2">
-                      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
-                        <div className="flex items-start gap-2 min-w-0">
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-100 border-b border-slate-200">
+                      <tr>
+                        {manageMode && (
+                          <th className="w-10 px-3 py-2 text-left text-[11px] font-black uppercase tracking-wide text-slate-500">
+                            Select
+                          </th>
+                        )}
+                        <th className="px-3 py-2 text-left text-[11px] font-black uppercase tracking-wide text-slate-500">
+                          Tower Segment
+                        </th>
+                        <th className="px-3 py-2 text-center text-[11px] font-black uppercase tracking-wide text-slate-500">
+                          Diameter
+                        </th>
+                        <th className="px-3 py-2 text-center text-[11px] font-black uppercase tracking-wide text-slate-500">
+                          DN/SN
+                        </th>
+                        <th className="px-3 py-2 text-center text-[11px] font-black uppercase tracking-wide text-slate-500">
+                          Length
+                        </th>
+                        <th className="px-3 py-2 text-center text-[11px] font-black uppercase tracking-wide text-slate-500">
+                          Qty
+                        </th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredBolts.map((bolt) => (
+                        <tr key={bolt.ui_id} className="hover:bg-slate-50">
                           {manageMode && (
-                            <input
-                              type="checkbox"
-                              className="mt-1 h-4 w-4"
-                              checked={!!selectedBoltRows[bolt.ui_id]}
-                              onChange={(e) =>
-                                setSelectedBoltRows((prev) => ({
-                                  ...prev,
-                                  [bolt.ui_id]: e.target.checked,
-                                }))
-                              }
-                            />
+                            <td className="px-3 py-2 align-middle">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4"
+                                checked={!!selectedBoltRows[bolt.ui_id]}
+                                onChange={(e) =>
+                                  setSelectedBoltRows((prev) => ({
+                                    ...prev,
+                                    [bolt.ui_id]: e.target.checked,
+                                  }))
+                                }
+                              />
+                            </td>
                           )}
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-bold text-base text-slate-900">
-                                {bolt.tower_segment || "General"}
-                              </h3>
-
-                              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-slate-100 text-slate-700 border-slate-200">
-                                {bolt.bolt_diameter || "M—"}
+                          <td className="px-3 py-2 align-middle min-w-[220px]">
+                            {manageMode ? (
+                              <input
+                                className="bolt-table-input text-left font-semibold"
+                                value={bolt.tower_segment}
+                                onChange={(e) =>
+                                  updateBoltRow(bolt.ui_id, "tower_segment", e.target.value)
+                                }
+                              />
+                            ) : (
+                              <span className="font-bold text-slate-900">
+                                {bolt.tower_segment || "—"}
                               </span>
-                            </div>
+                            )}
+                          </td>
 
-                            <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
-                              Tower Segment {bolt.tower_segment || "—"} • Bolt Diameter {bolt.bolt_diameter || "—"} • DN/SN {bolt.dn_sn || "—"} • Length {bolt.length || "—"} • Qty {bolt.qty}
-                            </div>
-                          </div>
-                        </div>
+                          <td className="px-3 py-2 align-middle text-center min-w-[120px]">
+                            {manageMode ? (
+                              <input
+                                className="bolt-table-input text-center font-black"
+                                value={bolt.bolt_diameter}
+                                onChange={(e) =>
+                                  updateBoltRow(bolt.ui_id, "bolt_diameter", e.target.value)
+                                }
+                              />
+                            ) : (
+                              <span className="inline-flex min-w-[64px] justify-center rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-sm font-black text-blue-900">
+                                {bolt.bolt_diameter || "—"}
+                              </span>
+                            )}
+                          </td>
 
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 min-w-[160px] text-center">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">
-                            Bolt Qty
-                          </div>
-                          <div className="text-xl font-black text-slate-900">{bolt.qty}</div>
-                        </div>
-                      </div>
+                          <td className="px-3 py-2 align-middle text-center min-w-[110px]">
+                            {manageMode ? (
+                              <input
+                                className="bolt-table-input text-center font-black uppercase"
+                                value={bolt.dn_sn}
+                                onChange={(e) => updateBoltRow(bolt.ui_id, "dn_sn", e.target.value)}
+                              />
+                            ) : (
+                              <span className="text-sm font-black uppercase text-slate-900">
+                                {bolt.dn_sn || "—"}
+                              </span>
+                            )}
+                          </td>
 
-                      {manageMode && (
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 pt-2 border-t border-slate-200">
-                          <Field
-                            label="Tower Segment"
-                            value={bolt.tower_segment}
-                            onChange={(v) => updateBoltRow(bolt.ui_id, "tower_segment", v)}
-                          />
-                          <Field
-                            label="Bolt Diameter"
-                            value={bolt.bolt_diameter}
-                            onChange={(v) => updateBoltRow(bolt.ui_id, "bolt_diameter", v)}
-                          />
-                          <Field
-                            label="DN/SN"
-                            value={bolt.dn_sn}
-                            onChange={(v) => updateBoltRow(bolt.ui_id, "dn_sn", v)}
-                          />
-                          <Field
-                            label="Length"
-                            value={bolt.length}
-                            onChange={(v) => updateBoltRow(bolt.ui_id, "length", v)}
-                          />
-                          <Field
-                            label="Qty"
-                            value={bolt.qty}
-                            onChange={(v) =>
-                              updateBoltRow(bolt.ui_id, "qty", Math.max(safeNumber(v, 0), 0))
-                            }
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
+                          <td className="px-3 py-2 align-middle text-center min-w-[110px]">
+                            {manageMode ? (
+                              <input
+                                className="bolt-table-input text-center font-black"
+                                value={bolt.length}
+                                onChange={(e) => updateBoltRow(bolt.ui_id, "length", e.target.value)}
+                              />
+                            ) : (
+                              <span className="text-sm font-black text-slate-900">
+                                {bolt.length || "—"}
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-2 align-middle text-center min-w-[100px]">
+                            {manageMode ? (
+                              <input
+                                className="bolt-table-input text-center font-black"
+                                value={bolt.qty}
+                                onChange={(e) =>
+                                  updateBoltRow(
+                                    bolt.ui_id,
+                                    "qty",
+                                    Math.max(safeNumber(e.target.value, 0), 0),
+                                  )
+                                }
+                              />
+                            ) : (
+                              <span className="inline-flex min-w-[56px] justify-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1 text-base font-black text-slate-950">
+                                {bolt.qty}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}
@@ -3007,6 +3163,22 @@ ${bodyHtml}
           display: inline-flex;
           align-items: center;
           justify-content: center;
+        }
+
+        .bolt-table-input {
+          width: 100%;
+          border-radius: 0.55rem;
+          border: 1px solid #cbd5e1;
+          background: white;
+          padding: 0.45rem 0.55rem;
+          font-size: 0.875rem;
+          color: #0f172a;
+          outline: none;
+        }
+
+        .bolt-table-input:focus {
+          border-color: #2563eb;
+          box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
         }
       `}</style>
     </div>
