@@ -191,6 +191,22 @@ function normaliseSection(value: string): string {
   return trimmed === "" ? "General" : trimmed;
 }
 
+function getCsvSegment(row: CsvRow, fallback = "General"): string {
+  return normaliseSection(
+    safeString(
+      row.segment ||
+        row["Segment"] ||
+        row["Tower Segment"] ||
+        row["Member Segment"] ||
+        row["Bundle Segment"] ||
+        row.section ||
+        row["Section"] ||
+        row["Bundle Group"] ||
+        fallback,
+    ),
+  );
+}
+
 function makeUiId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -1006,18 +1022,7 @@ async function importBundlesCSV(file: File) {
           return {
             tower_id: towerId,
             bundle_no: cleanBundleNo,
-            section: normaliseSection(
-              safeString(
-                r.segment ||
-                  r["Segment"] ||
-                  r["Tower Segment"] ||
-                  r["Bundle Segment"] ||
-                  r.section ||
-                  r["Section"] ||
-                  r["Bundle Group"] ||
-                  "General",
-              ),
-            ),
+            section: getCsvSegment(r),
             qty_required: safeNumber(
               r.qty_required ||
                 r["Bundle Qty"] ||
@@ -1077,7 +1082,7 @@ async function importBundlesCSV(file: File) {
       }
 
       await load();
-      alert("Bundle CSV imported/updated. Existing delivery records and site checks were preserved.");
+      alert("Bundle CSV imported.");
     },
     error: (err) => {
       console.error("bundle parse error", err);
@@ -1123,17 +1128,7 @@ async function importBundlesCSV(file: File) {
                 r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0,
                 0,
               ),
-              section: normaliseSection(
-                safeString(
-                  r.segment ||
-                    r["Segment"] ||
-                    r["Tower Segment"] ||
-                    r["Member Segment"] ||
-                    r.section ||
-                    r["Section"] ||
-                    "General",
-                ),
-              ),
+              section: getCsvSegment(r),
             };
           })
           .filter((row): row is MemberImportRow => row !== null);
@@ -1157,7 +1152,7 @@ async function importBundlesCSV(file: File) {
         }
 
         await load();
-        alert("Members CSV imported/updated. Existing member checks were preserved.");
+        alert("Members CSV imported.");
       },
       error: (err) => {
         console.error("member parse error", err);
@@ -1296,7 +1291,7 @@ async function importBundlesCSV(file: File) {
       const rows = [
         [
           "Bundle No",
-          "Section",
+          "Segment",
           "Bundle Qty",
           "Delivered",
           "Remaining",
@@ -1322,7 +1317,7 @@ async function importBundlesCSV(file: File) {
     }
 
     const rows = [
-      ["Mark No", "PN", "Drawing No", "Bundle Reference", "Qty", "Tower Segment", "Status"],
+      ["Mark No", "PN", "Drawing No", "Bundle Reference", "Qty", "Segment", "Status"],
       ...filteredMatchedMembers.map((member) => [
         member.mark_no,
         member.pn_final,
@@ -1352,7 +1347,7 @@ async function importBundlesCSV(file: File) {
           <thead>
             <tr>
               <th>Bundle No</th>
-              <th>Tower Segment</th>
+              <th>Segment</th>
               <th>Bundle Qty</th>
               <th>Delivered</th>
               <th>Remaining</th>
@@ -1392,7 +1387,7 @@ async function importBundlesCSV(file: File) {
               <th>Drawing No</th>
               <th>Bundle Ref</th>
               <th>Qty</th>
-              <th>Tower Segment</th>
+              <th>Segment</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -1560,34 +1555,6 @@ ${bodyHtml}
                 >
                   Export CSV
                 </button>
-
-                <label className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium cursor-pointer">
-                  {bundleImporting ? "Uploading Bundles..." : "Reupload Bundles"}
-                  <input
-                    type="file"
-                    accept=".csv"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void importBundlesCSV(file);
-                      e.currentTarget.value = "";
-                    }}
-                  />
-                </label>
-
-                <label className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium cursor-pointer">
-                  {memberImporting ? "Uploading Members..." : "Reupload Members"}
-                  <input
-                    type="file"
-                    accept=".csv"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void importMembersCSV(file);
-                      e.currentTarget.value = "";
-                    }}
-                  />
-                </label>
 
                 <button
                   onClick={() => setManageMode((prev) => !prev)}
@@ -1849,7 +1816,7 @@ ${bodyHtml}
 
                           <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
                             <MiniStat label="Weight" value={bundle.total_weight ?? "—"} />
-                            <MiniStat label="Tower Segment" value={bundle.section} />
+                            <MiniStat label="Segment" value={bundle.section} />
                             <MiniStat label="Member Qty" value={bundle.member_qty} />
                             <MiniStat label="Delivered" value={deliveredQty(bundle.bundle_no)} />
                             <MiniStat label="Remaining" value={remainingQty(bundle)} />
@@ -1864,7 +1831,7 @@ ${bodyHtml}
                               />
 
                               <Field
-                                label="Tower Segment"
+                                label="Segment"
                                 value={bundle.section}
                                 onChange={(v) => updateBundleRow(bundle.ui_id, "section", v)}
                               />
@@ -2116,7 +2083,7 @@ ${bodyHtml}
                             />
 
                             <Field
-                              label="Tower Segment"
+                              label="Segment"
                               value={member.section}
                               onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
                             />
@@ -2279,7 +2246,7 @@ ${bodyHtml}
                                   />
 
                                   <Field
-                                    label="Tower Segment"
+                                    label="Segment"
                                     value={member.section}
                                     onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
                                   />
