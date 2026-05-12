@@ -1,3 +1,11 @@
+/* 
+  Materials page update:
+  - Adds qty_received to bundle checks.
+  - Adds bundle quantity +/- site check controls.
+  - Keeps delivery-register quantities separate from site-confirmed received quantities.
+  - Outstanding section now uses site received qty against required bundle qty.
+*/
+
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -63,19 +71,8 @@ type Delivery = {
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
-type BundleCheckStatus =
-  | "not_checked"
-  | "arrived"
-  | "partial"
-  | "missing"
-  | "issue";
-
-type MemberCheckStatus =
-  | "not_checked"
-  | "arrived"
-  | "not_here"
-  | "missing"
-  | "issue";
+type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue";
+type MemberCheckStatus = "not_checked" | "arrived" | "not_here" | "missing" | "issue";
 
 type DbBundleCheckRow = {
   id?: string;
@@ -85,6 +82,7 @@ type DbBundleCheckRow = {
   notes: string | null;
   checked_by: string | null;
   checked_at: string | null;
+  qty_received: number | null;
 };
 
 type BundleCheck = {
@@ -95,6 +93,7 @@ type BundleCheck = {
   notes: string;
   checked_by: string;
   checked_at: string | null;
+  qty_received: number;
 };
 
 type DbMemberCheckRow = {
@@ -166,8 +165,9 @@ type OutstandingBundle = {
   bundle: Bundle;
   status: BundleCheckStatus;
   delivered: number;
+  received: number;
   required: number;
-  remaining: number;
+  remainingToReceive: number;
   progress: number;
   reason: string;
 };
@@ -189,7 +189,6 @@ function safeNumber(value: unknown, fallback = 0): number {
 
 function getTowerPrintLabel(tower: TowerRecord | null): string {
   if (!tower) return "Unknown Tower";
-
   const extra = tower.extra_data || {};
 
   return (
@@ -216,7 +215,6 @@ function makeUiId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
-
   return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -280,23 +278,19 @@ function statusBorderClasses(status: BundleCheckStatus | MemberCheckStatus): str
 
 function csvEscape(value: string | number | null | undefined): string {
   const str = value === null || value === undefined ? "" : String(value);
-
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
-
   return str;
 }
 
 function downloadTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
-
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
-
   URL.revokeObjectURL(url);
 }
 
@@ -361,10 +355,6 @@ export default function MaterialsPage() {
   const [memberImporting, setMemberImporting] = useState(false);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  /* =========================================================
-     LOAD
-  ========================================================= */
 
   useEffect(() => {
     void load();
@@ -467,6 +457,7 @@ export default function MaterialsPage() {
         notes: safeString(row.notes),
         checked_by: safeString(row.checked_by),
         checked_at: row.checked_at || null,
+        qty_received: Math.max(safeNumber(row.qty_received, 0), 0),
       }),
     );
 
@@ -491,10 +482,6 @@ export default function MaterialsPage() {
     setLoading(false);
   }
 
-  /* =========================================================
-     DELIVERY CALCS
-  ========================================================= */
-
   function deliveredQty(bundleNo: string): number {
     let total = 0;
 
@@ -509,17 +496,25 @@ export default function MaterialsPage() {
     return total;
   }
 
-  function remainingQty(bundle: Bundle): number {
+  function receivedQty(bundleNo: string): number {
+    return Math.max(safeNumber(bundleCheckMap[bundleNo.trim()]?.qty_received, 0), 0);
+  }
+
+  function remainingDeliveryQty(bundle: Bundle): number {
     return Math.max(bundle.qty_required - deliveredQty(bundle.bundle_no), 0);
+  }
+
+  function remainingReceiveQty(bundle: Bundle): number {
+    return Math.max(bundle.qty_required - receivedQty(bundle.bundle_no), 0);
   }
 
   function overDeliveredQty(bundle: Bundle): number {
     return Math.max(deliveredQty(bundle.bundle_no) - bundle.qty_required, 0);
   }
 
-  /* =========================================================
-     LOOKUPS
-  ========================================================= */
+  function overReceivedQty(bundle: Bundle): number {
+    return Math.max(receivedQty(bundle.bundle_no) - bundle.qty_required, 0);
+  }
 
   const membersByBundle = useMemo(() => {
     const map: Record<string, Member[]> = {};
@@ -587,8 +582,26 @@ export default function MaterialsPage() {
     return memberCheckMap[`${member.bundle_reference.trim()}__${member.mark_no.trim()}`];
   }
 
+  function deriveStatusFromReceived(qtyReceived: number, qtyRequired: number): BundleCheckStatus {
+    if (qtyReceived <= 0) return "not_checked";
+    if (qtyReceived < qtyRequired) return "partial";
+    return "arrived";
+  }
+
   function deriveBundleStatus(bundleNo: string): BundleCheckStatus {
+    const bundle = bundleMap[bundleNo.trim()];
     const manual = bundleCheckMap[bundleNo.trim()];
+    const qtyReceived = Math.max(safeNumber(manual?.qty_received, 0), 0);
+
+    if (manual?.status === "issue") return "issue";
+    if (manual?.status === "missing" && qtyReceived <= 0) return "missing";
+
+    if (bundle) {
+      if (qtyReceived > 0 || bundle.qty_required > 1) {
+        return deriveStatusFromReceived(qtyReceived, Math.max(bundle.qty_required, 1));
+      }
+    }
+
     const relatedMembers = membersByBundle[bundleNo.trim()] || [];
 
     if (relatedMembers.length === 0) {
@@ -596,7 +609,6 @@ export default function MaterialsPage() {
     }
 
     const statuses = relatedMembers.map((member) => getMemberCheck(member)?.status || "not_checked");
-
     const arrivedCount = statuses.filter((s) => s === "arrived").length;
     const missingCount = statuses.filter((s) => s === "missing").length;
     const notHereCount = statuses.filter((s) => s === "not_here").length;
@@ -617,8 +629,7 @@ export default function MaterialsPage() {
 
   function bundleMatchesStatus(bundleNo: string, filter: StatusFilter): boolean {
     if (filter === "all") return true;
-    const derived = deriveBundleStatus(bundleNo);
-    return derived === filter;
+    return deriveBundleStatus(bundleNo) === filter;
   }
 
   function memberMatchesStatus(member: Member, filter: StatusFilter): boolean {
@@ -628,23 +639,20 @@ export default function MaterialsPage() {
   }
 
   function getOutstandingReason(bundle: Bundle, status: BundleCheckStatus): string {
-    const remaining = remainingQty(bundle);
-    const overDelivered = overDeliveredQty(bundle);
+    const received = receivedQty(bundle.bundle_no);
+    const remainingToReceive = remainingReceiveQty(bundle);
+    const delivered = deliveredQty(bundle.bundle_no);
     const reasons: string[] = [];
 
-    if (remaining > 0) reasons.push(`${remaining} bundle(s) still required`);
-    if (overDelivered > 0) reasons.push(`${overDelivered} extra delivered`);
+    if (remainingToReceive > 0) reasons.push(`${remainingToReceive} bundle(s) still to confirm`);
+    if (delivered > received) reasons.push(`${delivered - received} delivered but not confirmed`);
     if (status === "not_checked") reasons.push("Not checked on site");
-    if (status === "partial") reasons.push("Partially checked");
+    if (status === "partial") reasons.push("Partial bundle qty received");
     if (status === "missing") reasons.push("Marked missing");
     if (status === "issue") reasons.push("Issue / review");
 
     return reasons.join(" • ") || "Outstanding";
   }
-
-  /* =========================================================
-     AUTO SAVE
-  ========================================================= */
 
   function scheduleAutoSave(nextRows: Bundle[]) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -707,10 +715,6 @@ export default function MaterialsPage() {
 
     setSaving(false);
   }
-
-  /* =========================================================
-     MANAGE ACTIONS
-  ========================================================= */
 
   function addBundleRow() {
     setBundles((prev) => [
@@ -836,9 +840,53 @@ export default function MaterialsPage() {
     await load();
   }
 
-  /* =========================================================
-     CHECK ACTIONS
-  ========================================================= */
+  async function upsertBundleQtyReceived(bundle: Bundle, nextQty: number, forcedStatus?: BundleCheckStatus) {
+    const required = Math.max(bundle.qty_required, 1);
+    const clampedQty = Math.max(Math.min(Math.round(nextQty), required), 0);
+    const autoStatus = forcedStatus || deriveStatusFromReceived(clampedQty, required);
+
+    const payload = {
+      tower_id: towerId,
+      bundle_no: bundle.bundle_no.trim(),
+      status: autoStatus,
+      notes: bundleCheckMap[bundle.bundle_no.trim()]?.notes || "",
+      checked_by: "Site Check",
+      checked_at: new Date().toISOString(),
+      qty_received: clampedQty,
+    };
+
+    const { error } = await supabase.from("tower_material_bundle_checks").upsert(payload, {
+      onConflict: "tower_id,bundle_no",
+    });
+
+    if (error) {
+      console.error("bundle qty check save error", error);
+      alert("Failed to save bundle quantity check.");
+      return;
+    }
+
+    setBundleChecks((prev) => {
+      const next = prev.filter((row) => row.bundle_no.trim() !== payload.bundle_no);
+      next.push(payload);
+      return next;
+    });
+  }
+
+  async function incrementBundleReceived(bundle: Bundle, amount: number) {
+    await upsertBundleQtyReceived(bundle, receivedQty(bundle.bundle_no) + amount);
+  }
+
+  async function setBundleReceivedFull(bundle: Bundle) {
+    await upsertBundleQtyReceived(bundle, Math.max(bundle.qty_required, 0), "arrived");
+  }
+
+  async function markBundleMissing(bundle: Bundle) {
+    await upsertBundleQtyReceived(bundle, 0, "missing");
+  }
+
+  async function markBundleIssue(bundle: Bundle) {
+    await upsertBundleQtyReceived(bundle, receivedQty(bundle.bundle_no), "issue");
+  }
 
   async function updateMemberStatus(member: Member, status: MemberCheckStatus, notes?: string) {
     const payload = {
@@ -867,8 +915,6 @@ export default function MaterialsPage() {
       next.push(payload);
       return next;
     });
-
-    await saveDerivedBundleStatus(payload.bundle_no);
   }
 
   async function clearMemberStatus(member: Member) {
@@ -894,119 +940,6 @@ export default function MaterialsPage() {
           ),
       ),
     );
-
-    await saveDerivedBundleStatus(member.bundle_reference.trim());
-  }
-
-  async function updateBundleManualStatus(bundleNo: string, status: BundleCheckStatus, notes = "") {
-    const payload = {
-      tower_id: towerId,
-      bundle_no: bundleNo.trim(),
-      status,
-      notes,
-      checked_by: "Site Check",
-      checked_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from("tower_material_bundle_checks").upsert(payload, {
-      onConflict: "tower_id,bundle_no",
-    });
-
-    if (error) {
-      console.error("bundle check save error", error);
-      alert("Failed to save bundle status.");
-      return;
-    }
-
-    setBundleChecks((prev) => {
-      const next = prev.filter((row) => row.bundle_no.trim() !== payload.bundle_no);
-      next.push(payload);
-      return next;
-    });
-  }
-
-  async function clearBundleManualStatus(bundleNo: string) {
-    const { error } = await supabase
-      .from("tower_material_bundle_checks")
-      .delete()
-      .eq("tower_id", towerId)
-      .eq("bundle_no", bundleNo.trim());
-
-    if (error) {
-      console.error("clear bundle status error", error);
-      alert("Failed to clear bundle status.");
-      return;
-    }
-
-    setBundleChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
-  }
-
-  async function saveDerivedBundleStatus(bundleNo: string) {
-    const derived = deriveBundleStatus(bundleNo);
-
-    const payload = {
-      tower_id: towerId,
-      bundle_no: bundleNo.trim(),
-      status: derived,
-      notes: bundleCheckMap[bundleNo.trim()]?.notes || "",
-      checked_by: "Site Check",
-      checked_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from("tower_material_bundle_checks").upsert(payload, {
-      onConflict: "tower_id,bundle_no",
-    });
-
-    if (error) {
-      console.error("derived bundle status save error", error);
-      return;
-    }
-
-    setBundleChecks((prev) => {
-      const next = prev.filter((row) => row.bundle_no.trim() !== payload.bundle_no);
-      next.push(payload);
-      return next;
-    });
-  }
-
-  async function markWholeBundle(bundleNo: string, status: MemberCheckStatus) {
-    const relatedMembers = membersByBundle[bundleNo.trim()] || [];
-
-    if (!relatedMembers.length) {
-      await updateBundleManualStatus(
-        bundleNo,
-        status === "arrived" ? "arrived" : status === "missing" ? "missing" : "partial",
-      );
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const payload = relatedMembers.map((member) => ({
-      tower_id: towerId,
-      bundle_no: bundleNo.trim(),
-      mark_no: member.mark_no.trim(),
-      status,
-      notes: getMemberCheck(member)?.notes || "",
-      checked_by: "Site Check",
-      checked_at: now,
-    }));
-
-    const { error } = await supabase.from("tower_material_member_checks").upsert(payload, {
-      onConflict: "tower_id,bundle_no,mark_no",
-    });
-
-    if (error) {
-      console.error("whole bundle check save error", error);
-      alert("Failed to update whole bundle.");
-      return;
-    }
-
-    setMemberChecks((prev) => {
-      const next = prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim());
-      return [...next, ...payload];
-    });
-
-    await saveDerivedBundleStatus(bundleNo);
   }
 
   async function clearWholeBundleStatuses(bundleNo: string) {
@@ -1022,13 +955,21 @@ export default function MaterialsPage() {
       return;
     }
 
-    setMemberChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
-    await clearBundleManualStatus(bundleNo);
-  }
+    const { error: bundleDeleteError } = await supabase
+      .from("tower_material_bundle_checks")
+      .delete()
+      .eq("tower_id", towerId)
+      .eq("bundle_no", bundleNo.trim());
 
-  /* =========================================================
-     IMPORTS
-  ========================================================= */
+    if (bundleDeleteError) {
+      console.error("clear bundle status error", bundleDeleteError);
+      alert("Failed to clear bundle status.");
+      return;
+    }
+
+    setMemberChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
+    setBundleChecks((prev) => prev.filter((row) => row.bundle_no.trim() !== bundleNo.trim()));
+  }
 
   async function importBundlesCSV(file: File) {
     setBundleImporting(true);
@@ -1213,10 +1154,6 @@ export default function MaterialsPage() {
     });
   }
 
-  /* =========================================================
-     FILTERED DATA
-  ========================================================= */
-
   const filteredBundles = useMemo(() => {
     const q = normaliseSearch(search);
 
@@ -1233,6 +1170,9 @@ export default function MaterialsPage() {
         bundle.member_qty,
         bundle.total_weight,
         deliveredQty(bundle.bundle_no),
+        receivedQty(bundle.bundle_no),
+        remainingDeliveryQty(bundle),
+        remainingReceiveQty(bundle),
         memberLinesForBundle(bundle.bundle_no),
         memberQtyFromMemberList(bundle.bundle_no),
         ...((membersByBundle[bundle.bundle_no.trim()] || []).map((m) =>
@@ -1242,7 +1182,7 @@ export default function MaterialsPage() {
 
       return text.includes(q);
     });
-  }, [bundles, search, sectionFilter, statusFilter, membersByBundle, deliveries]);
+  }, [bundles, search, sectionFilter, statusFilter, membersByBundle, deliveries, bundleChecks]);
 
   const matchedMembers = useMemo(
     () => members.filter((member) => !!bundleMap[member.bundle_reference.trim()]),
@@ -1308,8 +1248,13 @@ export default function MaterialsPage() {
     [bundles, deliveries],
   );
 
-  const overallRemaining = Math.max(overallRequired - overallDelivered, 0);
-  const overallProgress = overallRequired > 0 ? (overallDelivered / overallRequired) * 100 : 0;
+  const overallReceived = useMemo(
+    () => bundles.reduce((sum, row) => sum + receivedQty(row.bundle_no), 0),
+    [bundles, bundleChecks],
+  );
+
+  const overallRemaining = Math.max(overallRequired - overallReceived, 0);
+  const overallProgress = overallRequired > 0 ? (overallReceived / overallRequired) * 100 : 0;
 
   const totalBundleMemberQty = useMemo(
     () => bundles.reduce((sum, row) => sum + safeNumber(row.member_qty, 0), 0),
@@ -1338,11 +1283,12 @@ export default function MaterialsPage() {
       .map((bundle) => {
         const status = deriveBundleStatus(bundle.bundle_no);
         const delivered = deliveredQty(bundle.bundle_no);
+        const received = receivedQty(bundle.bundle_no);
         const required = Math.max(bundle.qty_required, 0);
-        const remaining = Math.max(required - delivered, 0);
-        const progress = percentage(delivered, required);
+        const remainingToReceive = Math.max(required - received, 0);
+        const progress = percentage(received, required);
         const isOutstanding =
-          remaining > 0 ||
+          remainingToReceive > 0 ||
           status === "not_checked" ||
           status === "partial" ||
           status === "missing" ||
@@ -1354,15 +1300,16 @@ export default function MaterialsPage() {
           bundle,
           status,
           delivered,
+          received,
           required,
-          remaining,
+          remainingToReceive,
           progress,
           reason: getOutstandingReason(bundle, status),
         };
       })
       .filter((item): item is OutstandingBundle => item !== null)
       .sort((a, b) => {
-        if (a.remaining !== b.remaining) return b.remaining - a.remaining;
+        if (a.remainingToReceive !== b.remainingToReceive) return b.remainingToReceive - a.remainingToReceive;
         return a.bundle.bundle_no.localeCompare(b.bundle.bundle_no);
       });
   }, [bundles, deliveries, memberChecks, bundleChecks]);
@@ -1371,14 +1318,10 @@ export default function MaterialsPage() {
     return bundles
       .filter((bundle) => {
         const status = deriveBundleStatus(bundle.bundle_no);
-        return remainingQty(bundle) === 0 && status === "arrived";
+        return remainingReceiveQty(bundle) === 0 && status === "arrived";
       })
       .sort((a, b) => a.bundle_no.localeCompare(b.bundle_no));
   }, [bundles, deliveries, memberChecks, bundleChecks]);
-
-  /* =========================================================
-     EXPORT / PRINT
-  ========================================================= */
 
   function exportCurrentViewCSV() {
     if (viewMode === "bundles") {
@@ -1386,10 +1329,11 @@ export default function MaterialsPage() {
         [
           "Bundle No",
           "Section",
-          "Required Bundles",
-          "Delivered Bundles",
-          "Remaining Bundles",
-          "Over Delivered",
+          "Required Bundle Qty",
+          "Delivered Qty",
+          "Site Received Qty",
+          "Remaining To Receive",
+          "Over Received",
           "Bundle Member Qty",
           "Total Weight",
           "Status",
@@ -1399,8 +1343,9 @@ export default function MaterialsPage() {
           bundle.section,
           bundle.qty_required,
           deliveredQty(bundle.bundle_no),
-          remainingQty(bundle),
-          overDeliveredQty(bundle),
+          receivedQty(bundle.bundle_no),
+          remainingReceiveQty(bundle),
+          overReceivedQty(bundle),
           bundle.member_qty,
           bundle.total_weight ?? "",
           statusLabel(deriveBundleStatus(bundle.bundle_no)),
@@ -1434,10 +1379,11 @@ export default function MaterialsPage() {
       [
         "Bundle No",
         "Section",
-        "Required Bundles",
-        "Delivered Bundles",
-        "Remaining Bundles",
-        "Progress",
+        "Required Bundle Qty",
+        "Delivered Qty",
+        "Site Received Qty",
+        "Remaining To Receive",
+        "Site Check Progress",
         "Status",
         "Reason",
       ],
@@ -1446,7 +1392,8 @@ export default function MaterialsPage() {
         item.bundle.section,
         item.required,
         item.delivered,
-        item.remaining,
+        item.received,
+        item.remainingToReceive,
         `${item.progress.toFixed(1)}%`,
         statusLabel(item.status),
         item.reason,
@@ -1467,21 +1414,18 @@ export default function MaterialsPage() {
 
   function buildBundleRowsHtml(rows: Bundle[]) {
     if (!rows.length) {
-      return `
-        <tr>
-          <td colspan="9" class="empty-cell">No items in this section.</td>
-        </tr>
-      `;
+      return `<tr><td colspan="10" class="empty-cell">No items in this section.</td></tr>`;
     }
 
     return rows
       .map((bundle) => {
         const status = deriveBundleStatus(bundle.bundle_no);
         const delivered = deliveredQty(bundle.bundle_no);
-        const remaining = remainingQty(bundle);
-        const over = overDeliveredQty(bundle);
+        const received = receivedQty(bundle.bundle_no);
+        const remainingToReceive = remainingReceiveQty(bundle);
+        const over = overReceivedQty(bundle);
         const required = Math.max(bundle.qty_required, 0);
-        const progress = percentage(delivered, required);
+        const progress = percentage(received, required);
 
         return `
           <tr>
@@ -1489,7 +1433,8 @@ export default function MaterialsPage() {
             <td>${htmlEscape(bundle.section)}</td>
             <td>${required}</td>
             <td>${delivered}</td>
-            <td>${remaining}</td>
+            <td>${received}</td>
+            <td>${remainingToReceive}</td>
             <td>${over}</td>
             <td>${bundle.member_qty}</td>
             <td>${progress.toFixed(1)}%</td>
@@ -1502,11 +1447,7 @@ export default function MaterialsPage() {
 
   function buildOutstandingRowsHtml(rows: OutstandingBundle[]) {
     if (!rows.length) {
-      return `
-        <tr>
-          <td colspan="8" class="empty-cell">No outstanding items.</td>
-        </tr>
-      `;
+      return `<tr><td colspan="9" class="empty-cell">No outstanding items.</td></tr>`;
     }
 
     return rows
@@ -1517,7 +1458,8 @@ export default function MaterialsPage() {
             <td>${htmlEscape(item.bundle.section)}</td>
             <td>${item.required}</td>
             <td>${item.delivered}</td>
-            <td>${item.remaining}</td>
+            <td>${item.received}</td>
+            <td>${item.remainingToReceive}</td>
             <td>${item.progress.toFixed(1)}%</td>
             <td>${htmlEscape(statusLabel(item.status))}</td>
             <td>${htmlEscape(item.reason)}</td>
@@ -1535,41 +1477,37 @@ export default function MaterialsPage() {
     const outstandingHtml = `
       <h2>Outstanding Items</h2>
       <p class="section-note">
-        Items listed here are not fully delivered, not checked, partially checked, missing, or marked as an issue.
+        Based on site-confirmed bundle qty. Items listed here are not fully received, unchecked, missing, partial, or marked as an issue.
       </p>
-
       <table>
         <thead>
           <tr>
             <th>Bundle No</th>
             <th>Section</th>
-            <th>Required</th>
-            <th>Delivered</th>
+            <th>Required Qty</th>
+            <th>Delivered Qty</th>
+            <th>Site Received Qty</th>
             <th>Remaining</th>
             <th>Progress</th>
             <th>Status</th>
             <th>Reason</th>
           </tr>
         </thead>
-        <tbody>
-          ${buildOutstandingRowsHtml(outstandingBundles)}
-        </tbody>
+        <tbody>${buildOutstandingRowsHtml(outstandingBundles)}</tbody>
       </table>
     `;
 
     const completedHtml = `
       <h2>Completed Items</h2>
-      <p class="section-note">
-        Items listed here are fully delivered and marked arrived.
-      </p>
-
+      <p class="section-note">Items listed here are fully received and marked arrived.</p>
       <table>
         <thead>
           <tr>
             <th>Bundle No</th>
             <th>Section</th>
-            <th>Required</th>
-            <th>Delivered</th>
+            <th>Required Qty</th>
+            <th>Delivered Qty</th>
+            <th>Site Received Qty</th>
             <th>Remaining</th>
             <th>Over</th>
             <th>Member Qty</th>
@@ -1577,25 +1515,21 @@ export default function MaterialsPage() {
             <th>Status</th>
           </tr>
         </thead>
-        <tbody>
-          ${buildBundleRowsHtml(completedBundles)}
-        </tbody>
+        <tbody>${buildBundleRowsHtml(completedBundles)}</tbody>
       </table>
     `;
 
     const fullRegisterHtml = `
       <h2>Full Bundle Register</h2>
-      <p class="section-note">
-        Complete register for the tower. Outstanding section is shown first for driver and crew reference.
-      </p>
-
+      <p class="section-note">Complete register. Outstanding items are shown first for driver and crew reference.</p>
       <table>
         <thead>
           <tr>
             <th>Bundle No</th>
             <th>Section</th>
-            <th>Required</th>
-            <th>Delivered</th>
+            <th>Required Qty</th>
+            <th>Delivered Qty</th>
+            <th>Site Received Qty</th>
             <th>Remaining</th>
             <th>Over</th>
             <th>Member Qty</th>
@@ -1603,9 +1537,7 @@ export default function MaterialsPage() {
             <th>Status</th>
           </tr>
         </thead>
-        <tbody>
-          ${buildBundleRowsHtml(bundles)}
-        </tbody>
+        <tbody>${buildBundleRowsHtml(bundles)}</tbody>
       </table>
     `;
 
@@ -1619,146 +1551,45 @@ export default function MaterialsPage() {
 <head>
 <title>${htmlEscape(title)} - ${htmlEscape(towerLabel)}</title>
 <style>
-body{
-  font-family:Arial,sans-serif;
-  padding:24px;
-  color:#0f172a;
-}
-.print-header{
-  display:flex;
-  justify-content:space-between;
-  align-items:flex-start;
-  border-bottom:2px solid #0f172a;
-  padding-bottom:12px;
-  margin-bottom:18px;
-}
-h1{
-  margin:0;
-  font-size:22px;
-}
-h2{
-  font-size:16px;
-  margin:22px 0 6px;
-}
-.tower-label{
-  font-size:18px;
-  font-weight:700;
-}
-.meta{
-  font-size:12px;
-  color:#64748b;
-  margin-top:4px;
-}
-.summary-grid{
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  gap:8px;
-  margin:14px 0 18px;
-}
-.summary-card{
-  border:1px solid #cbd5e1;
-  background:#f8fafc;
-  padding:8px;
-  border-radius:8px;
-}
-.summary-label{
-  font-size:10px;
-  color:#64748b;
-  text-transform:uppercase;
-  letter-spacing:.04em;
-}
-.summary-value{
-  font-size:16px;
-  font-weight:800;
-  margin-top:3px;
-}
-.section-note{
-  font-size:12px;
-  color:#64748b;
-  margin:0 0 8px;
-}
-table{
-  border-collapse:collapse;
-  width:100%;
-  margin-bottom:16px;
-}
-th,td{
-  border:1px solid #cbd5e1;
-  padding:7px;
-  font-size:11px;
-  text-align:left;
-  vertical-align:top;
-}
-th{
-  background:#f1f5f9;
-  font-weight:700;
-}
-.empty-cell{
-  text-align:center;
-  color:#64748b;
-  padding:16px;
-}
-.print-footer{
-  margin-top:20px;
-  padding-top:8px;
-  border-top:1px solid #cbd5e1;
-  font-size:11px;
-  color:#64748b;
-  display:flex;
-  justify-content:space-between;
-}
-.page-break{
-  page-break-before:always;
-}
-@media print{
-  body{
-    padding:12px;
-  }
-  .page-break{
-    page-break-before:always;
-  }
-}
+body{font-family:Arial,sans-serif;padding:24px;color:#0f172a;}
+.print-header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:18px;}
+h1{margin:0;font-size:22px;}
+h2{font-size:16px;margin:22px 0 6px;}
+.tower-label{font-size:18px;font-weight:700;}
+.meta{font-size:12px;color:#64748b;margin-top:4px;}
+.summary-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:14px 0 18px;}
+.summary-card{border:1px solid #cbd5e1;background:#f8fafc;padding:8px;border-radius:8px;}
+.summary-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;}
+.summary-value{font-size:16px;font-weight:800;margin-top:3px;}
+.section-note{font-size:12px;color:#64748b;margin:0 0 8px;}
+table{border-collapse:collapse;width:100%;margin-bottom:16px;}
+th,td{border:1px solid #cbd5e1;padding:7px;font-size:11px;text-align:left;vertical-align:top;}
+th{background:#f1f5f9;font-weight:700;}
+.empty-cell{text-align:center;color:#64748b;padding:16px;}
+.print-footer{margin-top:20px;padding-top:8px;border-top:1px solid #cbd5e1;font-size:11px;color:#64748b;display:flex;justify-content:space-between;}
+.page-break{page-break-before:always;}
+@media print{body{padding:12px;}.page-break{page-break-before:always;}}
 </style>
 </head>
-
 <body>
 <div class="print-header">
   <div>
     <h1>${htmlEscape(title)}</h1>
     <div class="meta">Printed ${new Date().toLocaleString()}</div>
   </div>
-
   <div style="text-align:right">
     <div class="tower-label">Tower: ${htmlEscape(towerLabel)}</div>
     <div class="meta">${towerLine ? `Line: ${htmlEscape(towerLine)}` : ""}</div>
   </div>
 </div>
-
 <div class="summary-grid">
-  <div class="summary-card">
-    <div class="summary-label">Bundles</div>
-    <div class="summary-value">${bundles.length}</div>
-  </div>
-  <div class="summary-card">
-    <div class="summary-label">Required</div>
-    <div class="summary-value">${overallRequired}</div>
-  </div>
-  <div class="summary-card">
-    <div class="summary-label">Delivered</div>
-    <div class="summary-value">${overallDelivered}</div>
-  </div>
-  <div class="summary-card">
-    <div class="summary-label">Outstanding</div>
-    <div class="summary-value">${outstandingBundles.length}</div>
-  </div>
-  <div class="summary-card">
-    <div class="summary-label">Progress</div>
-    <div class="summary-value">${overallProgress.toFixed(1)}%</div>
-  </div>
+  <div class="summary-card"><div class="summary-label">Bundles</div><div class="summary-value">${bundles.length}</div></div>
+  <div class="summary-card"><div class="summary-label">Required</div><div class="summary-value">${overallRequired}</div></div>
+  <div class="summary-card"><div class="summary-label">Delivered</div><div class="summary-value">${overallDelivered}</div></div>
+  <div class="summary-card"><div class="summary-label">Site Received</div><div class="summary-value">${overallReceived}</div></div>
+  <div class="summary-card"><div class="summary-label">Progress</div><div class="summary-value">${overallProgress.toFixed(1)}%</div></div>
 </div>
-
 ${bodyHtml}
-
 <div class="print-footer">
   <span>${htmlEscape(title)} - Tower ${htmlEscape(towerLabel)}</span>
   <span>TTTracker</span>
@@ -1777,10 +1608,6 @@ ${bodyHtml}
     win.print();
   }
 
-  /* =========================================================
-     RENDER
-  ========================================================= */
-
   if (loading) {
     return <div className="p-4 md:p-8 text-sm text-slate-600">Loading materials register...</div>;
   }
@@ -1798,7 +1625,7 @@ ${bodyHtml}
                   Materials Register
                 </h1>
                 <p className="text-xs md:text-sm text-slate-500">
-                  Site check bundles or members, update arrival status, and print outstanding items.
+                  Site check bundle quantities, confirm received items, and print outstanding materials.
                 </p>
               </div>
 
@@ -1850,6 +1677,7 @@ ${bodyHtml}
               members={members.length}
               memberQty={totalBundleMemberQty}
               delivered={overallDelivered}
+              received={overallReceived}
               required={overallRequired}
               remaining={overallRemaining}
               progress={overallProgress}
@@ -1954,7 +1782,7 @@ ${bodyHtml}
             {manageMode && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
                 <div className="text-xs md:text-sm text-amber-800 font-medium">
-                  Manage mode on. Bundle Qty now represents total required quantity, for example 3 of the same bundle.
+                  Manage mode on. Required Bundle Qty is the total number needed, for example 3 leg bundles.
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1998,10 +1826,13 @@ ${bodyHtml}
                   const status = deriveBundleStatus(bundle.bundle_no);
                   const expanded = expandedBundleNo === bundle.bundle_no;
                   const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
-                  const hasManualBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
+                  const hasBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
                   const delivered = deliveredQty(bundle.bundle_no);
-                  const remaining = remainingQty(bundle);
-                  const overDelivered = overDeliveredQty(bundle);
+                  const received = receivedQty(bundle.bundle_no);
+                  const remainingToReceive = remainingReceiveQty(bundle);
+                  const remainingToDeliver = remainingDeliveryQty(bundle);
+                  const overReceived = overReceivedQty(bundle);
+                  const receiveProgress = percentage(received, bundle.qty_required);
                   const deliveryProgress = percentage(delivered, bundle.qty_required);
 
                   return (
@@ -2043,79 +1874,102 @@ ${bodyHtml}
                                     {statusLabel(status)}
                                   </span>
 
-                                  {remaining > 0 && (
+                                  {remainingToReceive > 0 && (
                                     <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-rose-50 text-rose-700 border-rose-200">
-                                      {remaining} Outstanding
+                                      {remainingToReceive} To Confirm
                                     </span>
                                   )}
 
-                                  {overDelivered > 0 && (
+                                  {overReceived > 0 && (
                                     <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-blue-50 text-blue-700 border-blue-200">
-                                      {overDelivered} Over
+                                      {overReceived} Over
                                     </span>
                                   )}
                                 </div>
 
                                 <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
                                   {bundle.section} • Required {bundle.qty_required} • Delivered{" "}
-                                  {delivered} • Remaining {remaining} • Members {bundle.member_qty}
+                                  {delivered} • Site received {received} • To confirm{" "}
+                                  {remainingToReceive} • Members {bundle.member_qty}
                                   {bundle.total_weight !== null ? ` • ${bundle.total_weight} kg` : ""}
                                 </div>
 
-                                <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-slate-900 rounded-full"
-                                    style={{ width: `${deliveryProgress}%` }}
-                                  />
+                                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                                  <ProgressLine label="Delivery register" value={deliveryProgress} />
+                                  <ProgressLine label="Site received" value={receiveProgress} />
                                 </div>
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-4 sm:flex sm:flex-wrap gap-1.5">
-                              <button
-                                onClick={() => void markWholeBundle(bundle.bundle_no, "arrived")}
-                                className="site-action-btn bg-emerald-600 text-white"
-                                title="Mark arrived"
-                              >
-                                ✓
-                                <span className="hidden sm:inline ml-1">Arrived</span>
-                              </button>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 min-w-[220px]">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">
+                                Bundle qty site check
+                              </div>
 
-                              <button
-                                onClick={() => void markWholeBundle(bundle.bundle_no, "missing")}
-                                className="site-action-btn bg-rose-600 text-white"
-                                title="Mark missing"
-                              >
-                                ✕
-                                <span className="hidden sm:inline ml-1">Missing</span>
-                              </button>
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  onClick={() => void incrementBundleReceived(bundle, -1)}
+                                  className="qty-btn bg-white border border-slate-300 text-slate-800"
+                                  title="Remove one received bundle"
+                                >
+                                  -
+                                </button>
 
-                              <button
-                                onClick={() => void updateBundleManualStatus(bundle.bundle_no, "issue")}
-                                className="site-action-btn bg-purple-600 text-white"
-                                title="Mark issue"
-                              >
-                                !
-                                <span className="hidden sm:inline ml-1">Issue</span>
-                              </button>
+                                <div className="text-center min-w-[70px]">
+                                  <div className="text-lg font-black text-slate-900">
+                                    {received}/{bundle.qty_required}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    received bundles
+                                  </div>
+                                </div>
 
-                              <button
-                                onClick={() =>
-                                  setExpandedBundleNo((prev) =>
-                                    prev === bundle.bundle_no ? null : bundle.bundle_no,
-                                  )
-                                }
-                                className="site-action-btn bg-slate-100 text-slate-800 border border-slate-200"
-                              >
-                                {expanded ? "Hide" : "Open"}
-                              </button>
+                                <button
+                                  onClick={() => void incrementBundleReceived(bundle, 1)}
+                                  className="qty-btn bg-emerald-600 text-white"
+                                  title="Add one received bundle"
+                                >
+                                  +
+                                </button>
+                              </div>
 
-                              {(hasMemberStatuses || hasManualBundleStatus) && (
+                              <div className="grid grid-cols-4 gap-1.5 mt-2">
+                                <button
+                                  onClick={() => void setBundleReceivedFull(bundle)}
+                                  className="mini-site-action bg-emerald-100 text-emerald-800 border border-emerald-200"
+                                >
+                                  Full
+                                </button>
+                                <button
+                                  onClick={() => void markBundleMissing(bundle)}
+                                  className="mini-site-action bg-rose-100 text-rose-800 border border-rose-200"
+                                >
+                                  Missing
+                                </button>
+                                <button
+                                  onClick={() => void markBundleIssue(bundle)}
+                                  className="mini-site-action bg-purple-100 text-purple-800 border border-purple-200"
+                                >
+                                  Issue
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setExpandedBundleNo((prev) =>
+                                      prev === bundle.bundle_no ? null : bundle.bundle_no,
+                                    )
+                                  }
+                                  className="mini-site-action bg-white text-slate-800 border border-slate-200"
+                                >
+                                  {expanded ? "Hide" : "Open"}
+                                </button>
+                              </div>
+
+                              {(hasMemberStatuses || hasBundleStatus) && (
                                 <button
                                   onClick={() => void clearWholeBundleStatuses(bundle.bundle_no)}
-                                  className="site-action-btn bg-slate-200 text-slate-800"
+                                  className="mt-1.5 w-full mini-site-action bg-slate-200 text-slate-800"
                                 >
-                                  Clear
+                                  Clear Check
                                 </button>
                               )}
                             </div>
@@ -2171,20 +2025,18 @@ ${bodyHtml}
 
                           {expanded && (
                             <div className="pt-2 border-t border-slate-200 space-y-2">
-                              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                              <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
                                 <MiniInfo label="Required" value={bundle.qty_required} />
                                 <MiniInfo label="Delivered" value={delivered} />
-                                <MiniInfo label="Remaining" value={remaining} />
+                                <MiniInfo label="Site received" value={received} />
+                                <MiniInfo label="To deliver" value={remainingToDeliver} />
+                                <MiniInfo label="To confirm" value={remainingToReceive} />
                                 <MiniInfo label="Member lines" value={relatedMembers.length} />
-                                <MiniInfo
-                                  label="Member qty list"
-                                  value={memberQtyFromMemberList(bundle.bundle_no)}
-                                />
                               </div>
 
                               {relatedMembers.length === 0 ? (
                                 <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
-                                  No linked members found for this bundle. It can still be marked manually.
+                                  No linked members found for this bundle. It can still be checked using the bundle quantity controls.
                                 </div>
                               ) : (
                                 <div className="space-y-1.5">
@@ -2329,10 +2181,11 @@ ${bodyHtml}
                               </div>
 
                               <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
-                                Bundle {member.bundle_reference} • Bundle Qty{" "}
-                                {matchingBundle?.qty_required ?? "—"} • PN {member.pn_final || "—"} •
-                                Drawing {member.drawing_number || "—"} • Qty {member.qty_per_tower} •{" "}
-                                {member.section}
+                                Bundle {member.bundle_reference} • Required Bundle Qty{" "}
+                                {matchingBundle?.qty_required ?? "—"} • Site received{" "}
+                                {matchingBundle ? receivedQty(matchingBundle.bundle_no) : "—"} • PN{" "}
+                                {member.pn_final || "—"} • Drawing {member.drawing_number || "—"} • Qty{" "}
+                                {member.qty_per_tower} • {member.section}
                               </div>
                             </div>
                           </div>
@@ -2646,11 +2499,22 @@ ${bodyHtml}
           font-weight: 700;
         }
 
-        .site-action-btn {
-          min-height: 2.25rem;
-          border-radius: 0.75rem;
-          padding: 0.45rem 0.65rem;
-          font-size: 0.75rem;
+        .qty-btn {
+          min-height: 2.4rem;
+          min-width: 2.4rem;
+          border-radius: 0.8rem;
+          font-size: 1.25rem;
+          font-weight: 900;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .mini-site-action {
+          min-height: 1.9rem;
+          border-radius: 0.65rem;
+          padding: 0.3rem 0.45rem;
+          font-size: 0.68rem;
           font-weight: 800;
           display: inline-flex;
           align-items: center;
@@ -2703,6 +2567,7 @@ function CompactSummary({
   members,
   memberQty,
   delivered,
+  received,
   required,
   remaining,
   progress,
@@ -2718,6 +2583,7 @@ function CompactSummary({
   members: number;
   memberQty: number;
   delivered: number;
+  received: number;
   required: number;
   remaining: number;
   progress: number;
@@ -2736,6 +2602,7 @@ function CompactSummary({
         <SummaryPill label="Members" value={members} />
         <SummaryPill label="Member Qty" value={memberQty} />
         <SummaryPill label="Delivered" value={`${delivered}/${required}`} />
+        <SummaryPill label="Site Received" value={`${received}/${required}`} strong />
         <SummaryPill label="Remaining" value={remaining} />
         <SummaryPill label="Outstanding" value={outstanding} tone="red" strong />
         <SummaryPill label="Completed" value={completed} tone="green" />
@@ -2804,7 +2671,7 @@ function OutstandingPanel({
             Outstanding Deliveries / Items
           </div>
           <div className="text-xs text-rose-700">
-            Quick list for drivers and crews. Shows bundles not fully delivered, unchecked, missing, partial, or issues.
+            Uses site-confirmed bundle qty. Shows bundles not fully received, unchecked, missing, partial, or issues.
           </div>
         </div>
 
@@ -2828,7 +2695,7 @@ function OutstandingPanel({
         <div className="border-t border-rose-200 bg-white p-2">
           {outstanding.length === 0 ? (
             <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-              No outstanding items. All required bundles are delivered and checked.
+              No outstanding items. All required bundle quantities are confirmed on site.
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -2851,16 +2718,16 @@ function OutstandingPanel({
                         {statusLabel(item.status)}
                       </span>
 
-                      {item.remaining > 0 && (
+                      {item.remainingToReceive > 0 && (
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-rose-50 text-rose-700 border-rose-200">
-                          {item.remaining} outstanding
+                          {item.remainingToReceive} to confirm
                         </span>
                       )}
                     </div>
 
                     <div className="text-xs text-slate-500 mt-1">
                       {item.bundle.section} • Required {item.required} • Delivered {item.delivered} •{" "}
-                      Remaining {item.remaining} • {item.reason}
+                      Site received {item.received} • {item.reason}
                     </div>
                   </div>
 
@@ -2888,6 +2755,20 @@ function OutstandingPanel({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ProgressLine({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+        <span>{label}</span>
+        <span>{value.toFixed(1)}%</span>
+      </div>
+      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+        <div className="h-full bg-slate-900 rounded-full" style={{ width: `${Math.min(value, 100)}%` }} />
+      </div>
     </div>
   );
 }
