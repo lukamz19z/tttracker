@@ -83,7 +83,6 @@ export default function TowerDefectsPage() {
   const [photoModalTitle, setPhotoModalTitle] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState<DefectPhotoRow[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
-  const [loadingPhotoUrls, setLoadingPhotoUrls] = useState(false);
 
   const [actionsModalOpen, setActionsModalOpen] = useState(false);
   const [selectedDefectForActions, setSelectedDefectForActions] = useState<DefectRow | null>(null);
@@ -128,20 +127,65 @@ export default function TowerDefectsPage() {
     setLoading(false);
   }
 
+  function isHeicFile(file: File) {
+    const name = file.name.toLowerCase();
+
+    return (
+      file.type === "image/heic" ||
+      file.type === "image/heif" ||
+      name.endsWith(".heic") ||
+      name.endsWith(".heif")
+    );
+  }
+
+  async function convertHeicToJpeg(file: File): Promise<File> {
+    if (!isHeicFile(file)) return file;
+
+    const heic2anyModule = await import("heic2any");
+    const heic2any = heic2anyModule.default;
+
+    const converted = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.9,
+    });
+
+    const convertedBlob = Array.isArray(converted) ? converted[0] : converted;
+
+    const jpgName = file.name
+      .replace(/\.heic$/i, ".jpg")
+      .replace(/\.heif$/i, ".jpg");
+
+    return new File([convertedBlob], jpgName, {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    });
+  }
+
+  function safeStorageName(fileName: string) {
+    return fileName
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9._-]/g, "_");
+  }
+
   async function uploadFilesForDefect(defectId: string, files: File[]) {
     if (!files.length) return;
 
-    for (const file of files) {
-      const safeName = file.name.replace(/\s+/g, "_");
+    for (const originalFile of files) {
+      const file = await convertHeicToJpeg(originalFile);
+      const safeName = safeStorageName(file.name);
       const path = `${towerId}/${defectId}/${Date.now()}_${safeName}`;
 
       const { error: storageError } = await supabase.storage
         .from("defect-photos")
-        .upload(path, file, { upsert: true });
+        .upload(path, file, {
+          upsert: true,
+          contentType: file.type || "image/jpeg",
+        });
 
       if (storageError) {
         console.error(storageError);
-        throw new Error(`Failed to upload ${file.name}`);
+        throw new Error(`Failed to upload ${originalFile.name}`);
       }
 
       const { error: insertError } = await supabase.from("defect_photos").insert({
@@ -151,7 +195,7 @@ export default function TowerDefectsPage() {
 
       if (insertError) {
         console.error(insertError);
-        throw new Error(`Failed to save file record for ${file.name}`);
+        throw new Error(`Failed to save file record for ${originalFile.name}`);
       }
     }
   }
@@ -339,8 +383,35 @@ export default function TowerDefectsPage() {
     }
   }
 
+  async function loadPhotoUrls(photos: DefectPhotoRow[]) {
+    const entries = await Promise.all(
+      photos.map(async (photo) => {
+        const path = photo.photo_path;
+
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+          return [photo.id, path] as const;
+        }
+
+        const { data, error } = await supabase.storage
+          .from("defect-photos")
+          .createSignedUrl(path, 60 * 60 * 24);
+
+        if (error || !data?.signedUrl) {
+          console.error("Photo signed URL error:", error, "path:", path);
+          return [photo.id, ""] as const;
+        }
+
+        return [photo.id, data.signedUrl] as const;
+      })
+    );
+
+    setPhotoUrls(Object.fromEntries(entries));
+  }
+
   async function openPhotos(defect: DefectRow) {
     try {
+      setPhotoUrls({});
+
       const { data, error } = await supabase
         .from("defect_photos")
         .select("*")
@@ -353,11 +424,10 @@ export default function TowerDefectsPage() {
       }
 
       const photoRows = (data || []) as DefectPhotoRow[];
-
-      let photosToShow: DefectPhotoRow[] = photoRows;
+      let photosToShow = photoRows;
 
       // Fallback for older defects that only used photo_url
-      if (!photoRows.length && defect.photo_url && defect.photo_url !== "pending") {
+      if (!photosToShow.length && defect.photo_url && defect.photo_url !== "pending") {
         photosToShow = [
           {
             id: "legacy-photo",
@@ -369,11 +439,12 @@ export default function TowerDefectsPage() {
       }
 
       setSelectedPhotos(photosToShow);
+      await loadPhotoUrls(photosToShow);
+
       setPhotoModalTitle(
         `Photos - Member ${defect.member_number || "-"} / ${defect.segment || "-"}`
       );
       setPhotoModalOpen(true);
-      await loadSignedPhotoUrls(photosToShow);
     } catch (err) {
       console.error(err);
       alert(err instanceof Error ? err.message : "Failed to load photos.");
@@ -383,46 +454,9 @@ export default function TowerDefectsPage() {
   function closePhotosModal() {
     setPhotoModalOpen(false);
     setSelectedPhotos([]);
+    setPhotoUrls({});
     setPhotoModalTitle("");
     setPreviewUrl(null);
-    setPhotoUrls({});
-    setLoadingPhotoUrls(false);
-  }
-
-  async function loadSignedPhotoUrls(photos: DefectPhotoRow[]) {
-    if (!photos.length) {
-      setPhotoUrls({});
-      return;
-    }
-
-    setLoadingPhotoUrls(true);
-
-    try {
-      const entries = await Promise.all(
-        photos.map(async (photo) => {
-          const path = photo.photo_path;
-
-          if (path.startsWith("http://") || path.startsWith("https://")) {
-            return [photo.id, path] as const;
-          }
-
-          const { data, error } = await supabase.storage
-            .from("defect-photos")
-            .createSignedUrl(path, 60 * 60);
-
-          if (error) {
-            console.error("Signed URL error:", error);
-            return [photo.id, ""] as const;
-          }
-
-          return [photo.id, data?.signedUrl || ""] as const;
-        })
-      );
-
-      setPhotoUrls(Object.fromEntries(entries));
-    } finally {
-      setLoadingPhotoUrls(false);
-    }
   }
 
   async function openActions(defect: DefectRow) {
@@ -643,6 +677,7 @@ export default function TowerDefectsPage() {
                 id="defect-files-input"
                 type="file"
                 multiple
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
                 className="border p-2 rounded w-full bg-white"
                 onChange={(e) =>
                   setForm((prev) => ({
@@ -678,7 +713,7 @@ export default function TowerDefectsPage() {
 
           {form.files.length > 0 && (
             <div className="text-sm text-slate-500">
-              {form.files.length} file(s) selected
+              {form.files.length} file(s) selected. HEIC/HEIF photos will be converted to JPG before upload.
             </div>
           )}
         </div>
@@ -820,24 +855,25 @@ export default function TowerDefectsPage() {
             <div className="p-4 overflow-auto max-h-[calc(90vh-65px)]">
               {selectedPhotos.length === 0 ? (
                 <div className="text-slate-500">No photos attached to this defect.</div>
-              ) : loadingPhotoUrls ? (
-                <div className="text-slate-500">Loading photos...</div>
               ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {selectedPhotos.map((photo) => {
                     const url = photoUrls[photo.id] || "";
+                    const isStoredHeic =
+                      photo.photo_path.toLowerCase().endsWith(".heic") ||
+                      photo.photo_path.toLowerCase().endsWith(".heif");
 
                     return (
                       <button
                         key={photo.id}
                         type="button"
                         onClick={() => {
-                          if (url) setPreviewUrl(url);
+                          if (url && !isStoredHeic) setPreviewUrl(url);
                         }}
-                        disabled={!url}
+                        disabled={!url || isStoredHeic}
                         className="border rounded-xl overflow-hidden bg-slate-100 aspect-square disabled:cursor-not-allowed"
                       >
-                        {url ? (
+                        {url && !isStoredHeic ? (
                           <img
                             src={url}
                             alt="Defect"
@@ -845,7 +881,9 @@ export default function TowerDefectsPage() {
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center p-3 text-center text-xs text-slate-500">
-                            Photo failed to load
+                            {isStoredHeic
+                              ? "Existing HEIC photo. Re-upload to convert to JPG."
+                              : "Photo failed to load."}
                           </div>
                         )}
                       </button>
