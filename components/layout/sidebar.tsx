@@ -27,9 +27,21 @@ function extractGroupFromTowerName(name?: string | null): string {
   const clean = safeString(name);
   if (!clean) return "";
 
-  // Example: "10 1R-2R" -> "1R-2R"
+  // Handles: "1R/2R-10" -> "1R-2R"
+  const slashRunMatch = clean.match(/^([A-Za-z0-9]+R)\s*\/\s*([A-Za-z0-9]+R)\s*-\s*\d+$/i);
+  if (slashRunMatch?.[1] && slashRunMatch?.[2]) {
+    return `${slashRunMatch[1].toUpperCase()}-${slashRunMatch[2].toUpperCase()}`;
+  }
+
+  // Handles: "1R-2R-10" -> "1R-2R"
+  const dashRunMatch = clean.match(/^([A-Za-z0-9]+R)\s*-\s*([A-Za-z0-9]+R)\s*-\s*\d+$/i);
+  if (dashRunMatch?.[1] && dashRunMatch?.[2]) {
+    return `${dashRunMatch[1].toUpperCase()}-${dashRunMatch[2].toUpperCase()}`;
+  }
+
+  // Handles: "10 1R-2R" -> "1R-2R"
   const numberThenGroup = clean.match(/^\s*\S+\s+(.+)$/);
-  if (numberThenGroup?.[1]) return numberThenGroup[1].trim();
+  if (numberThenGroup?.[1]) return numberThenGroup[1].trim().replace("/", "-").toUpperCase();
 
   return "";
 }
