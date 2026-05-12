@@ -82,6 +82,8 @@ export default function TowerDefectsPage() {
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [photoModalTitle, setPhotoModalTitle] = useState("");
   const [selectedPhotos, setSelectedPhotos] = useState<DefectPhotoRow[]>([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [loadingPhotoUrls, setLoadingPhotoUrls] = useState(false);
 
   const [actionsModalOpen, setActionsModalOpen] = useState(false);
   const [selectedDefectForActions, setSelectedDefectForActions] = useState<DefectRow | null>(null);
@@ -352,24 +354,26 @@ export default function TowerDefectsPage() {
 
       const photoRows = (data || []) as DefectPhotoRow[];
 
+      let photosToShow: DefectPhotoRow[] = photoRows;
+
       // Fallback for older defects that only used photo_url
-      if (!photoRows.length && defect.photo_url) {
-        setSelectedPhotos([
+      if (!photoRows.length && defect.photo_url && defect.photo_url !== "pending") {
+        photosToShow = [
           {
             id: "legacy-photo",
             defect_id: defect.id,
             photo_path: defect.photo_url,
             created_at: defect.created_at,
           },
-        ]);
-      } else {
-        setSelectedPhotos(photoRows);
+        ];
       }
 
+      setSelectedPhotos(photosToShow);
       setPhotoModalTitle(
         `Photos - Member ${defect.member_number || "-"} / ${defect.segment || "-"}`
       );
       setPhotoModalOpen(true);
+      await loadSignedPhotoUrls(photosToShow);
     } catch (err) {
       console.error(err);
       alert(err instanceof Error ? err.message : "Failed to load photos.");
@@ -381,13 +385,44 @@ export default function TowerDefectsPage() {
     setSelectedPhotos([]);
     setPhotoModalTitle("");
     setPreviewUrl(null);
+    setPhotoUrls({});
+    setLoadingPhotoUrls(false);
   }
 
-  function getPhotoPublicUrl(path: string) {
-    if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  async function loadSignedPhotoUrls(photos: DefectPhotoRow[]) {
+    if (!photos.length) {
+      setPhotoUrls({});
+      return;
+    }
 
-    const { data } = supabase.storage.from("defect-photos").getPublicUrl(path);
-    return data.publicUrl;
+    setLoadingPhotoUrls(true);
+
+    try {
+      const entries = await Promise.all(
+        photos.map(async (photo) => {
+          const path = photo.photo_path;
+
+          if (path.startsWith("http://") || path.startsWith("https://")) {
+            return [photo.id, path] as const;
+          }
+
+          const { data, error } = await supabase.storage
+            .from("defect-photos")
+            .createSignedUrl(path, 60 * 60);
+
+          if (error) {
+            console.error("Signed URL error:", error);
+            return [photo.id, ""] as const;
+          }
+
+          return [photo.id, data?.signedUrl || ""] as const;
+        })
+      );
+
+      setPhotoUrls(Object.fromEntries(entries));
+    } finally {
+      setLoadingPhotoUrls(false);
+    }
   }
 
   async function openActions(defect: DefectRow) {
@@ -785,23 +820,34 @@ export default function TowerDefectsPage() {
             <div className="p-4 overflow-auto max-h-[calc(90vh-65px)]">
               {selectedPhotos.length === 0 ? (
                 <div className="text-slate-500">No photos attached to this defect.</div>
+              ) : loadingPhotoUrls ? (
+                <div className="text-slate-500">Loading photos...</div>
               ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {selectedPhotos.map((photo) => {
-                    const url = getPhotoPublicUrl(photo.photo_path);
+                    const url = photoUrls[photo.id] || "";
 
                     return (
                       <button
                         key={photo.id}
                         type="button"
-                        onClick={() => setPreviewUrl(url)}
-                        className="border rounded-xl overflow-hidden bg-slate-100 aspect-square"
+                        onClick={() => {
+                          if (url) setPreviewUrl(url);
+                        }}
+                        disabled={!url}
+                        className="border rounded-xl overflow-hidden bg-slate-100 aspect-square disabled:cursor-not-allowed"
                       >
-                        <img
-                          src={url}
-                          alt="Defect"
-                          className="w-full h-full object-cover"
-                        />
+                        {url ? (
+                          <img
+                            src={url}
+                            alt="Defect"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center p-3 text-center text-xs text-slate-500">
+                            Photo failed to load
+                          </div>
+                        )}
                       </button>
                     );
                   })}
