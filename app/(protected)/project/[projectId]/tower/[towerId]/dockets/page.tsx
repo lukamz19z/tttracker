@@ -24,6 +24,7 @@ type DocketRecord = {
   crew: string | null;
   leading_hand: string | null;
   weather: string | null;
+  rate_type?: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
   lunch_break_minutes?: number | null;
@@ -40,6 +41,7 @@ type DocketRecord = {
 
 type LabourRow = {
   docket_id: string;
+  worker_name?: string | null;
   total_hours: number | null;
   production_hours?: number | null;
   lunch_minutes?: number | null;
@@ -57,14 +59,24 @@ type DelayRow = {
   worker_names: string[] | null;
 };
 
+type PlantRow = {
+  docket_id: string;
+  total_hours: number | null;
+  plant_name?: string | null;
+  plant_type?: string | null;
+  asset_number?: string | null;
+};
+
 type DocketTotals = {
   raw: number;
   production: number;
   lunch: number;
   travel: number;
-  mobilisation: number;
+  prestartMinutes: number;
   delay: number;
   delayEvents: number;
+  plant: number;
+  workers: number;
 };
 
 function safeNumber(value: unknown, fallback = 0): number {
@@ -100,7 +112,8 @@ function getProgress(docket: DocketRecord): number {
 }
 
 function getStatus(docket: DocketRecord): "closed" | "bc_signed" | "open" {
-  if (docket.client_rep_name?.trim() && docket.signed_date?.trim()) return "closed";
+  if (docket.client_rep_name?.trim() && docket.signed_date?.trim())
+    return "closed";
   if (docket.bc_rep_name?.trim()) return "bc_signed";
   return "open";
 }
@@ -112,13 +125,15 @@ function getStatusLabel(status: "closed" | "bc_signed" | "open") {
 }
 
 function getStatusClasses(status: "closed" | "bc_signed" | "open") {
-  if (status === "closed") return "bg-emerald-100 text-emerald-700 border-emerald-200";
-  if (status === "bc_signed") return "bg-blue-100 text-blue-700 border-blue-200";
+  if (status === "closed")
+    return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (status === "bc_signed")
+    return "bg-blue-100 text-blue-700 border-blue-200";
   return "bg-amber-100 text-amber-700 border-amber-200";
 }
 
 export default function TowerDocketsPage() {
-  const supabase = createSupabaseBrowser();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
   const params = useParams();
 
   const projectId = params.projectId as string;
@@ -128,6 +143,7 @@ export default function TowerDocketsPage() {
   const [dockets, setDockets] = useState<DocketRecord[]>([]);
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
   const [delayRows, setDelayRows] = useState<DelayRow[]>([]);
+  const [plantRows, setPlantRows] = useState<PlantRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -159,35 +175,49 @@ export default function TowerDocketsPage() {
       const docketIds = loadedDockets.map((docket) => docket.id);
 
       if (docketIds.length > 0) {
-        const [{ data: labourData }, { data: delayData }] = await Promise.all([
-          supabase
-            .from("tower_docket_labour")
-            .select(
-              "docket_id,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
-            )
-            .in("docket_id", docketIds),
-          supabase
-            .from("tower_docket_delays")
-            .select("docket_id,delay_type,delay_hours,applies_to,worker_names")
-            .in("docket_id", docketIds),
-        ]);
+        const [{ data: labourData }, { data: delayData }, { data: plantData }] =
+          await Promise.all([
+            supabase
+              .from("tower_docket_labour")
+              .select(
+                "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
+              )
+              .in("docket_id", docketIds),
+            supabase
+              .from("tower_docket_delays")
+              .select(
+                "docket_id,delay_type,delay_hours,applies_to,worker_names",
+              )
+              .in("docket_id", docketIds),
+            supabase
+              .from("tower_docket_plant")
+              .select(
+                "docket_id,total_hours,plant_name,plant_type,asset_number",
+              )
+              .in("docket_id", docketIds),
+          ]);
 
         if (!isMounted) return;
 
         setLabourRows((labourData || []) as LabourRow[]);
         setDelayRows((delayData || []) as DelayRow[]);
+        setPlantRows((plantData || []) as PlantRow[]);
       } else {
         setLabourRows([]);
         setDelayRows([]);
+        setPlantRows([]);
       }
 
       setLoading(false);
     }
 
-    void fetchData();
+    const timer = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timer);
     };
   }, [towerId, supabase]);
 
@@ -200,30 +230,44 @@ export default function TowerDocketsPage() {
         production: safeNumber(docket.production_manhours, 0),
         lunch: 0,
         travel: 0,
-        mobilisation: 0,
+        prestartMinutes: 0,
         delay: 0,
         delayEvents: 0,
+        plant: 0,
+        workers: 0,
       };
     });
 
     labourRows.forEach((row) => {
       if (!totals[row.docket_id]) return;
 
-      totals[row.docket_id].raw += totals[row.docket_id].raw > 0 ? 0 : safeNumber(row.total_hours, 0);
+      totals[row.docket_id].raw +=
+        totals[row.docket_id].raw > 0 ? 0 : safeNumber(row.total_hours, 0);
       totals[row.docket_id].production +=
-        totals[row.docket_id].production > 0 ? 0 : safeNumber(row.production_hours, 0);
+        totals[row.docket_id].production > 0
+          ? 0
+          : safeNumber(row.production_hours, 0);
       totals[row.docket_id].lunch += safeNumber(row.lunch_minutes, 0) / 60;
       totals[row.docket_id].travel +=
-        (safeNumber(row.travel_in_minutes, 0) + safeNumber(row.travel_out_minutes, 0)) / 60;
-      totals[row.docket_id].mobilisation += safeNumber(row.mobilisation_hours, 0);
+        (safeNumber(row.travel_in_minutes, 0) +
+          safeNumber(row.travel_out_minutes, 0)) /
+        60;
+      totals[row.docket_id].prestartMinutes += safeNumber(
+        row.mobilisation_hours,
+        0,
+      );
       totals[row.docket_id].delay += safeNumber(row.delay_hours, 0);
+      if (row.worker_name?.trim()) totals[row.docket_id].workers += 1;
     });
 
     delayRows.forEach((row) => {
       if (!totals[row.docket_id]) return;
 
       const delayHours = safeNumber(row.delay_hours, 0);
-      const people = row.applies_to === "selected_workers" ? row.worker_names?.length || 0 : 1;
+      const people =
+        row.applies_to === "selected_workers"
+          ? row.worker_names?.length || 0
+          : 1;
 
       totals[row.docket_id].delayEvents += delayHours;
 
@@ -232,8 +276,13 @@ export default function TowerDocketsPage() {
       }
     });
 
+    plantRows.forEach((row) => {
+      if (!totals[row.docket_id]) return;
+      totals[row.docket_id].plant += safeNumber(row.total_hours, 0);
+    });
+
     return totals;
-  }, [dockets, labourRows, delayRows]);
+  }, [dockets, labourRows, delayRows, plantRows]);
 
   const summary = useMemo(() => {
     return dockets.reduce(
@@ -247,7 +296,9 @@ export default function TowerDocketsPage() {
         acc.delay += totals?.delay || 0;
         acc.lunch += totals?.lunch || 0;
         acc.travel += totals?.travel || 0;
-        acc.mobilisation += totals?.mobilisation || 0;
+        acc.prestartMinutes += totals?.prestartMinutes || 0;
+        acc.plant += totals?.plant || 0;
+        acc.workers += totals?.workers || 0;
         acc.avgProgress += progress;
 
         if (status === "closed") acc.closed += 1;
@@ -261,7 +312,9 @@ export default function TowerDocketsPage() {
         delay: 0,
         lunch: 0,
         travel: 0,
-        mobilisation: 0,
+        prestartMinutes: 0,
+        plant: 0,
+        workers: 0,
         avgProgress: 0,
         closed: 0,
         open: 0,
@@ -287,6 +340,11 @@ export default function TowerDocketsPage() {
         getErection(docket),
         totals?.raw,
         totals?.production,
+        totals?.workers,
+        totals?.plant,
+        docket.rate_type === "schedule_of_rates"
+          ? "Schedule of Rates SOR plant"
+          : "Tonnage Rate",
       ]
         .join(" ")
         .toLowerCase()
@@ -298,7 +356,10 @@ export default function TowerDocketsPage() {
     const confirmed = window.confirm("Delete this daily docket?");
     if (!confirmed) return;
 
-    const { error } = await supabase.from("tower_daily_dockets").delete().eq("id", id);
+    const { error } = await supabase
+      .from("tower_daily_dockets")
+      .delete()
+      .eq("id", id);
 
     if (error) {
       alert(error.message || "Failed to delete docket.");
@@ -308,6 +369,7 @@ export default function TowerDocketsPage() {
     setDockets((prev) => prev.filter((docket) => docket.id !== id));
     setLabourRows((prev) => prev.filter((row) => row.docket_id !== id));
     setDelayRows((prev) => prev.filter((row) => row.docket_id !== id));
+    setPlantRows((prev) => prev.filter((row) => row.docket_id !== id));
   }
 
   if (loading) {
@@ -322,9 +384,12 @@ export default function TowerDocketsPage() {
         <div className="p-4 md:p-6 border-b border-slate-200">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Daily Dockets</h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
+                Daily Dockets
+              </h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
-                Review raw hours, production hours, delays and progress for this tower.
+                Review raw hours, production hours, delays and progress for this
+                tower.
               </p>
             </div>
 
@@ -336,13 +401,26 @@ export default function TowerDocketsPage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 md:gap-3 mt-5">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 md:gap-3 mt-5">
             <KpiCard label="Dockets" value={dockets.length} />
+            <KpiCard label="Workers" value={summary.workers} />
             <KpiCard label="Raw Hrs" value={formatNumber(summary.raw)} />
-            <KpiCard label="Prod Hrs" value={formatNumber(summary.production)} tone="green" />
-            <KpiCard label="Delay MH" value={formatNumber(summary.delay)} tone="amber" />
+            <KpiCard
+              label="Prod Hrs"
+              value={formatNumber(summary.production)}
+              tone="green"
+            />
+            <KpiCard
+              label="Delay MH"
+              value={formatNumber(summary.delay)}
+              tone="amber"
+            />
             <KpiCard label="Travel" value={formatNumber(summary.travel)} />
-            <KpiCard label="Mob" value={formatNumber(summary.mobilisation)} />
+            <KpiCard
+              label="Prestart Min"
+              value={Math.round(summary.prestartMinutes)}
+            />
+            <KpiCard label="Plant Hrs" value={formatNumber(summary.plant)} />
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mt-3">
@@ -350,7 +428,9 @@ export default function TowerDocketsPage() {
             <SmallCard
               label="Avg Progress"
               value={
-                dockets.length > 0 ? `${Math.round(summary.avgProgress / dockets.length)}%` : "0%"
+                dockets.length > 0
+                  ? `${Math.round(summary.avgProgress / dockets.length)}%`
+                  : "0%"
               }
             />
             <SmallCard label="Open" value={summary.open} />
@@ -384,9 +464,11 @@ export default function TowerDocketsPage() {
                   production: 0,
                   lunch: 0,
                   travel: 0,
-                  mobilisation: 0,
+                  prestartMinutes: 0,
                   delay: 0,
                   delayEvents: 0,
+                  plant: 0,
+                  workers: 0,
                 };
 
                 const isOpen = openDocketId === docket.id;
@@ -419,48 +501,142 @@ export default function TowerDocketsPage() {
 
                           <div className="text-sm text-slate-500 mt-1">
                             {docket.leading_hand || "No leading hand"} • Crew{" "}
-                            {docket.crew || "—"} • {docket.weather || "No weather"}
+                            {docket.crew || "—"} •{" "}
+                            {docket.weather || "No weather"}
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <span
+                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                                docket.rate_type === "schedule_of_rates"
+                                  ? "bg-purple-100 text-purple-700 border-purple-200"
+                                  : "bg-slate-100 text-slate-700 border-slate-200"
+                              }`}
+                            >
+                              {docket.rate_type === "schedule_of_rates"
+                                ? "Schedule of Rates"
+                                : "Tonnage Rate"}
+                            </span>
+                            <span className="inline-flex rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                              {totals.workers} workers
+                            </span>
                           </div>
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="text-2xl font-black text-slate-900">{progress}%</div>
-                          <div className="text-[11px] text-slate-500">Overall</div>
+                          <div className="text-2xl font-black text-slate-900">
+                            {progress}%
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Overall
+                          </div>
                         </div>
                       </div>
 
                       <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                         <div className="flex items-center justify-between gap-3 mb-2">
-                          <div className="text-sm font-bold text-slate-800">Progress Breakdown</div>
-                          <div className="text-xs text-slate-500">50% Assembly + 50% Erection</div>
+                          <div className="text-sm font-bold text-slate-800">
+                            Progress Breakdown
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            50% Assembly + 50% Erection
+                          </div>
                         </div>
 
                         <div className="space-y-2">
-                          <ProgressLine label="Assembly" value={assembly} tone="blue" />
-                          <ProgressLine label="Erection" value={erection} tone="emerald" />
-                          <ProgressLine label="Overall" value={progress} tone="slate" strong />
+                          <ProgressLine
+                            label="Assembly"
+                            value={assembly}
+                            tone="blue"
+                          />
+                          <ProgressLine
+                            label="Erection"
+                            value={erection}
+                            tone="emerald"
+                          />
+                          <ProgressLine
+                            label="Overall"
+                            value={progress}
+                            tone="slate"
+                            strong
+                          />
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mt-3">
-                        <MiniMetric label="Raw" value={formatNumber(totals.raw)} />
-                        <MiniMetric label="Prod" value={formatNumber(totals.production)} />
-                        <MiniMetric label="Delay" value={formatNumber(totals.delay)} />
-                        <MiniMetric label="Lunch" value={formatNumber(totals.lunch)} />
-                        <MiniMetric label="Travel" value={formatNumber(totals.travel)} />
-                        <MiniMetric label="Mob" value={formatNumber(totals.mobilisation)} />
+                      <div className="grid grid-cols-2 md:grid-cols-6 xl:grid-cols-8 gap-2 mt-3">
+                        <MiniMetric label="Workers" value={totals.workers} />
+                        <MiniMetric
+                          label="Raw"
+                          value={formatNumber(totals.raw)}
+                        />
+                        <MiniMetric
+                          label="Prod"
+                          value={formatNumber(totals.production)}
+                        />
+                        <MiniMetric
+                          label="Delay"
+                          value={formatNumber(totals.delay)}
+                        />
+                        <MiniMetric
+                          label="Lunch"
+                          value={formatNumber(totals.lunch)}
+                        />
+                        <MiniMetric
+                          label="Travel"
+                          value={formatNumber(totals.travel)}
+                        />
+                        <MiniMetric
+                          label="Prestart Min"
+                          value={Math.round(totals.prestartMinutes)}
+                        />
+                        <MiniMetric
+                          label="Plant"
+                          value={formatNumber(totals.plant)}
+                        />
                       </div>
                     </button>
 
                     {isOpen && (
                       <div className="border-t border-slate-200 bg-slate-50 p-3 md:p-4 space-y-4">
-                        <div className="grid grid-cols-2 md:grid-cols-2 gap-2">
-                          <DetailCard label="Delay Events" value={formatNumber(totals.delayEvents)} />
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <DetailCard
+                            label="Delay Events"
+                            value={formatNumber(totals.delayEvents)}
+                          />
+                          <DetailCard label="Workers" value={totals.workers} />
+                          <DetailCard
+                            label="Prestart Minutes"
+                            value={Math.round(totals.prestartMinutes)}
+                          />
                           <DetailCard
                             label="Uploaded"
                             value={docket.docket_file_url ? "Yes" : "No"}
                           />
                         </div>
+
+                        {docket.rate_type === "schedule_of_rates" && (
+                          <div className="rounded-2xl border border-purple-200 bg-purple-50 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-bold text-purple-900">
+                                  Schedule of Rates Plant
+                                </div>
+                                <div className="text-xs text-purple-700 mt-1">
+                                  Plant and equipment hours captured against
+                                  this docket.
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xl font-black text-purple-900">
+                                  {formatNumber(totals.plant)}
+                                </div>
+                                <div className="text-[11px] text-purple-700">
+                                  Plant Hrs
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                           <Link
@@ -535,11 +711,18 @@ function ProgressLine({
         >
           {label}
         </div>
-        <div className={`text-sm font-black ${labelColour[tone]}`}>{clamped}%</div>
+        <div className={`text-sm font-black ${labelColour[tone]}`}>
+          {clamped}%
+        </div>
       </div>
 
-      <div className={`${strong ? "h-4" : "h-3"} rounded-full bg-white border border-slate-200 overflow-hidden`}>
-        <div className={`h-full rounded-full ${barColour[tone]}`} style={{ width: `${clamped}%` }} />
+      <div
+        className={`${strong ? "h-4" : "h-3"} rounded-full bg-white border border-slate-200 overflow-hidden`}
+      >
+        <div
+          className={`h-full rounded-full ${barColour[tone]}`}
+          style={{ width: `${clamped}%` }}
+        />
       </div>
     </div>
   );
@@ -563,21 +746,37 @@ function KpiCard({
   return (
     <div className={`rounded-xl px-3 py-3 min-w-0 ${tones[tone]}`}>
       <div className="text-[11px] opacity-75 truncate">{label}</div>
-      <div className="font-bold text-base md:text-lg mt-1 truncate">{value}</div>
+      <div className="font-bold text-base md:text-lg mt-1 truncate">
+        {value}
+      </div>
     </div>
   );
 }
 
-function SmallCard({ label, value }: { label: string; value: string | number }) {
+function SmallCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <div className="rounded-xl bg-white border border-slate-200 px-3 py-2 min-w-0">
       <div className="text-[11px] text-slate-500 truncate">{label}</div>
-      <div className="font-bold text-sm md:text-base mt-1 truncate">{value}</div>
+      <div className="font-bold text-sm md:text-base mt-1 truncate">
+        {value}
+      </div>
     </div>
   );
 }
 
-function MiniMetric({ label, value }: { label: string; value: string | number }) {
+function MiniMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
   return (
     <div className="rounded-xl bg-slate-100 px-3 py-2 min-w-0">
       <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate">
@@ -588,7 +787,13 @@ function MiniMetric({ label, value }: { label: string; value: string | number })
   );
 }
 
-function DetailCard({ label, value }: { label: string | number; value: string | number }) {
+function DetailCard({
+  label,
+  value,
+}: {
+  label: string | number;
+  value: string | number;
+}) {
   return (
     <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
       <div className="text-[11px] text-slate-500">{label}</div>

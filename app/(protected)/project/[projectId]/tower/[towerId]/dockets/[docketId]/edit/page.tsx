@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import DailyDocketForm from "@/components/dockets/DailyDocketForm";
@@ -17,39 +19,62 @@ export default function EditDocketPage() {
   const [docket, setDocket] = useState<any>(null);
   const [labour, setLabour] = useState<any[]>([]);
   const [progress, setProgress] = useState<any[]>([]);
+  const [delays, setDelays] = useState<any[]>([]);
+  const [plant, setPlant] = useState<any[]>([]);
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
 
-    // MAIN DOCKET
-    const { data: docketData } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("id", docketId)
-      .single();
+    const [
+      docketRes,
+      labourRes,
+      progressRes,
+      delaysRes,
+      plantRes,
+    ] = await Promise.all([
+      supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("id", docketId)
+        .single(),
 
-    // LABOUR
-    const { data: labourData } = await supabase
-      .from("tower_docket_labour")
-      .select("*")
-      .eq("docket_id", docketId);
+      supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docketId),
 
-    // PROGRESS
-    const { data: progressData } = await supabase
-      .from("tower_docket_progress")
-      .select("*")
-      .eq("docket_id", docketId);
+      supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", docketId),
 
-    setDocket(docketData);
-    setLabour(labourData || []);
-    setProgress(progressData || []);
+      supabase
+        .from("tower_docket_delays")
+        .select("*")
+        .eq("docket_id", docketId),
+
+      supabase
+        .from("tower_docket_plant")
+        .select("*")
+        .eq("docket_id", docketId),
+    ]);
+
+    setDocket(docketRes.data);
+    setLabour(labourRes.data || []);
+    setProgress(progressRes.data || []);
+    setDelays(delaysRes.data || []);
+    setPlant(plantRes.data || []);
 
     setLoading(false);
-  }
+  }, [supabase, docketId]);
+
+useEffect(() => {
+  const timer = window.setTimeout(() => {
+    void load();
+  }, 0);
+
+  return () => window.clearTimeout(timer);
+}, [load]);
 
   if (loading) return <div className="p-8">Loading docket...</div>;
 
@@ -62,6 +87,8 @@ export default function EditDocketPage() {
       initialDocket={docket}
       initialLabourRows={labour}
       initialProgressRows={progress}
+      initialDelayRows={delays}
+      initialPlantRows={plant}
     />
   );
 }
