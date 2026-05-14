@@ -35,6 +35,8 @@ type PlantRow = {
 
 type DelayScope = "entire_crew" | "selected_workers";
 
+type DelayAppliesMode = "labour_only" | "labour_and_plant";
+
 type DelayType = "weather" | "lightning" | "toolbox" | "mobilisation" | "access" | "plant" | "materials" | "other";
 
 type DelayRow = {
@@ -45,6 +47,8 @@ type DelayRow = {
   delay_hours: string;
   applies_to: DelayScope;
   worker_names: string[];
+  delay_applies_mode: DelayAppliesMode;
+  plant_names: string[];
 };
 
 type DbDelayRow = {
@@ -55,6 +59,8 @@ type DbDelayRow = {
   delay_hours: number | null;
   applies_to: DelayScope | string | null;
   worker_names: string[] | null;
+  delay_applies_mode?: DelayAppliesMode | string | null;
+  plant_names?: string[] | null;
 };
 
 type ProgressRow = {
@@ -136,18 +142,6 @@ function toNumber(value: string | number | null | undefined) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function hoursToMinutes(value: string | number | null | undefined) {
-  if (value === null || value === undefined || value === "") return "";
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "";
-  const minutes = n * 60;
-  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2);
-}
-
-function minutesToHours(value: string | number | null | undefined) {
-  return toNumber(value) / 60;
-}
-
 function clampPercent(value: string) {
   if (value === "") return "";
   const n = Number(value);
@@ -188,7 +182,7 @@ function calculateProductionHours(row: LabourRow, appliedDelayHours?: number) {
   const lunch = toNumber(row.lunch_minutes) / 60;
   const travelIn = toNumber(row.travel_in_minutes) / 60;
   const travelOut = toNumber(row.travel_out_minutes) / 60;
-  const mobilisation = toNumber(row.mobilisation_hours) / 60;
+  const mobilisation = toNumber(row.mobilisation_hours);
   const delay = appliedDelayHours ?? toNumber(row.delay_hours);
 
   return Math.max(0, raw - lunch - travelIn - travelOut - mobilisation - delay).toFixed(2);
@@ -301,7 +295,7 @@ function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
     lunch_minutes: toStringValue(row?.lunch_minutes),
     travel_in_minutes: toStringValue(row?.travel_in_minutes),
     travel_out_minutes: toStringValue(row?.travel_out_minutes),
-    mobilisation_hours: toStringValue(hoursToMinutes(row?.mobilisation_hours)),
+    mobilisation_hours: toStringValue(row?.mobilisation_hours),
     delay_hours: toStringValue(row?.delay_hours),
     delay_reason: toStringValue(row?.delay_reason),
     production_hours: toStringValue(row?.production_hours),
@@ -317,7 +311,7 @@ function blankLabourRow(defaults?: {
   travelOutMinutes?: string;
   mobilisationHours?: string;
 }): LabourRow {
-  const mapped: LabourRow = {
+  return makeLabourRow({
     worker_name: "",
     time_in: "",
     time_out: "",
@@ -329,10 +323,7 @@ function blankLabourRow(defaults?: {
     delay_hours: "",
     delay_reason: "",
     production_hours: "",
-  };
-
-  mapped.production_hours = calculateProductionHours(mapped);
-  return mapped;
+  });
 }
 
 function makePlantRow(row?: Partial<PlantRow> | any): PlantRow {
@@ -374,15 +365,24 @@ type DelayRowInput = {
   delay_hours?: unknown;
   applies_to?: DelayScope | string | null;
   worker_names?: string[] | string | null;
+  delay_applies_mode?: DelayAppliesMode | string | null;
+  plant_names?: string[] | string | null;
 };
 
 function makeDelayRow(row?: DelayRowInput): DelayRow {
   const workerNamesValue = row?.worker_names;
+  const plantNamesValue = row?.plant_names;
 
   const rawWorkers: string[] = Array.isArray(workerNamesValue)
     ? workerNamesValue
     : typeof workerNamesValue === "string"
     ? workerNamesValue.split(",")
+    : [];
+
+  const rawPlants: string[] = Array.isArray(plantNamesValue)
+    ? plantNamesValue
+    : typeof plantNamesValue === "string"
+    ? plantNamesValue.split(",")
     : [];
 
   const delayRow: DelayRow = {
@@ -393,6 +393,8 @@ function makeDelayRow(row?: DelayRowInput): DelayRow {
     delay_hours: toStringValue(row?.delay_hours),
     applies_to: (row?.applies_to || "entire_crew") as DelayScope,
     worker_names: rawWorkers.map((name) => toStringValue(name).trim()).filter(Boolean),
+    delay_applies_mode: (row?.delay_applies_mode || "labour_only") as DelayAppliesMode,
+    plant_names: rawPlants.map((name) => toStringValue(name).trim()).filter(Boolean),
   };
 
   return delayRow;
@@ -405,6 +407,8 @@ function blankDelayRow(): DelayRow {
     delay_hours: "",
     applies_to: "entire_crew",
     worker_names: [],
+    delay_applies_mode: "labour_only",
+    plant_names: [],
   });
 }
 
@@ -449,6 +453,21 @@ function delayTypeLabel(type: DelayType) {
     default:
       return "Other";
   }
+}
+
+function plantDisplayName(row: PlantRow, index: number) {
+  const primary = row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim();
+  const secondary = [row.plant_type.trim(), row.asset_id.trim()]
+    .filter(Boolean)
+    .filter((value, i, arr) => arr.indexOf(value) === i && value !== primary)
+    .join(" / ");
+
+  if (!primary) return `Plant ${index + 1}`;
+  return secondary ? `${primary} (${secondary})` : primary;
+}
+
+function delayIncludesPlant(delay: DelayRow) {
+  return delay.delay_applies_mode === "labour_and_plant";
 }
 
 export default function DailyDocketForm({
@@ -535,7 +554,7 @@ export default function DailyDocketForm({
     toStringValue(initialDocket?.travel_out_minutes)
   );
   const [mobilisationHours, setMobilisationHours] = useState(
-    hoursToMinutes(initialDocket?.mobilisation_hours)
+    toStringValue(initialDocket?.mobilisation_hours)
   );
   const [mobilisationNotes, setMobilisationNotes] = useState(
     toStringValue(initialDocket?.mobilisation_notes)
@@ -675,7 +694,7 @@ useEffect(() => {
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
         setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
-        setMobilisationHours(hoursToMinutes(initialDocket.mobilisation_hours));
+        setMobilisationHours(toStringValue(initialDocket.mobilisation_hours));
         setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
@@ -689,29 +708,6 @@ useEffect(() => {
 
         if (initialDelayRows?.length) {
           setDelayRows(initialDelayRows.map((r) => makeDelayRow(r)));
-        } else if (docketId) {
-          const { data: delays } = await supabase
-            .from("tower_docket_delays")
-            .select("*")
-            .eq("docket_id", docketId);
-
-          if (delays && delays.length > 0) {
-            setDelayRows((delays as DbDelayRow[]).map((r) => makeDelayRow(r)));
-          } else if (initialLabourRows?.length) {
-            const legacyDelayRows = initialLabourRows
-              .filter((r) => Number(r.delay_hours || 0) > 0)
-              .map((r) =>
-                makeDelayRow({
-                  delay_type: "other",
-                  delay_reason: r.delay_reason || "Legacy labour delay",
-                  delay_hours: r.delay_hours,
-                  applies_to: "selected_workers",
-                  worker_names: [r.worker_name],
-                }),
-              );
-
-            setDelayRows(legacyDelayRows);
-          }
         }
 
         if (initialPlantRows?.length) {
@@ -756,7 +752,7 @@ useEffect(() => {
       setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
       setTravelInMinutes(toStringValue(data.travel_in_minutes));
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
-      setMobilisationHours(hoursToMinutes(data.mobilisation_hours));
+      setMobilisationHours(toStringValue(data.mobilisation_hours));
       setMobilisationNotes(toStringValue(data.mobilisation_notes));
 
       setBcRepName(toStringValue(data.bc_rep_name));
@@ -925,10 +921,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
   };
 });
 
-  const labourWorkerCount = useMemo(() => {
-    return labourRowsWithProduction.filter((row) => row.worker_name.trim()).length;
-  }, [labourRowsWithProduction]);
-
   const totalLabourHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
       return sum + (Number(row.total_hours) || 0);
@@ -948,6 +940,12 @@ const labourRowsWithProduction = labourRows.map((row) => {
     });
   }, [plantRows]);
 
+  const availablePlantNames = useMemo(() => {
+    return plantRowsWithTotals
+      .map((row, index) => plantDisplayName(row, index))
+      .filter((name) => name.trim());
+  }, [plantRowsWithTotals]);
+
   const totalPlantHours = useMemo(() => {
     return plantRowsWithTotals.reduce((sum, row) => sum + toNumber(row.total_hours), 0);
   }, [plantRowsWithTotals]);
@@ -966,7 +964,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
   const totalMobilisationHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
-      return sum + minutesToHours(row.mobilisation_hours);
+      return sum + toNumber(row.mobilisation_hours);
     }, 0);
   }, [labourRowsWithProduction]);
 
@@ -975,6 +973,13 @@ const labourRowsWithProduction = labourRows.map((row) => {
       return sum + toNumber(row.delay_hours);
     }, 0);
   }, [labourRowsWithProduction]);
+
+  const totalPlantDelayHours = useMemo(() => {
+    return delayRows.reduce((sum, row) => {
+      if (!delayIncludesPlant(row)) return sum;
+      return sum + toNumber(row.delay_hours) * row.plant_names.length;
+    }, 0);
+  }, [delayRows]);
 
   const totalDelayEvents = useMemo(() => {
     return delayRows.reduce((sum, row) => sum + toNumber(row.delay_hours), 0);
@@ -1051,7 +1056,15 @@ const labourRowsWithProduction = labourRows.map((row) => {
         row.production_hours = calculateProductionHours(row);
       });
 
-      setLabourRows(mappedWorkers);
+      setLabourRows([
+        ...mappedWorkers,
+        blankLabourRow({
+          lunchBreakMinutes,
+          travelInMinutes,
+          travelOutMinutes,
+          mobilisationHours,
+        }),
+      ]);
     }
   }
 
@@ -1272,6 +1285,19 @@ const labourRowsWithProduction = labourRows.map((row) => {
           return { ...row, worker_names: Array.isArray(value) ? value : [] };
         }
 
+        if (key === "delay_applies_mode") {
+          const modeValue = value as DelayAppliesMode;
+          return {
+            ...row,
+            delay_applies_mode: modeValue,
+            plant_names: modeValue === "labour_only" ? [] : row.plant_names,
+          };
+        }
+
+        if (key === "plant_names") {
+          return { ...row, plant_names: Array.isArray(value) ? value : [] };
+        }
+
         return row;
       }),
     );
@@ -1293,6 +1319,27 @@ const labourRowsWithProduction = labourRows.map((row) => {
                 (name) => normalizeWorkerName(name) !== normalizeWorkerName(workerName),
               )
             : [...row.worker_names, workerName],
+        };
+      }),
+    );
+  }
+
+  function toggleDelayPlant(index: number, plantName: string) {
+    if (isView || locked) return;
+
+    setDelayRows((prev) =>
+      prev.map((row, i) => {
+        if (i !== index) return row;
+        const exists = row.plant_names.some(
+          (name) => normalizeWorkerName(name) === normalizeWorkerName(plantName),
+        );
+        return {
+          ...row,
+          plant_names: exists
+            ? row.plant_names.filter(
+                (name) => normalizeWorkerName(name) !== normalizeWorkerName(plantName),
+              )
+            : [...row.plant_names, plantName],
         };
       }),
     );
@@ -1335,7 +1382,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
-      mobilisation_hours: minutesToHours(mobilisationHours),
+      mobilisation_hours: Number(mobilisationHours || 0),
       mobilisation_notes: mobilisationNotes,
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
@@ -1358,7 +1405,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
         lunch_minutes: Number(row.lunch_minutes || 0),
         travel_in_minutes: Number(row.travel_in_minutes || 0),
         travel_out_minutes: Number(row.travel_out_minutes || 0),
-        mobilisation_hours: minutesToHours(row.mobilisation_hours),
+        mobilisation_hours: Number(row.mobilisation_hours || 0),
         delay_hours: Number(row.delay_hours || 0),
         delay_reason: row.delay_reason || null,
         production_hours: Number(row.production_hours || 0),
@@ -1366,8 +1413,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }
 
   function buildPlantPayload(docketIdValue: string) {
-    if (rateType !== "schedule_of_rates") return [];
-
     return plantRowsWithTotals
       .filter((row) => row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim())
       .map((row) => ({
@@ -1392,6 +1437,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
         delay_hours: Number(row.delay_hours || 0),
         applies_to: row.applies_to,
         worker_names: row.applies_to === "selected_workers" ? row.worker_names : [],
+        delay_applies_mode: row.delay_applies_mode,
+        plant_names: row.delay_applies_mode === "labour_and_plant" ? row.plant_names : [],
       }));
   }
 
@@ -1523,7 +1570,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       .delete()
       .eq("docket_id", docketId);
 
-    if (deletePlantRes.error && rateType === "schedule_of_rates") {
+    if (deletePlantRes.error) {
       throw new Error("Failed to refresh plant rows. Check that tower_docket_plant exists.");
     }
 
@@ -1681,7 +1728,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
       setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
       setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
-      setMobilisationHours(hoursToMinutes(lastDocket.mobilisation_hours));
+      setMobilisationHours(toStringValue(lastDocket.mobilisation_hours));
       setMobilisationNotes(toStringValue(lastDocket.mobilisation_notes));
 
       setBcRepName("");
@@ -1703,14 +1750,22 @@ const labourRowsWithProduction = labourRows.map((row) => {
           dedupedLabour.push(row);
         });
 
-        setLabourRows(dedupedLabour);
+        setLabourRows([
+          ...dedupedLabour,
+          blankLabourRow({
+            lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
+            travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
+            travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
+            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
+          }),
+        ]);
       } else {
         setLabourRows([
           blankLabourRow({
             lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
             travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
             travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
-            mobilisationHours: hoursToMinutes(lastDocket.mobilisation_hours),
+            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
           }),
         ]);
       }
@@ -2028,13 +2083,12 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-right">
-            <MiniSummary label="Workers" value={String(labourWorkerCount)} />
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
             <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
             <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
             <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
             <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
-            <MiniSummary label="Prestart Hrs" value={totalMobilisationHours.toFixed(2)} />
+            <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
             <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
           </div>
         </div>
@@ -2084,7 +2138,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                   <LabourInput label="Lunch Min" id={`labour-lunch-${index}`} type="number" value={row.lunch_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)} onChange={(v) => updateLabourRow(index, "lunch_minutes", v)} />
                   <LabourInput label="Travel In" id={`labour-travelin-${index}`} type="number" value={row.travel_in_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)} onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)} />
                   <LabourInput label="Travel Out" id={`labour-travelout-${index}`} type="number" value={row.travel_out_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)} onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)} />
-                  <LabourInput label="Prestart Min" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
+                  <LabourInput label="Mob Hrs" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
 
                   <div>
                     <label className="block text-sm font-medium mb-1">Delay Hrs</label>
@@ -2112,13 +2166,14 @@ const labourRowsWithProduction = labourRows.map((row) => {
         )}
       </section>
 
-      {rateType === "schedule_of_rates" && (
-        <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <h2 className="text-xl font-semibold text-slate-900">Plant & Equipment</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Used for Schedule of Rates dockets. This can later link to the Assets page.
+                {rateType === "schedule_of_rates"
+                  ? "Used for Schedule of Rates dockets and commercial delay tracking. This can later link to the Assets page."
+                  : "Manual plant used for commercial delay tracking only. This does not affect production MH/t."}
               </p>
             </div>
             <MiniSummary label="Plant Hrs" value={totalPlantHours.toFixed(2)} />
@@ -2151,20 +2206,20 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </button>
           )}
         </section>
-      )}
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Delays & Issues</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Add delay events after labour so selected-worker delays can be assigned to the correct people.
+              Add delay events for commercial tracking. Choose labour only or labour + plant for items such as moving blocks, access issues, bogged plant, or standby.
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-right">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-right">
             <MiniSummary label="Delay Events" value={totalDelayEvents.toFixed(2)} />
             <MiniSummary label="Delay MH" value={totalDelayManhours.toFixed(2)} />
+            <MiniSummary label="Plant Delay" value={totalPlantDelayHours.toFixed(2)} />
             <MiniSummary label="Rows" value={String(delayRows.length)} />
           </div>
         </div>
@@ -2183,10 +2238,13 @@ const labourRowsWithProduction = labourRows.map((row) => {
             delayRows.map((delay, index) => {
               const affectedCount = delay.applies_to === "entire_crew" ? availableWorkerNames.length : delay.worker_names.length;
               const delayManhours = toNumber(delay.delay_hours) * affectedCount;
+              const plantDelayHours = delayIncludesPlant(delay)
+                ? toNumber(delay.delay_hours) * delay.plant_names.length
+                : 0;
 
               return (
                 <div key={delay.ui_id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-                  <div className="grid md:grid-cols-[150px_120px_1fr_170px_auto] gap-3 items-end">
+                  <div className="grid md:grid-cols-[150px_150px_120px_1fr_170px_auto] gap-3 items-end">
                     <div>
                       <label className="block text-sm font-medium mb-1">Delay Type</label>
                       <select className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100" value={delay.delay_type} disabled={locked || isView} onChange={(e) => updateDelayRow(index, "delay_type", e.target.value)}>
@@ -2201,11 +2259,19 @@ const labourRowsWithProduction = labourRows.map((row) => {
                       </select>
                     </div>
 
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Commercial Tracking</label>
+                      <select className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100" value={delay.delay_applies_mode} disabled={locked || isView} onChange={(e) => updateDelayRow(index, "delay_applies_mode", e.target.value)}>
+                        <option value="labour_only">Labour Only</option>
+                        <option value="labour_and_plant">Labour + Plant</option>
+                      </select>
+                    </div>
+
                     <Input label="Delay Hrs" type="number" value={delay.delay_hours} onChange={(v) => updateDelayRow(index, "delay_hours", v)} disabled={locked || isView} />
                     <Input label="Reason" value={delay.delay_reason} onChange={(v) => updateDelayRow(index, "delay_reason", v)} disabled={locked || isView} />
 
                     <div>
-                      <label className="block text-sm font-medium mb-1">Applies To</label>
+                      <label className="block text-sm font-medium mb-1">Labour Applies To</label>
                       <select className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100" value={delay.applies_to} disabled={locked || isView} onChange={(e) => updateDelayRow(index, "applies_to", e.target.value)}>
                         <option value="entire_crew">Entire Crew</option>
                         <option value="selected_workers">Selected Workers</option>
@@ -2236,8 +2302,33 @@ const labourRowsWithProduction = labourRows.map((row) => {
                     </div>
                   )}
 
-                  <div className="text-xs text-slate-500">
-                    Production deduction: {toNumber(delay.delay_hours).toFixed(2)} hrs × {affectedCount} people = {delayManhours.toFixed(2)} delay manhours
+                  {delayIncludesPlant(delay) && (
+                    <div className="rounded-xl border border-purple-200 bg-white p-3">
+                      <div className="text-sm font-medium mb-2 text-purple-900">Affected Plant</div>
+                      {availablePlantNames.length === 0 ? (
+                        <div className="text-sm text-slate-500">Add plant or equipment above first. This can be manual for now and linked to Assets later.</div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {availablePlantNames.map((name) => {
+                            const checked = delay.plant_names.some((plant) => normalizeWorkerName(plant) === normalizeWorkerName(name));
+                            return (
+                              <label key={`${delay.ui_id}-plant-${name}`} className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm cursor-pointer ${checked ? "bg-purple-700 text-white border-purple-700" : "bg-white text-slate-700 border-slate-300"}`}>
+                                <input type="checkbox" className="hidden" checked={checked} disabled={locked || isView} onChange={() => toggleDelayPlant(index, name)} />
+                                {name}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="text-xs text-slate-500 space-y-1">
+                    <div>Labour delay tracking: {toNumber(delay.delay_hours).toFixed(2)} hrs × {affectedCount} people = {delayManhours.toFixed(2)} delay manhours.</div>
+                    {delayIncludesPlant(delay) && (
+                      <div>Plant delay tracking: {toNumber(delay.delay_hours).toFixed(2)} hrs × {delay.plant_names.length} plant item(s) = {plantDelayHours.toFixed(2)} plant delay hours.</div>
+                    )}
+                    <div className="font-medium text-slate-600">Plant delay is commercial tracking only and does not change production MH/t.</div>
                   </div>
                 </div>
               );
@@ -2257,7 +2348,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Docket Production Defaults</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row. Prestart is entered in minutes.
+              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row.
             </p>
           </div>
           {!locked && !isView && (
@@ -2275,10 +2366,10 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <Input label="Lunch Break Minutes" type="number" value={lunchBreakMinutes} onChange={setLunchBreakMinutes} disabled={locked || isView} />
           <Input label="Travel In Minutes" type="number" value={travelInMinutes} onChange={setTravelInMinutes} disabled={locked || isView} />
           <Input label="Travel Out Minutes" type="number" value={travelOutMinutes} onChange={setTravelOutMinutes} disabled={locked || isView} />
-          <Input label="Prestart Minutes" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
+          <Input label="Mobilisation Hours" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
         </div>
 
-        <Input label="Prestart Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
+        <Input label="Mobilisation Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
