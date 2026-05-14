@@ -98,6 +98,9 @@ type DocketRecord = {
   mobilisation_notes?: string | null;
   raw_manhours?: number | null;
   production_manhours?: number | null;
+  incident_occurred?: boolean | null;
+  incident_type?: string | null;
+  incident_notes?: string | null;
 };
 
 type TowerRecord = {
@@ -571,6 +574,15 @@ export default function DailyDocketForm({
   const [mobilisationNotes, setMobilisationNotes] = useState(
     toStringValue(initialDocket?.mobilisation_notes)
   );
+  const [incidentOccurred, setIncidentOccurred] = useState(
+    Boolean(initialDocket?.incident_occurred)
+  );
+  const [incidentType, setIncidentType] = useState(
+    toStringValue(initialDocket?.incident_type)
+  );
+  const [incidentNotes, setIncidentNotes] = useState(
+    toStringValue(initialDocket?.incident_notes)
+  );
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
     initialLabourRows && initialLabourRows.length > 0
@@ -708,6 +720,9 @@ useEffect(() => {
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
         setMobilisationHours(hoursToMinutes(initialDocket.mobilisation_hours));
         setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
+        setIncidentOccurred(Boolean(initialDocket.incident_occurred));
+        setIncidentType(toStringValue(initialDocket.incident_type));
+        setIncidentNotes(toStringValue(initialDocket.incident_notes));
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
@@ -789,6 +804,9 @@ useEffect(() => {
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
       setMobilisationHours(hoursToMinutes(data.mobilisation_hours));
       setMobilisationNotes(toStringValue(data.mobilisation_notes));
+      setIncidentOccurred(Boolean(data.incident_occurred));
+      setIncidentType(toStringValue(data.incident_type));
+      setIncidentNotes(toStringValue(data.incident_notes));
 
       setBcRepName(toStringValue(data.bc_rep_name));
       setClientRepName(toStringValue(data.client_rep_name));
@@ -1054,6 +1072,18 @@ const labourRowsWithProduction = labourRows.map((row) => {
     }));
   }, [crews]);
 
+  const employeeNameOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return employees
+      .map((employee) => employee.full_name.trim())
+      .filter((name) => {
+        const key = normalizeWorkerName(name);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [employees]);
+
   function crewMembersForCrew(crewId: string) {
     return employees.filter((employee) => employee.crew_id === crewId);
   }
@@ -1204,33 +1234,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
       }
 
       current.production_hours = calculateProductionHours(current);
-
-      const last = updated[updated.length - 1];
-      const hasBlankRow = updated.some(
-        (row, i) =>
-          i !== updated.length - 1 &&
-          !row.worker_name &&
-          !row.time_in &&
-          !row.time_out &&
-          !row.total_hours
-      );
-
-      if (
-        last.worker_name.trim() &&
-        last.time_in.trim() &&
-        last.time_out.trim() &&
-        last.total_hours.trim() &&
-        !hasBlankRow
-      ) {
-        updated.push(
-          blankLabourRow({
-            lunchBreakMinutes,
-            travelInMinutes,
-            travelOutMinutes,
-            mobilisationHours,
-          })
-        );
-      }
 
       return updated;
     });
@@ -1427,6 +1430,9 @@ const labourRowsWithProduction = labourRows.map((row) => {
       travel_out_minutes: Number(travelOutMinutes || 0),
       mobilisation_hours: minutesToHours(mobilisationHours),
       mobilisation_notes: mobilisationNotes,
+      incident_occurred: incidentOccurred,
+      incident_type: incidentOccurred ? incidentType || null : null,
+      incident_notes: incidentOccurred ? incidentNotes || null : null,
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
       bc_rep_name: bcRepName,
@@ -1775,6 +1781,9 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
       setMobilisationHours(hoursToMinutes(lastDocket.mobilisation_hours));
       setMobilisationNotes(toStringValue(lastDocket.mobilisation_notes));
+      setIncidentOccurred(false);
+      setIncidentType("");
+      setIncidentNotes("");
 
       setBcRepName("");
       setClientRepName("");
@@ -2117,15 +2126,12 @@ const labourRowsWithProduction = labourRows.map((row) => {
           </div>
         </div>
 
-        {!locked && !isView && (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end">
-            <LabourInput label="Bulk Time In" type="time" value={bulkTimeIn} onChange={setBulkTimeIn} />
-            <LabourInput label="Bulk Time Out" type="time" value={bulkTimeOut} onChange={setBulkTimeOut} />
-            <button type="button" onClick={applyBulkTimes} className="bg-slate-800 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-slate-900">
-              Apply Times to All
-            </button>
-          </div>
-        )}
+
+        <datalist id="employee-name-options">
+          {employeeNameOptions.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
 
         <div className="space-y-3">
           {labourRowsWithProduction.map((row, index) => {
@@ -2138,10 +2144,11 @@ const labourRowsWithProduction = labourRows.map((row) => {
                     <label className="block text-sm font-medium mb-1">Worker Name</label>
                     <input
                       id={`labour-name-${index}`}
+                      list="employee-name-options"
                       className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${isDuplicate ? "border-red-500 bg-white" : ""}`}
                       value={row.worker_name}
                       disabled={locked || isView}
-                      placeholder="Name"
+                      placeholder="Start typing or select employee"
                       onKeyDown={(e) => handleLabourKeyDown(e, `labour-timein-${index}`)}
                       onChange={(e) => updateLabourRow(index, "worker_name", e.target.value)}
                     />
@@ -2182,10 +2189,74 @@ const labourRowsWithProduction = labourRows.map((row) => {
         </div>
 
         {!locked && !isView && (
-          <div className="pt-2">
-            <button type="button" onClick={addLabourRow} className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-black">
+          <div className="pt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 flex flex-col md:flex-row md:items-end gap-2">
+            <button type="button" onClick={addLabourRow} className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-black h-10">
               Add Worker
             </button>
+            <div className="grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end flex-1">
+              <LabourInput label="Bulk Time In" type="time" value={bulkTimeIn} onChange={setBulkTimeIn} />
+              <LabourInput label="Bulk Time Out" type="time" value={bulkTimeOut} onChange={setBulkTimeOut} />
+              <button type="button" onClick={applyBulkTimes} className="bg-slate-800 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-slate-900">
+                Apply Times to All
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Safety Check</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Confirm whether an incident occurred during this docket shift. Details only appear if this is ticked.
+          </p>
+        </div>
+
+        <label className={`inline-flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-semibold ${incidentOccurred ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-800"}`}>
+          <input
+            type="checkbox"
+            checked={incidentOccurred}
+            disabled={locked || isView}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setIncidentOccurred(checked);
+
+              if (!checked) {
+                setIncidentType("");
+                setIncidentNotes("");
+              }
+            }}
+            className="h-4 w-4"
+          />
+          Incident occurred on this shift
+        </label>
+
+        {incidentOccurred && (
+          <div className="grid md:grid-cols-2 gap-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Incident Type</label>
+              <select
+                className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
+                value={incidentType}
+                disabled={locked || isView}
+                onChange={(e) => setIncidentType(e.target.value)}
+              >
+                <option value="">Select incident type...</option>
+                <option value="injury">Injury</option>
+                <option value="near_miss">Near Miss</option>
+                <option value="property_damage">Property / Plant Damage</option>
+                <option value="environmental">Environmental</option>
+                <option value="safety_observation">Safety Observation</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <Input
+              label="Incident Notes / Action Required"
+              value={incidentNotes}
+              onChange={setIncidentNotes}
+              disabled={locked || isView}
+            />
           </div>
         )}
       </section>
