@@ -72,7 +72,7 @@ type DocketTotals = {
   production: number;
   lunch: number;
   travel: number;
-  prestartMinutes: number;
+  prestartHours: number;
   delay: number;
   delayEvents: number;
   plant: number;
@@ -230,7 +230,7 @@ export default function TowerDocketsPage() {
         production: safeNumber(docket.production_manhours, 0),
         lunch: 0,
         travel: 0,
-        prestartMinutes: 0,
+        prestartHours: 0,
         delay: 0,
         delayEvents: 0,
         plant: 0,
@@ -252,10 +252,7 @@ export default function TowerDocketsPage() {
         (safeNumber(row.travel_in_minutes, 0) +
           safeNumber(row.travel_out_minutes, 0)) /
         60;
-      totals[row.docket_id].prestartMinutes += safeNumber(
-        row.mobilisation_hours,
-        0,
-      );
+      totals[row.docket_id].prestartHours += safeNumber(row.mobilisation_hours, 0);
       totals[row.docket_id].delay += safeNumber(row.delay_hours, 0);
       if (row.worker_name?.trim()) totals[row.docket_id].workers += 1;
     });
@@ -296,7 +293,7 @@ export default function TowerDocketsPage() {
         acc.delay += totals?.delay || 0;
         acc.lunch += totals?.lunch || 0;
         acc.travel += totals?.travel || 0;
-        acc.prestartMinutes += totals?.prestartMinutes || 0;
+        acc.prestartHours += totals?.prestartHours || 0;
         acc.plant += totals?.plant || 0;
         acc.workers += totals?.workers || 0;
         acc.avgProgress += progress;
@@ -312,7 +309,7 @@ export default function TowerDocketsPage() {
         delay: 0,
         lunch: 0,
         travel: 0,
-        prestartMinutes: 0,
+        prestartHours: 0,
         plant: 0,
         workers: 0,
         avgProgress: 0,
@@ -321,6 +318,17 @@ export default function TowerDocketsPage() {
       },
     );
   }, [dockets, docketTotals]);
+
+  const recordedWorkingDays = useMemo(() => {
+    const uniqueDates = new Set<string>();
+
+    dockets.forEach((docket) => {
+      if (!docket.docket_date) return;
+      uniqueDates.add(docket.docket_date);
+    });
+
+    return uniqueDates.size;
+  }, [dockets]);
 
   const filteredDockets = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -342,6 +350,7 @@ export default function TowerDocketsPage() {
         totals?.production,
         totals?.workers,
         totals?.plant,
+        totals?.prestartHours,
         docket.rate_type === "schedule_of_rates"
           ? "Schedule of Rates SOR plant"
           : "Tonnage Rate",
@@ -388,8 +397,8 @@ export default function TowerDocketsPage() {
                 Daily Dockets
               </h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
-                Review raw hours, production hours, delays and progress for this
-                tower.
+                Review raw hours, production hours, prestarts, plant, delays and progress for this
+                tower. Working days are counted from unique docket dates, not assumed from the total docket count.
               </p>
             </div>
 
@@ -401,8 +410,9 @@ export default function TowerDocketsPage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 md:gap-3 mt-5">
-            <KpiCard label="Dockets" value={dockets.length} />
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-9 gap-2 md:gap-3 mt-5">
+            <KpiCard label="Dockets Submitted" value={dockets.length} />
+            <KpiCard label="Working Days Recorded" value={recordedWorkingDays} />
             <KpiCard label="Workers" value={summary.workers} />
             <KpiCard label="Raw Hrs" value={formatNumber(summary.raw)} />
             <KpiCard
@@ -417,13 +427,13 @@ export default function TowerDocketsPage() {
             />
             <KpiCard label="Travel" value={formatNumber(summary.travel)} />
             <KpiCard
-              label="Prestart Min"
-              value={Math.round(summary.prestartMinutes)}
+              label="Prestart Hrs"
+              value={formatNumber(summary.prestartHours)}
             />
             <KpiCard label="Plant Hrs" value={formatNumber(summary.plant)} />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mt-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3 mt-3">
             <SmallCard label="Lunch Hrs" value={formatNumber(summary.lunch)} />
             <SmallCard
               label="Avg Progress"
@@ -435,6 +445,7 @@ export default function TowerDocketsPage() {
             />
             <SmallCard label="Open" value={summary.open} />
             <SmallCard label="Closed" value={summary.closed} />
+            <SmallCard label="Duration Basis" value="Unique docket dates" />
           </div>
 
           <div className="mt-4">
@@ -464,7 +475,7 @@ export default function TowerDocketsPage() {
                   production: 0,
                   lunch: 0,
                   travel: 0,
-                  prestartMinutes: 0,
+                  prestartHours: 0,
                   delay: 0,
                   delayEvents: 0,
                   plant: 0,
@@ -586,8 +597,8 @@ export default function TowerDocketsPage() {
                           value={formatNumber(totals.travel)}
                         />
                         <MiniMetric
-                          label="Prestart Min"
-                          value={Math.round(totals.prestartMinutes)}
+                          label="Prestart Hrs"
+                          value={formatNumber(totals.prestartHours)}
                         />
                         <MiniMetric
                           label="Plant"
@@ -605,8 +616,8 @@ export default function TowerDocketsPage() {
                           />
                           <DetailCard label="Workers" value={totals.workers} />
                           <DetailCard
-                            label="Prestart Minutes"
-                            value={Math.round(totals.prestartMinutes)}
+                            label="Prestart Hours"
+                            value={formatNumber(totals.prestartHours)}
                           />
                           <DetailCard
                             label="Uploaded"

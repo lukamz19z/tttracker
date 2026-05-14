@@ -1051,15 +1051,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
         row.production_hours = calculateProductionHours(row);
       });
 
-      setLabourRows([
-        ...mappedWorkers,
-        blankLabourRow({
-          lunchBreakMinutes,
-          travelInMinutes,
-          travelOutMinutes,
-          mobilisationHours,
-        }),
-      ]);
+      setLabourRows(mappedWorkers);
     }
   }
 
@@ -1711,15 +1703,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
           dedupedLabour.push(row);
         });
 
-        setLabourRows([
-          ...dedupedLabour,
-          blankLabourRow({
-            lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
-            travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
-            travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
-            mobilisationHours: hoursToMinutes(lastDocket.mobilisation_hours),
-          }),
-        ]);
+        setLabourRows(dedupedLabour);
       } else {
         setLabourRows([
           blankLabourRow({
