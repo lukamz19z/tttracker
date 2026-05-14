@@ -285,9 +285,6 @@ export default function TowerDocketsPage() {
     return dockets.reduce(
       (acc, docket) => {
         const totals = docketTotals[docket.id];
-        const progress = getProgress(docket);
-        const status = getStatus(docket);
-
         acc.raw += totals?.raw || 0;
         acc.production += totals?.production || 0;
         acc.delay += totals?.delay || 0;
@@ -295,11 +292,6 @@ export default function TowerDocketsPage() {
         acc.travel += totals?.travel || 0;
         acc.prestartHours += totals?.prestartHours || 0;
         acc.plant += totals?.plant || 0;
-        acc.workers += totals?.workers || 0;
-        acc.avgProgress += progress;
-
-        if (status === "closed") acc.closed += 1;
-        if (status === "open") acc.open += 1;
 
         return acc;
       },
@@ -311,24 +303,9 @@ export default function TowerDocketsPage() {
         travel: 0,
         prestartHours: 0,
         plant: 0,
-        workers: 0,
-        avgProgress: 0,
-        closed: 0,
-        open: 0,
       },
     );
   }, [dockets, docketTotals]);
-
-  const recordedWorkingDays = useMemo(() => {
-    const uniqueDates = new Set<string>();
-
-    dockets.forEach((docket) => {
-      if (!docket.docket_date) return;
-      uniqueDates.add(docket.docket_date);
-    });
-
-    return uniqueDates.size;
-  }, [dockets]);
 
   const filteredDockets = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -350,7 +327,6 @@ export default function TowerDocketsPage() {
         totals?.production,
         totals?.workers,
         totals?.plant,
-        totals?.prestartHours,
         docket.rate_type === "schedule_of_rates"
           ? "Schedule of Rates SOR plant"
           : "Tonnage Rate",
@@ -397,8 +373,8 @@ export default function TowerDocketsPage() {
                 Daily Dockets
               </h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
-                Review raw hours, production hours, prestarts, plant, delays and progress for this
-                tower. Working days are counted from unique docket dates, not assumed from the total docket count.
+                Review raw hours, production hours, delays and progress for this
+                tower.
               </p>
             </div>
 
@@ -410,10 +386,8 @@ export default function TowerDocketsPage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-9 gap-2 md:gap-3 mt-5">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 md:gap-3 mt-5">
             <KpiCard label="Dockets Submitted" value={dockets.length} />
-            <KpiCard label="Working Days Recorded" value={recordedWorkingDays} />
-            <KpiCard label="Workers" value={summary.workers} />
             <KpiCard label="Raw Hrs" value={formatNumber(summary.raw)} />
             <KpiCard
               label="Prod Hrs"
@@ -425,27 +399,13 @@ export default function TowerDocketsPage() {
               value={formatNumber(summary.delay)}
               tone="amber"
             />
-            <KpiCard label="Travel" value={formatNumber(summary.travel)} />
+            <KpiCard label="Lunch Hrs" value={formatNumber(summary.lunch)} />
+            <KpiCard label="Travel Hrs" value={formatNumber(summary.travel)} />
             <KpiCard
               label="Prestart Hrs"
               value={formatNumber(summary.prestartHours)}
             />
             <KpiCard label="Plant Hrs" value={formatNumber(summary.plant)} />
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3 mt-3">
-            <SmallCard label="Lunch Hrs" value={formatNumber(summary.lunch)} />
-            <SmallCard
-              label="Avg Progress"
-              value={
-                dockets.length > 0
-                  ? `${Math.round(summary.avgProgress / dockets.length)}%`
-                  : "0%"
-              }
-            />
-            <SmallCard label="Open" value={summary.open} />
-            <SmallCard label="Closed" value={summary.closed} />
-
           </div>
 
           <div className="mt-4">
@@ -616,7 +576,7 @@ export default function TowerDocketsPage() {
                           />
                           <DetailCard label="Workers" value={totals.workers} />
                           <DetailCard
-                            label="Prestart Hours"
+                            label="Prestart Hrs"
                             value={formatNumber(totals.prestartHours)}
                           />
                           <DetailCard
@@ -758,23 +718,6 @@ function KpiCard({
     <div className={`rounded-xl px-3 py-3 min-w-0 ${tones[tone]}`}>
       <div className="text-[11px] opacity-75 truncate">{label}</div>
       <div className="font-bold text-base md:text-lg mt-1 truncate">
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function SmallCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-xl bg-white border border-slate-200 px-3 py-2 min-w-0">
-      <div className="text-[11px] text-slate-500 truncate">{label}</div>
-      <div className="font-bold text-sm md:text-base mt-1 truncate">
         {value}
       </div>
     </div>
