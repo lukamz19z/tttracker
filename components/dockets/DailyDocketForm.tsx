@@ -1889,20 +1889,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
         current.total_hours = calculateHours(current.time_in, current.time_out) || current.total_hours;
       }
 
-      const last = updated[updated.length - 1];
-      const hasBlankRow = updated.some(
-        (row, i) =>
-          i !== updated.length - 1 &&
-          !row.plant_name &&
-          !row.asset_id &&
-          !row.plant_type &&
-          !row.total_hours
-      );
-
-      if ((last.plant_name.trim() || last.asset_id.trim() || last.plant_type.trim()) && !hasBlankRow) {
-        updated.push(blankPlantRow());
-      }
-
       return updated;
     });
   }
