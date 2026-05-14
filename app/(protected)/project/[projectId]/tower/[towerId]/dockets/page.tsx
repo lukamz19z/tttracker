@@ -445,7 +445,7 @@ export default function TowerDocketsPage() {
             />
             <SmallCard label="Open" value={summary.open} />
             <SmallCard label="Closed" value={summary.closed} />
-            <SmallCard label="Duration Basis" value="Unique docket dates" />
+
           </div>
 
           <div className="mt-4">
