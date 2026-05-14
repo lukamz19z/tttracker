@@ -136,6 +136,18 @@ function toNumber(value: string | number | null | undefined) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function hoursToMinutes(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  const minutes = n * 60;
+  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2);
+}
+
+function minutesToHours(value: string | number | null | undefined) {
+  return toNumber(value) / 60;
+}
+
 function clampPercent(value: string) {
   if (value === "") return "";
   const n = Number(value);
@@ -176,7 +188,7 @@ function calculateProductionHours(row: LabourRow, appliedDelayHours?: number) {
   const lunch = toNumber(row.lunch_minutes) / 60;
   const travelIn = toNumber(row.travel_in_minutes) / 60;
   const travelOut = toNumber(row.travel_out_minutes) / 60;
-  const mobilisation = toNumber(row.mobilisation_hours);
+  const mobilisation = toNumber(row.mobilisation_hours) / 60;
   const delay = appliedDelayHours ?? toNumber(row.delay_hours);
 
   return Math.max(0, raw - lunch - travelIn - travelOut - mobilisation - delay).toFixed(2);
@@ -289,7 +301,7 @@ function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
     lunch_minutes: toStringValue(row?.lunch_minutes),
     travel_in_minutes: toStringValue(row?.travel_in_minutes),
     travel_out_minutes: toStringValue(row?.travel_out_minutes),
-    mobilisation_hours: toStringValue(row?.mobilisation_hours),
+    mobilisation_hours: toStringValue(hoursToMinutes(row?.mobilisation_hours)),
     delay_hours: toStringValue(row?.delay_hours),
     delay_reason: toStringValue(row?.delay_reason),
     production_hours: toStringValue(row?.production_hours),
@@ -305,7 +317,7 @@ function blankLabourRow(defaults?: {
   travelOutMinutes?: string;
   mobilisationHours?: string;
 }): LabourRow {
-  return makeLabourRow({
+  const mapped: LabourRow = {
     worker_name: "",
     time_in: "",
     time_out: "",
@@ -317,7 +329,10 @@ function blankLabourRow(defaults?: {
     delay_hours: "",
     delay_reason: "",
     production_hours: "",
-  });
+  };
+
+  mapped.production_hours = calculateProductionHours(mapped);
+  return mapped;
 }
 
 function makePlantRow(row?: Partial<PlantRow> | any): PlantRow {
@@ -520,7 +535,7 @@ export default function DailyDocketForm({
     toStringValue(initialDocket?.travel_out_minutes)
   );
   const [mobilisationHours, setMobilisationHours] = useState(
-    toStringValue(initialDocket?.mobilisation_hours)
+    hoursToMinutes(initialDocket?.mobilisation_hours)
   );
   const [mobilisationNotes, setMobilisationNotes] = useState(
     toStringValue(initialDocket?.mobilisation_notes)
@@ -660,7 +675,7 @@ useEffect(() => {
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
         setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
-        setMobilisationHours(toStringValue(initialDocket.mobilisation_hours));
+        setMobilisationHours(hoursToMinutes(initialDocket.mobilisation_hours));
         setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
@@ -741,7 +756,7 @@ useEffect(() => {
       setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
       setTravelInMinutes(toStringValue(data.travel_in_minutes));
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
-      setMobilisationHours(toStringValue(data.mobilisation_hours));
+      setMobilisationHours(hoursToMinutes(data.mobilisation_hours));
       setMobilisationNotes(toStringValue(data.mobilisation_notes));
 
       setBcRepName(toStringValue(data.bc_rep_name));
@@ -910,6 +925,10 @@ const labourRowsWithProduction = labourRows.map((row) => {
   };
 });
 
+  const labourWorkerCount = useMemo(() => {
+    return labourRowsWithProduction.filter((row) => row.worker_name.trim()).length;
+  }, [labourRowsWithProduction]);
+
   const totalLabourHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
       return sum + (Number(row.total_hours) || 0);
@@ -947,7 +966,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
   const totalMobilisationHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
-      return sum + toNumber(row.mobilisation_hours);
+      return sum + minutesToHours(row.mobilisation_hours);
     }, 0);
   }, [labourRowsWithProduction]);
 
@@ -1324,7 +1343,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
-      mobilisation_hours: Number(mobilisationHours || 0),
+      mobilisation_hours: minutesToHours(mobilisationHours),
       mobilisation_notes: mobilisationNotes,
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
@@ -1347,7 +1366,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
         lunch_minutes: Number(row.lunch_minutes || 0),
         travel_in_minutes: Number(row.travel_in_minutes || 0),
         travel_out_minutes: Number(row.travel_out_minutes || 0),
-        mobilisation_hours: Number(row.mobilisation_hours || 0),
+        mobilisation_hours: minutesToHours(row.mobilisation_hours),
         delay_hours: Number(row.delay_hours || 0),
         delay_reason: row.delay_reason || null,
         production_hours: Number(row.production_hours || 0),
@@ -1670,7 +1689,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
       setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
       setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
-      setMobilisationHours(toStringValue(lastDocket.mobilisation_hours));
+      setMobilisationHours(hoursToMinutes(lastDocket.mobilisation_hours));
       setMobilisationNotes(toStringValue(lastDocket.mobilisation_notes));
 
       setBcRepName("");
@@ -1698,7 +1717,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
             travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
             travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
-            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
+            mobilisationHours: hoursToMinutes(lastDocket.mobilisation_hours),
           }),
         ]);
       } else {
@@ -1707,7 +1726,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
             travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
             travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
-            mobilisationHours: toStringValue(lastDocket.mobilisation_hours),
+            mobilisationHours: hoursToMinutes(lastDocket.mobilisation_hours),
           }),
         ]);
       }
@@ -2025,12 +2044,13 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-right">
+            <MiniSummary label="Workers" value={String(labourWorkerCount)} />
             <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
             <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
             <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
             <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
-            <MiniSummary label="Prestart" value={totalMobilisationHours.toFixed(2)} />
+            <MiniSummary label="Prestart Hrs" value={totalMobilisationHours.toFixed(2)} />
             <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
           </div>
         </div>
@@ -2080,7 +2100,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                   <LabourInput label="Lunch Min" id={`labour-lunch-${index}`} type="number" value={row.lunch_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)} onChange={(v) => updateLabourRow(index, "lunch_minutes", v)} />
                   <LabourInput label="Travel In" id={`labour-travelin-${index}`} type="number" value={row.travel_in_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)} onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)} />
                   <LabourInput label="Travel Out" id={`labour-travelout-${index}`} type="number" value={row.travel_out_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)} onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)} />
-                  <LabourInput label="Prestart Hrs" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
+                  <LabourInput label="Prestart Min" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
 
                   <div>
                     <label className="block text-sm font-medium mb-1">Delay Hrs</label>
@@ -2253,7 +2273,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Docket Production Defaults</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row.
+              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row. Prestart is entered in minutes.
             </p>
           </div>
           {!locked && !isView && (
@@ -2271,7 +2291,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <Input label="Lunch Break Minutes" type="number" value={lunchBreakMinutes} onChange={setLunchBreakMinutes} disabled={locked || isView} />
           <Input label="Travel In Minutes" type="number" value={travelInMinutes} onChange={setTravelInMinutes} disabled={locked || isView} />
           <Input label="Travel Out Minutes" type="number" value={travelOutMinutes} onChange={setTravelOutMinutes} disabled={locked || isView} />
-          <Input label="Prestart Hours" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
+          <Input label="Prestart Minutes" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
         </div>
 
         <Input label="Prestart Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
