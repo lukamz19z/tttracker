@@ -674,6 +674,29 @@ useEffect(() => {
 
         if (initialDelayRows?.length) {
           setDelayRows(initialDelayRows.map((r) => makeDelayRow(r)));
+        } else if (docketId) {
+          const { data: delays } = await supabase
+            .from("tower_docket_delays")
+            .select("*")
+            .eq("docket_id", docketId);
+
+          if (delays && delays.length > 0) {
+            setDelayRows((delays as DbDelayRow[]).map((r) => makeDelayRow(r)));
+          } else if (initialLabourRows?.length) {
+            const legacyDelayRows = initialLabourRows
+              .filter((r) => Number(r.delay_hours || 0) > 0)
+              .map((r) =>
+                makeDelayRow({
+                  delay_type: "other",
+                  delay_reason: r.delay_reason || "Legacy labour delay",
+                  delay_hours: r.delay_hours,
+                  applies_to: "selected_workers",
+                  worker_names: [r.worker_name],
+                }),
+              );
+
+            setDelayRows(legacyDelayRows);
+          }
         }
 
         if (initialPlantRows?.length) {
@@ -2007,7 +2030,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
             <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
             <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
-            <MiniSummary label="Mob" value={totalMobilisationHours.toFixed(2)} />
+            <MiniSummary label="Prestart" value={totalMobilisationHours.toFixed(2)} />
             <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
           </div>
         </div>
@@ -2057,7 +2080,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
                   <LabourInput label="Lunch Min" id={`labour-lunch-${index}`} type="number" value={row.lunch_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelin-${index}`)} onChange={(v) => updateLabourRow(index, "lunch_minutes", v)} />
                   <LabourInput label="Travel In" id={`labour-travelin-${index}`} type="number" value={row.travel_in_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-travelout-${index}`)} onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)} />
                   <LabourInput label="Travel Out" id={`labour-travelout-${index}`} type="number" value={row.travel_out_minutes} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-mob-${index}`)} onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)} />
-                  <LabourInput label="Mob Hrs" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
+                  <LabourInput label="Prestart Hrs" id={`labour-mob-${index}`} type="number" value={row.mobilisation_hours} disabled={locked || isView} onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)} onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)} />
 
                   <div>
                     <label className="block text-sm font-medium mb-1">Delay Hrs</label>
@@ -2248,10 +2271,10 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <Input label="Lunch Break Minutes" type="number" value={lunchBreakMinutes} onChange={setLunchBreakMinutes} disabled={locked || isView} />
           <Input label="Travel In Minutes" type="number" value={travelInMinutes} onChange={setTravelInMinutes} disabled={locked || isView} />
           <Input label="Travel Out Minutes" type="number" value={travelOutMinutes} onChange={setTravelOutMinutes} disabled={locked || isView} />
-          <Input label="Mobilisation Hours" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
+          <Input label="Prestart Hours" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
         </div>
 
-        <Input label="Mobilisation Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
+        <Input label="Prestart Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
