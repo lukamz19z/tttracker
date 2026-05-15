@@ -618,7 +618,7 @@ export default function DailyDocketForm({
   const [crews, setCrews] = useState<CrewRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [selectedCrewId, setSelectedCrewId] = useState("");
-const [showProductionDefaults, setShowProductionDefaults] = useState(false);
+  const [showProductionDefaults, setShowProductionDefaults] = useState(false);
 
 useEffect(() => {
   async function loadCrewData() {
@@ -2311,7 +2311,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
           )}
         </section>
       )}
- {rateType === "schedule_of_rates" && (
+
+      {rateType === "schedule_of_rates" && (
         <section className="bg-white border border-purple-200 rounded-2xl p-4 shadow-sm">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
@@ -2335,7 +2336,6 @@ const labourRowsWithProduction = labourRows.map((row) => {
           </div>
         </section>
       )}
-
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -2478,28 +2478,73 @@ const labourRowsWithProduction = labourRows.map((row) => {
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Docket Production Defaults</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Enter the default non-productive deductions, then click the highlighted button to push them into each worker row. Prestart is entered in minutes.
+              Prestart, lunch and travel defaults used to calculate production hours.
             </p>
           </div>
-          {!locked && !isView && (
-            <button
-              type="button"
-              onClick={applyProductionDefaultsToAll}
-              className="bg-amber-400 text-slate-950 border-2 border-amber-600 px-5 py-3 rounded-xl text-sm font-black shadow-md hover:bg-amber-300"
-            >
-              ⚠ Apply Defaults to Workers
-            </button>
-          )}
+
+          <button
+            type="button"
+            onClick={() => setShowProductionDefaults((prev) => !prev)}
+            className="border border-slate-300 bg-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-slate-50"
+          >
+            {showProductionDefaults ? "Hide Defaults" : "Show Defaults"}
+          </button>
         </div>
 
-        <div className="grid md:grid-cols-4 gap-4">
-          <Input label="Lunch Break Minutes" type="number" value={lunchBreakMinutes} onChange={setLunchBreakMinutes} disabled={locked || isView} />
-          <Input label="Travel In Minutes" type="number" value={travelInMinutes} onChange={setTravelInMinutes} disabled={locked || isView} />
-          <Input label="Travel Out Minutes" type="number" value={travelOutMinutes} onChange={setTravelOutMinutes} disabled={locked || isView} />
-          <Input label="Prestart Minutes" type="number" value={mobilisationHours} onChange={setMobilisationHours} disabled={locked || isView} />
-        </div>
+        {showProductionDefaults && (
+          <>
+            <div className="grid md:grid-cols-4 gap-4">
+              <Input
+                label="Lunch Break Minutes"
+                type="number"
+                value={lunchBreakMinutes}
+                onChange={setLunchBreakMinutes}
+                disabled={locked || isView}
+              />
 
-        <Input label="Prestart Notes" value={mobilisationNotes} onChange={setMobilisationNotes} disabled={locked || isView} />
+              <Input
+                label="Travel In Minutes"
+                type="number"
+                value={travelInMinutes}
+                onChange={setTravelInMinutes}
+                disabled={locked || isView}
+              />
+
+              <Input
+                label="Travel Out Minutes"
+                type="number"
+                value={travelOutMinutes}
+                onChange={setTravelOutMinutes}
+                disabled={locked || isView}
+              />
+
+              <Input
+                label="Prestart Minutes"
+                type="number"
+                value={mobilisationHours}
+                onChange={setMobilisationHours}
+                disabled={locked || isView}
+              />
+            </div>
+
+            <Input
+              label="Prestart Notes"
+              value={mobilisationNotes}
+              onChange={setMobilisationNotes}
+              disabled={locked || isView}
+            />
+
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={applyProductionDefaultsToAll}
+                className="bg-amber-400 text-slate-950 border-2 border-amber-600 px-5 py-3 rounded-xl text-sm font-black shadow-md hover:bg-amber-300"
+              >
+                ⚠ Apply Defaults to Workers
+              </button>
+            )}
+          </>
+        )}
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
