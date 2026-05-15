@@ -690,105 +690,6 @@ export default function ProjectDashboard() {
     });
   }, [towers, dockets, docketHoursById, docketProductionHoursById]);
 
-  const stats = useMemo<ProjectStats>(() => {
-    const totalTowers = towers.length;
-
-    const towersComplete = towerProductionSummaries.filter((tower) => tower.computedProgress >= 100).length;
-    const towersInProgress = towerProductionSummaries.filter(
-      (tower) => tower.computedProgress > 0 && tower.computedProgress < 100,
-    ).length;
-    const towersNotStarted = towerProductionSummaries.filter((tower) => tower.computedProgress <= 0).length;
-
-    const deliveryTowersInProgress = towers.filter((tower) => {
-      const summary = deliverySummaryByTowerId.get(tower.id);
-      return summary && summary.deliveryPercent > 0 && summary.deliveryPercent < 100;
-    }).length;
-
-    const totalDockets = dockets.length;
-    const totalManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.manhours, 0);
-    const productionManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.productionManhours, 0);
-
-    const totalTowerWeightRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.computedWeight, 0), 0);
-    const totalTowerWeight = totalTowerWeightRaw > 0 ? totalTowerWeightRaw : null;
-
-    const completedTonnesRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.completedTonnes, 0), 0);
-    const completedTonnes = completedTonnesRaw > 0 ? completedTonnesRaw : null;
-
-    const manhoursPerTonne = completedTonnes && completedTonnes > 0 ? totalManhours / completedTonnes : null;
-    const productionManhoursPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
-    const overallProgressPercent = totalTowerWeightRaw > 0
-      ? clampPercent((completedTonnesRaw / totalTowerWeightRaw) * 100)
-      : totalTowers > 0
-      ? clampPercent(towerProductionSummaries.reduce((sum, tower) => sum + tower.computedProgress, 0) / totalTowers)
-      : 0;
-
-    const totalDefects = defects.length;
-    const openDefects = defects.filter((defect) => {
-      const st = safeString(defect.status).trim().toLowerCase();
-      return st !== "closed" && st !== "complete" && st !== "completed";
-    }).length;
-
-    const totalDeliveries = deliveries.length;
-
-    const totalRequiredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.requiredQty, 0), 0);
-    const deliveredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.deliveredQty, 0), 0);
-    const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
-
-    const latestDocketDate =
-      dockets
-        .map((d) => d.docket_date)
-        .filter((d): d is string => !!d)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
-
-    return {
-      totalTowers,
-      towersComplete,
-      towersInProgress,
-      towersNotStarted,
-      deliveryTowersInProgress,
-      totalDockets,
-      totalManhours,
-      productionManhours,
-      totalTowerWeight,
-      completedTonnes,
-      manhoursPerTonne,
-      productionManhoursPerTonne,
-      overallProgressPercent,
-      openDefects,
-      totalDefects,
-      totalDeliveries,
-      totalRequiredQty,
-      deliveredQty,
-      outstandingQty,
-      deliveryPercent,
-      latestDocketDate,
-    };
-  }, [towers, towerProductionSummaries, dockets, defects, deliveries, deliverySummaryByTowerId]);
-
-  const inProgressTowers = useMemo(() => {
-    return towerProductionSummaries
-      .filter((tower) => tower.computedProgress > 0 && tower.computedProgress < 100)
-      .sort((a, b) => b.computedProgress - a.computedProgress)
-      .slice(0, 8);
-  }, [towerProductionSummaries]);
-
-  const deliveryTowersInProgress = useMemo<TowerDeliverySummary[]>(() => {
-    return towers
-      .map((tower) => {
-        const summary = deliverySummaryByTowerId.get(tower.id) || {
-          requiredQty: 0,
-          deliveredQty: 0,
-          outstandingQty: 0,
-          deliveryPercent: 0,
-        };
-        return { ...tower, ...summary };
-      })
-      .filter((tower) => tower.deliveryPercent > 0 && tower.deliveryPercent < 100)
-      .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
-      .slice(0, 8);
-  }, [towers, deliverySummaryByTowerId]);
-
   const crewProduction = useMemo<CrewProductionSummary[]>(() => {
     const towerById = new Map<string, TowerProductionSummary>();
     towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
@@ -886,6 +787,110 @@ export default function ProjectDashboard() {
         return a.mhPerTonne - b.mhPerTonne;
       });
   }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById]);
+
+  const stats = useMemo<ProjectStats>(() => {
+    const totalTowers = towers.length;
+
+    const towersComplete = towerProductionSummaries.filter((tower) => tower.computedProgress >= 100).length;
+    const towersInProgress = towerProductionSummaries.filter(
+      (tower) => tower.computedProgress > 0 && tower.computedProgress < 100,
+    ).length;
+    const towersNotStarted = towerProductionSummaries.filter((tower) => tower.computedProgress <= 0).length;
+
+    const deliveryTowersInProgress = towers.filter((tower) => {
+      const summary = deliverySummaryByTowerId.get(tower.id);
+      return summary && summary.deliveryPercent > 0 && summary.deliveryPercent < 100;
+    }).length;
+
+    const totalDockets = dockets.length;
+
+    // Keep project KPI MH/t aligned with the Crew Production Comparison table.
+    // This uses docket-by-docket progress gain rather than stale tower summary totals,
+    // so deleting a docket immediately changes the KPI values as well as the crew table.
+    const totalManhours = crewProduction.reduce((sum, crew) => sum + crew.totalHours, 0);
+    const productionManhours = crewProduction.reduce((sum, crew) => sum + crew.productionHours, 0);
+    const productionTonnesRaw = crewProduction.reduce((sum, crew) => sum + crew.productionTonnes, 0);
+
+    const totalTowerWeightRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.computedWeight, 0), 0);
+    const totalTowerWeight = totalTowerWeightRaw > 0 ? totalTowerWeightRaw : null;
+
+    const completedTonnesRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.completedTonnes, 0), 0);
+    const completedTonnes = productionTonnesRaw > 0 ? productionTonnesRaw : completedTonnesRaw > 0 ? completedTonnesRaw : null;
+
+    const manhoursPerTonne = completedTonnes && completedTonnes > 0 ? totalManhours / completedTonnes : null;
+    const productionManhoursPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
+    const overallProgressPercent = totalTowerWeightRaw > 0
+      ? clampPercent((completedTonnesRaw / totalTowerWeightRaw) * 100)
+      : totalTowers > 0
+      ? clampPercent(towerProductionSummaries.reduce((sum, tower) => sum + tower.computedProgress, 0) / totalTowers)
+      : 0;
+
+    const totalDefects = defects.length;
+    const openDefects = defects.filter((defect) => {
+      const st = safeString(defect.status).trim().toLowerCase();
+      return st !== "closed" && st !== "complete" && st !== "completed";
+    }).length;
+
+    const totalDeliveries = deliveries.length;
+
+    const totalRequiredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.requiredQty, 0), 0);
+    const deliveredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.deliveredQty, 0), 0);
+    const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
+    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
+
+    const latestDocketDate =
+      dockets
+        .map((d) => d.docket_date)
+        .filter((d): d is string => !!d)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+
+    return {
+      totalTowers,
+      towersComplete,
+      towersInProgress,
+      towersNotStarted,
+      deliveryTowersInProgress,
+      totalDockets,
+      totalManhours,
+      productionManhours,
+      totalTowerWeight,
+      completedTonnes,
+      manhoursPerTonne,
+      productionManhoursPerTonne,
+      overallProgressPercent,
+      openDefects,
+      totalDefects,
+      totalDeliveries,
+      totalRequiredQty,
+      deliveredQty,
+      outstandingQty,
+      deliveryPercent,
+      latestDocketDate,
+    };
+  }, [towers, towerProductionSummaries, crewProduction, dockets, defects, deliveries, deliverySummaryByTowerId]);
+
+  const inProgressTowers = useMemo(() => {
+    return towerProductionSummaries
+      .filter((tower) => tower.computedProgress > 0 && tower.computedProgress < 100)
+      .sort((a, b) => b.computedProgress - a.computedProgress)
+      .slice(0, 8);
+  }, [towerProductionSummaries]);
+
+  const deliveryTowersInProgress = useMemo<TowerDeliverySummary[]>(() => {
+    return towers
+      .map((tower) => {
+        const summary = deliverySummaryByTowerId.get(tower.id) || {
+          requiredQty: 0,
+          deliveredQty: 0,
+          outstandingQty: 0,
+          deliveryPercent: 0,
+        };
+        return { ...tower, ...summary };
+      })
+      .filter((tower) => tower.deliveryPercent > 0 && tower.deliveryPercent < 100)
+      .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
+      .slice(0, 8);
+  }, [towers, deliverySummaryByTowerId]);
 
   const bestPerformingTowers = useMemo(() => {
     return towerProductionSummaries
