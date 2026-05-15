@@ -558,6 +558,8 @@ export default function DailyDocketForm({
   );
   const [bulkTimeIn, setBulkTimeIn] = useState("");
   const [bulkTimeOut, setBulkTimeOut] = useState("");
+  const [bulkPlantTimeIn, setBulkPlantTimeIn] = useState("");
+  const [bulkPlantTimeOut, setBulkPlantTimeOut] = useState("");
 
   const [lunchBreakMinutes, setLunchBreakMinutes] = useState(
     toStringValue(initialDocket?.lunch_break_minutes)
@@ -1873,6 +1875,29 @@ const labourRowsWithProduction = labourRows.map((row) => {
     );
   }
 
+  function applyBulkPlantTimes() {
+    if (isView || locked || rateType !== "schedule_of_rates") return;
+
+    setPlantRows((prev) =>
+      prev.map((row) => {
+        if (!row.plant_name.trim() && !row.asset_id.trim() && !row.plant_type.trim()) {
+          return row;
+        }
+
+        const time_in = bulkPlantTimeIn || row.time_in;
+        const time_out = bulkPlantTimeOut || row.time_out;
+        const total_hours = calculateHours(time_in, time_out) || row.total_hours;
+
+        return {
+          ...row,
+          time_in,
+          time_out,
+          total_hours,
+        };
+      })
+    );
+  }
+
   function addPlantRow() {
     if (isView || locked) return;
     setPlantRows((prev) => [...prev, blankPlantRow()]);
@@ -2275,6 +2300,32 @@ const labourRowsWithProduction = labourRows.map((row) => {
             </div>
             <MiniSummary label={rateType === "schedule_of_rates" ? "Plant Hrs" : "Plant Items"} value={rateType === "schedule_of_rates" ? totalPlantHours.toFixed(2) : String(plantItemCount)} />
           </div>
+
+          {rateType === "schedule_of_rates" && !locked && !isView && (
+            <div className="rounded-2xl border border-purple-200 bg-purple-50/60 p-3 flex flex-col md:flex-row md:items-end gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end flex-1">
+                <LabourInput
+                  label="Bulk Plant Time In"
+                  type="time"
+                  value={bulkPlantTimeIn}
+                  onChange={setBulkPlantTimeIn}
+                />
+                <LabourInput
+                  label="Bulk Plant Time Out"
+                  type="time"
+                  value={bulkPlantTimeOut}
+                  onChange={setBulkPlantTimeOut}
+                />
+                <button
+                  type="button"
+                  onClick={applyBulkPlantTimes}
+                  className="bg-purple-700 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-purple-800"
+                >
+                  Apply Times to Plant
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="space-y-3">
             {plantRowsWithTotals.map((row, index) => (
