@@ -36,11 +36,14 @@ type DocketRow = {
   erection_percent?: number | null;
   crew?: string | null;
   leading_hand?: string | null;
+  raw_manhours?: number | null;
+  production_manhours?: number | null;
 };
 
 type LabourRow = {
   docket_id: string;
   total_hours?: number | null;
+  production_hours?: number | null;
 };
 
 type DefectRow = {
@@ -87,6 +90,8 @@ type TowerProductionSummary = Tower & {
   computedWeight: number | null;
   completedTonnes: number | null;
   manhours: number;
+  productionManhours: number;
+  rawMhPerTonne: number | null;
   productionMhPerTonne: number | null;
 };
 
@@ -94,13 +99,20 @@ type CrewProductionSummary = {
   crewName: string;
   docketCount: number;
   totalHours: number;
+  productionHours: number;
   productionTonnes: number;
+  rawMhPerTonne: number | null;
   mhPerTonne: number | null;
   tonnesPerHour: number | null;
+  towersTouched: number;
+  completedTowers: number;
+  towerNames: string[];
   lastDocketDate: string | null;
 };
 
-type QuickActionType = "docket" | "delivery" | "materials" | "delivery-progress" | null;
+type QuickActionType = "docket" | "delivery" | "materials" | null;
+type AnalyticsView = "tower_performance" | "crew_performance" | "mh_per_tonne" | "production_mh_per_tonne" | "completed_towers";
+type SortDirection = "best" | "worst";
 type UserRole = "admin" | "editor" | "viewer" | string | null;
 
 type ProjectStats = {
@@ -111,9 +123,12 @@ type ProjectStats = {
   deliveryTowersInProgress: number;
   totalDockets: number;
   totalManhours: number;
+  productionManhours: number;
   totalTowerWeight: number | null;
   completedTonnes: number | null;
   manhoursPerTonne: number | null;
+  productionManhoursPerTonne: number | null;
+  overallProgressPercent: number;
   openDefects: number;
   totalDefects: number;
   totalDeliveries: number;
@@ -291,6 +306,90 @@ function MetricTile({
   );
 }
 
+
+function ProgressRing({
+  label,
+  value,
+  sublabel,
+  tone = "blue",
+}: {
+  label: string;
+  value: number;
+  sublabel?: string;
+  tone?: "blue" | "emerald" | "purple" | "amber" | "slate";
+}) {
+  const pct = clampPercent(value);
+  const stroke = tone === "emerald" ? "#10b981" : tone === "purple" ? "#8b5cf6" : tone === "amber" ? "#f59e0b" : tone === "slate" ? "#64748b" : "#3b82f6";
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference - (pct / 100) * circumference;
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm flex items-center gap-4">
+      <div className="relative h-28 w-28 shrink-0">
+        <svg viewBox="0 0 100 100" className="h-28 w-28 -rotate-90">
+          <circle cx="50" cy="50" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="9" />
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            fill="none"
+            stroke={stroke}
+            strokeWidth="9"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-2xl font-black text-slate-900">{formatDecimal(pct, 0)}%</span>
+        </div>
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-slate-900">{label}</div>
+        {sublabel ? <div className="mt-1 text-sm text-slate-500 leading-5">{sublabel}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function CompactRankCard({
+  title,
+  items,
+  emptyText,
+}: {
+  title: string;
+  items: { id: string; label: string; meta: string; value: string; href?: string }[];
+  emptyText: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="text-lg font-bold text-slate-900">{title}</h3>
+      {items.length === 0 ? (
+        <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">{emptyText}</div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {items.map((item, index) => {
+            const content = (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 hover:bg-slate-100 transition">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-400">#{index + 1}</div>
+                    <div className="mt-1 truncate font-semibold text-slate-900">{item.label}</div>
+                    <div className="mt-1 text-xs text-slate-500">{item.meta}</div>
+                  </div>
+                  <div className="text-right text-lg font-black text-slate-900">{item.value}</div>
+                </div>
+              </div>
+            );
+            return item.href ? <Link key={item.id} href={item.href}>{content}</Link> : <div key={item.id}>{content}</div>;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QuickActionCard({
   title,
   description,
@@ -364,6 +463,9 @@ export default function ProjectDashboard() {
   const [loading, setLoading] = useState(true);
   const [actionType, setActionType] = useState<QuickActionType>(null);
   const [towerSearch, setTowerSearch] = useState("");
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("tower_performance");
+  const [analyticsCrewFilter, setAnalyticsCrewFilter] = useState("all");
+  const [analyticsSortDirection, setAnalyticsSortDirection] = useState<SortDirection>("best");
   const [role, setRole] = useState<UserRole>(null);
 
   const [editingProject, setEditingProject] = useState(false);
@@ -407,7 +509,7 @@ export default function ProjectDashboard() {
 
     const { data: docketsData, error: docketsError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, tower_id, project_id, docket_date, assembly_percent, erection_percent, crew, leading_hand")
+      .select("id, tower_id, project_id, docket_date, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
       .eq("project_id", projectId);
 
     if (docketsError) console.error("dockets load error", docketsError);
@@ -424,7 +526,7 @@ export default function ProjectDashboard() {
       ];
 
       for (const table of labourTableCandidates) {
-        const { data, error } = await supabase.from(table).select("docket_id, total_hours");
+        const { data, error } = await supabase.from(table).select("docket_id, total_hours, production_hours");
         if (!error && data) {
           loadedLabourRows = (data as LabourRow[]).filter((row) => docketIds.includes(row.docket_id));
           break;
@@ -509,11 +611,35 @@ export default function ProjectDashboard() {
 
   const docketHoursById = useMemo(() => {
     const map = new Map<string, number>();
+
+    dockets.forEach((docket) => {
+      const raw = safeNumber(docket.raw_manhours, NaN);
+      if (Number.isFinite(raw)) map.set(docket.id, raw);
+    });
+
     labourRows.forEach((row) => {
+      if (map.has(row.docket_id)) return;
       map.set(row.docket_id, (map.get(row.docket_id) || 0) + safeNumber(row.total_hours, 0));
     });
+
     return map;
-  }, [labourRows]);
+  }, [dockets, labourRows]);
+
+  const docketProductionHoursById = useMemo(() => {
+    const map = new Map<string, number>();
+
+    dockets.forEach((docket) => {
+      const production = safeNumber(docket.production_manhours, NaN);
+      if (Number.isFinite(production)) map.set(docket.id, production);
+    });
+
+    labourRows.forEach((row) => {
+      if (map.has(row.docket_id)) return;
+      map.set(row.docket_id, (map.get(row.docket_id) || 0) + safeNumber(row.production_hours ?? row.total_hours, 0));
+    });
+
+    return map;
+  }, [dockets, labourRows]);
 
   const deliverySummaryByTowerId = useMemo(() => {
     const map = new Map<string, { requiredQty: number; deliveredQty: number; outstandingQty: number; deliveryPercent: number }>();
@@ -547,7 +673,9 @@ export default function ProjectDashboard() {
 
       const towerDocketIds = dockets.filter((d) => d.tower_id === tower.id).map((d) => d.id);
       const manhours = towerDocketIds.reduce((sum, docketId) => sum + (docketHoursById.get(docketId) || 0), 0);
-      const productionMhPerTonne = completedTonnes && completedTonnes > 0 ? manhours / completedTonnes : null;
+      const productionManhours = towerDocketIds.reduce((sum, docketId) => sum + (docketProductionHoursById.get(docketId) || 0), 0);
+      const rawMhPerTonne = completedTonnes && completedTonnes > 0 ? manhours / completedTonnes : null;
+      const productionMhPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
 
       return {
         ...tower,
@@ -555,10 +683,12 @@ export default function ProjectDashboard() {
         computedWeight,
         completedTonnes,
         manhours,
+        productionManhours,
+        rawMhPerTonne,
         productionMhPerTonne,
       };
     });
-  }, [towers, dockets, docketHoursById]);
+  }, [towers, dockets, docketHoursById, docketProductionHoursById]);
 
   const stats = useMemo<ProjectStats>(() => {
     const totalTowers = towers.length;
@@ -575,7 +705,8 @@ export default function ProjectDashboard() {
     }).length;
 
     const totalDockets = dockets.length;
-    const totalManhours = labourRows.reduce((sum, row) => sum + safeNumber(row.total_hours, 0), 0);
+    const totalManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.manhours, 0);
+    const productionManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.productionManhours, 0);
 
     const totalTowerWeightRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.computedWeight, 0), 0);
     const totalTowerWeight = totalTowerWeightRaw > 0 ? totalTowerWeightRaw : null;
@@ -584,11 +715,17 @@ export default function ProjectDashboard() {
     const completedTonnes = completedTonnesRaw > 0 ? completedTonnesRaw : null;
 
     const manhoursPerTonne = completedTonnes && completedTonnes > 0 ? totalManhours / completedTonnes : null;
+    const productionManhoursPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
+    const overallProgressPercent = totalTowerWeightRaw > 0
+      ? clampPercent((completedTonnesRaw / totalTowerWeightRaw) * 100)
+      : totalTowers > 0
+      ? clampPercent(towerProductionSummaries.reduce((sum, tower) => sum + tower.computedProgress, 0) / totalTowers)
+      : 0;
 
     const totalDefects = defects.length;
     const openDefects = defects.filter((defect) => {
-      const s = safeString(defect.status).trim().toLowerCase();
-      return s !== "closed" && s !== "complete" && s !== "completed";
+      const st = safeString(defect.status).trim().toLowerCase();
+      return st !== "closed" && st !== "complete" && st !== "completed";
     }).length;
 
     const totalDeliveries = deliveries.length;
@@ -612,9 +749,12 @@ export default function ProjectDashboard() {
       deliveryTowersInProgress,
       totalDockets,
       totalManhours,
+      productionManhours,
       totalTowerWeight,
       completedTonnes,
       manhoursPerTonne,
+      productionManhoursPerTonne,
+      overallProgressPercent,
       openDefects,
       totalDefects,
       totalDeliveries,
@@ -624,7 +764,7 @@ export default function ProjectDashboard() {
       deliveryPercent,
       latestDocketDate,
     };
-  }, [towers, towerProductionSummaries, dockets, labourRows, defects, deliveries, deliverySummaryByTowerId]);
+  }, [towers, towerProductionSummaries, dockets, defects, deliveries, deliverySummaryByTowerId]);
 
   const inProgressTowers = useMemo(() => {
     return towerProductionSummaries
@@ -650,10 +790,8 @@ export default function ProjectDashboard() {
   }, [towers, deliverySummaryByTowerId]);
 
   const crewProduction = useMemo<CrewProductionSummary[]>(() => {
-    const towerWeightById = new Map<string, number>();
-    towers.forEach((tower) => {
-      towerWeightById.set(tower.id, safeNumber(getTowerWeightFromExtraData(tower.extra_data), 0));
-    });
+    const towerById = new Map<string, TowerProductionSummary>();
+    towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
 
     const sortedDocketsByTower = new Map<string, DocketRow[]>();
     dockets.forEach((docket) => {
@@ -672,10 +810,11 @@ export default function ProjectDashboard() {
       sortedDocketsByTower.set(towerId, arr);
     });
 
-    const rows = new Map<string, CrewProductionSummary>();
+    const rows = new Map<string, CrewProductionSummary & { towerIds: Set<string>; completedTowerIds: Set<string> }>();
 
     sortedDocketsByTower.forEach((towerDockets, towerId) => {
-      const towerWeight = towerWeightById.get(towerId) || 0;
+      const tower = towerById.get(towerId);
+      const towerWeight = safeNumber(tower?.computedWeight, 0);
       let previousProgress = 0;
 
       towerDockets.forEach((docket) => {
@@ -683,21 +822,32 @@ export default function ProjectDashboard() {
         const currentProgress = getDocketProgress(docket);
         const progressDelta = Math.max(0, currentProgress - previousProgress);
         const productionTonnes = towerWeight > 0 ? towerWeight * (progressDelta / 100) : 0;
-        const hours = docketHoursById.get(docket.id) || 0;
+        const rawHours = docketHoursById.get(docket.id) || 0;
+        const productionHours = docketProductionHoursById.get(docket.id) || rawHours;
 
         const existing = rows.get(crewName) || {
           crewName,
           docketCount: 0,
           totalHours: 0,
+          productionHours: 0,
           productionTonnes: 0,
+          rawMhPerTonne: null,
           mhPerTonne: null,
           tonnesPerHour: null,
+          towersTouched: 0,
+          completedTowers: 0,
+          towerNames: [],
+          towerIds: new Set<string>(),
+          completedTowerIds: new Set<string>(),
           lastDocketDate: null,
         };
 
         existing.docketCount += 1;
-        existing.totalHours += hours;
+        existing.totalHours += rawHours;
+        existing.productionHours += productionHours;
         existing.productionTonnes += productionTonnes;
+        existing.towerIds.add(towerId);
+        if (tower && tower.computedProgress >= 100) existing.completedTowerIds.add(towerId);
         if (
           docket.docket_date &&
           (!existing.lastDocketDate || new Date(docket.docket_date).getTime() > new Date(existing.lastDocketDate).getTime())
@@ -712,18 +862,81 @@ export default function ProjectDashboard() {
 
     return Array.from(rows.values())
       .map((row) => ({
-        ...row,
-        mhPerTonne: row.productionTonnes > 0 ? row.totalHours / row.productionTonnes : null,
-        tonnesPerHour: row.totalHours > 0 ? row.productionTonnes / row.totalHours : null,
+        crewName: row.crewName,
+        docketCount: row.docketCount,
+        totalHours: row.totalHours,
+        productionHours: row.productionHours,
+        productionTonnes: row.productionTonnes,
+        rawMhPerTonne: row.productionTonnes > 0 ? row.totalHours / row.productionTonnes : null,
+        mhPerTonne: row.productionTonnes > 0 ? row.productionHours / row.productionTonnes : null,
+        tonnesPerHour: row.productionHours > 0 ? row.productionTonnes / row.productionHours : null,
+        towersTouched: row.towerIds.size,
+        completedTowers: row.completedTowerIds.size,
+        towerNames: Array.from(row.towerIds)
+          .map((towerId) => towerById.get(towerId))
+          .filter((tower): tower is TowerProductionSummary => Boolean(tower))
+          .map((tower) => getTowerDisplayName(tower))
+          .slice(0, 6),
+        lastDocketDate: row.lastDocketDate,
       }))
       .sort((a, b) => {
-        if (a.mhPerTonne === null && b.mhPerTonne === null) return b.totalHours - a.totalHours;
+        if (a.mhPerTonne === null && b.mhPerTonne === null) return b.productionHours - a.productionHours;
         if (a.mhPerTonne === null) return 1;
         if (b.mhPerTonne === null) return -1;
         return a.mhPerTonne - b.mhPerTonne;
-      })
-      .slice(0, 6);
-  }, [towers, dockets, docketHoursById]);
+      });
+  }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById]);
+
+  const bestPerformingTowers = useMemo(() => {
+    return towerProductionSummaries
+      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
+      .sort((a, b) => safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999))
+      .slice(0, 5);
+  }, [towerProductionSummaries]);
+
+  const watchlistTowers = useMemo(() => {
+    return towerProductionSummaries
+      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
+      .sort((a, b) => safeNumber(b.productionMhPerTonne, -1) - safeNumber(a.productionMhPerTonne, -1))
+      .slice(0, 5);
+  }, [towerProductionSummaries]);
+
+  const completedTowersByCrew = useMemo(() => {
+    return crewProduction
+      .filter((crew) => crew.completedTowers > 0)
+      .sort((a, b) => b.completedTowers - a.completedTowers || safeNumber(a.mhPerTonne, 999999) - safeNumber(b.mhPerTonne, 999999));
+  }, [crewProduction]);
+
+  const analyticsCrewOptions = useMemo(() => {
+    return ["all", ...crewProduction.map((crew) => crew.crewName)];
+  }, [crewProduction]);
+
+  const analyticsRows = useMemo(() => {
+    let rows = [...towerProductionSummaries];
+
+    if (analyticsCrewFilter !== "all") {
+      const towerIds = new Set(
+        dockets
+          .filter((docket) => (docket.crew || docket.leading_hand || "Unassigned Crew") === analyticsCrewFilter)
+          .map((docket) => docket.tower_id)
+          .filter((towerId): towerId is string => Boolean(towerId)),
+      );
+      rows = rows.filter((tower) => towerIds.has(tower.id));
+    }
+
+    if (analyticsView === "completed_towers") rows = rows.filter((tower) => tower.computedProgress >= 100);
+    if (analyticsView === "mh_per_tonne") rows = rows.filter((tower) => tower.rawMhPerTonne !== null);
+    if (analyticsView === "production_mh_per_tonne") rows = rows.filter((tower) => tower.productionMhPerTonne !== null);
+
+    const direction = analyticsSortDirection === "best" ? 1 : -1;
+
+    return rows.sort((a, b) => {
+      if (analyticsView === "mh_per_tonne") return (safeNumber(a.rawMhPerTonne, 999999) - safeNumber(b.rawMhPerTonne, 999999)) * direction;
+      if (analyticsView === "production_mh_per_tonne") return (safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999)) * direction;
+      if (analyticsView === "completed_towers") return b.computedProgress - a.computedProgress;
+      return (safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999)) * direction;
+    });
+  }, [towerProductionSummaries, analyticsView, analyticsCrewFilter, analyticsSortDirection, dockets]);
 
   const filteredTowers = useMemo(() => {
     const q = towerSearch.trim().toLowerCase();
@@ -802,14 +1015,13 @@ export default function ProjectDashboard() {
   function goToTowerAction(towerId: string) {
     if (!actionType) return;
     if (actionType === "docket") router.push(`/project/${projectId}/tower/${towerId}/dockets`);
-    if (actionType === "delivery" || actionType === "delivery-progress") router.push(`/project/${projectId}/tower/${towerId}/deliveries`);
+    if (actionType === "delivery") router.push(`/project/${projectId}/tower/${towerId}/deliveries`);
     if (actionType === "materials") router.push(`/project/${projectId}/tower/${towerId}/materials`);
   }
 
   function getActionTitle(type: QuickActionType) {
     if (type === "docket") return "Select tower for Daily Docket";
     if (type === "delivery") return "Select tower for Delivery";
-    if (type === "delivery-progress") return "Select delivery tower in progress";
     if (type === "materials") return "Select tower for Materials";
     return "Select Tower";
   }
@@ -817,7 +1029,6 @@ export default function ProjectDashboard() {
   function getActionSubtitle(type: QuickActionType) {
     if (type === "docket") return "Choose a tower, then open its Daily Dockets page.";
     if (type === "delivery") return "Choose a tower, then open its Deliveries page.";
-    if (type === "delivery-progress") return "Choose a tower with delivery underway, then open its Deliveries page.";
     if (type === "materials") return "Choose a tower, then open its Materials page.";
     return "";
   }
@@ -892,23 +1103,33 @@ export default function ProjectDashboard() {
         )}
       </div>
 
-      <div className="grid md:grid-cols-2 xl:grid-cols-7 gap-4">
-        <StatCard title="Total Towers" value={String(stats.totalTowers)} subtitle={`${stats.towersInProgress} tower progress in progress`} />
-        <StatCard title="Towers Complete" value={String(stats.towersComplete)} subtitle={`${stats.towersNotStarted} not started`} />
-        <StatCard title="Delivery Towers In Progress" value={String(stats.deliveryTowersInProgress)} subtitle={`${formatDecimal(stats.deliveryPercent, 0)}% project delivery`} />
-        <StatCard title="Open Defects" value={String(stats.openDefects)} subtitle={`${stats.totalDefects} total defects`} />
+      <div className="grid xl:grid-cols-[1.2fr_2fr] gap-6">
+        <div className="grid sm:grid-cols-2 gap-4">
+          <ProgressRing label="Overall Progress" value={stats.overallProgressPercent} sublabel={`${stats.towersComplete} complete • ${stats.towersInProgress} active`} tone="blue" />
+          <ProgressRing label="Delivery Progress" value={stats.deliveryPercent} sublabel={`${formatDecimal(stats.deliveredQty, 0)} / ${formatDecimal(stats.totalRequiredQty, 0)} delivered`} tone="emerald" />
+        </div>
+
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <MetricTile title="Total Towers" value={String(stats.totalTowers)} subtitle={`${stats.towersNotStarted} not started`} accent="slate" />
+          <MetricTile title="Production MH/t" value={formatDecimal(stats.productionManhoursPerTonne, 2)} subtitle={`${formatDecimal(stats.productionManhours, 1)} production hrs`} accent="purple" />
+          <MetricTile title="Raw MH/t" value={formatDecimal(stats.manhoursPerTonne, 2)} subtitle={`${formatDecimal(stats.totalManhours, 1)} raw hrs`} accent="blue" />
+          <MetricTile title="Open Defects" value={String(stats.openDefects)} subtitle={`${stats.totalDefects} total defects`} accent="rose" />
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard title="Daily Dockets" value={String(stats.totalDockets)} subtitle={`Latest: ${formatDate(stats.latestDocketDate)}`} />
-        <StatCard title="Total Manhours" value={formatDecimal(stats.totalManhours, 1)} subtitle={stats.completedTonnes !== null ? `${formatDecimal(stats.completedTonnes, 2)} completed tonnes` : "No completed tonnes yet"} />
-        <StatCard title="Project MH/t" value={formatDecimal(stats.manhoursPerTonne, 2)} subtitle={stats.totalTowerWeight !== null ? `${formatDecimal(stats.totalTowerWeight, 2)} total tower weight` : "Tower weights not found"} />
+        <StatCard title="Completed Tonnes" value={formatDecimal(stats.completedTonnes, 2)} subtitle={stats.totalTowerWeight !== null ? `${formatDecimal(stats.totalTowerWeight, 2)} total tower weight` : "Tower weights not found"} />
+        <StatCard title="Towers Complete" value={String(stats.towersComplete)} subtitle={`${stats.towersInProgress} in progress`} />
+        <StatCard title="Delivery Towers Active" value={String(stats.deliveryTowersInProgress)} subtitle="shown in logistics list below" />
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader title="Quick Actions" subtitle="Jump straight into common project tasks by selecting a tower." />
 
-        <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="mt-6 grid md:grid-cols-3 gap-6">
           <QuickActionCard title="Add Daily Docket" description="Choose a tower and jump into its Daily Dockets page." accent="blue" onClick={() => openAction("docket")} />
           <QuickActionCard title="Add Delivery" description="Choose a tower and jump into its Deliveries page." accent="emerald" onClick={() => openAction("delivery")} />
-          <QuickActionCard title="Delivery Towers In Progress" description="Open a tower where delivery has started but is not complete." accent="amber" onClick={() => openAction("delivery-progress")} />
           <QuickActionCard title="Search Materials" description="Choose a tower and jump into its Materials page." accent="purple" onClick={() => openAction("materials")} />
         </div>
       </div>
@@ -979,9 +1200,44 @@ export default function ProjectDashboard() {
         </div>
       </div>
 
+      <div className="grid xl:grid-cols-3 gap-6">
+        <CompactRankCard
+          title="Best Performing Towers"
+          emptyText="No tower production rates available yet."
+          items={bestPerformingTowers.map((tower) => ({
+            id: tower.id,
+            label: getTowerDisplayName(tower),
+            meta: `${tower.computedProgress}% progress • ${formatDecimal(tower.productionManhours, 1)} prod hrs`,
+            value: `${formatDecimal(tower.productionMhPerTonne, 2)} MH/t`,
+            href: `/project/${projectId}/tower/${tower.id}`,
+          }))}
+        />
+        <CompactRankCard
+          title="Watchlist Towers"
+          emptyText="No watchlist towers yet."
+          items={watchlistTowers.map((tower) => ({
+            id: tower.id,
+            label: getTowerDisplayName(tower),
+            meta: `${tower.computedProgress}% progress • ${formatDecimal(tower.productionManhours, 1)} prod hrs`,
+            value: `${formatDecimal(tower.productionMhPerTonne, 2)} MH/t`,
+            href: `/project/${projectId}/tower/${tower.id}`,
+          }))}
+        />
+        <CompactRankCard
+          title="Completed Towers by Crew"
+          emptyText="No completed towers allocated to crews yet."
+          items={completedTowersByCrew.slice(0, 5).map((crew) => ({
+            id: crew.crewName,
+            label: crew.crewName,
+            meta: crew.towerNames.join(", ") || "No towers listed",
+            value: `${crew.completedTowers} complete`,
+          }))}
+        />
+      </div>
+
       <div className="grid xl:grid-cols-2 gap-6">
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <SectionHeader title="Crew Production Comparison" subtitle="Compares crew production using docket progress gain, tower weight and docket manhours." />
+          <SectionHeader title="Crew Production Comparison" subtitle="Compares crew production using docket progress gain, tower weight and production manhours." />
 
           {crewProduction.length === 0 ? (
             <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">No crew production data yet.</div>
@@ -992,10 +1248,11 @@ export default function ProjectDashboard() {
                   <tr className="border-b border-slate-200 text-left text-slate-500">
                     <th className="py-3 pr-4 font-medium">Crew</th>
                     <th className="py-3 pr-4 font-medium">Dockets</th>
-                    <th className="py-3 pr-4 font-medium">Hours</th>
+                    <th className="py-3 pr-4 font-medium">Raw Hrs</th>
+                    <th className="py-3 pr-4 font-medium">Prod Hrs</th>
                     <th className="py-3 pr-4 font-medium">Prod. Tonnes</th>
-                    <th className="py-3 pr-4 font-medium">MH/t</th>
-                    <th className="py-3 pr-4 font-medium">t/hr</th>
+                    <th className="py-3 pr-4 font-medium">Prod MH/t</th>
+                    <th className="py-3 pr-4 font-medium">Towers</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1004,9 +1261,10 @@ export default function ProjectDashboard() {
                       <td className="py-3 pr-4 font-semibold text-slate-900">{crew.crewName}</td>
                       <td className="py-3 pr-4 text-slate-600">{crew.docketCount}</td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(crew.totalHours, 1)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(crew.productionHours, 1)}</td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(crew.productionTonnes, 2)}</td>
                       <td className="py-3 pr-4 font-semibold text-slate-900">{formatDecimal(crew.mhPerTonne, 2)}</td>
-                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(crew.tonnesPerHour, 3)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{crew.towersTouched} touched • {crew.completedTowers} complete</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1028,6 +1286,89 @@ export default function ProjectDashboard() {
           <div className="mt-6 h-4 rounded-full overflow-hidden bg-slate-100">
             <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600" style={{ width: `${stats.deliveryPercent}%` }} />
           </div>
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="Project Analytics View"
+          subtitle="Filter the project like a dashboard: compare by raw MH/t, production MH/t, crew allocation or completed towers."
+        />
+
+        <div className="mt-6 grid md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">View mode</label>
+            <select value={analyticsView} onChange={(e) => setAnalyticsView(e.target.value as AnalyticsView)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="tower_performance">Tower Performance</option>
+              <option value="crew_performance">Towers by Crew</option>
+              <option value="mh_per_tonne">Raw MH/T</option>
+              <option value="production_mh_per_tonne">Production MH/T</option>
+              <option value="completed_towers">Completed Towers</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Crew filter</label>
+            <select value={analyticsCrewFilter} onChange={(e) => setAnalyticsCrewFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              {analyticsCrewOptions.map((crew) => <option key={crew} value={crew}>{crew === "all" ? "All crews" : crew}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Sort</label>
+            <select value={analyticsSortDirection} onChange={(e) => setAnalyticsSortDirection(e.target.value as SortDirection)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="best">Best first</option>
+              <option value="worst">Worst first</option>
+            </select>
+          </div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Rows shown</div>
+            <div className="mt-1 text-xl font-black text-slate-900">{analyticsRows.length}</div>
+          </div>
+        </div>
+
+        <div className="mt-6 hidden md:block overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-slate-500">
+                <th className="py-3 pr-4 font-medium">Tower</th>
+                <th className="py-3 pr-4 font-medium">Progress</th>
+                <th className="py-3 pr-4 font-medium">Raw Hrs</th>
+                <th className="py-3 pr-4 font-medium">Prod Hrs</th>
+                <th className="py-3 pr-4 font-medium">Tonnes</th>
+                <th className="py-3 pr-4 font-medium">Raw MH/t</th>
+                <th className="py-3 pr-4 font-medium">Prod MH/t</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analyticsRows.slice(0, 25).map((tower) => (
+                <tr key={tower.id} className="border-b border-slate-100 last:border-0">
+                  <td className="py-3 pr-4 font-semibold text-slate-900"><Link href={`/project/${projectId}/tower/${tower.id}`} className="hover:underline">{getTowerDisplayName(tower)}</Link></td>
+                  <td className="py-3 pr-4 text-slate-600">{tower.computedProgress}%</td>
+                  <td className="py-3 pr-4 text-slate-600">{formatDecimal(tower.manhours, 1)}</td>
+                  <td className="py-3 pr-4 text-slate-600">{formatDecimal(tower.productionManhours, 1)}</td>
+                  <td className="py-3 pr-4 text-slate-600">{formatDecimal(tower.completedTonnes, 2)}</td>
+                  <td className="py-3 pr-4 text-slate-600">{formatDecimal(tower.rawMhPerTonne, 2)}</td>
+                  <td className="py-3 pr-4 font-semibold text-slate-900">{formatDecimal(tower.productionMhPerTonne, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-6 md:hidden space-y-3">
+          {analyticsRows.slice(0, 15).map((tower) => (
+            <Link key={tower.id} href={`/project/${projectId}/tower/${tower.id}`} className="block rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-slate-900">{getTowerDisplayName(tower)}</div>
+                  <div className="mt-1 text-xs text-slate-500">{tower.computedProgress}% progress • {formatDecimal(tower.completedTonnes, 2)} t</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-slate-500">Prod MH/t</div>
+                  <div className="text-lg font-black text-slate-900">{formatDecimal(tower.productionMhPerTonne, 2)}</div>
+                </div>
+              </div>
+            </Link>
+          ))}
         </div>
       </div>
 
@@ -1059,7 +1400,7 @@ export default function ProjectDashboard() {
                         <div className="mt-1 font-bold text-slate-900">{tower.computedProgress}%</div>
                       </div>
                       <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
-                        <div className="text-slate-500 text-xs">MH/t</div>
+                        <div className="text-slate-500 text-xs">Prod MH/t</div>
                         <div className="mt-1 font-bold text-slate-900">{formatDecimal(tower.productionMhPerTonne, 2)}</div>
                       </div>
                       <div className="rounded-xl bg-slate-50 border border-slate-100 p-3">
@@ -1114,10 +1455,6 @@ export default function ProjectDashboard() {
                     const computedProgress = getTowerComputedProgress(tower, dockets);
                     const deliverySummary = deliverySummaryByTowerId.get(tower.id) || { deliveryPercent: 0 };
 
-                    if (actionType === "delivery-progress" && !(deliverySummary.deliveryPercent > 0 && deliverySummary.deliveryPercent < 100)) {
-                      return null;
-                    }
-
                     return (
                       <button key={tower.id} onClick={() => goToTowerAction(tower.id)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
                         <div className="flex items-center justify-between gap-4">
@@ -1130,10 +1467,10 @@ export default function ProjectDashboard() {
 
                           <div className="min-w-[120px] text-right">
                             <div className="text-sm font-semibold text-slate-900">
-                              {actionType === "delivery-progress" ? `${formatDecimal(deliverySummary.deliveryPercent, 0)}% delivery` : `${computedProgress}%`}
+                              {`${computedProgress}%`}
                             </div>
                             <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden">
-                              <div className={`h-full rounded-full ${actionType === "delivery-progress" ? "bg-emerald-500" : "bg-blue-500"}`} style={{ width: `${clampPercent(actionType === "delivery-progress" ? deliverySummary.deliveryPercent : computedProgress)}%` }} />
+                              <div className="h-full rounded-full bg-blue-500" style={{ width: `${clampPercent(computedProgress)}%` }} />
                             </div>
                           </div>
                         </div>
