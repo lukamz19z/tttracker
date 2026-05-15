@@ -618,6 +618,7 @@ export default function DailyDocketForm({
   const [crews, setCrews] = useState<CrewRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [selectedCrewId, setSelectedCrewId] = useState("");
+const [showProductionDefaults, setShowProductionDefaults] = useState(false);
 
 useEffect(() => {
   async function loadCrewData() {
@@ -2310,6 +2311,31 @@ const labourRowsWithProduction = labourRows.map((row) => {
           )}
         </section>
       )}
+ {rateType === "schedule_of_rates" && (
+        <section className="bg-white border border-purple-200 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">LAFHA</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                Automatically calculated from workers on this docket.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <MiniSummary
+                label="Workers on Docket"
+                value={String(labourWorkerCount)}
+              />
+
+              <MiniSummary
+                label="LAFHA Required"
+                value={String(labourWorkerCount)}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
