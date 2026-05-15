@@ -1836,7 +1836,6 @@ const watchlistTowers = useMemo(() => {
                 <div className="space-y-3">
                   {filteredTowers.map((tower) => {
                     const computedProgress = getTowerComputedProgress(tower, dockets);
-                    const deliverySummary = deliverySummaryByTowerId.get(tower.id) || { deliveryPercent: 0 };
 
                     return (
                       <button key={tower.id} onClick={() => goToTowerAction(tower.id)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
