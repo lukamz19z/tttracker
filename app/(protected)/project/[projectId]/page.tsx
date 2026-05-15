@@ -125,10 +125,9 @@ type ForecastRow = {
   weight: number | null;
   remainingTonnes: number | null;
   benchmarkMhPerTonne: number | null;
-  forecastProductionHours: number | null;
-  adjustedForecastHours: number | null;
+  forecastRawHours: number | null;
   forecastDays: number | null;
-  benchmarkDailyProductionHours: number | null;
+  benchmarkDailyRawHours: number | null;
 };
 
 type QuickActionType = "docket" | "delivery" | "materials" | null;
@@ -1096,24 +1095,27 @@ const watchlistTowers = useMemo(() => {
       }));
   }, [crewProduction]);
 
-  const projectAverageDailyProductionHours = useMemo(() => {
+  const projectAverageDailyRawHours = useMemo(() => {
     const validDockets = dockets.filter((docket) => docket.docket_date);
     if (validDockets.length === 0) return null;
 
-    const productionHoursByDate = new Map<string, number>();
+    const rawHoursByDate = new Map<string, number>();
 
     validDockets.forEach((docket) => {
       if (!docket.docket_date) return;
-      const current = productionHoursByDate.get(docket.docket_date) || 0;
-      productionHoursByDate.set(docket.docket_date, current + (docketProductionHoursById.get(docket.id) || docketHoursById.get(docket.id) || 0));
+      const current = rawHoursByDate.get(docket.docket_date) || 0;
+      rawHoursByDate.set(
+        docket.docket_date,
+        current + (docketHoursById.get(docket.id) || 0),
+      );
     });
 
-    const total = Array.from(productionHoursByDate.values()).reduce((sum, value) => sum + value, 0);
-    return productionHoursByDate.size > 0 ? total / productionHoursByDate.size : null;
-  }, [dockets, docketHoursById, docketProductionHoursById]);
+    const total = Array.from(rawHoursByDate.values()).reduce((sum, value) => sum + value, 0);
+    return rawHoursByDate.size > 0 ? total / rawHoursByDate.size : null;
+  }, [dockets, docketHoursById]);
 
   const bestBenchmarkCrew = useMemo(() => {
-    return crewProduction.find((crew) => crew.mhPerTonne !== null && crew.productionTonnes > 0) || null;
+    return crewProduction.find((crew) => crew.rawMhPerTonne !== null && crew.productionTonnes > 0) || null;
   }, [crewProduction]);
 
   const forecastBenchmarkOptions = useMemo(() => {
@@ -1121,53 +1123,44 @@ const watchlistTowers = useMemo(() => {
       { value: "project_average", label: "Project average" },
       { value: "best_crew", label: bestBenchmarkCrew ? `Best crew (${bestBenchmarkCrew.crewName})` : "Best crew" },
       ...crewProduction
-        .filter((crew) => crew.mhPerTonne !== null && crew.productionTonnes > 0)
+        .filter((crew) => crew.rawMhPerTonne !== null && crew.productionTonnes > 0)
         .map((crew) => ({ value: crew.crewName, label: crew.crewName })),
     ];
   }, [crewProduction, bestBenchmarkCrew]);
 
   const selectedForecastBenchmark = useMemo(() => {
     if (forecastBenchmark === "best_crew" && bestBenchmarkCrew) {
-      const dailyHours = bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.productionHours / bestBenchmarkCrew.docketCount : null;
-      const delayFactor = bestBenchmarkCrew.productionHours > 0 ? Math.max(1, bestBenchmarkCrew.totalHours / bestBenchmarkCrew.productionHours) : 1;
+      const dailyRawHours = bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.totalHours / bestBenchmarkCrew.docketCount : null;
 
       return {
         label: bestBenchmarkCrew.crewName,
-        mhPerTonne: bestBenchmarkCrew.mhPerTonne,
-        dailyProductionHours: dailyHours,
-        delayFactor,
+        mhPerTonne: bestBenchmarkCrew.rawMhPerTonne,
+        dailyRawHours,
       };
     }
 
     const selectedCrew = crewProduction.find((crew) => crew.crewName === forecastBenchmark);
 
     if (selectedCrew) {
-      const dailyHours = selectedCrew.docketCount > 0 ? selectedCrew.productionHours / selectedCrew.docketCount : null;
-      const delayFactor = selectedCrew.productionHours > 0 ? Math.max(1, selectedCrew.totalHours / selectedCrew.productionHours) : 1;
+      const dailyRawHours = selectedCrew.docketCount > 0 ? selectedCrew.totalHours / selectedCrew.docketCount : null;
 
       return {
         label: selectedCrew.crewName,
-        mhPerTonne: selectedCrew.mhPerTonne,
-        dailyProductionHours: dailyHours,
-        delayFactor,
+        mhPerTonne: selectedCrew.rawMhPerTonne,
+        dailyRawHours,
       };
     }
 
-    const projectDelayFactor =
-      stats.productionManhours > 0 ? Math.max(1, stats.totalManhours / stats.productionManhours) : 1;
-
     return {
       label: "Project average",
-      mhPerTonne: stats.productionManhoursPerTonne,
-      dailyProductionHours: projectAverageDailyProductionHours,
-      delayFactor: projectDelayFactor,
+      mhPerTonne: stats.manhoursPerTonne,
+      dailyRawHours: projectAverageDailyRawHours,
     };
-  }, [forecastBenchmark, bestBenchmarkCrew, crewProduction, stats, projectAverageDailyProductionHours]);
+  }, [forecastBenchmark, bestBenchmarkCrew, crewProduction, stats.manhoursPerTonne, projectAverageDailyRawHours]);
 
   const forecastRows = useMemo<ForecastRow[]>(() => {
     const benchmarkMhPerTonne = selectedForecastBenchmark.mhPerTonne;
-    const benchmarkDailyProductionHours = selectedForecastBenchmark.dailyProductionHours;
-    const delayFactor = selectedForecastBenchmark.delayFactor;
+    const benchmarkDailyRawHours = selectedForecastBenchmark.dailyRawHours;
 
     return towerProductionSummaries
       .filter((tower) => tower.computedProgress < 100)
@@ -1175,15 +1168,13 @@ const watchlistTowers = useMemo(() => {
         const weight = tower.computedWeight;
         const remainingTonnes =
           weight !== null && weight > 0 ? weight * ((100 - tower.computedProgress) / 100) : null;
-        const forecastProductionHours =
+        const forecastRawHours =
           remainingTonnes !== null && benchmarkMhPerTonne !== null
             ? remainingTonnes * benchmarkMhPerTonne
             : null;
-        const adjustedForecastHours =
-          forecastProductionHours !== null ? forecastProductionHours * delayFactor : null;
         const forecastDays =
-          adjustedForecastHours !== null && benchmarkDailyProductionHours !== null && benchmarkDailyProductionHours > 0
-            ? adjustedForecastHours / benchmarkDailyProductionHours
+          forecastRawHours !== null && benchmarkDailyRawHours !== null && benchmarkDailyRawHours > 0
+            ? forecastRawHours / benchmarkDailyRawHours
             : null;
 
         return {
@@ -1193,10 +1184,9 @@ const watchlistTowers = useMemo(() => {
           weight,
           remainingTonnes,
           benchmarkMhPerTonne,
-          forecastProductionHours,
-          adjustedForecastHours,
+          forecastRawHours,
           forecastDays,
-          benchmarkDailyProductionHours,
+          benchmarkDailyRawHours,
         };
       })
       .sort((a, b) => safeNumber(a.forecastDays, 999999) - safeNumber(b.forecastDays, 999999))
@@ -1679,19 +1669,19 @@ const watchlistTowers = useMemo(() => {
           <MetricTile
             title="Benchmark"
             value={selectedForecastBenchmark.label}
-            subtitle={`${formatDecimal(selectedForecastBenchmark.mhPerTonne, 2)} production MH/t`}
+            subtitle={`${formatDecimal(selectedForecastBenchmark.mhPerTonne, 2)} raw MH/t`}
             accent="purple"
           />
           <MetricTile
-            title="Daily Production"
-            value={formatDecimal(selectedForecastBenchmark.dailyProductionHours, 1)}
-            subtitle="average production hrs/day"
+            title="Daily Raw Hours"
+            value={formatDecimal(selectedForecastBenchmark.dailyRawHours, 1)}
+            subtitle="average raw hrs/day"
             accent="blue"
           />
           <MetricTile
-            title="Delay Factor"
-            value={`${formatDecimal(selectedForecastBenchmark.delayFactor, 2)}x`}
-            subtitle="raw hours ÷ production hours"
+            title="Forecast Method"
+            value="Raw MH/t"
+            subtitle="no delay factor applied"
             accent="amber"
           />
         </div>
@@ -1710,8 +1700,7 @@ const watchlistTowers = useMemo(() => {
                     <th className="py-3 pr-4 font-medium">Progress</th>
                     <th className="py-3 pr-4 font-medium">Weight</th>
                     <th className="py-3 pr-4 font-medium">Remaining t</th>
-                    <th className="py-3 pr-4 font-medium">Forecast hrs</th>
-                    <th className="py-3 pr-4 font-medium">Adjusted hrs</th>
+                    <th className="py-3 pr-4 font-medium">Forecast raw hrs</th>
                     <th className="py-3 pr-4 font-medium">Forecast duration</th>
                   </tr>
                 </thead>
@@ -1724,8 +1713,7 @@ const watchlistTowers = useMemo(() => {
                       <td className="py-3 pr-4 text-slate-600">{row.progress}%</td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.weight, 2)}</td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.remainingTonnes, 2)}</td>
-                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.forecastProductionHours, 1)}</td>
-                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.adjustedForecastHours, 1)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.forecastRawHours, 1)}</td>
                       <td className="py-3 pr-4"><ForecastBadge value={row.forecastDays} /></td>
                     </tr>
                   ))}
@@ -1743,7 +1731,7 @@ const watchlistTowers = useMemo(() => {
                         {row.progress}% progress • {formatDecimal(row.remainingTonnes, 2)} t remaining
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
-                        {formatDecimal(row.adjustedForecastHours, 1)} adjusted hrs
+                        {formatDecimal(row.forecastRawHours, 1)} raw forecast hrs
                       </div>
                     </div>
                     <ForecastBadge value={row.forecastDays} />
@@ -1836,6 +1824,7 @@ const watchlistTowers = useMemo(() => {
                 <div className="space-y-3">
                   {filteredTowers.map((tower) => {
                     const computedProgress = getTowerComputedProgress(tower, dockets);
+                    const deliverySummary = deliverySummaryByTowerId.get(tower.id) || { deliveryPercent: 0 };
 
                     return (
                       <button key={tower.id} onClick={() => goToTowerAction(tower.id)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
