@@ -110,6 +110,27 @@ type CrewProductionSummary = {
   lastDocketDate: string | null;
 };
 
+type CrewChartRow = {
+  crewName: string;
+  rawMhPerTonne: number | null;
+  productionMhPerTonne: number | null;
+  productionHours: number;
+  productionTonnes: number;
+};
+
+type ForecastRow = {
+  towerId: string;
+  towerName: string;
+  progress: number;
+  weight: number | null;
+  remainingTonnes: number | null;
+  benchmarkMhPerTonne: number | null;
+  forecastProductionHours: number | null;
+  adjustedForecastHours: number | null;
+  forecastDays: number | null;
+  benchmarkDailyProductionHours: number | null;
+};
+
 type QuickActionType = "docket" | "delivery" | "materials" | null;
 type AnalyticsView = "tower_performance" | "crew_performance" | "mh_per_tonne" | "production_mh_per_tonne" | "completed_towers";
 type SortDirection = "best" | "worst";
@@ -444,6 +465,110 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle: s
   );
 }
 
+function CrewBenchmarkChart({
+  title,
+  subtitle,
+  rows,
+  average,
+  metricKey,
+  unit = "MH/t",
+}: {
+  title: string;
+  subtitle: string;
+  rows: CrewChartRow[];
+  average: number | null;
+  metricKey: "rawMhPerTonne" | "productionMhPerTonne";
+  unit?: string;
+}) {
+  const validRows = rows.filter((row) => row[metricKey] !== null);
+  const maxValue = Math.max(
+    average || 0,
+    ...validRows.map((row) => safeNumber(row[metricKey], 0)),
+    1,
+  );
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <SectionHeader title={title} subtitle={subtitle} />
+
+      {validRows.length === 0 ? (
+        <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+          No crew data available for this metric yet.
+        </div>
+      ) : (
+        <div className="mt-6 space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="font-medium text-slate-600">Project average</span>
+              <span className="font-black text-slate-900">
+                {formatDecimal(average, 2)} {unit}
+              </span>
+            </div>
+          </div>
+
+          {validRows.map((row) => {
+            const value = row[metricKey];
+            const width = value !== null ? clampPercent((value / maxValue) * 100) : 0;
+            const isBetterThanAverage =
+              average !== null && value !== null ? value <= average : false;
+
+            return (
+              <div key={`${title}-${row.crewName}`} className="space-y-2">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-slate-900">{row.crewName}</div>
+                    <div className="text-xs text-slate-500">
+                      {formatDecimal(row.productionTonnes, 2)} t • {formatDecimal(row.productionHours, 1)} prod hrs
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-black text-slate-900">
+                      {formatDecimal(value, 2)} {unit}
+                    </div>
+                    <div className={`text-xs font-medium ${isBetterThanAverage ? "text-emerald-600" : "text-amber-600"}`}>
+                      {average === null ? "No average" : isBetterThanAverage ? "Better than avg" : "Above avg"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative h-4 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full ${isBetterThanAverage ? "bg-emerald-500" : "bg-amber-500"}`}
+                    style={{ width: `${width}%` }}
+                  />
+                  {average !== null && (
+                    <div
+                      className="absolute top-0 h-full w-0.5 bg-slate-900/70"
+                      style={{ left: `${clampPercent((average / maxValue) * 100)}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ForecastBadge({ value }: { value: number | null }) {
+  if (value === null) {
+    return <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">No forecast</span>;
+  }
+
+  const tone =
+    value <= 3
+      ? "bg-emerald-100 text-emerald-700"
+      : value <= 7
+      ? "bg-blue-100 text-blue-700"
+      : value <= 14
+      ? "bg-amber-100 text-amber-700"
+      : "bg-rose-100 text-rose-700";
+
+  return <span className={`rounded-full px-3 py-1 text-xs font-semibold ${tone}`}>{formatDecimal(value, 1)} days</span>;
+}
+
 export default function ProjectDashboard() {
   const params = useParams();
   const router = useRouter();
@@ -466,6 +591,7 @@ export default function ProjectDashboard() {
   const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("tower_performance");
   const [analyticsCrewFilter, setAnalyticsCrewFilter] = useState("all");
   const [analyticsSortDirection, setAnalyticsSortDirection] = useState<SortDirection>("best");
+  const [forecastBenchmark, setForecastBenchmark] = useState("project_average");
   const [role, setRole] = useState<UserRole>(null);
 
   const [editingProject, setEditingProject] = useState(false);
@@ -958,6 +1084,125 @@ const watchlistTowers = useMemo(() => {
     });
   }, [towerProductionSummaries, analyticsView, analyticsCrewFilter, analyticsSortDirection, dockets]);
 
+  const crewChartRows = useMemo<CrewChartRow[]>(() => {
+    return crewProduction
+      .filter((crew) => crew.productionTonnes > 0 && (crew.rawMhPerTonne !== null || crew.mhPerTonne !== null))
+      .map((crew) => ({
+        crewName: crew.crewName,
+        rawMhPerTonne: crew.rawMhPerTonne,
+        productionMhPerTonne: crew.mhPerTonne,
+        productionHours: crew.productionHours,
+        productionTonnes: crew.productionTonnes,
+      }));
+  }, [crewProduction]);
+
+  const projectAverageDailyProductionHours = useMemo(() => {
+    const validDockets = dockets.filter((docket) => docket.docket_date);
+    if (validDockets.length === 0) return null;
+
+    const productionHoursByDate = new Map<string, number>();
+
+    validDockets.forEach((docket) => {
+      if (!docket.docket_date) return;
+      const current = productionHoursByDate.get(docket.docket_date) || 0;
+      productionHoursByDate.set(docket.docket_date, current + (docketProductionHoursById.get(docket.id) || docketHoursById.get(docket.id) || 0));
+    });
+
+    const total = Array.from(productionHoursByDate.values()).reduce((sum, value) => sum + value, 0);
+    return productionHoursByDate.size > 0 ? total / productionHoursByDate.size : null;
+  }, [dockets, docketHoursById, docketProductionHoursById]);
+
+  const bestBenchmarkCrew = useMemo(() => {
+    return crewProduction.find((crew) => crew.mhPerTonne !== null && crew.productionTonnes > 0) || null;
+  }, [crewProduction]);
+
+  const forecastBenchmarkOptions = useMemo(() => {
+    return [
+      { value: "project_average", label: "Project average" },
+      { value: "best_crew", label: bestBenchmarkCrew ? `Best crew (${bestBenchmarkCrew.crewName})` : "Best crew" },
+      ...crewProduction
+        .filter((crew) => crew.mhPerTonne !== null && crew.productionTonnes > 0)
+        .map((crew) => ({ value: crew.crewName, label: crew.crewName })),
+    ];
+  }, [crewProduction, bestBenchmarkCrew]);
+
+  const selectedForecastBenchmark = useMemo(() => {
+    if (forecastBenchmark === "best_crew" && bestBenchmarkCrew) {
+      const dailyHours = bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.productionHours / bestBenchmarkCrew.docketCount : null;
+      const delayFactor = bestBenchmarkCrew.productionHours > 0 ? Math.max(1, bestBenchmarkCrew.totalHours / bestBenchmarkCrew.productionHours) : 1;
+
+      return {
+        label: bestBenchmarkCrew.crewName,
+        mhPerTonne: bestBenchmarkCrew.mhPerTonne,
+        dailyProductionHours: dailyHours,
+        delayFactor,
+      };
+    }
+
+    const selectedCrew = crewProduction.find((crew) => crew.crewName === forecastBenchmark);
+
+    if (selectedCrew) {
+      const dailyHours = selectedCrew.docketCount > 0 ? selectedCrew.productionHours / selectedCrew.docketCount : null;
+      const delayFactor = selectedCrew.productionHours > 0 ? Math.max(1, selectedCrew.totalHours / selectedCrew.productionHours) : 1;
+
+      return {
+        label: selectedCrew.crewName,
+        mhPerTonne: selectedCrew.mhPerTonne,
+        dailyProductionHours: dailyHours,
+        delayFactor,
+      };
+    }
+
+    const projectDelayFactor =
+      stats.productionManhours > 0 ? Math.max(1, stats.totalManhours / stats.productionManhours) : 1;
+
+    return {
+      label: "Project average",
+      mhPerTonne: stats.productionManhoursPerTonne,
+      dailyProductionHours: projectAverageDailyProductionHours,
+      delayFactor: projectDelayFactor,
+    };
+  }, [forecastBenchmark, bestBenchmarkCrew, crewProduction, stats, projectAverageDailyProductionHours]);
+
+  const forecastRows = useMemo<ForecastRow[]>(() => {
+    const benchmarkMhPerTonne = selectedForecastBenchmark.mhPerTonne;
+    const benchmarkDailyProductionHours = selectedForecastBenchmark.dailyProductionHours;
+    const delayFactor = selectedForecastBenchmark.delayFactor;
+
+    return towerProductionSummaries
+      .filter((tower) => tower.computedProgress < 100)
+      .map((tower) => {
+        const weight = tower.computedWeight;
+        const remainingTonnes =
+          weight !== null && weight > 0 ? weight * ((100 - tower.computedProgress) / 100) : null;
+        const forecastProductionHours =
+          remainingTonnes !== null && benchmarkMhPerTonne !== null
+            ? remainingTonnes * benchmarkMhPerTonne
+            : null;
+        const adjustedForecastHours =
+          forecastProductionHours !== null ? forecastProductionHours * delayFactor : null;
+        const forecastDays =
+          adjustedForecastHours !== null && benchmarkDailyProductionHours !== null && benchmarkDailyProductionHours > 0
+            ? adjustedForecastHours / benchmarkDailyProductionHours
+            : null;
+
+        return {
+          towerId: tower.id,
+          towerName: getTowerDisplayName(tower),
+          progress: tower.computedProgress,
+          weight,
+          remainingTonnes,
+          benchmarkMhPerTonne,
+          forecastProductionHours,
+          adjustedForecastHours,
+          forecastDays,
+          benchmarkDailyProductionHours,
+        };
+      })
+      .sort((a, b) => safeNumber(a.forecastDays, 999999) - safeNumber(b.forecastDays, 999999))
+      .slice(0, 12);
+  }, [towerProductionSummaries, selectedForecastBenchmark]);
+
   const filteredTowers = useMemo(() => {
     const q = towerSearch.trim().toLowerCase();
     const sorted = [...towers].sort((a, b) => getTowerDisplayName(a).localeCompare(getTowerDisplayName(b)));
@@ -1309,6 +1554,24 @@ const watchlistTowers = useMemo(() => {
         </div>
       </div>
 
+      <div className="grid xl:grid-cols-2 gap-6">
+        <CrewBenchmarkChart
+          title="Crew Production MH/t vs Average"
+          subtitle="Lower is better. The black marker shows the current project average."
+          rows={crewChartRows}
+          average={stats.productionManhoursPerTonne}
+          metricKey="productionMhPerTonne"
+        />
+
+        <CrewBenchmarkChart
+          title="Crew Raw MH/t vs Average"
+          subtitle="Compares total raw hours against production tonnes. Lower is better."
+          rows={crewChartRows}
+          average={stats.manhoursPerTonne}
+          metricKey="rawMhPerTonne"
+        />
+      </div>
+
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
           title="Project Analytics View"
@@ -1390,6 +1653,106 @@ const watchlistTowers = useMemo(() => {
             </Link>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
+          title="Forecasting"
+          subtitle="Forecast only — based on current docket productivity, project tower weights and remaining tower progress."
+          action={
+            <div className="w-full sm:w-auto">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Forecast benchmark</label>
+              <select
+                value={forecastBenchmark}
+                onChange={(e) => setForecastBenchmark(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+              >
+                {forecastBenchmarkOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          }
+        />
+
+        <div className="mt-6 grid md:grid-cols-3 gap-4">
+          <MetricTile
+            title="Benchmark"
+            value={selectedForecastBenchmark.label}
+            subtitle={`${formatDecimal(selectedForecastBenchmark.mhPerTonne, 2)} production MH/t`}
+            accent="purple"
+          />
+          <MetricTile
+            title="Daily Production"
+            value={formatDecimal(selectedForecastBenchmark.dailyProductionHours, 1)}
+            subtitle="average production hrs/day"
+            accent="blue"
+          />
+          <MetricTile
+            title="Delay Factor"
+            value={`${formatDecimal(selectedForecastBenchmark.delayFactor, 2)}x`}
+            subtitle="raw hours ÷ production hours"
+            accent="amber"
+          />
+        </div>
+
+        {forecastRows.length === 0 ? (
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+            No towers available for forecasting. Towers need a weight from CSV and remaining progress.
+          </div>
+        ) : (
+          <>
+            <div className="mt-6 hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-slate-500">
+                    <th className="py-3 pr-4 font-medium">Tower</th>
+                    <th className="py-3 pr-4 font-medium">Progress</th>
+                    <th className="py-3 pr-4 font-medium">Weight</th>
+                    <th className="py-3 pr-4 font-medium">Remaining t</th>
+                    <th className="py-3 pr-4 font-medium">Forecast hrs</th>
+                    <th className="py-3 pr-4 font-medium">Adjusted hrs</th>
+                    <th className="py-3 pr-4 font-medium">Forecast duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecastRows.map((row) => (
+                    <tr key={row.towerId} className="border-b border-slate-100 last:border-0">
+                      <td className="py-3 pr-4 font-semibold text-slate-900">
+                        <Link href={`/project/${projectId}/tower/${row.towerId}`} className="hover:underline">{row.towerName}</Link>
+                      </td>
+                      <td className="py-3 pr-4 text-slate-600">{row.progress}%</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.weight, 2)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.remainingTonnes, 2)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.forecastProductionHours, 1)}</td>
+                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.adjustedForecastHours, 1)}</td>
+                      <td className="py-3 pr-4"><ForecastBadge value={row.forecastDays} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-6 md:hidden space-y-3">
+              {forecastRows.map((row) => (
+                <Link key={row.towerId} href={`/project/${projectId}/tower/${row.towerId}`} className="block rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{row.towerName}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {row.progress}% progress • {formatDecimal(row.remainingTonnes, 2)} t remaining
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        {formatDecimal(row.adjustedForecastHours, 1)} adjusted hrs
+                      </div>
+                    </div>
+                    <ForecastBadge value={row.forecastDays} />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
