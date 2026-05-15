@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -132,6 +132,12 @@ function getStatusClasses(status: "closed" | "bc_signed" | "open") {
   return "bg-amber-100 text-amber-700 border-amber-200";
 }
 
+function buildTowerStatus(progress: number) {
+  if (progress >= 100) return "Complete";
+  if (progress > 0) return "In Progress";
+  return "Not Started";
+}
+
 export default function TowerDocketsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const params = useParams();
@@ -148,78 +154,110 @@ export default function TowerDocketsPage() {
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
+  const [deletingDocketId, setDeletingDocketId] = useState<string | null>(null);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+
+    const { data: towerData } = await supabase
+      .from("towers")
+      .select("*")
+      .eq("id", towerId)
+      .single();
+
+    const { data: docketData } = await supabase
+      .from("tower_daily_dockets")
+      .select("*")
+      .eq("tower_id", towerId)
+      .order("docket_date", { ascending: false });
+
+    const loadedDockets = (docketData || []) as DocketRecord[];
+    setTower((towerData as TowerRecord | null) || null);
+    setDockets(loadedDockets);
+
+    const docketIds = loadedDockets.map((docket) => docket.id);
+
+    if (docketIds.length > 0) {
+      const [{ data: labourData }, { data: delayData }, { data: plantData }] =
+        await Promise.all([
+          supabase
+            .from("tower_docket_labour")
+            .select(
+              "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
+            )
+            .in("docket_id", docketIds),
+          supabase
+            .from("tower_docket_delays")
+            .select(
+              "docket_id,delay_type,delay_hours,applies_to,worker_names",
+            )
+            .in("docket_id", docketIds),
+          supabase
+            .from("tower_docket_plant")
+            .select(
+              "docket_id,total_hours,plant_name,plant_type,asset_number",
+            )
+            .in("docket_id", docketIds),
+        ]);
+
+      setLabourRows((labourData || []) as LabourRow[]);
+      setDelayRows((delayData || []) as DelayRow[]);
+      setPlantRows((plantData || []) as PlantRow[]);
+    } else {
+      setLabourRows([]);
+      setDelayRows([]);
+      setPlantRows([]);
+    }
+
+    setLoading(false);
+  }, [supabase, towerId]);
+
   useEffect(() => {
     let isMounted = true;
 
-    async function fetchData() {
-      setLoading(true);
-
-      const { data: towerData } = await supabase
-        .from("towers")
-        .select("*")
-        .eq("id", towerId)
-        .single();
-
-      const { data: docketData } = await supabase
-        .from("tower_daily_dockets")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("docket_date", { ascending: false });
-
-      if (!isMounted) return;
-
-      const loadedDockets = (docketData || []) as DocketRecord[];
-      setTower((towerData as TowerRecord | null) || null);
-      setDockets(loadedDockets);
-
-      const docketIds = loadedDockets.map((docket) => docket.id);
-
-      if (docketIds.length > 0) {
-        const [{ data: labourData }, { data: delayData }, { data: plantData }] =
-          await Promise.all([
-            supabase
-              .from("tower_docket_labour")
-              .select(
-                "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
-              )
-              .in("docket_id", docketIds),
-            supabase
-              .from("tower_docket_delays")
-              .select(
-                "docket_id,delay_type,delay_hours,applies_to,worker_names",
-              )
-              .in("docket_id", docketIds),
-            supabase
-              .from("tower_docket_plant")
-              .select(
-                "docket_id,total_hours,plant_name,plant_type,asset_number",
-              )
-              .in("docket_id", docketIds),
-          ]);
-
-        if (!isMounted) return;
-
-        setLabourRows((labourData || []) as LabourRow[]);
-        setDelayRows((delayData || []) as DelayRow[]);
-        setPlantRows((plantData || []) as PlantRow[]);
-      } else {
-        setLabourRows([]);
-        setDelayRows([]);
-        setPlantRows([]);
-      }
-
-      setLoading(false);
-    }
-
     const timer = window.setTimeout(() => {
-      void fetchData();
+      void fetchData().finally(() => {
+        if (!isMounted) return;
+      });
     }, 0);
 
     return () => {
       isMounted = false;
       window.clearTimeout(timer);
     };
-  }, [towerId, supabase]);
+  }, [fetchData]);
+
+  async function recalcTowerProgressAndStatus() {
+    const { data, error } = await supabase
+      .from("tower_daily_dockets")
+      .select("assembly_percent, erection_percent")
+      .eq("tower_id", towerId);
+
+    if (error) {
+      throw new Error("Docket deleted, but tower progress failed to recalculate.");
+    }
+
+    const maxProgress =
+      data?.reduce((max, docket) => {
+        const assembly = safeNumber(docket.assembly_percent, 0);
+        const erection = safeNumber(docket.erection_percent, 0);
+        const progress = Math.round(assembly * 0.5 + erection * 0.5);
+        return Math.max(max, progress);
+      }, 0) ?? 0;
+
+    const { error: updateError } = await supabase
+      .from("towers")
+      .update({
+        progress: Math.round(maxProgress),
+        status: buildTowerStatus(maxProgress),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", towerId);
+
+    if (updateError) {
+      throw new Error("Docket deleted, but tower status failed to update.");
+    }
+  }
 
   const docketTotals = useMemo(() => {
     const totals: Record<string, DocketTotals> = {};
@@ -338,23 +376,48 @@ export default function TowerDocketsPage() {
   }, [dockets, search, docketTotals]);
 
   async function deleteDocket(id: string) {
-    const confirmed = window.confirm("Delete this daily docket?");
+    const confirmed = window.confirm(
+      "Delete this daily docket? This will also remove its labour, delay, plant and progress rows, then recalculate the tower totals.",
+    );
     if (!confirmed) return;
 
-    const { error } = await supabase
-      .from("tower_daily_dockets")
-      .delete()
-      .eq("id", id);
+    setDeletingDocketId(id);
 
-    if (error) {
-      alert(error.message || "Failed to delete docket.");
-      return;
+    try {
+      const [labourRes, delayRes, plantRes, progressRes] = await Promise.all([
+        supabase.from("tower_docket_labour").delete().eq("docket_id", id),
+        supabase.from("tower_docket_delays").delete().eq("docket_id", id),
+        supabase.from("tower_docket_plant").delete().eq("docket_id", id),
+        supabase.from("tower_docket_progress").delete().eq("docket_id", id),
+      ]);
+
+      const childError =
+        labourRes.error || delayRes.error || plantRes.error || progressRes.error;
+
+      if (childError) {
+        throw new Error(
+          childError.message || "Failed to delete one or more docket detail rows.",
+        );
+      }
+
+      const { error } = await supabase
+        .from("tower_daily_dockets")
+        .delete()
+        .eq("id", id);
+
+      if (error) {
+        throw new Error(error.message || "Failed to delete docket.");
+      }
+
+      await recalcTowerProgressAndStatus();
+      await fetchData();
+      setOpenDocketId((current) => (current === id ? null : current));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Failed to delete docket.");
+    } finally {
+      setDeletingDocketId(null);
     }
-
-    setDockets((prev) => prev.filter((docket) => docket.id !== id));
-    setLabourRows((prev) => prev.filter((row) => row.docket_id !== id));
-    setDelayRows((prev) => prev.filter((row) => row.docket_id !== id));
-    setPlantRows((prev) => prev.filter((row) => row.docket_id !== id));
   }
 
   if (loading) {
@@ -629,9 +692,10 @@ export default function TowerDocketsPage() {
                           <button
                             type="button"
                             onClick={() => void deleteDocket(docket.id)}
-                            className="bg-rose-600 text-white px-4 py-3 rounded-xl text-sm font-semibold"
+                            disabled={deletingDocketId === docket.id}
+                            className="bg-rose-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60"
                           >
-                            Delete
+                            {deletingDocketId === docket.id ? "Deleting..." : "Delete"}
                           </button>
                         </div>
                       </div>
