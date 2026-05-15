@@ -229,7 +229,7 @@ function getTowerComputedProgress(tower: Tower, dockets: DocketRow[]) {
     }, 0);
   }
 
-  return safeNumber(tower.progress, 0);
+  return 0;
 }
 
 function getDocketProgress(docket: DocketRow) {
@@ -892,19 +892,34 @@ export default function ProjectDashboard() {
       .slice(0, 8);
   }, [towers, deliverySummaryByTowerId]);
 
-  const bestPerformingTowers = useMemo(() => {
-    return towerProductionSummaries
-      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
-      .sort((a, b) => safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999))
-      .slice(0, 5);
-  }, [towerProductionSummaries]);
+const validPerformanceTower = (tower: TowerProductionSummary) =>
+  tower.productionMhPerTonne !== null &&
+  tower.computedProgress > 0 &&
+  tower.productionManhours > 0 &&
+  tower.completedTonnes !== null &&
+  tower.completedTonnes > 0;
 
-  const watchlistTowers = useMemo(() => {
-    return towerProductionSummaries
-      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
-      .sort((a, b) => safeNumber(b.productionMhPerTonne, -1) - safeNumber(a.productionMhPerTonne, -1))
-      .slice(0, 5);
-  }, [towerProductionSummaries]);
+const bestPerformingTowers = useMemo(() => {
+  return towerProductionSummaries
+    .filter(validPerformanceTower)
+    .sort(
+      (a, b) =>
+        safeNumber(a.productionMhPerTonne, 999999) -
+        safeNumber(b.productionMhPerTonne, 999999)
+    )
+    .slice(0, 5);
+}, [towerProductionSummaries]);
+
+const watchlistTowers = useMemo(() => {
+  return towerProductionSummaries
+    .filter(validPerformanceTower)
+    .sort(
+      (a, b) =>
+        safeNumber(b.productionMhPerTonne, -1) -
+        safeNumber(a.productionMhPerTonne, -1)
+    )
+    .slice(0, 5);
+}, [towerProductionSummaries]);
 
   const completedTowersByCrew = useMemo(() => {
     return crewProduction
