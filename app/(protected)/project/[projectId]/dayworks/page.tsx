@@ -68,6 +68,26 @@ export default function DayworksRegisterPage() {
     if (projectId) void loadDayworks();
   }, [projectId, supabase]);
 
+  async function deleteDaywork(dayworkId: string) {
+    const confirmed = window.confirm(
+      "Delete this daywork docket? This cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("dayworks")
+      .delete()
+      .eq("id", dayworkId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setDayworks((prev) => prev.filter((dw) => dw.id !== dayworkId));
+  }
+
   const filteredDayworks = useMemo(() => {
     const q = search.trim().toLowerCase();
 
@@ -190,31 +210,72 @@ export default function DayworksRegisterPage() {
                   <th className="py-3 pr-4 font-medium">Location</th>
                   <th className="py-3 pr-4 font-medium">Completed By</th>
                   <th className="py-3 pr-4 font-medium">Status</th>
+                  <th className="py-3 pr-4 font-medium text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
 
               <tbody>
                 {filteredDayworks.map((dw) => (
-                  <tr key={dw.id} className="border-b border-slate-100 last:border-0">
+                  <tr
+                    key={dw.id}
+                    className="border-b border-slate-100 last:border-0"
+                  >
                     <td className="py-3 pr-4 font-semibold text-slate-900">
                       {dw.docket_number}
                     </td>
+
                     <td className="py-3 pr-4 text-slate-600">
                       {formatDate(dw.daywork_date)}
                     </td>
+
                     <td className="py-3 pr-4 text-slate-600">
                       {dw.work_type}
                     </td>
+
                     <td className="py-3 pr-4 text-slate-600">
                       {dw.location || "-"}
                     </td>
+
                     <td className="py-3 pr-4 text-slate-600">
                       {dw.completed_by || "-"}
                     </td>
+
                     <td className="py-3 pr-4">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(dw.status)}`}>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(
+                          dw.status
+                        )}`}
+                      >
                         {dw.status}
                       </span>
+                    </td>
+
+                    <td className="py-3 pr-4">
+                      <div className="flex justify-end gap-2">
+                        <Link
+                          href={`/project/${projectId}/dayworks/${dw.id}`}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                        >
+                          View
+                        </Link>
+
+                        <Link
+                          href={`/project/${projectId}/dayworks/${dw.id}/edit`}
+                          className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                        >
+                          Edit
+                        </Link>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteDaywork(dw.id)}
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
