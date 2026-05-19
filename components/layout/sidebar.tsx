@@ -232,32 +232,39 @@ async function loadProject() {
 
 
         <div>
-          <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
-            Navigation
-          </div>
+<div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
+  Navigation
+</div>
 
-          <nav className="space-y-1">
-            <Link
-              className={linkStyle(`/project/${projectId}`)}
-              href={`/project/${projectId}`}
-            >
-              Dashboard
-            </Link>
+<nav className="space-y-1">
+  <Link
+    className={linkStyle(`/project/${projectId}`)}
+    href={`/project/${projectId}`}
+  >
+    Dashboard
+  </Link>
 
-            <Link
-              className={linkStyle(`/project/${projectId}/towers`)}
-              href={`/project/${projectId}/towers`}
-            >
-              Towers
-            </Link>
+  <Link
+    className={linkStyle(`/project/${projectId}/towers`)}
+    href={`/project/${projectId}/towers`}
+  >
+    Towers
+  </Link>
 
-            <Link
-              className={linkStyle(`/project/${projectId}/map`)}
-              href={`/project/${projectId}/map`}
-            >
-              Map
-            </Link>
-          </nav>
+  <Link
+    className={linkStyle(`/project/${projectId}/dayworks`)}
+    href={`/project/${projectId}/dayworks`}
+  >
+    Dayworks
+  </Link>
+
+  <Link
+    className={linkStyle(`/project/${projectId}/map`)}
+    href={`/project/${projectId}/map`}
+  >
+    Map
+  </Link>
+</nav>
         </div>
 
         {activeTowerId && matchingTowers.length > 0 && (
