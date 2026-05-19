@@ -12,6 +12,11 @@ type Project = {
   status?: string | null;
   client?: string | null;
   location?: string | null;
+
+  project_number?: string | null;
+  client_code?: string | null;
+  project_year?: number | null;
+  project_sequence?: number | null;
 };
 
 type Tower = {
@@ -595,7 +600,16 @@ export default function ProjectDashboard() {
 
   const [editingProject, setEditingProject] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
-  const [projectForm, setProjectForm] = useState({ name: "", location: "", status: "", client: "" });
+  const [projectForm, setProjectForm] = useState({
+  name: "",
+  location: "",
+  status: "",
+  client: "",
+  project_number: "",
+  client_code: "",
+  project_year: "",
+  project_sequence: "",
+});
 
   const isAdmin = role === "admin";
 
@@ -615,7 +629,7 @@ export default function ProjectDashboard() {
 
     const { data: projectData, error: projectError } = await supabase
       .from("projects")
-      .select("id, name, status, client, location")
+      .select("id, name, status, client, location, project_number, client_code, project_year, project_sequence")
       .eq("id", projectId)
       .single();
 
@@ -715,15 +729,27 @@ export default function ProjectDashboard() {
       }
     }
 
-    const loadedProject = (projectData as Project | null) || null;
+const loadedProject = (projectData as Project | null) || null;
 
-    setProject(loadedProject);
-    setProjectForm({
-      name: loadedProject?.name || "",
-      location: loadedProject?.location || "",
-      status: loadedProject?.status || "",
-      client: loadedProject?.client || "",
-    });
+setProject(loadedProject);
+
+setProjectForm({
+  name: loadedProject?.name || "",
+  location: loadedProject?.location || "",
+  status: loadedProject?.status || "",
+  client: loadedProject?.client || "",
+
+  project_number: loadedProject?.project_number || "",
+  client_code: loadedProject?.client_code || "",
+
+  project_year: loadedProject?.project_year
+    ? String(loadedProject.project_year)
+    : "",
+
+  project_sequence: loadedProject?.project_sequence
+    ? String(loadedProject.project_sequence)
+    : "",
+});
     setTowers(loadedTowers);
     setDockets(loadedDockets);
     setLabourRows(loadedLabourRows);
@@ -1214,39 +1240,60 @@ const watchlistTowers = useMemo(() => {
     setTowerSearch("");
   }
 
-  function startEditingProject() {
-    if (!project) return;
+function startEditingProject() {
+  if (!project) return;
+  setProjectForm({
+    name: project.name || "",
+    location: project.location || "",
+    status: project.status || "",
+    client: project.client || "",
+
+    project_number: project.project_number || "",
+    client_code: project.client_code || "",
+    project_year: project.project_year ? String(project.project_year) : "",
+    project_sequence: project.project_sequence
+      ? String(project.project_sequence)
+      : "",
+  });
+  setEditingProject(true);
+}
+
+function cancelEditingProject() {
+  if (project) {
     setProjectForm({
       name: project.name || "",
       location: project.location || "",
       status: project.status || "",
       client: project.client || "",
-    });
-    setEditingProject(true);
-  }
 
-  function cancelEditingProject() {
-    if (project) {
-      setProjectForm({
-        name: project.name || "",
-        location: project.location || "",
-        status: project.status || "",
-        client: project.client || "",
-      });
-    }
-    setEditingProject(false);
+      project_number: project.project_number || "",
+      client_code: project.client_code || "",
+      project_year: project.project_year ? String(project.project_year) : "",
+      project_sequence: project.project_sequence
+        ? String(project.project_sequence)
+        : "",
+    });
   }
+  setEditingProject(false);
+}
 
   async function saveProjectDetails() {
     if (!project) return;
     setSavingProject(true);
 
-    const payload = {
-      name: projectForm.name.trim(),
-      location: projectForm.location.trim(),
-      status: projectForm.status.trim(),
-      client: projectForm.client.trim(),
-    };
+const payload = {
+  name: projectForm.name.trim(),
+  location: projectForm.location.trim(),
+  status: projectForm.status.trim(),
+  client: projectForm.client.trim(),
+
+  project_number: projectForm.project_number.trim(),
+  client_code: projectForm.client_code.trim().toUpperCase(),
+  project_year: projectForm.project_year ? Number(projectForm.project_year) : null,
+  project_sequence: projectForm.project_sequence
+    ? Number(projectForm.project_sequence)
+    : null,
+};
 
     const { data, error } = await supabase
       .from("projects")
@@ -1336,24 +1383,47 @@ const watchlistTowers = useMemo(() => {
               </div>
             </div>
 
-            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Project Name</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.name} onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))} />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Location</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.location} onChange={(e) => setProjectForm((prev) => ({ ...prev, location: e.target.value }))} />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Status</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.status} onChange={(e) => setProjectForm((prev) => ({ ...prev, status: e.target.value }))} />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Client</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.client} onChange={(e) => setProjectForm((prev) => ({ ...prev, client: e.target.value }))} />
-              </div>
-            </div>
+         <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Project Name</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.name} onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Location</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.location} onChange={(e) => setProjectForm((prev) => ({ ...prev, location: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Status</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.status} onChange={(e) => setProjectForm((prev) => ({ ...prev, status: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Client</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.client} onChange={(e) => setProjectForm((prev) => ({ ...prev, client: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Project Number</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_number} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_number: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Client Code</label>
+    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5 uppercase" value={projectForm.client_code} onChange={(e) => setProjectForm((prev) => ({ ...prev, client_code: e.target.value.toUpperCase() }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Project Year</label>
+    <input type="number" className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_year} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_year: e.target.value }))} />
+  </div>
+
+  <div>
+    <label className="block text-xs text-slate-500 mb-1">Project Sequence</label>
+    <input type="number" className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_sequence} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_sequence: e.target.value }))} />
+  </div>
+</div>
           </div>
         )}
       </div>
