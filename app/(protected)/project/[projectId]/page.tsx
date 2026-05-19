@@ -1290,9 +1290,7 @@ const payload = {
   project_number: projectForm.project_number.trim(),
   client_code: projectForm.client_code.trim().toUpperCase(),
   project_year: projectForm.project_year ? Number(projectForm.project_year) : null,
-  project_sequence: projectForm.project_sequence
-    ? Number(projectForm.project_sequence)
-    : null,
+  project_sequence: projectForm.project_sequence ? Number(projectForm.project_sequence) : null,
 };
 
     const { data, error } = await supabase
