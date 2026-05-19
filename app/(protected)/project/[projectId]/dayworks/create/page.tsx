@@ -109,7 +109,7 @@ export default function CreateDayworkPage() {
   const [towers, setTowers] = useState<Tower[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
 
-  const [employeeSearch, setEmployeeSearch] = useState("");
+  
 
   const [sequenceNo, setSequenceNo] = useState(1);
   const [dayworkDate, setDayworkDate] = useState(() =>
@@ -202,17 +202,6 @@ export default function CreateDayworkPage() {
     return buildDocketNumber(projectNumber, sequenceNo);
   }, [project?.project_number, sequenceNo]);
 
-  const filteredEmployees = useMemo(() => {
-    const q = employeeSearch.trim().toLowerCase();
-    if (!q) return employees;
-
-    return employees.filter((employee) =>
-      [employee.full_name, employee.role]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [employees, employeeSearch]);
 
   function updatePerson(index: number, changes: Partial<PersonRow>) {
     setPeople((prev) => {
@@ -448,21 +437,31 @@ export default function CreateDayworkPage() {
             </select>
           </div>
 
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">Tower Optional</label>
-            <select
-              className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-              value={towerId}
-              onChange={(e) => setTowerId(e.target.value)}
-            >
-              <option value="">No specific tower</option>
-              {towers.map((tower) => (
-                <option key={tower.id} value={tower.id}>
-                  {getTowerName(tower)}
-                </option>
-              ))}
-            </select>
-          </div>
+<div>
+  <label className="block text-xs text-slate-500 mb-1">
+    Tower / Area
+  </label>
+
+  <select
+    className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+    value={towerId}
+    onChange={(e) => setTowerId(e.target.value)}
+  >
+    <option value="">
+      General project works
+    </option>
+
+    {towers.map((tower) => (
+      <option key={tower.id} value={tower.id}>
+        {getTowerName(tower)}
+      </option>
+    ))}
+  </select>
+
+  <p className="mt-1 text-xs text-slate-400">
+    Optional — select a tower if the work was tied to a specific location.
+  </p>
+</div>
 
           <div>
             <label className="block text-xs text-slate-500 mb-1">Location</label>
@@ -504,12 +503,7 @@ export default function CreateDayworkPage() {
           </button>
         </div>
 
-        <input
-          className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-          placeholder="Search employee by name or role..."
-          value={employeeSearch}
-          onChange={(e) => setEmployeeSearch(e.target.value)}
-        />
+
 
         <div className="space-y-3">
           {people.map((person, index) => (
@@ -523,7 +517,7 @@ export default function CreateDayworkPage() {
                     onChange={(e) => handleEmployeeSelect(index, e.target.value)}
                   >
                     <option value="">Select employee</option>
-                    {filteredEmployees.map((employee) => (
+                    {employees.map((employee) => (
                       <option key={employee.id} value={employee.id}>
                         {getEmployeeName(employee)}
                       </option>
