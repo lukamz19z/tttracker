@@ -366,26 +366,37 @@ export default function CreateDayworkPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 md:p-8 space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-              Create Daywork Docket
-            </h1>
+<div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+  <div>
+    <div className="flex items-center gap-3 mb-3">
+      <button
+        type="button"
+        onClick={() => router.push(`/project/${projectId}/dayworks`)}
+        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+      >
+        ← Back
+      </button>
+    </div>
 
-            <p className="mt-2 text-slate-600">
-              Record the work completed, personnel involved, hours worked and resources used.
-            </p>
-          </div>
+    <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+      Create Daywork Docket
+    </h1>
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">
-              Docket Number
-            </div>
-            <div className="mt-1 text-lg font-black text-slate-900">
-              {docketNumber}
-            </div>
-          </div>
-        </div>
+    <p className="mt-2 text-slate-600">
+      Record the work completed, personnel involved, hours worked and resources used.
+    </p>
+  </div>
+
+  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+    <div className="text-xs uppercase tracking-wide text-slate-500">
+      Docket Number
+    </div>
+
+    <div className="mt-1 text-lg font-black text-slate-900">
+      {docketNumber}
+    </div>
+  </div>
+</div>
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
