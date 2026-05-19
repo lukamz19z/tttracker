@@ -30,7 +30,6 @@ type PersonRow = {
   role: string;
   start_time: string;
   finish_time: string;
-  break_hours: string;
   total_hours: number;
   activity: string;
 };
@@ -65,7 +64,7 @@ function getEmployeeName(employee: Employee) {
   return employee.full_name || "Unnamed Employee";
 }
 
-function calculateHours(start: string, finish: string, breakHours: string) {
+function calculateHours(start: string, finish: string) {
   if (!start || !finish) return 0;
 
   const [startHour, startMinute] = start.split(":").map(Number);
@@ -86,10 +85,7 @@ function calculateHours(start: string, finish: string, breakHours: string) {
   let diff = finishTotal - startTotal;
   if (diff < 0) diff += 24 * 60;
 
-  const breakValue = Number(breakHours || 0);
-  const hours = diff / 60 - (Number.isFinite(breakValue) ? breakValue : 0);
-
-  return Math.max(0, Number(hours.toFixed(2)));
+  return Math.max(0, Number((diff / 60).toFixed(2)));
 }
 
 function buildDocketNumber(projectNumber: string, sequenceNo: number) {
@@ -129,7 +125,6 @@ export default function CreateDayworkPage() {
       role: "",
       start_time: "",
       finish_time: "",
-      break_hours: "0",
       total_hours: 0,
       activity: "",
     },
@@ -208,26 +203,13 @@ export default function CreateDayworkPage() {
       const next = [...prev];
       const updated = { ...next[index], ...changes };
 
-      updated.total_hours = calculateHours(
-        updated.start_time,
-        updated.finish_time,
-        updated.break_hours
-      );
+      updated.total_hours = calculateHours(updated.start_time, updated.finish_time);
 
       next[index] = updated;
       return next;
     });
   }
 
-  function handleEmployeeSelect(index: number, employeeId: string) {
-    const employee = employees.find((e) => e.id === employeeId);
-
-    updatePerson(index, {
-      employee_id: employeeId,
-      employee_name: employee ? getEmployeeName(employee) : "",
-      role: employee?.role || "",
-    });
-  }
 
   function addPerson() {
     setPeople((prev) => [
@@ -238,8 +220,7 @@ export default function CreateDayworkPage() {
         role: "",
         start_time: "",
         finish_time: "",
-        break_hours: "0",
-        total_hours: 0,
+          total_hours: 0,
         activity: "",
       },
     ]);
@@ -326,7 +307,6 @@ export default function CreateDayworkPage() {
           role: person.role.trim() || null,
           start_time: person.start_time || null,
           finish_time: person.finish_time || null,
-          break_hours: person.break_hours ? Number(person.break_hours) : 0,
           total_hours: person.total_hours || 0,
           activity: person.activity.trim() || null,
         }))
@@ -508,21 +488,57 @@ export default function CreateDayworkPage() {
         <div className="space-y-3">
           {people.map((person, index) => (
             <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="grid md:grid-cols-2 xl:grid-cols-7 gap-3">
-                <div className="xl:col-span-2">
+              <div className="grid md:grid-cols-2 xl:grid-cols-6 gap-3">
+                <div className="xl:col-span-2 relative">
                   <label className="block text-xs text-slate-500 mb-1">Employee</label>
-                  <select
+                  <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                    value={person.employee_id}
-                    onChange={(e) => handleEmployeeSelect(index, e.target.value)}
-                  >
-                    <option value="">Select employee</option>
-                    {employees.map((employee) => (
-                      <option key={employee.id} value={employee.id}>
-                        {getEmployeeName(employee)}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Search employee..."
+                    value={person.employee_name}
+                    onChange={(e) =>
+                      updatePerson(index, {
+                        employee_id: "",
+                        employee_name: e.target.value,
+                        role: "",
+                      })
+                    }
+                  />
+
+                  {person.employee_name && !person.employee_id && (
+                    <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                      {employees
+                        .filter((employee) =>
+                          [employee.full_name, employee.role]
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(person.employee_name.toLowerCase())
+                        )
+                        .slice(0, 8)
+                        .map((employee) => (
+                          <button
+                            key={employee.id}
+                            type="button"
+                            className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                            onClick={() =>
+                              updatePerson(index, {
+                                employee_id: employee.id,
+                                employee_name: getEmployeeName(employee),
+                                role: employee.role || "",
+                              })
+                            }
+                          >
+                            <div className="font-medium text-slate-900">
+                              {getEmployeeName(employee)}
+                            </div>
+                            {employee.role && (
+                              <div className="text-xs text-slate-500">
+                                {employee.role}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -554,16 +570,6 @@ export default function CreateDayworkPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Break Hrs</label>
-                  <input
-                    type="number"
-                    step="0.25"
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                    value={person.break_hours}
-                    onChange={(e) => updatePerson(index, { break_hours: e.target.value })}
-                  />
-                </div>
 
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">Total</label>
