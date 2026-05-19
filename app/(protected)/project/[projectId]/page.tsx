@@ -1342,10 +1342,21 @@ const payload = {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         {!editingProject ? (
           <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900">{project?.name || `Project ${projectId}`}</h1>
-              <p className="mt-2 text-slate-600">Project-wide overview across all assigned towers.</p>
-            </div>
+<div>
+  <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+    {project?.name || `Project ${projectId}`}
+  </h1>
+
+  {project?.project_number && (
+    <p className="mt-1 text-sm font-semibold text-slate-500">
+      {project.project_number}
+    </p>
+  )}
+
+  <p className="mt-2 text-slate-600">
+    Project-wide overview across all assigned towers.
+  </p>
+</div>
 
             <div className="flex flex-wrap gap-3">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
