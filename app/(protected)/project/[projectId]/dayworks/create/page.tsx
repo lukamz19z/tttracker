@@ -13,16 +13,15 @@ type Project = {
 type Tower = {
   id: string;
   name?: string | null;
-  tower_number?: string | null;
-  structure_number?: string | null;
-  tower_no?: string | null;
+  line?: string | null;
+  extra_data?: Record<string, unknown> | null;
 };
 
 type Employee = {
   id: string;
-  full_name?: string | null;
-  name?: string | null;
-  role?: string | null;
+  full_name: string;
+  role: string | null;
+  active?: boolean | null;
 };
 
 type PersonRow = {
@@ -59,11 +58,11 @@ const WORK_TYPES = [
 ];
 
 function getTowerName(tower: Tower) {
-  return tower.tower_number || tower.structure_number || tower.tower_no || tower.name || "Unnamed Tower";
+  return tower.name || "Unnamed Tower";
 }
 
 function getEmployeeName(employee: Employee) {
-  return employee.full_name || employee.name || "Unnamed Employee";
+  return employee.full_name || "Unnamed Employee";
 }
 
 function calculateHours(start: string, finish: string, breakHours: string) {
@@ -85,7 +84,6 @@ function calculateHours(start: string, finish: string, breakHours: string) {
   const finishTotal = finishHour * 60 + finishMinute;
 
   let diff = finishTotal - startTotal;
-
   if (diff < 0) diff += 24 * 60;
 
   const breakValue = Number(breakHours || 0);
@@ -111,8 +109,12 @@ export default function CreateDayworkPage() {
   const [towers, setTowers] = useState<Tower[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
 
+  const [employeeSearch, setEmployeeSearch] = useState("");
+
   const [sequenceNo, setSequenceNo] = useState(1);
-  const [dayworkDate, setDayworkDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dayworkDate, setDayworkDate] = useState(() =>
+    new Date().toISOString().slice(0, 10)
+  );
   const [workType, setWorkType] = useState("Steel delivery");
   const [towerId, setTowerId] = useState("");
   const [location, setLocation] = useState("");
@@ -156,7 +158,7 @@ export default function CreateDayworkPage() {
 
       const { data: towerData, error: towerError } = await supabase
         .from("towers")
-        .select("id, name, tower_number, structure_number, tower_no")
+        .select("id, name, line, extra_data")
         .eq("project_id", projectId)
         .order("name", { ascending: true });
 
@@ -164,12 +166,11 @@ export default function CreateDayworkPage() {
 
       const { data: employeeData, error: employeeError } = await supabase
         .from("employees")
-        .select("id, full_name, name, role")
+        .select("id, full_name, role, active")
+        .eq("active", true)
         .order("full_name", { ascending: true });
 
-      if (employeeError) {
-        console.warn("employee load skipped", employeeError.message);
-      }
+      if (employeeError) console.error("employee load error", employeeError);
 
       const { data: latestDaywork, error: sequenceError } = await supabase
         .from("dayworks")
@@ -185,9 +186,11 @@ export default function CreateDayworkPage() {
       setTowers((towerData as Tower[]) || []);
       setEmployees((employeeData as Employee[]) || []);
 
-      const nextSequence = latestDaywork?.sequence_no ? Number(latestDaywork.sequence_no) + 1 : 1;
-      setSequenceNo(nextSequence);
+      const nextSequence = latestDaywork?.sequence_no
+        ? Number(latestDaywork.sequence_no) + 1
+        : 1;
 
+      setSequenceNo(nextSequence);
       setLoading(false);
     }
 
@@ -199,6 +202,18 @@ export default function CreateDayworkPage() {
     return buildDocketNumber(projectNumber, sequenceNo);
   }, [project?.project_number, sequenceNo]);
 
+  const filteredEmployees = useMemo(() => {
+    const q = employeeSearch.trim().toLowerCase();
+    if (!q) return employees;
+
+    return employees.filter((employee) =>
+      [employee.full_name, employee.role]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [employees, employeeSearch]);
+
   function updatePerson(index: number, changes: Partial<PersonRow>) {
     setPeople((prev) => {
       const next = [...prev];
@@ -207,7 +222,7 @@ export default function CreateDayworkPage() {
       updated.total_hours = calculateHours(
         updated.start_time,
         updated.finish_time,
-        updated.break_hours,
+        updated.break_hours
       );
 
       next[index] = updated;
@@ -277,11 +292,6 @@ export default function CreateDayworkPage() {
       return;
     }
 
-    if (!workType.trim()) {
-      alert("Select a work type.");
-      return;
-    }
-
     if (!description.trim()) {
       alert("Add a short description of the work completed.");
       return;
@@ -330,7 +340,7 @@ export default function CreateDayworkPage() {
           break_hours: person.break_hours ? Number(person.break_hours) : 0,
           total_hours: person.total_hours || 0,
           activity: person.activity.trim() || null,
-        })),
+        }))
       );
 
       if (peopleError) {
@@ -341,18 +351,22 @@ export default function CreateDayworkPage() {
       }
     }
 
-    const validResources = resources.filter((resource) => resource.resource_name.trim());
+    const validResources = resources.filter((resource) =>
+      resource.resource_name.trim()
+    );
 
     if (validResources.length > 0) {
-      const { error: resourcesError } = await supabase.from("daywork_resources").insert(
-        validResources.map((resource) => ({
-          daywork_id: daywork.id,
-          resource_name: resource.resource_name.trim(),
-          hours: resource.hours ? Number(resource.hours) : 0,
-          activity: resource.activity.trim() || null,
-          notes: resource.notes.trim() || null,
-        })),
-      );
+      const { error: resourcesError } = await supabase
+        .from("daywork_resources")
+        .insert(
+          validResources.map((resource) => ({
+            daywork_id: daywork.id,
+            resource_name: resource.resource_name.trim(),
+            hours: resource.hours ? Number(resource.hours) : 0,
+            activity: resource.activity.trim() || null,
+            notes: resource.notes.trim() || null,
+          }))
+        );
 
       if (resourcesError) {
         console.error("resources save error", resourcesError);
@@ -366,7 +380,11 @@ export default function CreateDayworkPage() {
     router.push(`/project/${projectId}/dayworks`);
   }
 
-  const totalPersonHours = people.reduce((sum, person) => sum + person.total_hours, 0);
+  const totalPersonHours = people.reduce(
+    (sum, person) => sum + person.total_hours,
+    0
+  );
+
   const totalResourceHours = resources.reduce((sum, resource) => {
     const value = Number(resource.hours || 0);
     return sum + (Number.isFinite(value) ? value : 0);
@@ -486,6 +504,13 @@ export default function CreateDayworkPage() {
           </button>
         </div>
 
+        <input
+          className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+          placeholder="Search employee by name or role..."
+          value={employeeSearch}
+          onChange={(e) => setEmployeeSearch(e.target.value)}
+        />
+
         <div className="space-y-3">
           {people.map((person, index) => (
             <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -498,7 +523,7 @@ export default function CreateDayworkPage() {
                     onChange={(e) => handleEmployeeSelect(index, e.target.value)}
                   >
                     <option value="">Select employee</option>
-                    {employees.map((employee) => (
+                    {filteredEmployees.map((employee) => (
                       <option key={employee.id} value={employee.id}>
                         {getEmployeeName(employee)}
                       </option>
@@ -616,7 +641,9 @@ export default function CreateDayworkPage() {
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="e.g. Telehandler, Crane, Truck"
                     value={resource.resource_name}
-                    onChange={(e) => updateResource(index, { resource_name: e.target.value })}
+                    onChange={(e) =>
+                      updateResource(index, { resource_name: e.target.value })
+                    }
                   />
                 </div>
 
@@ -637,7 +664,9 @@ export default function CreateDayworkPage() {
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="e.g. Steel unloading, crane block relocation"
                     value={resource.activity}
-                    onChange={(e) => updateResource(index, { activity: e.target.value })}
+                    onChange={(e) =>
+                      updateResource(index, { activity: e.target.value })
+                    }
                   />
                 </div>
               </div>
