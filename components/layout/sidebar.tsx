@@ -98,32 +98,40 @@ export function Sidebar({
   const pathname = usePathname();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [projectName, setProjectName] = useState<string | null>(null);
+  const [projectInfo, setProjectInfo] = useState<{
+  name: string | null;
+  project_number: string | null;
+} | null>(null);
   const [towers, setTowers] = useState<Tower[]>([]);
 
   const towerMatch = pathname.match(/\/tower\/([^/]+)/);
   const activeTowerId = towerId || towerMatch?.[1] || null;
 
   useEffect(() => {
-    if (!projectId) return;
+if (!projectId) return;
 
-    async function loadProject() {
-      const { data: projectData } = await supabase
-        .from("projects")
-        .select("name")
-        .eq("id", projectId)
-        .single();
+async function loadProject() {
+  const { data: projectData } = await supabase
+    .from("projects")
+    .select("name, project_number")
+    .eq("id", projectId)
+    .single();
 
-      if (projectData) setProjectName(projectData.name);
+  if (projectData) {
+    setProjectInfo({
+      name: projectData.name,
+      project_number: projectData.project_number,
+    });
+  }
 
-      const { data: towerData } = await supabase
-        .from("towers")
-        .select("id,name,line,extra_data")
-        .eq("project_id", projectId)
-        .order("name");
+  const { data: towerData } = await supabase
+    .from("towers")
+    .select("id,name,line,extra_data")
+    .eq("project_id", projectId)
+    .order("name");
 
-      if (towerData) setTowers(towerData as Tower[]);
-    }
+  if (towerData) setTowers(towerData as Tower[]);
+}
 
     void loadProject();
   }, [projectId, supabase]);
@@ -199,21 +207,29 @@ export function Sidebar({
   }
 
   return (
-    <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
-      <div className="flex-1 p-4 space-y-6">
-        {projectId && (
-          <div>
-            <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
-              Current Project
-            </div>
+<aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
+  <div className="flex-1 p-4 space-y-6">
 
-            <div className="bg-slate-100 rounded-2xl px-4 py-3">
-              <div className="font-semibold text-slate-800 truncate">
-                {projectName || "Loading..."}
-              </div>
-            </div>
+    {projectId && (
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
+          Current Project
+        </div>
+
+        <div className="bg-slate-100 rounded-2xl px-4 py-3">
+          <div className="font-semibold text-slate-800 truncate">
+            {projectInfo?.name || "Loading..."}
           </div>
-        )}
+
+          {projectInfo?.project_number && (
+            <div className="mt-1 text-xs font-medium text-slate-500">
+              {projectInfo.project_number}
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
 
         <div>
           <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
