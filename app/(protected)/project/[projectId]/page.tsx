@@ -1277,40 +1277,72 @@ function cancelEditingProject() {
   setEditingProject(false);
 }
 
-  async function saveProjectDetails() {
-    if (!project) return;
-    setSavingProject(true);
+async function saveProjectDetails() {
+  if (!project) return;
+  setSavingProject(true);
 
-const payload = {
-  name: projectForm.name.trim(),
-  location: projectForm.location.trim(),
-  status: projectForm.status.trim(),
-  client: projectForm.client.trim(),
+  const rebuiltProjectNumber =
+    projectForm.client_code.trim() &&
+    projectForm.project_year.trim() &&
+    projectForm.project_sequence.trim()
+      ? `P-${projectForm.client_code.trim().toUpperCase()}-${String(
+          projectForm.project_year
+        ).slice(-2)}-${String(Number(projectForm.project_sequence)).padStart(
+          3,
+          "0"
+        )}`
+      : projectForm.project_number.trim();
 
-  project_number: projectForm.project_number.trim(),
-  client_code: projectForm.client_code.trim().toUpperCase(),
-  project_year: projectForm.project_year ? Number(projectForm.project_year) : null,
-  project_sequence: projectForm.project_sequence ? Number(projectForm.project_sequence) : null,
-};
+  const payload = {
+    name: projectForm.name.trim(),
+    location: projectForm.location.trim(),
+    status: projectForm.status.trim(),
+    client: projectForm.client.trim(),
 
-    const { data, error } = await supabase
-      .from("projects")
-      .update(payload)
-      .eq("id", project.id)
-      .select("id, name, status, client, location")
-      .single();
+    project_number: rebuiltProjectNumber,
+    client_code: projectForm.client_code.trim().toUpperCase(),
+    project_year: projectForm.project_year
+      ? Number(projectForm.project_year)
+      : null,
+    project_sequence: projectForm.project_sequence
+      ? Number(projectForm.project_sequence)
+      : null,
+  };
 
-    setSavingProject(false);
+  const { data, error } = await supabase
+    .from("projects")
+    .update(payload)
+    .eq("id", project.id)
+    .select(
+      "id, name, status, client, location, project_number, client_code, project_year, project_sequence"
+    )
+    .single();
 
-    if (error) {
-      console.error("project update error", error);
-      alert("Failed to update project details.");
-      return;
-    }
+  setSavingProject(false);
 
-    setProject((data as Project) || null);
-    setEditingProject(false);
+  if (error) {
+    console.error("project update error", error);
+    alert(error.message);
+    return;
   }
+
+  setProject((data as Project) || null);
+
+  setProjectForm({
+    name: data?.name || "",
+    location: data?.location || "",
+    status: data?.status || "",
+    client: data?.client || "",
+    project_number: data?.project_number || "",
+    client_code: data?.client_code || "",
+    project_year: data?.project_year ? String(data.project_year) : "",
+    project_sequence: data?.project_sequence
+      ? String(data.project_sequence)
+      : "",
+  });
+
+  setEditingProject(false);
+}
 
   function goToTowerAction(towerId: string) {
     if (!actionType) return;
