@@ -553,6 +553,7 @@ export default function DailyDocketForm({
   const [leadingHand, setLeadingHand] = useState(
     toStringValue(initialDocket?.leading_hand)
   );
+  const [towerLabel, setTowerLabel] = useState("");
   const [weather, setWeather] = useState(toStringValue(initialDocket?.weather));
   const [rateType, setRateType] = useState<DocketRateType>(
     initialDocket?.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate"
@@ -706,13 +707,41 @@ useEffect(() => {
   async function loadTowerBodyExtensionDefault() {
     const { data } = await supabase
       .from("towers")
-      .select("id, extra_data")
+      .select(`
+        id,
+        name,
+        tower_number,
+        structure_number,
+        line,
+        extra_data
+      `)
       .eq("id", towerId)
       .single();
 
-    const hasBodyExtFromCsv = inferTowerHasBodyExtension(
-      (data as TowerRecord | null) || null
+    const towerData = data as TowerRecord | null;
+
+    const towerName =
+      String(
+        towerData?.tower_number ||
+        towerData?.structure_number ||
+        towerData?.name ||
+        ""
+      );
+
+    const line =
+      String(
+        towerData?.line ||
+        ""
+      );
+
+    setTowerLabel(
+      line
+        ? `${towerName} (${line})`
+        : towerName
     );
+
+    const hasBodyExtFromCsv =
+      inferTowerHasBodyExtension(towerData);
 
     setHasBodyExtension(hasBodyExtFromCsv);
 
@@ -720,7 +749,11 @@ useEffect(() => {
       setProgressRows((prev) =>
         prev.map((row) =>
           isBodyExtensionRow(row)
-            ? { ...row, assembled_qty: "", erected_qty: "" }
+            ? {
+                ...row,
+                assembled_qty: "",
+                erected_qty: "",
+              }
             : row
         )
       );
@@ -1653,7 +1686,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             })
           : [];
 
-      const locationText = `Tower ${towerId}`;
+const locationText = towerLabel || "Tower related works";
       const descriptionText = [
         `${meta.label} recorded from daily docket.`,
         delay.delay_reason ? `Reason: ${delay.delay_reason}` : "",
