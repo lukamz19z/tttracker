@@ -156,12 +156,64 @@ export default function ViewDayworkPage() {
         </div>
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-900">Work Completed</h2>
-        <p className="mt-4 whitespace-pre-wrap text-slate-700">
-          {daywork.description || "-"}
-        </p>
-      </div>
+<div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+  <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div>
+      <h2 className="text-xl font-bold text-slate-900">
+        Work Summary
+      </h2>
+
+      <p className="mt-1 text-sm text-slate-500">
+        Captured details for commercial review and traceability.
+      </p>
+    </div>
+
+    <div className="rounded-full bg-blue-50 px-4 py-2">
+      <span className="text-xs font-bold uppercase tracking-wide text-blue-700">
+        {daywork.work_type}
+      </span>
+    </div>
+  </div>
+
+  <div className="mt-6 space-y-3">
+    {(daywork.description || "-")
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line, index) => {
+        const parts = line.split(":");
+        const label = parts[0];
+        const value = parts.slice(1).join(":").trim();
+
+        if (!value) {
+          return (
+            <div
+              key={index}
+              className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="font-semibold text-slate-900">
+                {line}
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={index}
+            className="grid md:grid-cols-[180px_1fr] gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+          >
+            <div className="text-xs uppercase tracking-wide font-bold text-slate-500">
+              {label}
+            </div>
+
+            <div className="font-semibold text-slate-900">
+              {value}
+            </div>
+          </div>
+        );
+      })}
+  </div>
+</div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900">Personnel</h2>
