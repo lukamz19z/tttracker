@@ -101,6 +101,7 @@ type DocketRecord = {
   incident_occurred?: boolean | null;
   incident_type?: string | null;
   incident_notes?: string | null;
+  safety_check_completed?: "Y" | "N" | null;
 };
 
 type TowerRecord = {
@@ -301,7 +302,10 @@ function makeUiId() {
 
   return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
+function makeLabourRow(
+  row?: Partial<LabourRow> | any,
+  options?: { mobilisationIsMinutes?: boolean }
+): LabourRow {
   const mapped: LabourRow = {
     worker_name: toStringValue(row?.worker_name),
     time_in: toStringValue(row?.time_in),
@@ -310,7 +314,9 @@ function makeLabourRow(row?: Partial<LabourRow> | any): LabourRow {
     lunch_minutes: toStringValue(row?.lunch_minutes),
     travel_in_minutes: toStringValue(row?.travel_in_minutes),
     travel_out_minutes: toStringValue(row?.travel_out_minutes),
-    mobilisation_hours: toStringValue(hoursToMinutes(row?.mobilisation_hours)),
+    mobilisation_hours: options?.mobilisationIsMinutes
+      ? toStringValue(row?.mobilisation_hours)
+      : toStringValue(hoursToMinutes(row?.mobilisation_hours)),
     delay_hours: toStringValue(row?.delay_hours),
     delay_reason: toStringValue(row?.delay_reason),
     production_hours: toStringValue(row?.production_hours),
@@ -326,19 +332,22 @@ function blankLabourRow(defaults?: {
   travelOutMinutes?: string;
   mobilisationHours?: string;
 }): LabourRow {
-  return makeLabourRow({
-    worker_name: "",
-    time_in: "",
-    time_out: "",
-    total_hours: "",
-    lunch_minutes: defaults?.lunchBreakMinutes || "",
-    travel_in_minutes: defaults?.travelInMinutes || "",
-    travel_out_minutes: defaults?.travelOutMinutes || "",
-    mobilisation_hours: defaults?.mobilisationHours || "",
-    delay_hours: "",
-    delay_reason: "",
-    production_hours: "",
-  });
+  return makeLabourRow(
+    {
+      worker_name: "",
+      time_in: "",
+      time_out: "",
+      total_hours: "",
+      lunch_minutes: defaults?.lunchBreakMinutes || "",
+      travel_in_minutes: defaults?.travelInMinutes || "",
+      travel_out_minutes: defaults?.travelOutMinutes || "",
+      mobilisation_hours: defaults?.mobilisationHours || "",
+      delay_hours: "",
+      delay_reason: "",
+      production_hours: "",
+    },
+    { mobilisationIsMinutes: true }
+  );
 }
 
 function makePlantRow(row?: Partial<PlantRow> | any): PlantRow {
@@ -470,6 +479,32 @@ function delayTypeLabel(type: DelayType) {
   }
 }
 
+function delayDayworkMeta(type: DelayType) {
+  switch (type) {
+    case "weather":
+      return { code: "WD", label: "Weather delay" };
+    case "lightning":
+      return { code: "WD", label: "Weather delay" };
+    case "toolbox":
+      return { code: "SB", label: "Standby" };
+    case "mobilisation":
+      return { code: "MOB", label: "Mobilisation" };
+    case "access":
+      return { code: "ACC", label: "Access / Bogged" };
+    case "plant":
+      return { code: "PI", label: "Plant issue" };
+    case "materials":
+      return { code: "MI", label: "Material issue" };
+    case "other":
+    default:
+      return { code: "OTH", label: "Other" };
+  }
+}
+
+function buildDayworkDocketNumber(projectNumber: string, sequenceNo: number) {
+  return `${projectNumber}-DW-${String(sequenceNo).padStart(4, "0")}`;
+}
+
 function plantDisplayName(row: PlantRow, index: number) {
   const primary = row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim();
   const secondary = [row.plant_type.trim(), row.asset_id.trim()]
@@ -584,6 +619,11 @@ export default function DailyDocketForm({
   );
   const [incidentNotes, setIncidentNotes] = useState(
     toStringValue(initialDocket?.incident_notes)
+  );
+  const [safetyCheckCompleted, setSafetyCheckCompleted] = useState<"Y" | "N" | "">(
+    initialDocket?.safety_check_completed === "Y" || initialDocket?.safety_check_completed === "N"
+      ? initialDocket.safety_check_completed
+      : ""
   );
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
@@ -726,6 +766,11 @@ useEffect(() => {
         setIncidentOccurred(Boolean(initialDocket.incident_occurred));
         setIncidentType(toStringValue(initialDocket.incident_type));
         setIncidentNotes(toStringValue(initialDocket.incident_notes));
+        setSafetyCheckCompleted(
+          initialDocket.safety_check_completed === "Y" || initialDocket.safety_check_completed === "N"
+            ? initialDocket.safety_check_completed
+            : ""
+        );
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
@@ -810,6 +855,11 @@ useEffect(() => {
       setIncidentOccurred(Boolean(data.incident_occurred));
       setIncidentType(toStringValue(data.incident_type));
       setIncidentNotes(toStringValue(data.incident_notes));
+      setSafetyCheckCompleted(
+        data.safety_check_completed === "Y" || data.safety_check_completed === "N"
+          ? data.safety_check_completed
+          : ""
+      );
 
       setBcRepName(toStringValue(data.bc_rep_name));
       setClientRepName(toStringValue(data.client_rep_name));
@@ -1185,15 +1235,44 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }
 
   function addLabourRow() {
-    setLabourRows((prev) => [
-      ...prev,
-      blankLabourRow({
-        lunchBreakMinutes,
-        travelInMinutes,
-        travelOutMinutes,
-        mobilisationHours,
-      }),
-    ]);
+    setLabourRows((prev) => {
+      const previous = prev[prev.length - 1];
+
+      if (!previous) {
+        return [
+          blankLabourRow({
+            lunchBreakMinutes,
+            travelInMinutes,
+            travelOutMinutes,
+            mobilisationHours,
+          }),
+        ];
+      }
+
+      const time_in = previous.time_in || "";
+      const time_out = previous.time_out || "";
+      const total_hours = calculateHours(time_in, time_out);
+
+      const next = makeLabourRow(
+        {
+          worker_name: "",
+          time_in,
+          time_out,
+          total_hours,
+          lunch_minutes: previous.lunch_minutes || lunchBreakMinutes,
+          travel_in_minutes: previous.travel_in_minutes || travelInMinutes,
+          travel_out_minutes: previous.travel_out_minutes || travelOutMinutes,
+          mobilisation_hours: previous.mobilisation_hours || mobilisationHours,
+          delay_hours: "",
+          delay_reason: "",
+          production_hours: "",
+        },
+        { mobilisationIsMinutes: true }
+      );
+
+      next.production_hours = calculateProductionHours(next);
+      return [...prev, next];
+    });
   }
 
   function removeLabourRow(index: number) {
@@ -1436,6 +1515,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       incident_occurred: incidentOccurred,
       incident_type: incidentOccurred ? incidentType || null : null,
       incident_notes: incidentOccurred ? incidentNotes || null : null,
+      safety_check_completed: safetyCheckCompleted || null,
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
       bc_rep_name: bcRepName,
@@ -1512,6 +1592,213 @@ const labourRowsWithProduction = labourRows.map((row) => {
     }));
   }
 
+  async function getNextDayworkSequence() {
+    const { data, error } = await supabase
+      .from("dayworks")
+      .select("sequence_no")
+      .eq("project_id", projectId)
+      .order("sequence_no", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error("Daily docket saved, but failed to get next daywork number.");
+    }
+
+    return data?.sequence_no ? Number(data.sequence_no) + 1 : 1;
+  }
+
+  async function syncDelayDayworks(docketIdValue: string) {
+    const activeDelays = delayRows.filter((delay) => toNumber(delay.delay_hours) > 0);
+
+    const { data: existingLinkedDayworks, error: existingDayworksError } = await supabase
+      .from("dayworks")
+      .select("id, source_delay_key")
+      .eq("source_docket_id", docketIdValue)
+      .eq("source_type", "daily_docket_delay");
+
+    if (existingDayworksError) {
+      throw new Error("Daily docket saved, but linked dayworks could not be checked.");
+    }
+
+    const existingByKey = new Map(
+      ((existingLinkedDayworks || []) as { id: string; source_delay_key: string | null }[])
+        .filter((row) => row.source_delay_key)
+        .map((row) => [row.source_delay_key as string, row.id])
+    );
+
+    const activeKeys = new Set<string>();
+    let nextSequence = await getNextDayworkSequence();
+
+    const { data: projectData, error: projectError } = await supabase
+      .from("projects")
+      .select("project_number")
+      .eq("id", projectId)
+      .single();
+
+    if (projectError || !projectData?.project_number) {
+      throw new Error("Daily docket saved, but project number is missing for linked dayworks.");
+    }
+
+    for (const [index, delay] of activeDelays.entries()) {
+      const meta = delayDayworkMeta(delay.delay_type);
+      const sourceDelayKey = `${delay.delay_type}-${index + 1}`;
+      activeKeys.add(sourceDelayKey);
+
+      const affectedLabour =
+        delay.applies_to === "entire_crew"
+          ? labourRowsWithProduction.filter((row) => row.worker_name.trim())
+          : labourRowsWithProduction.filter((row) =>
+              delay.worker_names.some(
+                (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
+              )
+            );
+
+      const affectedPlant =
+        delay.delay_applies_mode === "labour_and_plant"
+          ? plantRowsWithTotals.filter((row, plantIndex) => {
+              const displayName = plantDisplayName(row, plantIndex);
+              return delay.plant_names.some(
+                (name) => normalizeWorkerName(name) === normalizeWorkerName(displayName)
+              );
+            })
+          : [];
+
+      const locationText = `Tower ${towerId}`;
+      const descriptionText = [
+        `${meta.label} recorded from daily docket.`,
+        delay.delay_reason ? `Reason: ${delay.delay_reason}` : "",
+        `Delay duration: ${toNumber(delay.delay_hours).toFixed(2)} hours.`,
+        `Labour affected: ${
+          delay.applies_to === "entire_crew"
+            ? "Entire crew"
+            : delay.worker_names.join(", ") || "Selected workers"
+        }.`,
+        delay.delay_applies_mode === "labour_and_plant"
+          ? `Plant affected: ${delay.plant_names.join(", ") || "Selected plant"}.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\\n");
+
+      const existingDayworkId = existingByKey.get(sourceDelayKey);
+      let dayworkIdForRows = existingDayworkId;
+
+      if (existingDayworkId) {
+        const { error: updateDayworkError } = await supabase
+          .from("dayworks")
+          .update({
+            tower_id: towerId,
+            source_tower_id: towerId,
+            daywork_date: docketDate,
+            work_type: meta.label,
+            work_type_code: meta.code,
+            delay_code: meta.code,
+            delay_hours: toNumber(delay.delay_hours),
+            location: locationText,
+            description: descriptionText,
+            completed_by: leadingHand || null,
+            comments: delaysComments || null,
+            status: "Draft",
+            commercial_status: "Pending Review",
+          })
+          .eq("id", existingDayworkId);
+
+        if (updateDayworkError) {
+          throw new Error("Daily docket saved, but linked daywork update failed.");
+        }
+      } else {
+        const docketNumber = buildDayworkDocketNumber(projectData.project_number, nextSequence);
+        const { data: newDaywork, error: insertDayworkError } = await supabase
+          .from("dayworks")
+          .insert({
+            project_id: projectId,
+            tower_id: towerId,
+            source_tower_id: towerId,
+            source_type: "daily_docket_delay",
+            source_docket_id: docketIdValue,
+            source_delay_key: sourceDelayKey,
+            docket_number: docketNumber,
+            sequence_no: nextSequence,
+            daywork_date: docketDate,
+            work_type: meta.label,
+            work_type_code: meta.code,
+            delay_code: meta.code,
+            delay_hours: toNumber(delay.delay_hours),
+            location: locationText,
+            description: descriptionText,
+            completed_by: leadingHand || null,
+            comments: delaysComments || null,
+            status: "Draft",
+            commercial_status: "Pending Review",
+          })
+          .select("id")
+          .single();
+
+        if (insertDayworkError || !newDaywork) {
+          throw new Error("Daily docket saved, but linked daywork creation failed.");
+        }
+
+        dayworkIdForRows = newDaywork.id;
+        nextSequence += 1;
+      }
+
+      if (!dayworkIdForRows) continue;
+
+      await supabase.from("daywork_people").delete().eq("daywork_id", dayworkIdForRows);
+      await supabase.from("daywork_resources").delete().eq("daywork_id", dayworkIdForRows);
+
+      if (affectedLabour.length > 0) {
+        const { error: peopleError } = await supabase.from("daywork_people").insert(
+          affectedLabour.map((row) => ({
+            daywork_id: dayworkIdForRows,
+            employee_id: null,
+            employee_name: row.worker_name.trim(),
+            start_time: row.time_in || null,
+            finish_time: row.time_out || null,
+            total_hours: toNumber(delay.delay_hours),
+            activity: `${meta.label}${delay.delay_reason ? ` - ${delay.delay_reason}` : ""}`,
+          }))
+        );
+
+        if (peopleError) {
+          throw new Error("Daily docket saved, but linked daywork personnel failed.");
+        }
+      }
+
+      if (affectedPlant.length > 0) {
+        const { error: resourceError } = await supabase.from("daywork_resources").insert(
+          affectedPlant.map((row, plantIndex) => ({
+            daywork_id: dayworkIdForRows,
+            resource_name: plantDisplayName(row, plantIndex),
+            hours: toNumber(delay.delay_hours),
+            activity: meta.label,
+            notes: delay.delay_reason || null,
+          }))
+        );
+
+        if (resourceError) {
+          throw new Error("Daily docket saved, but linked daywork resources failed.");
+        }
+      }
+    }
+
+    const staleDayworks = ((existingLinkedDayworks || []) as { id: string; source_delay_key: string | null }[])
+      .filter((row) => row.source_delay_key && !activeKeys.has(row.source_delay_key))
+      .map((row) => row.id);
+
+    if (staleDayworks.length > 0) {
+      const { error: staleDeleteError } = await supabase
+        .from("dayworks")
+        .delete()
+        .in("id", staleDayworks);
+
+      if (staleDeleteError) {
+        throw new Error("Daily docket saved, but stale linked dayworks could not be removed.");
+      }
+    }
+  }
+
   async function handleCreate() {
     const docketFileUrl = await uploadFileIfNeeded();
 
@@ -1567,6 +1854,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
         throw new Error("Daily docket saved, but progress rows failed.");
       }
     }
+
+    await syncDelayDayworks(docket.id);
 
     await recalcTowerProgressAndStatus();
 
@@ -1685,6 +1974,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
       }
     }
 
+    await syncDelayDayworks(docketId);
+
     await recalcTowerProgressAndStatus();
 
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
@@ -1709,6 +2000,11 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
     if (hasDuplicateWorkers) {
       alert("Duplicate worker names found. Each worker can only appear once in a daily docket.");
+      return;
+    }
+
+    if (!safetyCheckCompleted) {
+      alert("Please confirm the safety / prestart check as Yes or No before submitting.");
       return;
     }
 
@@ -1787,6 +2083,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setIncidentOccurred(false);
       setIncidentType("");
       setIncidentNotes("");
+      setSafetyCheckCompleted("");
 
       setBcRepName("");
       setClientRepName("");
@@ -2234,28 +2531,64 @@ const labourRowsWithProduction = labourRows.map((row) => {
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Safety Check</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Confirm whether an incident occurred during this docket shift. Details only appear if this is ticked.
+            Confirm the safety / prestart check before submitting the docket.
           </p>
         </div>
 
-        <label className={`inline-flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-semibold ${incidentOccurred ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-800"}`}>
-          <input
-            type="checkbox"
-            checked={incidentOccurred}
+        <div className="grid md:grid-cols-2 gap-3">
+          <button
+            type="button"
             disabled={locked || isView}
-            onChange={(e) => {
-              const checked = e.target.checked;
-              setIncidentOccurred(checked);
+            onClick={() => setSafetyCheckCompleted("Y")}
+            className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold ${
+              safetyCheckCompleted === "Y"
+                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                : "border-slate-200 bg-slate-50 text-slate-700"
+            } disabled:opacity-60`}
+          >
+            Yes — safety / prestart completed
+          </button>
 
-              if (!checked) {
-                setIncidentType("");
-                setIncidentNotes("");
-              }
-            }}
-            className="h-4 w-4"
-          />
-          Incident occurred on this shift
-        </label>
+          <button
+            type="button"
+            disabled={locked || isView}
+            onClick={() => setSafetyCheckCompleted("N")}
+            className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold ${
+              safetyCheckCompleted === "N"
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-slate-200 bg-slate-50 text-slate-700"
+            } disabled:opacity-60`}
+          >
+            No — not completed / issue raised
+          </button>
+        </div>
+
+        {!safetyCheckCompleted && !isView && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Select Yes or No before submitting this docket.
+          </div>
+        )}
+
+        <div className="pt-2">
+          <label className={`inline-flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-semibold ${incidentOccurred ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-800"}`}>
+            <input
+              type="checkbox"
+              checked={incidentOccurred}
+              disabled={locked || isView}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setIncidentOccurred(checked);
+
+                if (!checked) {
+                  setIncidentType("");
+                  setIncidentNotes("");
+                }
+              }}
+              className="h-4 w-4"
+            />
+            Incident occurred on this shift
+          </label>
+        </div>
 
         {incidentOccurred && (
           <div className="grid md:grid-cols-2 gap-4 rounded-2xl border border-red-200 bg-red-50 p-4">
