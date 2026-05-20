@@ -620,11 +620,8 @@ export default function DailyDocketForm({
   const [incidentNotes, setIncidentNotes] = useState(
     toStringValue(initialDocket?.incident_notes)
   );
-  const [safetyCheckCompleted, setSafetyCheckCompleted] = useState<"Y" | "N" | "">(
-    initialDocket?.safety_check_completed === "Y" || initialDocket?.safety_check_completed === "N"
-      ? initialDocket.safety_check_completed
-      : ""
-  );
+
+
 
   const [labourRows, setLabourRows] = useState<LabourRow[]>(
     initialLabourRows && initialLabourRows.length > 0
@@ -766,11 +763,7 @@ useEffect(() => {
         setIncidentOccurred(Boolean(initialDocket.incident_occurred));
         setIncidentType(toStringValue(initialDocket.incident_type));
         setIncidentNotes(toStringValue(initialDocket.incident_notes));
-        setSafetyCheckCompleted(
-          initialDocket.safety_check_completed === "Y" || initialDocket.safety_check_completed === "N"
-            ? initialDocket.safety_check_completed
-            : ""
-        );
+
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
@@ -855,11 +848,7 @@ useEffect(() => {
       setIncidentOccurred(Boolean(data.incident_occurred));
       setIncidentType(toStringValue(data.incident_type));
       setIncidentNotes(toStringValue(data.incident_notes));
-      setSafetyCheckCompleted(
-        data.safety_check_completed === "Y" || data.safety_check_completed === "N"
-          ? data.safety_check_completed
-          : ""
-      );
+
 
       setBcRepName(toStringValue(data.bc_rep_name));
       setClientRepName(toStringValue(data.client_rep_name));
@@ -1515,7 +1504,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       incident_occurred: incidentOccurred,
       incident_type: incidentOccurred ? incidentType || null : null,
       incident_notes: incidentOccurred ? incidentNotes || null : null,
-      safety_check_completed: safetyCheckCompleted || null,
+
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
       bc_rep_name: bcRepName,
@@ -2003,10 +1992,15 @@ const labourRowsWithProduction = labourRows.map((row) => {
       return;
     }
 
-    if (!safetyCheckCompleted) {
-      alert("Please confirm the safety / prestart check as Yes or No before submitting.");
-      return;
-    }
+if (incidentOccurred && !incidentType) {
+  alert("Please select the incident type.");
+  return;
+}
+
+if (incidentOccurred && !incidentNotes.trim()) {
+  alert("Please enter incident notes/action required.");
+  return;
+}
 
     setSaving(true);
 
@@ -2083,7 +2077,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       setIncidentOccurred(false);
       setIncidentType("");
       setIncidentNotes("");
-      setSafetyCheckCompleted("");
+
 
       setBcRepName("");
       setClientRepName("");
@@ -2527,98 +2521,81 @@ const labourRowsWithProduction = labourRows.map((row) => {
         )}
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">Safety Check</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Confirm the safety / prestart check before submitting the docket.
-          </p>
-        </div>
+<section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+  <div>
+    <h2 className="text-xl font-semibold text-slate-900">Safety / Incident Check</h2>
+    <p className="text-sm text-slate-500 mt-1">
+      Confirm whether an incident occurred during this docket shift.
+    </p>
+  </div>
 
-        <div className="grid md:grid-cols-2 gap-3">
-          <button
-            type="button"
-            disabled={locked || isView}
-            onClick={() => setSafetyCheckCompleted("Y")}
-            className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold ${
-              safetyCheckCompleted === "Y"
-                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-                : "border-slate-200 bg-slate-50 text-slate-700"
-            } disabled:opacity-60`}
-          >
-            Yes — safety / prestart completed
-          </button>
+  <div>
+    <label className="block text-sm font-medium mb-2">
+      Has an incident occurred?
+    </label>
 
-          <button
-            type="button"
-            disabled={locked || isView}
-            onClick={() => setSafetyCheckCompleted("N")}
-            className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold ${
-              safetyCheckCompleted === "N"
-                ? "border-amber-300 bg-amber-50 text-amber-800"
-                : "border-slate-200 bg-slate-50 text-slate-700"
-            } disabled:opacity-60`}
-          >
-            No — not completed / issue raised
-          </button>
-        </div>
+    <div className="flex flex-wrap gap-3">
+      <button
+        type="button"
+        disabled={locked || isView}
+        onClick={() => {
+          setIncidentOccurred(false);
+          setIncidentType("");
+          setIncidentNotes("");
+        }}
+        className={`rounded-xl border px-5 py-3 text-sm font-semibold ${
+          !incidentOccurred
+            ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+            : "border-slate-200 bg-white text-slate-700"
+        } disabled:opacity-60`}
+      >
+        No
+      </button>
 
-        {!safetyCheckCompleted && !isView && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            Select Yes or No before submitting this docket.
-          </div>
-        )}
+      <button
+        type="button"
+        disabled={locked || isView}
+        onClick={() => setIncidentOccurred(true)}
+        className={`rounded-xl border px-5 py-3 text-sm font-semibold ${
+          incidentOccurred
+            ? "border-red-300 bg-red-50 text-red-800"
+            : "border-slate-200 bg-white text-slate-700"
+        } disabled:opacity-60`}
+      >
+        Yes
+      </button>
+    </div>
+  </div>
 
-        <div className="pt-2">
-          <label className={`inline-flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-semibold ${incidentOccurred ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-800"}`}>
-            <input
-              type="checkbox"
-              checked={incidentOccurred}
-              disabled={locked || isView}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setIncidentOccurred(checked);
+  {incidentOccurred && (
+    <div className="grid md:grid-cols-2 gap-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+      <div>
+        <label className="block text-sm font-medium mb-1">Incident Type</label>
+        <select
+          className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
+          value={incidentType}
+          disabled={locked || isView}
+          onChange={(e) => setIncidentType(e.target.value)}
+        >
+          <option value="">Select incident type...</option>
+          <option value="injury">Injury</option>
+          <option value="near_miss">Near Miss</option>
+          <option value="property_damage">Property / Plant Damage</option>
+          <option value="environmental">Environmental</option>
+          <option value="safety_observation">Safety Observation</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
 
-                if (!checked) {
-                  setIncidentType("");
-                  setIncidentNotes("");
-                }
-              }}
-              className="h-4 w-4"
-            />
-            Incident occurred on this shift
-          </label>
-        </div>
-
-        {incidentOccurred && (
-          <div className="grid md:grid-cols-2 gap-4 rounded-2xl border border-red-200 bg-red-50 p-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Incident Type</label>
-              <select
-                className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
-                value={incidentType}
-                disabled={locked || isView}
-                onChange={(e) => setIncidentType(e.target.value)}
-              >
-                <option value="">Select incident type...</option>
-                <option value="injury">Injury</option>
-                <option value="near_miss">Near Miss</option>
-                <option value="property_damage">Property / Plant Damage</option>
-                <option value="environmental">Environmental</option>
-                <option value="safety_observation">Safety Observation</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-
-            <Input
-              label="Incident Notes / Action Required"
-              value={incidentNotes}
-              onChange={setIncidentNotes}
-              disabled={locked || isView}
-            />
-          </div>
-        )}
-      </section>
+      <Input
+        label="Incident Notes / Action Required"
+        value={incidentNotes}
+        onChange={setIncidentNotes}
+        disabled={locked || isView}
+      />
+    </div>
+  )}
+</section>
 
       {shouldShowPlantSection && (
         <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
