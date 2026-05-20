@@ -10,24 +10,15 @@ type Project = {
   project_number?: string | null;
 };
 
-type Tower = {
-  id: string;
-  name?: string | null;
-  line?: string | null;
-  extra_data?: Record<string, unknown> | null;
-};
-
 type Employee = {
   id: string;
   full_name: string;
-  role: string | null;
   active?: boolean | null;
 };
 
 type PersonRow = {
   employee_id: string;
   employee_name: string;
-  role: string;
   start_time: string;
   finish_time: string;
   total_hours: number;
@@ -41,24 +32,25 @@ type ResourceRow = {
   notes: string;
 };
 
-const WORK_TYPES = [
-  "Steel delivery",
-  "Bolt chasing",
-  "Crane support",
-  "Stringing support",
-  "Weather delay",
-  "Mobilisation",
-  "Demobilisation",
-  "Moving blocks",
-  "Standby",
-  "Rework",
-  "Material handling",
-  "Other",
-];
+type WorkType = {
+  code: string;
+  label: string;
+};
 
-function getTowerName(tower: Tower) {
-  return tower.name || "Unnamed Tower";
-}
+const WORK_TYPES: WorkType[] = [
+  { code: "SD", label: "Steel delivery" },
+  { code: "BC", label: "Bolt chasing" },
+  { code: "CS", label: "Crane support" },
+  { code: "SS", label: "Stringing support" },
+  { code: "WD", label: "Weather delay" },
+  { code: "MOB", label: "Mobilisation" },
+  { code: "DEMOB", label: "Demobilisation" },
+  { code: "MB", label: "Moving blocks" },
+  { code: "SB", label: "Standby" },
+  { code: "RW", label: "Rework" },
+  { code: "MH", label: "Material handling" },
+  { code: "OTH", label: "Other" },
+];
 
 function getEmployeeName(employee: Employee) {
   return employee.full_name || "Unnamed Employee";
@@ -102,17 +94,14 @@ export default function CreateDayworkPage() {
   const [saving, setSaving] = useState(false);
 
   const [project, setProject] = useState<Project | null>(null);
-  const [towers, setTowers] = useState<Tower[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
-
-  
 
   const [sequenceNo, setSequenceNo] = useState(1);
   const [dayworkDate, setDayworkDate] = useState(() =>
     new Date().toISOString().slice(0, 10)
   );
-  const [workType, setWorkType] = useState("Steel delivery");
-  const [towerId, setTowerId] = useState("");
+
+  const [workTypeCode, setWorkTypeCode] = useState(WORK_TYPES[0].code);
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
   const [completedBy, setCompletedBy] = useState("");
@@ -122,7 +111,6 @@ export default function CreateDayworkPage() {
     {
       employee_id: "",
       employee_name: "",
-      role: "",
       start_time: "",
       finish_time: "",
       total_hours: 0,
@@ -151,17 +139,9 @@ export default function CreateDayworkPage() {
 
       if (projectError) console.error("project load error", projectError);
 
-      const { data: towerData, error: towerError } = await supabase
-        .from("towers")
-        .select("id, name, line, extra_data")
-        .eq("project_id", projectId)
-        .order("name", { ascending: true });
-
-      if (towerError) console.error("tower load error", towerError);
-
       const { data: employeeData, error: employeeError } = await supabase
         .from("employees")
-        .select("id, full_name, role, active")
+        .select("id, full_name, active")
         .eq("active", true)
         .order("full_name", { ascending: true });
 
@@ -178,7 +158,6 @@ export default function CreateDayworkPage() {
       if (sequenceError) console.error("sequence load error", sequenceError);
 
       setProject((projectData as Project) || null);
-      setTowers((towerData as Tower[]) || []);
       setEmployees((employeeData as Employee[]) || []);
 
       const nextSequence = latestDaywork?.sequence_no
@@ -192,24 +171,29 @@ export default function CreateDayworkPage() {
     if (projectId) void load();
   }, [projectId, supabase]);
 
+  const selectedWorkType = useMemo(() => {
+    return WORK_TYPES.find((type) => type.code === workTypeCode) || WORK_TYPES[0];
+  }, [workTypeCode]);
+
   const docketNumber = useMemo(() => {
     const projectNumber = project?.project_number || "PROJECT-NUMBER";
     return buildDocketNumber(projectNumber, sequenceNo);
   }, [project?.project_number, sequenceNo]);
-
 
   function updatePerson(index: number, changes: Partial<PersonRow>) {
     setPeople((prev) => {
       const next = [...prev];
       const updated = { ...next[index], ...changes };
 
-      updated.total_hours = calculateHours(updated.start_time, updated.finish_time);
+      updated.total_hours = calculateHours(
+        updated.start_time,
+        updated.finish_time
+      );
 
       next[index] = updated;
       return next;
     });
   }
-
 
   function addPerson() {
     setPeople((prev) => [
@@ -217,10 +201,9 @@ export default function CreateDayworkPage() {
       {
         employee_id: "",
         employee_name: "",
-        role: "",
         start_time: "",
         finish_time: "",
-          total_hours: 0,
+        total_hours: 0,
         activity: "",
       },
     ]);
@@ -274,16 +257,18 @@ export default function CreateDayworkPage() {
       .insert([
         {
           project_id: projectId,
-          tower_id: towerId || null,
+          tower_id: null,
           docket_number: docketNumber,
           sequence_no: sequenceNo,
           daywork_date: dayworkDate,
-          work_type: workType,
+          work_type: selectedWorkType.label,
+          work_type_code: selectedWorkType.code,
           location: location.trim() || null,
           description: description.trim(),
           completed_by: completedBy.trim() || null,
           comments: comments.trim() || null,
           status,
+          source_type: "manual",
         },
       ])
       .select("id")
@@ -304,7 +289,6 @@ export default function CreateDayworkPage() {
           daywork_id: daywork.id,
           employee_id: person.employee_id || null,
           employee_name: person.employee_name.trim(),
-          role: person.role.trim() || null,
           start_time: person.start_time || null,
           finish_time: person.finish_time || null,
           total_hours: person.total_hours || 0,
@@ -366,43 +350,47 @@ export default function CreateDayworkPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 md:p-8 space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-<div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-  <div>
-    <div className="flex items-center gap-3 mb-3">
-      <button
-        type="button"
-        onClick={() => router.push(`/project/${projectId}/dayworks`)}
-        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-      >
-        ← Back
-      </button>
-    </div>
+        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3 mb-3">
+              <button
+                type="button"
+                onClick={() => router.push(`/project/${projectId}/dayworks`)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+              >
+                ← Back
+              </button>
+            </div>
 
-    <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-      Create Daywork Docket
-    </h1>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+              Create Daywork Docket
+            </h1>
 
-    <p className="mt-2 text-slate-600">
-      Record the work completed, personnel involved, hours worked and resources used.
-    </p>
-  </div>
+            <p className="mt-2 text-slate-600">
+              Record the work completed, personnel involved, hours worked and resources used.
+            </p>
+          </div>
 
-  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
-    <div className="text-xs uppercase tracking-wide text-slate-500">
-      Docket Number
-    </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Docket Number
+            </div>
 
-    <div className="mt-1 text-lg font-black text-slate-900">
-      {docketNumber}
-    </div>
-  </div>
-</div>
+            <div className="mt-1 text-lg font-black text-slate-900">
+              {docketNumber}
+            </div>
+
+            <div className="mt-2 text-xs font-semibold text-slate-500">
+              Work Code: {selectedWorkType.code}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
         <h2 className="text-xl font-bold text-slate-900">Docket Details</h2>
 
-        <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
           <div>
             <label className="block text-xs text-slate-500 mb-1">Date</label>
             <input
@@ -414,51 +402,27 @@ export default function CreateDayworkPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-slate-500 mb-1">Work Type</label>
+            <label className="block text-xs text-slate-500 mb-1">
+              Work Type / Code
+            </label>
             <select
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-              value={workType}
-              onChange={(e) => setWorkType(e.target.value)}
+              value={workTypeCode}
+              onChange={(e) => setWorkTypeCode(e.target.value)}
             >
               {WORK_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
+                <option key={type.code} value={type.code}>
+                  {type.code} - {type.label}
                 </option>
               ))}
             </select>
           </div>
 
-<div>
-  <label className="block text-xs text-slate-500 mb-1">
-    Tower / Area
-  </label>
-
-  <select
-    className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-    value={towerId}
-    onChange={(e) => setTowerId(e.target.value)}
-  >
-    <option value="">
-      General project works
-    </option>
-
-    {towers.map((tower) => (
-      <option key={tower.id} value={tower.id}>
-        {getTowerName(tower)}
-      </option>
-    ))}
-  </select>
-
-  <p className="mt-1 text-xs text-slate-400">
-    Optional — select a tower if the work was tied to a specific location.
-  </p>
-</div>
-
           <div>
             <label className="block text-xs text-slate-500 mb-1">Location</label>
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-              placeholder="e.g. T13 pad, laydown yard"
+              placeholder="e.g. T13 to T14, laydown yard, site access"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
             />
@@ -466,7 +430,9 @@ export default function CreateDayworkPage() {
         </div>
 
         <div>
-          <label className="block text-xs text-slate-500 mb-1">Work completed</label>
+          <label className="block text-xs text-slate-500 mb-1">
+            Work completed
+          </label>
           <textarea
             className="min-h-28 w-full rounded-xl border border-slate-300 px-3 py-2.5"
             placeholder="Example: Moved crane blocks from T13 to T14 and assisted with crane mobilisation."
@@ -479,7 +445,9 @@ export default function CreateDayworkPage() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">Personnel Involved</h2>
+            <h2 className="text-xl font-bold text-slate-900">
+              Personnel Involved
+            </h2>
             <p className="mt-1 text-sm text-slate-600">
               Select employees and record the time spent on this work.
             </p>
@@ -494,14 +462,17 @@ export default function CreateDayworkPage() {
           </button>
         </div>
 
-
-
         <div className="space-y-3">
           {people.map((person, index) => (
-            <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="grid md:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div
+              key={index}
+              className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="grid md:grid-cols-2 xl:grid-cols-5 gap-3">
                 <div className="xl:col-span-2 relative">
-                  <label className="block text-xs text-slate-500 mb-1">Employee</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Employee
+                  </label>
                   <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="Search employee..."
@@ -510,7 +481,6 @@ export default function CreateDayworkPage() {
                       updatePerson(index, {
                         employee_id: "",
                         employee_name: e.target.value,
-                        role: "",
                       })
                     }
                   />
@@ -519,8 +489,7 @@ export default function CreateDayworkPage() {
                     <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg">
                       {employees
                         .filter((employee) =>
-                          [employee.full_name, employee.role]
-                            .join(" ")
+                          employee.full_name
                             .toLowerCase()
                             .includes(person.employee_name.toLowerCase())
                         )
@@ -534,18 +503,12 @@ export default function CreateDayworkPage() {
                               updatePerson(index, {
                                 employee_id: employee.id,
                                 employee_name: getEmployeeName(employee),
-                                role: employee.role || "",
                               })
                             }
                           >
                             <div className="font-medium text-slate-900">
                               {getEmployeeName(employee)}
                             </div>
-                            {employee.role && (
-                              <div className="text-xs text-slate-500">
-                                {employee.role}
-                              </div>
-                            )}
                           </button>
                         ))}
                     </div>
@@ -553,37 +516,37 @@ export default function CreateDayworkPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Role</label>
-                  <input
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                    value={person.role}
-                    onChange={(e) => updatePerson(index, { role: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Start</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Start
+                  </label>
                   <input
                     type="time"
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     value={person.start_time}
-                    onChange={(e) => updatePerson(index, { start_time: e.target.value })}
+                    onChange={(e) =>
+                      updatePerson(index, { start_time: e.target.value })
+                    }
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Finish</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Finish
+                  </label>
                   <input
                     type="time"
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     value={person.finish_time}
-                    onChange={(e) => updatePerson(index, { finish_time: e.target.value })}
+                    onChange={(e) =>
+                      updatePerson(index, { finish_time: e.target.value })
+                    }
                   />
                 </div>
 
-
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Total</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Total
+                  </label>
                   <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-semibold text-slate-900">
                     {person.total_hours.toFixed(2)}
                   </div>
@@ -592,12 +555,16 @@ export default function CreateDayworkPage() {
 
               <div className="mt-3 grid md:grid-cols-[1fr_auto] gap-3">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Activity</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Activity
+                  </label>
                   <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="e.g. Truck unloading, bolt chasing, moving blocks"
                     value={person.activity}
-                    onChange={(e) => updatePerson(index, { activity: e.target.value })}
+                    onChange={(e) =>
+                      updatePerson(index, { activity: e.target.value })
+                    }
                   />
                 </div>
 
@@ -627,7 +594,9 @@ export default function CreateDayworkPage() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">Resources Used</h2>
+            <h2 className="text-xl font-bold text-slate-900">
+              Resources Used
+            </h2>
             <p className="mt-1 text-sm text-slate-600">
               Record plant, equipment, trucks or other resources used for the work.
             </p>
@@ -644,10 +613,15 @@ export default function CreateDayworkPage() {
 
         <div className="space-y-3">
           {resources.map((resource, index) => (
-            <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div
+              key={index}
+              className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+            >
               <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Resource</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Resource
+                  </label>
                   <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="e.g. Telehandler, Crane, Truck"
@@ -659,18 +633,24 @@ export default function CreateDayworkPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Hours Used</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Hours Used
+                  </label>
                   <input
                     type="number"
                     step="0.25"
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     value={resource.hours}
-                    onChange={(e) => updateResource(index, { hours: e.target.value })}
+                    onChange={(e) =>
+                      updateResource(index, { hours: e.target.value })
+                    }
                   />
                 </div>
 
                 <div className="xl:col-span-2">
-                  <label className="block text-xs text-slate-500 mb-1">Activity</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Activity
+                  </label>
                   <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     placeholder="e.g. Steel unloading, crane block relocation"
@@ -684,11 +664,15 @@ export default function CreateDayworkPage() {
 
               <div className="mt-3 grid md:grid-cols-[1fr_auto] gap-3">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">Notes</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    Notes
+                  </label>
                   <input
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
                     value={resource.notes}
-                    onChange={(e) => updateResource(index, { notes: e.target.value })}
+                    onChange={(e) =>
+                      updateResource(index, { notes: e.target.value })
+                    }
                   />
                 </div>
 
@@ -720,7 +704,9 @@ export default function CreateDayworkPage() {
 
         <div className="grid md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs text-slate-500 mb-1">Completed By</label>
+            <label className="block text-xs text-slate-500 mb-1">
+              Completed By
+            </label>
             <input
               className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
               value={completedBy}
