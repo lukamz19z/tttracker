@@ -1690,16 +1690,23 @@ const towerLocation =
               )
             );
 
-      const affectedPlant =
-        delay.delay_applies_mode === "labour_and_plant"
-          ? plantRowsWithTotals.filter((row, plantIndex) => {
-              const displayName = plantDisplayName(row, plantIndex);
-              return delay.plant_names.some(
-                (name) => normalizeWorkerName(name) === normalizeWorkerName(displayName)
-              );
-            })
-          : [];
-
+const affectedPlant =
+  delay.delay_applies_mode === "labour_and_plant"
+    ? delay.plant_names.length > 0
+      ? plantRowsWithTotals.filter((row, plantIndex) => {
+          const displayName = plantDisplayName(row, plantIndex);
+          return delay.plant_names.some(
+            (name) =>
+              normalizeWorkerName(name) === normalizeWorkerName(displayName)
+          );
+        })
+      : plantRowsWithTotals.filter(
+          (row) =>
+            row.plant_name.trim() ||
+            row.asset_id.trim() ||
+            row.plant_type.trim()
+        )
+    : [];
 const locationText = towerLocation;
       const descriptionText = [
         `${meta.label} recorded from daily docket.`,
