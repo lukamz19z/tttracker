@@ -1722,7 +1722,7 @@ const locationText = towerLocation;
           : "",
       ]
         .filter(Boolean)
-        .join("\\n");
+        .join("\n");
 
       const existingDayworkId = existingByKey.get(sourceDelayKey);
       let dayworkIdForRows = existingDayworkId;
