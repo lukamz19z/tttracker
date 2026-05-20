@@ -1631,6 +1631,20 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }
 
   async function syncDelayDayworks(docketIdValue: string) {
+    const { data: towerData } = await supabase
+  .from("towers")
+  .select("id, name, line, extra_data")
+  .eq("id", towerId)
+  .single();
+
+const towerLocation =
+  String(
+    towerData?.name ||
+      towerData?.extra_data?.tower_number ||
+      towerData?.extra_data?.structure_number ||
+      towerData?.extra_data?.tower_no ||
+      ""
+  ) || "Tower related works";
     const activeDelays = delayRows.filter((delay) => toNumber(delay.delay_hours) > 0);
 
     const { data: existingLinkedDayworks, error: existingDayworksError } = await supabase
@@ -1686,7 +1700,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
             })
           : [];
 
-const locationText = towerLabel || "Tower related works";
+const locationText = towerLocation;
       const descriptionText = [
         `${meta.label} recorded from daily docket.`,
         delay.delay_reason ? `Reason: ${delay.delay_reason}` : "",
