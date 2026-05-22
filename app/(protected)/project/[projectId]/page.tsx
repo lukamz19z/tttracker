@@ -12,11 +12,6 @@ type Project = {
   status?: string | null;
   client?: string | null;
   location?: string | null;
-
-  project_number?: string | null;
-  client_code?: string | null;
-  project_year?: number | null;
-  project_sequence?: number | null;
 };
 
 type Tower = {
@@ -115,14 +110,6 @@ type CrewProductionSummary = {
   lastDocketDate: string | null;
 };
 
-type CrewChartRow = {
-  crewName: string;
-  rawMhPerTonne: number | null;
-  productionMhPerTonne: number | null;
-  productionHours: number;
-  productionTonnes: number;
-};
-
 type ForecastRow = {
   towerId: string;
   towerName: string;
@@ -135,9 +122,21 @@ type ForecastRow = {
   benchmarkDailyRawHours: number | null;
 };
 
+type TrendRow = {
+  date: string;
+  rawHours: number;
+  productionHours: number;
+  productionTonnes: number;
+  rawMhPerTonne: number | null;
+  productionMhPerTonne: number | null;
+  docketCount: number;
+};
+
 type QuickActionType = "docket" | "delivery" | "materials" | null;
 type AnalyticsView = "tower_performance" | "crew_performance" | "mh_per_tonne" | "production_mh_per_tonne" | "completed_towers";
 type SortDirection = "best" | "worst";
+type RowsToShow = "10" | "25" | "50" | "all";
+type TrendMetric = "both" | "raw" | "production";
 type UserRole = "admin" | "editor" | "viewer" | string | null;
 
 type ProjectStats = {
@@ -242,6 +241,14 @@ function getTowerDisplayName(tower: Tower) {
   return tower.tower_number || tower.structure_number || tower.tower_no || tower.name || "Unnamed Tower";
 }
 
+function naturalSortText(a: string, b: string) {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function naturalTowerSort(a: Tower, b: Tower) {
+  return naturalSortText(getTowerDisplayName(a), getTowerDisplayName(b));
+}
+
 function getTowerComputedProgress(tower: Tower, dockets: DocketRow[]) {
   const related = dockets.filter((d) => d.tower_id === tower.id);
 
@@ -254,7 +261,7 @@ function getTowerComputedProgress(tower: Tower, dockets: DocketRow[]) {
     }, 0);
   }
 
-  return 0;
+  return safeNumber(tower.progress, 0);
 }
 
 function getDocketProgress(docket: DocketRow) {
@@ -469,93 +476,6 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle: s
   );
 }
 
-function CrewBenchmarkChart({
-  title,
-  subtitle,
-  rows,
-  average,
-  metricKey,
-  unit = "MH/t",
-}: {
-  title: string;
-  subtitle: string;
-  rows: CrewChartRow[];
-  average: number | null;
-  metricKey: "rawMhPerTonne" | "productionMhPerTonne";
-  unit?: string;
-}) {
-  const validRows = rows.filter((row) => row[metricKey] !== null);
-  const maxValue = Math.max(
-    average || 0,
-    ...validRows.map((row) => safeNumber(row[metricKey], 0)),
-    1,
-  );
-
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <SectionHeader title={title} subtitle={subtitle} />
-
-      {validRows.length === 0 ? (
-        <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
-          No crew data available for this metric yet.
-        </div>
-      ) : (
-        <div className="mt-6 space-y-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-medium text-slate-600">Project average</span>
-              <span className="font-black text-slate-900">
-                {formatDecimal(average, 2)} {unit}
-              </span>
-            </div>
-          </div>
-
-          {validRows.map((row) => {
-            const value = row[metricKey];
-            const width = value !== null ? clampPercent((value / maxValue) * 100) : 0;
-            const isBetterThanAverage =
-              average !== null && value !== null ? value <= average : false;
-
-            return (
-              <div key={`${title}-${row.crewName}`} className="space-y-2">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-slate-900">{row.crewName}</div>
-                    <div className="text-xs text-slate-500">
-                      {formatDecimal(row.productionTonnes, 2)} t • {formatDecimal(row.productionHours, 1)} prod hrs
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-black text-slate-900">
-                      {formatDecimal(value, 2)} {unit}
-                    </div>
-                    <div className={`text-xs font-medium ${isBetterThanAverage ? "text-emerald-600" : "text-amber-600"}`}>
-                      {average === null ? "No average" : isBetterThanAverage ? "Better than avg" : "Above avg"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="relative h-4 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className={`h-full rounded-full ${isBetterThanAverage ? "bg-emerald-500" : "bg-amber-500"}`}
-                    style={{ width: `${width}%` }}
-                  />
-                  {average !== null && (
-                    <div
-                      className="absolute top-0 h-full w-0.5 bg-slate-900/70"
-                      style={{ left: `${clampPercent((average / maxValue) * 100)}%` }}
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ForecastBadge({ value }: { value: number | null }) {
   if (value === null) {
     return <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">No forecast</span>;
@@ -571,6 +491,78 @@ function ForecastBadge({ value }: { value: number | null }) {
       : "bg-rose-100 text-rose-700";
 
   return <span className={`rounded-full px-3 py-1 text-xs font-semibold ${tone}`}>{formatDecimal(value, 1)} days</span>;
+}
+
+function TrendBarChart({ rows, metric }: { rows: TrendRow[]; metric: TrendMetric }) {
+  const visibleRows = rows.slice(-20);
+  const maxValue = Math.max(
+    1,
+    ...visibleRows.map((row) =>
+      Math.max(
+        metric !== "production" ? safeNumber(row.rawMhPerTonne, 0) : 0,
+        metric !== "raw" ? safeNumber(row.productionMhPerTonne, 0) : 0,
+      ),
+    ),
+  );
+
+  if (visibleRows.length === 0) {
+    return (
+      <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
+        No trend data found for the selected filters.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-end gap-3 overflow-x-auto pb-2">
+        {visibleRows.map((row) => {
+          const rawHeight = clampPercent((safeNumber(row.rawMhPerTonne, 0) / maxValue) * 100);
+          const productionHeight = clampPercent((safeNumber(row.productionMhPerTonne, 0) / maxValue) * 100);
+
+          return (
+            <div key={row.date} className="min-w-[72px] flex-1">
+              <div className="h-44 flex items-end justify-center gap-1 rounded-xl bg-white border border-slate-200 px-2 py-2">
+                {metric !== "production" && (
+                  <div
+                    className="w-5 rounded-t-lg bg-blue-500"
+                    title={`Raw MH/t: ${formatDecimal(row.rawMhPerTonne, 2)}`}
+                    style={{ height: `${Math.max(4, rawHeight)}%` }}
+                  />
+                )}
+                {metric !== "raw" && (
+                  <div
+                    className="w-5 rounded-t-lg bg-violet-500"
+                    title={`Production MH/t: ${formatDecimal(row.productionMhPerTonne, 2)}`}
+                    style={{ height: `${Math.max(4, productionHeight)}%` }}
+                  />
+                )}
+              </div>
+              <div className="mt-2 text-center text-[11px] font-medium text-slate-500">
+                {formatDate(row.date)}
+              </div>
+              <div className="mt-1 text-center text-[11px] text-slate-400">
+                {row.docketCount} docket{row.docketCount === 1 ? "" : "s"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600">
+        {metric !== "production" && (
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded bg-blue-500" /> Raw MH/t
+          </span>
+        )}
+        {metric !== "raw" && (
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3 w-3 rounded bg-violet-500" /> Production MH/t
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function ProjectDashboard() {
@@ -595,21 +587,20 @@ export default function ProjectDashboard() {
   const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("tower_performance");
   const [analyticsCrewFilter, setAnalyticsCrewFilter] = useState("all");
   const [analyticsSortDirection, setAnalyticsSortDirection] = useState<SortDirection>("best");
+  const [analyticsSearch, setAnalyticsSearch] = useState("");
+  const [analyticsRowsToShow, setAnalyticsRowsToShow] = useState<RowsToShow>("25");
   const [forecastBenchmark, setForecastBenchmark] = useState("project_average");
+  const [forecastSearch, setForecastSearch] = useState("");
+  const [forecastRowsToShow, setForecastRowsToShow] = useState<RowsToShow>("25");
+  const [trendCrewFilter, setTrendCrewFilter] = useState("all");
+  const [trendStartDate, setTrendStartDate] = useState("");
+  const [trendEndDate, setTrendEndDate] = useState("");
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>("both");
   const [role, setRole] = useState<UserRole>(null);
 
   const [editingProject, setEditingProject] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
-  const [projectForm, setProjectForm] = useState({
-  name: "",
-  location: "",
-  status: "",
-  client: "",
-  project_number: "",
-  client_code: "",
-  project_year: "",
-  project_sequence: "",
-});
+  const [projectForm, setProjectForm] = useState({ name: "", location: "", status: "", client: "" });
 
   const isAdmin = role === "admin";
 
@@ -629,7 +620,7 @@ export default function ProjectDashboard() {
 
     const { data: projectData, error: projectError } = await supabase
       .from("projects")
-      .select("id, name, status, client, location, project_number, client_code, project_year, project_sequence")
+      .select("id, name, status, client, location")
       .eq("id", projectId)
       .single();
 
@@ -643,7 +634,7 @@ export default function ProjectDashboard() {
 
     if (towersError) console.error("towers load error", towersError);
 
-    const loadedTowers = (towersData as Tower[] | null) || [];
+    const loadedTowers = [...((towersData as Tower[] | null) || [])].sort(naturalTowerSort);
     const towerIds = loadedTowers.map((t) => t.id);
 
     const { data: docketsData, error: docketsError } = await supabase
@@ -729,27 +720,15 @@ export default function ProjectDashboard() {
       }
     }
 
-const loadedProject = (projectData as Project | null) || null;
+    const loadedProject = (projectData as Project | null) || null;
 
-setProject(loadedProject);
-
-setProjectForm({
-  name: loadedProject?.name || "",
-  location: loadedProject?.location || "",
-  status: loadedProject?.status || "",
-  client: loadedProject?.client || "",
-
-  project_number: loadedProject?.project_number || "",
-  client_code: loadedProject?.client_code || "",
-
-  project_year: loadedProject?.project_year
-    ? String(loadedProject.project_year)
-    : "",
-
-  project_sequence: loadedProject?.project_sequence
-    ? String(loadedProject.project_sequence)
-    : "",
-});
+    setProject(loadedProject);
+    setProjectForm({
+      name: loadedProject?.name || "",
+      location: loadedProject?.location || "",
+      status: loadedProject?.status || "",
+      client: loadedProject?.client || "",
+    });
     setTowers(loadedTowers);
     setDockets(loadedDockets);
     setLabourRows(loadedLabourRows);
@@ -817,7 +796,7 @@ setProjectForm({
   }, [towers, deliveries, deliveryItems, materialBundles]);
 
   const towerProductionSummaries = useMemo<TowerProductionSummary[]>(() => {
-    return towers.map((tower) => {
+    return [...towers].sort(naturalTowerSort).map((tower) => {
       const computedProgress = getTowerComputedProgress(tower, dockets);
       const computedWeight = getTowerWeightFromExtraData(tower.extra_data);
       const completedTonnes = computedWeight ? computedWeight * (computedProgress / 100) : null;
@@ -840,6 +819,105 @@ setProjectForm({
       };
     });
   }, [towers, dockets, docketHoursById, docketProductionHoursById]);
+
+  const stats = useMemo<ProjectStats>(() => {
+    const totalTowers = towers.length;
+
+    const towersComplete = towerProductionSummaries.filter((tower) => tower.computedProgress >= 100).length;
+    const towersInProgress = towerProductionSummaries.filter(
+      (tower) => tower.computedProgress > 0 && tower.computedProgress < 100,
+    ).length;
+    const towersNotStarted = towerProductionSummaries.filter((tower) => tower.computedProgress <= 0).length;
+
+    const deliveryTowersInProgress = towers.filter((tower) => {
+      const summary = deliverySummaryByTowerId.get(tower.id);
+      return summary && summary.deliveryPercent > 0 && summary.deliveryPercent < 100;
+    }).length;
+
+    const totalDockets = dockets.length;
+    const totalManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.manhours, 0);
+    const productionManhours = towerProductionSummaries.reduce((sum, tower) => sum + tower.productionManhours, 0);
+
+    const totalTowerWeightRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.computedWeight, 0), 0);
+    const totalTowerWeight = totalTowerWeightRaw > 0 ? totalTowerWeightRaw : null;
+
+    const completedTonnesRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.completedTonnes, 0), 0);
+    const completedTonnes = completedTonnesRaw > 0 ? completedTonnesRaw : null;
+
+    const manhoursPerTonne = completedTonnes && completedTonnes > 0 ? totalManhours / completedTonnes : null;
+    const productionManhoursPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
+    const overallProgressPercent = totalTowerWeightRaw > 0
+      ? clampPercent((completedTonnesRaw / totalTowerWeightRaw) * 100)
+      : totalTowers > 0
+      ? clampPercent(towerProductionSummaries.reduce((sum, tower) => sum + tower.computedProgress, 0) / totalTowers)
+      : 0;
+
+    const totalDefects = defects.length;
+    const openDefects = defects.filter((defect) => {
+      const st = safeString(defect.status).trim().toLowerCase();
+      return st !== "closed" && st !== "complete" && st !== "completed";
+    }).length;
+
+    const totalDeliveries = deliveries.length;
+
+    const totalRequiredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.requiredQty, 0), 0);
+    const deliveredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.deliveredQty, 0), 0);
+    const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
+    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
+
+    const latestDocketDate =
+      dockets
+        .map((d) => d.docket_date)
+        .filter((d): d is string => !!d)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+
+    return {
+      totalTowers,
+      towersComplete,
+      towersInProgress,
+      towersNotStarted,
+      deliveryTowersInProgress,
+      totalDockets,
+      totalManhours,
+      productionManhours,
+      totalTowerWeight,
+      completedTonnes,
+      manhoursPerTonne,
+      productionManhoursPerTonne,
+      overallProgressPercent,
+      openDefects,
+      totalDefects,
+      totalDeliveries,
+      totalRequiredQty,
+      deliveredQty,
+      outstandingQty,
+      deliveryPercent,
+      latestDocketDate,
+    };
+  }, [towers, towerProductionSummaries, dockets, defects, deliveries, deliverySummaryByTowerId]);
+
+  const inProgressTowers = useMemo(() => {
+    return towerProductionSummaries
+      .filter((tower) => tower.computedProgress > 0 && tower.computedProgress < 100)
+      .sort((a, b) => b.computedProgress - a.computedProgress)
+      .slice(0, 8);
+  }, [towerProductionSummaries]);
+
+  const deliveryTowersInProgress = useMemo<TowerDeliverySummary[]>(() => {
+    return towers
+      .map((tower) => {
+        const summary = deliverySummaryByTowerId.get(tower.id) || {
+          requiredQty: 0,
+          deliveredQty: 0,
+          outstandingQty: 0,
+          deliveryPercent: 0,
+        };
+        return { ...tower, ...summary };
+      })
+      .filter((tower) => tower.deliveryPercent > 0 && tower.deliveryPercent < 100)
+      .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
+      .slice(0, 8);
+  }, [towers, deliverySummaryByTowerId]);
 
   const crewProduction = useMemo<CrewProductionSummary[]>(() => {
     const towerById = new Map<string, TowerProductionSummary>();
@@ -939,138 +1017,19 @@ setProjectForm({
       });
   }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById]);
 
-  const stats = useMemo<ProjectStats>(() => {
-    const totalTowers = towers.length;
-
-    const towersComplete = towerProductionSummaries.filter((tower) => tower.computedProgress >= 100).length;
-    const towersInProgress = towerProductionSummaries.filter(
-      (tower) => tower.computedProgress > 0 && tower.computedProgress < 100,
-    ).length;
-    const towersNotStarted = towerProductionSummaries.filter((tower) => tower.computedProgress <= 0).length;
-
-    const deliveryTowersInProgress = towers.filter((tower) => {
-      const summary = deliverySummaryByTowerId.get(tower.id);
-      return summary && summary.deliveryPercent > 0 && summary.deliveryPercent < 100;
-    }).length;
-
-    const totalDockets = dockets.length;
-
-    // Keep project KPI MH/t aligned with the Crew Production Comparison table.
-    // This uses docket-by-docket progress gain rather than stale tower summary totals,
-    // so deleting a docket immediately changes the KPI values as well as the crew table.
-    const totalManhours = crewProduction.reduce((sum, crew) => sum + crew.totalHours, 0);
-    const productionManhours = crewProduction.reduce((sum, crew) => sum + crew.productionHours, 0);
-    const productionTonnesRaw = crewProduction.reduce((sum, crew) => sum + crew.productionTonnes, 0);
-
-    const totalTowerWeightRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.computedWeight, 0), 0);
-    const totalTowerWeight = totalTowerWeightRaw > 0 ? totalTowerWeightRaw : null;
-
-    const completedTonnesRaw = towerProductionSummaries.reduce((sum, tower) => sum + safeNumber(tower.completedTonnes, 0), 0);
-    const completedTonnes = productionTonnesRaw > 0 ? productionTonnesRaw : completedTonnesRaw > 0 ? completedTonnesRaw : null;
-
-    const manhoursPerTonne = completedTonnes && completedTonnes > 0 ? totalManhours / completedTonnes : null;
-    const productionManhoursPerTonne = completedTonnes && completedTonnes > 0 ? productionManhours / completedTonnes : null;
-    const overallProgressPercent = totalTowerWeightRaw > 0
-      ? clampPercent((completedTonnesRaw / totalTowerWeightRaw) * 100)
-      : totalTowers > 0
-      ? clampPercent(towerProductionSummaries.reduce((sum, tower) => sum + tower.computedProgress, 0) / totalTowers)
-      : 0;
-
-    const totalDefects = defects.length;
-    const openDefects = defects.filter((defect) => {
-      const st = safeString(defect.status).trim().toLowerCase();
-      return st !== "closed" && st !== "complete" && st !== "completed";
-    }).length;
-
-    const totalDeliveries = deliveries.length;
-
-    const totalRequiredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.requiredQty, 0), 0);
-    const deliveredQty = towers.reduce((sum, tower) => sum + safeNumber(deliverySummaryByTowerId.get(tower.id)?.deliveredQty, 0), 0);
-    const outstandingQty = Math.max(0, totalRequiredQty - deliveredQty);
-    const deliveryPercent = totalRequiredQty > 0 ? clampPercent((deliveredQty / totalRequiredQty) * 100) : 0;
-
-    const latestDocketDate =
-      dockets
-        .map((d) => d.docket_date)
-        .filter((d): d is string => !!d)
-        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
-
-    return {
-      totalTowers,
-      towersComplete,
-      towersInProgress,
-      towersNotStarted,
-      deliveryTowersInProgress,
-      totalDockets,
-      totalManhours,
-      productionManhours,
-      totalTowerWeight,
-      completedTonnes,
-      manhoursPerTonne,
-      productionManhoursPerTonne,
-      overallProgressPercent,
-      openDefects,
-      totalDefects,
-      totalDeliveries,
-      totalRequiredQty,
-      deliveredQty,
-      outstandingQty,
-      deliveryPercent,
-      latestDocketDate,
-    };
-  }, [towers, towerProductionSummaries, crewProduction, dockets, defects, deliveries, deliverySummaryByTowerId]);
-
-  const inProgressTowers = useMemo(() => {
+  const bestPerformingTowers = useMemo(() => {
     return towerProductionSummaries
-      .filter((tower) => tower.computedProgress > 0 && tower.computedProgress < 100)
-      .sort((a, b) => b.computedProgress - a.computedProgress)
-      .slice(0, 8);
+      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
+      .sort((a, b) => safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999))
+      .slice(0, 5);
   }, [towerProductionSummaries]);
 
-  const deliveryTowersInProgress = useMemo<TowerDeliverySummary[]>(() => {
-    return towers
-      .map((tower) => {
-        const summary = deliverySummaryByTowerId.get(tower.id) || {
-          requiredQty: 0,
-          deliveredQty: 0,
-          outstandingQty: 0,
-          deliveryPercent: 0,
-        };
-        return { ...tower, ...summary };
-      })
-      .filter((tower) => tower.deliveryPercent > 0 && tower.deliveryPercent < 100)
-      .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
-      .slice(0, 8);
-  }, [towers, deliverySummaryByTowerId]);
-
-const validPerformanceTower = (tower: TowerProductionSummary) =>
-  tower.productionMhPerTonne !== null &&
-  tower.computedProgress > 0 &&
-  tower.productionManhours > 0 &&
-  tower.completedTonnes !== null &&
-  tower.completedTonnes > 0;
-
-const bestPerformingTowers = useMemo(() => {
-  return towerProductionSummaries
-    .filter(validPerformanceTower)
-    .sort(
-      (a, b) =>
-        safeNumber(a.productionMhPerTonne, 999999) -
-        safeNumber(b.productionMhPerTonne, 999999)
-    )
-    .slice(0, 5);
-}, [towerProductionSummaries]);
-
-const watchlistTowers = useMemo(() => {
-  return towerProductionSummaries
-    .filter(validPerformanceTower)
-    .sort(
-      (a, b) =>
-        safeNumber(b.productionMhPerTonne, -1) -
-        safeNumber(a.productionMhPerTonne, -1)
-    )
-    .slice(0, 5);
-}, [towerProductionSummaries]);
+  const watchlistTowers = useMemo(() => {
+    return towerProductionSummaries
+      .filter((tower) => tower.productionMhPerTonne !== null && tower.computedProgress > 0)
+      .sort((a, b) => safeNumber(b.productionMhPerTonne, -1) - safeNumber(a.productionMhPerTonne, -1))
+      .slice(0, 5);
+  }, [towerProductionSummaries]);
 
   const completedTowersByCrew = useMemo(() => {
     return crewProduction
@@ -1084,6 +1043,16 @@ const watchlistTowers = useMemo(() => {
 
   const analyticsRows = useMemo(() => {
     let rows = [...towerProductionSummaries];
+
+    const q = analyticsSearch.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((tower) =>
+        [getTowerDisplayName(tower), safeString(tower.line), safeString(tower.status)]
+          .join(" ")
+          .toLowerCase()
+          .includes(q),
+      );
+    }
 
     if (analyticsCrewFilter !== "all") {
       const towerIds = new Set(
@@ -1104,40 +1073,34 @@ const watchlistTowers = useMemo(() => {
     return rows.sort((a, b) => {
       if (analyticsView === "mh_per_tonne") return (safeNumber(a.rawMhPerTonne, 999999) - safeNumber(b.rawMhPerTonne, 999999)) * direction;
       if (analyticsView === "production_mh_per_tonne") return (safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999)) * direction;
-      if (analyticsView === "completed_towers") return b.computedProgress - a.computedProgress;
-      return (safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999)) * direction;
+      if (analyticsView === "completed_towers") return b.computedProgress - a.computedProgress || naturalTowerSort(a, b);
+      return (safeNumber(a.productionMhPerTonne, 999999) - safeNumber(b.productionMhPerTonne, 999999)) * direction || naturalTowerSort(a, b);
     });
-  }, [towerProductionSummaries, analyticsView, analyticsCrewFilter, analyticsSortDirection, dockets]);
+  }, [towerProductionSummaries, analyticsView, analyticsCrewFilter, analyticsSortDirection, analyticsSearch, dockets]);
 
-  const crewChartRows = useMemo<CrewChartRow[]>(() => {
-    return crewProduction
-      .filter((crew) => crew.productionTonnes > 0 && (crew.rawMhPerTonne !== null || crew.mhPerTonne !== null))
-      .map((crew) => ({
-        crewName: crew.crewName,
-        rawMhPerTonne: crew.rawMhPerTonne,
-        productionMhPerTonne: crew.mhPerTonne,
-        productionHours: crew.productionHours,
-        productionTonnes: crew.productionTonnes,
-      }));
-  }, [crewProduction]);
+  function limitRows<T>(rows: T[], count: RowsToShow) {
+    if (count === "all") return rows;
+    return rows.slice(0, Number(count));
+  }
+
+  const visibleAnalyticsRows = useMemo(() => {
+    return limitRows(analyticsRows, analyticsRowsToShow);
+  }, [analyticsRows, analyticsRowsToShow]);
 
   const projectAverageDailyRawHours = useMemo(() => {
-    const validDockets = dockets.filter((docket) => docket.docket_date);
-    if (validDockets.length === 0) return null;
-
     const rawHoursByDate = new Map<string, number>();
 
-    validDockets.forEach((docket) => {
+    dockets.forEach((docket) => {
       if (!docket.docket_date) return;
-      const current = rawHoursByDate.get(docket.docket_date) || 0;
       rawHoursByDate.set(
         docket.docket_date,
-        current + (docketHoursById.get(docket.id) || 0),
+        (rawHoursByDate.get(docket.docket_date) || 0) + (docketHoursById.get(docket.id) || 0),
       );
     });
 
-    const total = Array.from(rawHoursByDate.values()).reduce((sum, value) => sum + value, 0);
-    return rawHoursByDate.size > 0 ? total / rawHoursByDate.size : null;
+    const values = Array.from(rawHoursByDate.values());
+    if (values.length === 0) return null;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
   }, [dockets, docketHoursById]);
 
   const bestBenchmarkCrew = useMemo(() => {
@@ -1156,7 +1119,8 @@ const watchlistTowers = useMemo(() => {
 
   const selectedForecastBenchmark = useMemo(() => {
     if (forecastBenchmark === "best_crew" && bestBenchmarkCrew) {
-      const dailyRawHours = bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.totalHours / bestBenchmarkCrew.docketCount : null;
+      const dailyRawHours =
+        bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.totalHours / bestBenchmarkCrew.docketCount : null;
 
       return {
         label: bestBenchmarkCrew.crewName,
@@ -1187,17 +1151,23 @@ const watchlistTowers = useMemo(() => {
   const forecastRows = useMemo<ForecastRow[]>(() => {
     const benchmarkMhPerTonne = selectedForecastBenchmark.mhPerTonne;
     const benchmarkDailyRawHours = selectedForecastBenchmark.dailyRawHours;
+    const q = forecastSearch.trim().toLowerCase();
 
     return towerProductionSummaries
       .filter((tower) => tower.computedProgress < 100)
+      .filter((tower) => {
+        if (!q) return true;
+        return [getTowerDisplayName(tower), safeString(tower.line), safeString(tower.status)]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
       .map((tower) => {
         const weight = tower.computedWeight;
         const remainingTonnes =
           weight !== null && weight > 0 ? weight * ((100 - tower.computedProgress) / 100) : null;
         const forecastRawHours =
-          remainingTonnes !== null && benchmarkMhPerTonne !== null
-            ? remainingTonnes * benchmarkMhPerTonne
-            : null;
+          remainingTonnes !== null && benchmarkMhPerTonne !== null ? remainingTonnes * benchmarkMhPerTonne : null;
         const forecastDays =
           forecastRawHours !== null && benchmarkDailyRawHours !== null && benchmarkDailyRawHours > 0
             ? forecastRawHours / benchmarkDailyRawHours
@@ -1215,13 +1185,86 @@ const watchlistTowers = useMemo(() => {
           benchmarkDailyRawHours,
         };
       })
-      .sort((a, b) => safeNumber(a.forecastDays, 999999) - safeNumber(b.forecastDays, 999999))
-      .slice(0, 12);
-  }, [towerProductionSummaries, selectedForecastBenchmark]);
+      .sort((a, b) => safeNumber(a.forecastDays, 999999) - safeNumber(b.forecastDays, 999999) || naturalSortText(a.towerName, b.towerName));
+  }, [towerProductionSummaries, selectedForecastBenchmark, forecastSearch]);
+
+  const visibleForecastRows = useMemo(() => {
+    return limitRows(forecastRows, forecastRowsToShow);
+  }, [forecastRows, forecastRowsToShow]);
+
+  const trendCrewOptions = useMemo(() => {
+    return ["all", ...crewProduction.map((crew) => crew.crewName)];
+  }, [crewProduction]);
+
+  const trendRows = useMemo<TrendRow[]>(() => {
+    const towerById = new Map<string, TowerProductionSummary>();
+    towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
+
+    const sortedDocketsByTower = new Map<string, DocketRow[]>();
+    dockets.forEach((docket) => {
+      if (!docket.tower_id || !docket.docket_date) return;
+
+      const crewName = safeString(docket.crew || docket.leading_hand || "Unassigned Crew", "Unassigned Crew").trim() || "Unassigned Crew";
+      if (trendCrewFilter !== "all" && crewName !== trendCrewFilter) return;
+      if (trendStartDate && docket.docket_date < trendStartDate) return;
+      if (trendEndDate && docket.docket_date > trendEndDate) return;
+
+      const arr = sortedDocketsByTower.get(docket.tower_id) || [];
+      arr.push(docket);
+      sortedDocketsByTower.set(docket.tower_id, arr);
+    });
+
+    const byDate = new Map<string, { rawHours: number; productionHours: number; productionTonnes: number; docketCount: number }>();
+
+    sortedDocketsByTower.forEach((towerDockets, towerId) => {
+      const tower = towerById.get(towerId);
+      const towerWeight = safeNumber(tower?.computedWeight, 0);
+      let previousProgress = 0;
+
+      towerDockets
+        .sort((a, b) => new Date(a.docket_date || "").getTime() - new Date(b.docket_date || "").getTime())
+        .forEach((docket) => {
+          if (!docket.docket_date) return;
+
+          const currentProgress = getDocketProgress(docket);
+          const progressDelta = Math.max(0, currentProgress - previousProgress);
+          const productionTonnes = towerWeight > 0 ? towerWeight * (progressDelta / 100) : 0;
+          const rawHours = docketHoursById.get(docket.id) || 0;
+          const productionHours = docketProductionHoursById.get(docket.id) || rawHours;
+
+          const existing = byDate.get(docket.docket_date) || {
+            rawHours: 0,
+            productionHours: 0,
+            productionTonnes: 0,
+            docketCount: 0,
+          };
+
+          existing.rawHours += rawHours;
+          existing.productionHours += productionHours;
+          existing.productionTonnes += productionTonnes;
+          existing.docketCount += 1;
+          byDate.set(docket.docket_date, existing);
+
+          previousProgress = Math.max(previousProgress, currentProgress);
+        });
+    });
+
+    return Array.from(byDate.entries())
+      .map(([date, row]) => ({
+        date,
+        rawHours: row.rawHours,
+        productionHours: row.productionHours,
+        productionTonnes: row.productionTonnes,
+        rawMhPerTonne: row.productionTonnes > 0 ? row.rawHours / row.productionTonnes : null,
+        productionMhPerTonne: row.productionTonnes > 0 ? row.productionHours / row.productionTonnes : null,
+        docketCount: row.docketCount,
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById, trendCrewFilter, trendStartDate, trendEndDate]);
 
   const filteredTowers = useMemo(() => {
     const q = towerSearch.trim().toLowerCase();
-    const sorted = [...towers].sort((a, b) => getTowerDisplayName(a).localeCompare(getTowerDisplayName(b)));
+    const sorted = [...towers].sort(naturalTowerSort);
     if (!q) return sorted;
 
     return sorted.filter((tower) => {
@@ -1240,109 +1283,58 @@ const watchlistTowers = useMemo(() => {
     setTowerSearch("");
   }
 
-function startEditingProject() {
-  if (!project) return;
-  setProjectForm({
-    name: project.name || "",
-    location: project.location || "",
-    status: project.status || "",
-    client: project.client || "",
-
-    project_number: project.project_number || "",
-    client_code: project.client_code || "",
-    project_year: project.project_year ? String(project.project_year) : "",
-    project_sequence: project.project_sequence
-      ? String(project.project_sequence)
-      : "",
-  });
-  setEditingProject(true);
-}
-
-function cancelEditingProject() {
-  if (project) {
+  function startEditingProject() {
+    if (!project) return;
     setProjectForm({
       name: project.name || "",
       location: project.location || "",
       status: project.status || "",
       client: project.client || "",
-
-      project_number: project.project_number || "",
-      client_code: project.client_code || "",
-      project_year: project.project_year ? String(project.project_year) : "",
-      project_sequence: project.project_sequence
-        ? String(project.project_sequence)
-        : "",
     });
-  }
-  setEditingProject(false);
-}
-
-async function saveProjectDetails() {
-  if (!project) return;
-  setSavingProject(true);
-
-  const rebuiltProjectNumber =
-    projectForm.client_code.trim() &&
-    projectForm.project_year.trim() &&
-    projectForm.project_sequence.trim()
-      ? `P-${projectForm.client_code.trim().toUpperCase()}-${String(
-          projectForm.project_year
-        ).slice(-2)}-${String(Number(projectForm.project_sequence)).padStart(
-          3,
-          "0"
-        )}`
-      : projectForm.project_number.trim();
-
-  const payload = {
-    name: projectForm.name.trim(),
-    location: projectForm.location.trim(),
-    status: projectForm.status.trim(),
-    client: projectForm.client.trim(),
-
-    project_number: rebuiltProjectNumber,
-    client_code: projectForm.client_code.trim().toUpperCase(),
-    project_year: projectForm.project_year
-      ? Number(projectForm.project_year)
-      : null,
-    project_sequence: projectForm.project_sequence
-      ? Number(projectForm.project_sequence)
-      : null,
-  };
-
-  const { data, error } = await supabase
-    .from("projects")
-    .update(payload)
-    .eq("id", project.id)
-    .select(
-      "id, name, status, client, location, project_number, client_code, project_year, project_sequence"
-    )
-    .single();
-
-  setSavingProject(false);
-
-  if (error) {
-    console.error("project update error", error);
-    alert(error.message);
-    return;
+    setEditingProject(true);
   }
 
-  setProject((data as Project) || null);
+  function cancelEditingProject() {
+    if (project) {
+      setProjectForm({
+        name: project.name || "",
+        location: project.location || "",
+        status: project.status || "",
+        client: project.client || "",
+      });
+    }
+    setEditingProject(false);
+  }
 
-  setProjectForm({
-    name: data?.name || "",
-    location: data?.location || "",
-    status: data?.status || "",
-    client: data?.client || "",
-    project_number: data?.project_number || "",
-    client_code: data?.client_code || "",
-    project_year: data?.project_year ? String(data.project_year) : "",
-    project_sequence: data?.project_sequence
-      ? String(data.project_sequence)
-      : "",
-  });
+  async function saveProjectDetails() {
+    if (!project) return;
+    setSavingProject(true);
 
-  setEditingProject(false);
-}
+    const payload = {
+      name: projectForm.name.trim(),
+      location: projectForm.location.trim(),
+      status: projectForm.status.trim(),
+      client: projectForm.client.trim(),
+    };
+
+    const { data, error } = await supabase
+      .from("projects")
+      .update(payload)
+      .eq("id", project.id)
+      .select("id, name, status, client, location")
+      .single();
+
+    setSavingProject(false);
+
+    if (error) {
+      console.error("project update error", error);
+      alert("Failed to update project details.");
+      return;
+    }
+
+    setProject((data as Project) || null);
+    setEditingProject(false);
+  }
 
   function goToTowerAction(towerId: string) {
     if (!actionType) return;
@@ -1372,21 +1364,10 @@ async function saveProjectDetails() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         {!editingProject ? (
           <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-<div>
-  <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-    {project?.name || `Project ${projectId}`}
-  </h1>
-
-  {project?.project_number && (
-    <p className="mt-1 text-sm font-semibold text-slate-500">
-      {project.project_number}
-    </p>
-  )}
-
-  <p className="mt-2 text-slate-600">
-    Project-wide overview across all assigned towers.
-  </p>
-</div>
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900">{project?.name || `Project ${projectId}`}</h1>
+              <p className="mt-2 text-slate-600">Project-wide overview across all assigned towers.</p>
+            </div>
 
             <div className="flex flex-wrap gap-3">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -1424,47 +1405,24 @@ async function saveProjectDetails() {
               </div>
             </div>
 
-         <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Project Name</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.name} onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Location</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.location} onChange={(e) => setProjectForm((prev) => ({ ...prev, location: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Status</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.status} onChange={(e) => setProjectForm((prev) => ({ ...prev, status: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Client</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.client} onChange={(e) => setProjectForm((prev) => ({ ...prev, client: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Project Number</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_number} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_number: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Client Code</label>
-    <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5 uppercase" value={projectForm.client_code} onChange={(e) => setProjectForm((prev) => ({ ...prev, client_code: e.target.value.toUpperCase() }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Project Year</label>
-    <input type="number" className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_year} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_year: e.target.value }))} />
-  </div>
-
-  <div>
-    <label className="block text-xs text-slate-500 mb-1">Project Sequence</label>
-    <input type="number" className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.project_sequence} onChange={(e) => setProjectForm((prev) => ({ ...prev, project_sequence: e.target.value }))} />
-  </div>
-</div>
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Project Name</label>
+                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.name} onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Location</label>
+                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.location} onChange={(e) => setProjectForm((prev) => ({ ...prev, location: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Status</label>
+                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.status} onChange={(e) => setProjectForm((prev) => ({ ...prev, status: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Client</label>
+                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.client} onChange={(e) => setProjectForm((prev) => ({ ...prev, client: e.target.value }))} />
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1655,31 +1613,13 @@ async function saveProjectDetails() {
         </div>
       </div>
 
-      <div className="grid xl:grid-cols-2 gap-6">
-        <CrewBenchmarkChart
-          title="Crew Production MH/t vs Average"
-          subtitle="Lower is better. The black marker shows the current project average."
-          rows={crewChartRows}
-          average={stats.productionManhoursPerTonne}
-          metricKey="productionMhPerTonne"
-        />
-
-        <CrewBenchmarkChart
-          title="Crew Raw MH/t vs Average"
-          subtitle="Compares total raw hours against production tonnes. Lower is better."
-          rows={crewChartRows}
-          average={stats.manhoursPerTonne}
-          metricKey="rawMhPerTonne"
-        />
-      </div>
-
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
           title="Project Analytics View"
           subtitle="Filter the project like a dashboard: compare by raw MH/t, production MH/t, crew allocation or completed towers."
         />
 
-        <div className="mt-6 grid md:grid-cols-4 gap-3">
+        <div className="mt-6 grid md:grid-cols-6 gap-3">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">View mode</label>
             <select value={analyticsView} onChange={(e) => setAnalyticsView(e.target.value as AnalyticsView)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
@@ -1703,10 +1643,29 @@ async function saveProjectDetails() {
               <option value="worst">Worst first</option>
             </select>
           </div>
-          <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Rows shown</div>
-            <div className="mt-1 text-xl font-black text-slate-900">{analyticsRows.length}</div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Rows</label>
+            <select value={analyticsRowsToShow} onChange={(e) => setAnalyticsRowsToShow(e.target.value as RowsToShow)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="10">10 rows</option>
+              <option value="25">25 rows</option>
+              <option value="50">50 rows</option>
+              <option value="all">All rows</option>
+            </select>
           </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-slate-500 mb-1">Search tower</label>
+            <input
+              value={analyticsSearch}
+              onChange={(e) => setAnalyticsSearch(e.target.value)}
+              placeholder="Search tower, line or status..."
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 w-fit">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Rows shown</div>
+          <div className="mt-1 text-xl font-black text-slate-900">{visibleAnalyticsRows.length} / {analyticsRows.length}</div>
         </div>
 
         <div className="mt-6 hidden md:block overflow-x-auto">
@@ -1723,7 +1682,7 @@ async function saveProjectDetails() {
               </tr>
             </thead>
             <tbody>
-              {analyticsRows.slice(0, 25).map((tower) => (
+              {visibleAnalyticsRows.map((tower) => (
                 <tr key={tower.id} className="border-b border-slate-100 last:border-0">
                   <td className="py-3 pr-4 font-semibold text-slate-900"><Link href={`/project/${projectId}/tower/${tower.id}`} className="hover:underline">{getTowerDisplayName(tower)}</Link></td>
                   <td className="py-3 pr-4 text-slate-600">{tower.computedProgress}%</td>
@@ -1739,7 +1698,7 @@ async function saveProjectDetails() {
         </div>
 
         <div className="mt-6 md:hidden space-y-3">
-          {analyticsRows.slice(0, 15).map((tower) => (
+          {visibleAnalyticsRows.map((tower) => (
             <Link key={tower.id} href={`/project/${projectId}/tower/${tower.id}`} className="block rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1758,8 +1717,46 @@ async function saveProjectDetails() {
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
+          title="Performance Trend Analytics"
+          subtitle="Track raw MH/t and production MH/t across dates to see whether certain periods, crews or conditions are performing better or worse."
+        />
+
+        <div className="mt-6 grid md:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Crew</label>
+            <select value={trendCrewFilter} onChange={(e) => setTrendCrewFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              {trendCrewOptions.map((crew) => <option key={crew} value={crew}>{crew === "all" ? "All crews" : crew}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Start date</label>
+            <input type="date" value={trendStartDate} onChange={(e) => setTrendStartDate(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">End date</label>
+            <input type="date" value={trendEndDate} onChange={(e) => setTrendEndDate(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Metric</label>
+            <select value={trendMetric} onChange={(e) => setTrendMetric(e.target.value as TrendMetric)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="both">Raw + Production</option>
+              <option value="raw">Raw MH/t only</option>
+              <option value="production">Production MH/t only</option>
+            </select>
+          </div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Dates shown</div>
+            <div className="mt-1 text-xl font-black text-slate-900">{trendRows.length}</div>
+          </div>
+        </div>
+
+        <TrendBarChart rows={trendRows} metric={trendMetric} />
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <SectionHeader
           title="Forecasting"
-          subtitle="Forecast only — based on current docket productivity, project tower weights and remaining tower progress."
+          subtitle="Forecast only — based on remaining tower weight, current progress, raw MH/t and average raw hrs/day."
           action={
             <div className="w-full sm:w-auto">
               <label className="block text-xs font-medium text-slate-500 mb-1">Forecast benchmark</label>
@@ -1776,7 +1773,7 @@ async function saveProjectDetails() {
           }
         />
 
-        <div className="mt-6 grid md:grid-cols-3 gap-4">
+        <div className="mt-6 grid md:grid-cols-5 gap-3">
           <MetricTile
             title="Benchmark"
             value={selectedForecastBenchmark.label}
@@ -1789,12 +1786,29 @@ async function saveProjectDetails() {
             subtitle="average raw hrs/day"
             accent="blue"
           />
-          <MetricTile
-            title="Forecast Method"
-            value="Raw MH/t"
-            subtitle="no delay factor applied"
-            accent="amber"
-          />
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Rows</label>
+            <select value={forecastRowsToShow} onChange={(e) => setForecastRowsToShow(e.target.value as RowsToShow)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="10">10 rows</option>
+              <option value="25">25 rows</option>
+              <option value="50">50 rows</option>
+              <option value="all">All rows</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-slate-500 mb-1">Search tower</label>
+            <input
+              value={forecastSearch}
+              onChange={(e) => setForecastSearch(e.target.value)}
+              placeholder="Search tower, line or status..."
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 w-fit">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Rows shown</div>
+          <div className="mt-1 text-xl font-black text-slate-900">{visibleForecastRows.length} / {forecastRows.length}</div>
         </div>
 
         {forecastRows.length === 0 ? (
@@ -1816,7 +1830,7 @@ async function saveProjectDetails() {
                   </tr>
                 </thead>
                 <tbody>
-                  {forecastRows.map((row) => (
+                  {visibleForecastRows.map((row) => (
                     <tr key={row.towerId} className="border-b border-slate-100 last:border-0">
                       <td className="py-3 pr-4 font-semibold text-slate-900">
                         <Link href={`/project/${projectId}/tower/${row.towerId}`} className="hover:underline">{row.towerName}</Link>
@@ -1833,7 +1847,7 @@ async function saveProjectDetails() {
             </div>
 
             <div className="mt-6 md:hidden space-y-3">
-              {forecastRows.map((row) => (
+              {visibleForecastRows.map((row) => (
                 <Link key={row.towerId} href={`/project/${projectId}/tower/${row.towerId}`} className="block rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -1842,7 +1856,7 @@ async function saveProjectDetails() {
                         {row.progress}% progress • {formatDecimal(row.remainingTonnes, 2)} t remaining
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
-                        {formatDecimal(row.forecastRawHours, 1)} raw forecast hrs
+                        {formatDecimal(row.forecastRawHours, 1)} forecast raw hrs
                       </div>
                     </div>
                     <ForecastBadge value={row.forecastDays} />
@@ -1935,8 +1949,6 @@ async function saveProjectDetails() {
                 <div className="space-y-3">
                   {filteredTowers.map((tower) => {
                     const computedProgress = getTowerComputedProgress(tower, dockets);
-                    const deliverySummary = deliverySummaryByTowerId.get(tower.id) || { deliveryPercent: 0 };
-
                     return (
                       <button key={tower.id} onClick={() => goToTowerAction(tower.id)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
                         <div className="flex items-center justify-between gap-4">
