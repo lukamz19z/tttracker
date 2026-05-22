@@ -327,22 +327,6 @@ export default function AssetsDashboardPage() {
             </p>
           </div>
 
-          <div className="no-print flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handlePrintPdf}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Print / Save PDF
-            </button>
-
-            <Link
-              href="/assets/compliance"
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              Compliance View
-            </Link>
-          </div>
         </div>
       </section>
 
