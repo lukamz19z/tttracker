@@ -494,16 +494,7 @@ function ForecastBadge({ value }: { value: number | null }) {
 }
 
 function TrendBarChart({ rows, metric }: { rows: TrendRow[]; metric: TrendMetric }) {
-  const visibleRows = rows.slice(-20);
-  const maxValue = Math.max(
-    1,
-    ...visibleRows.map((row) =>
-      Math.max(
-        metric !== "production" ? safeNumber(row.rawMhPerTonne, 0) : 0,
-        metric !== "raw" ? safeNumber(row.productionMhPerTonne, 0) : 0,
-      ),
-    ),
-  );
+  const visibleRows = rows.slice(-24);
 
   if (visibleRows.length === 0) {
     return (
@@ -513,53 +504,214 @@ function TrendBarChart({ rows, metric }: { rows: TrendRow[]; metric: TrendMetric
     );
   }
 
+  const chartWidth = Math.max(720, visibleRows.length * 70);
+  const chartHeight = 320;
+  const padding = { top: 28, right: 26, bottom: 64, left: 62 };
+  const plotWidth = chartWidth - padding.left - padding.right;
+  const plotHeight = chartHeight - padding.top - padding.bottom;
+
+  const values = visibleRows.flatMap((row) => {
+    const next: number[] = [];
+    if (metric !== "production" && row.rawMhPerTonne !== null) next.push(row.rawMhPerTonne);
+    if (metric !== "raw" && row.productionMhPerTonne !== null) next.push(row.productionMhPerTonne);
+    return next;
+  });
+
+  const maxValue = Math.max(1, ...values);
+  const yMax = Math.ceil(maxValue * 1.15);
+  const yTicks = Array.from({ length: 5 }, (_, index) => (yMax / 4) * index).reverse();
+
+  function xForIndex(index: number) {
+    if (visibleRows.length === 1) return padding.left + plotWidth / 2;
+    return padding.left + (index / (visibleRows.length - 1)) * plotWidth;
+  }
+
+  function yForValue(value: number | null) {
+    if (value === null) return null;
+    return padding.top + plotHeight - (value / yMax) * plotHeight;
+  }
+
+  function buildLine(metricKey: "rawMhPerTonne" | "productionMhPerTonne") {
+    return visibleRows
+      .map((row, index) => {
+        const y = yForValue(row[metricKey]);
+        if (y === null) return null;
+        return `${xForIndex(index)},${y}`;
+      })
+      .filter((point): point is string => Boolean(point))
+      .join(" ");
+  }
+
+  const rawLine = buildLine("rawMhPerTonne");
+  const productionLine = buildLine("productionMhPerTonne");
+
   return (
     <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex items-end gap-3 overflow-x-auto pb-2">
-        {visibleRows.map((row) => {
-          const rawHeight = clampPercent((safeNumber(row.rawMhPerTonne, 0) / maxValue) * 100);
-          const productionHeight = clampPercent((safeNumber(row.productionMhPerTonne, 0) / maxValue) * 100);
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">MH/t trend by docket date</div>
+          <div className="text-xs text-slate-500">X-axis is date. Y-axis is MH/t. Lower is better.</div>
+        </div>
 
-          return (
-            <div key={row.date} className="min-w-[72px] flex-1">
-              <div className="h-44 flex items-end justify-center gap-1 rounded-xl bg-white border border-slate-200 px-2 py-2">
-                {metric !== "production" && (
-                  <div
-                    className="w-5 rounded-t-lg bg-blue-500"
-                    title={`Raw MH/t: ${formatDecimal(row.rawMhPerTonne, 2)}`}
-                    style={{ height: `${Math.max(4, rawHeight)}%` }}
-                  />
-                )}
-                {metric !== "raw" && (
-                  <div
-                    className="w-5 rounded-t-lg bg-violet-500"
-                    title={`Production MH/t: ${formatDecimal(row.productionMhPerTonne, 2)}`}
-                    style={{ height: `${Math.max(4, productionHeight)}%` }}
-                  />
-                )}
-              </div>
-              <div className="mt-2 text-center text-[11px] font-medium text-slate-500">
-                {formatDate(row.date)}
-              </div>
-              <div className="mt-1 text-center text-[11px] text-slate-400">
-                {row.docketCount} docket{row.docketCount === 1 ? "" : "s"}
-              </div>
-            </div>
-          );
-        })}
+        <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+          {metric !== "production" && (
+            <span className="inline-flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-blue-500" /> Raw MH/t
+            </span>
+          )}
+          {metric !== "raw" && (
+            <span className="inline-flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-violet-500" /> Production MH/t
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600">
-        {metric !== "production" && (
-          <span className="inline-flex items-center gap-2">
-            <span className="h-3 w-3 rounded bg-blue-500" /> Raw MH/t
-          </span>
-        )}
-        {metric !== "raw" && (
-          <span className="inline-flex items-center gap-2">
-            <span className="h-3 w-3 rounded bg-violet-500" /> Production MH/t
-          </span>
-        )}
+      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+        <svg width={chartWidth} height={chartHeight} className="block">
+          {yTicks.map((tick) => {
+            const y = yForValue(tick) || padding.top + plotHeight;
+            return (
+              <g key={`y-${tick}`}>
+                <line
+                  x1={padding.left}
+                  y1={y}
+                  x2={chartWidth - padding.right}
+                  y2={y}
+                  stroke="#e2e8f0"
+                  strokeWidth="1"
+                />
+                <text
+                  x={padding.left - 12}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="fill-slate-500 text-[11px]"
+                >
+                  {formatDecimal(tick, 0)}
+                </text>
+              </g>
+            );
+          })}
+
+          <line
+            x1={padding.left}
+            y1={padding.top}
+            x2={padding.left}
+            y2={padding.top + plotHeight}
+            stroke="#cbd5e1"
+            strokeWidth="1.5"
+          />
+          <line
+            x1={padding.left}
+            y1={padding.top + plotHeight}
+            x2={chartWidth - padding.right}
+            y2={padding.top + plotHeight}
+            stroke="#cbd5e1"
+            strokeWidth="1.5"
+          />
+
+          {metric !== "production" && rawLine && (
+            <polyline
+              points={rawLine}
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+
+          {metric !== "raw" && productionLine && (
+            <polyline
+              points={productionLine}
+              fill="none"
+              stroke="#8b5cf6"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+
+          {visibleRows.map((row, index) => {
+            const x = xForIndex(index);
+            const rawY = yForValue(row.rawMhPerTonne);
+            const productionY = yForValue(row.productionMhPerTonne);
+            const showLabel = visibleRows.length <= 12 || index % Math.ceil(visibleRows.length / 8) === 0;
+
+            return (
+              <g key={row.date}>
+                {metric !== "production" && rawY !== null && (
+                  <g>
+                    <circle cx={x} cy={rawY} r="4.5" fill="#3b82f6">
+                      <title>{`${formatDate(row.date)} raw MH/t: ${formatDecimal(row.rawMhPerTonne, 2)}`}</title>
+                    </circle>
+                    {visibleRows.length <= 14 && (
+                      <text
+                        x={x}
+                        y={rawY - 10}
+                        textAnchor="middle"
+                        className="fill-slate-600 text-[10px] font-semibold"
+                      >
+                        {formatDecimal(row.rawMhPerTonne, 1)}
+                      </text>
+                    )}
+                  </g>
+                )}
+
+                {metric !== "raw" && productionY !== null && (
+                  <g>
+                    <circle cx={x} cy={productionY} r="4.5" fill="#8b5cf6">
+                      <title>{`${formatDate(row.date)} production MH/t: ${formatDecimal(row.productionMhPerTonne, 2)}`}</title>
+                    </circle>
+                    {visibleRows.length <= 14 && (
+                      <text
+                        x={x}
+                        y={productionY + 18}
+                        textAnchor="middle"
+                        className="fill-slate-600 text-[10px] font-semibold"
+                      >
+                        {formatDecimal(row.productionMhPerTonne, 1)}
+                      </text>
+                    )}
+                  </g>
+                )}
+
+                {showLabel && (
+                  <text
+                    x={x}
+                    y={chartHeight - 24}
+                    textAnchor="middle"
+                    transform={`rotate(-35 ${x} ${chartHeight - 24})`}
+                    className="fill-slate-500 text-[11px]"
+                  >
+                    {formatDate(row.date)}
+                  </text>
+                )}
+
+                {showLabel && (
+                  <text
+                    x={x}
+                    y={chartHeight - 8}
+                    textAnchor="middle"
+                    className="fill-slate-400 text-[10px]"
+                  >
+                    {row.docketCount} docket{row.docketCount === 1 ? "" : "s"}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+
+          <text
+            x={20}
+            y={padding.top + plotHeight / 2}
+            textAnchor="middle"
+            transform={`rotate(-90 20 ${padding.top + plotHeight / 2})`}
+            className="fill-slate-500 text-[12px] font-medium"
+          >
+            MH/t
+          </text>
+        </svg>
       </div>
     </div>
   );
