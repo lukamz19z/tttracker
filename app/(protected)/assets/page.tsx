@@ -15,7 +15,7 @@ type PanelItem = {
   asset: string;
   detail: string;
   status: string;
-  tone: "red" | "amber" | "green" | "blue" | "slate";
+  tone: "red" | "amber" | "green" | "blue" | "violet" | "slate";
 };
 
 function accentClasses(accent: Accent) {
@@ -45,6 +45,8 @@ function badgeClasses(tone: PanelItem["tone"]) {
       return "bg-emerald-100 text-emerald-700";
     case "blue":
       return "bg-blue-100 text-blue-700";
+    case "violet":
+      return "bg-violet-100 text-violet-700";
     default:
       return "bg-slate-100 text-slate-700";
   }
@@ -53,11 +55,11 @@ function badgeClasses(tone: PanelItem["tone"]) {
 function KpiTile({ title, value, subtitle, accent }: KpiCard) {
   return (
     <div className={`rounded-3xl border p-5 shadow-sm ${accentClasses(accent)}`}>
-      <div className="text-sm font-medium text-slate-500">{title}</div>
-      <div className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
+      <p className="text-sm font-medium text-slate-500">{title}</p>
+      <p className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
         {value}
-      </div>
-      <div className="mt-2 text-sm text-slate-600">{subtitle}</div>
+      </p>
+      <p className="mt-2 text-sm text-slate-600">{subtitle}</p>
     </div>
   );
 }
@@ -104,7 +106,7 @@ function ControlPanel({
   items: PanelItem[];
 }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm break-inside-avoid">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-bold text-slate-900">{title}</h3>
@@ -139,6 +141,26 @@ function ControlPanel({
         ))}
       </div>
     </div>
+  );
+}
+
+function QuickAction({
+  label,
+  href,
+  description,
+}: {
+  label: string;
+  href: string;
+  description: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+    >
+      <p className="font-bold text-slate-900">{label}</p>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+    </Link>
   );
 }
 
@@ -185,7 +207,7 @@ export default function AssetsDashboardPage() {
   const regoItems: PanelItem[] = [
     {
       asset: "No rego expiries loaded",
-      detail: "Vehicle and plant registration expiries will appear here.",
+      detail: "Vehicle and road-registered plant expiry dates will appear here.",
       status: "Pending data",
       tone: "slate",
     },
@@ -195,6 +217,15 @@ export default function AssetsDashboardPage() {
     {
       asset: "No insurance records loaded",
       detail: "Insurance and policy expiry dates will appear here.",
+      status: "Pending data",
+      tone: "slate",
+    },
+  ];
+
+  const serviceItems: PanelItem[] = [
+    {
+      asset: "No service records loaded",
+      detail: "Service due dates, service hours and workshop planning will appear here.",
       status: "Pending data",
       tone: "slate",
     },
@@ -218,9 +249,70 @@ export default function AssetsDashboardPage() {
     },
   ];
 
+  const missingDocumentItems: PanelItem[] = [
+    {
+      asset: "No missing documents loaded",
+      detail: "Missing load charts, risk assessments, manuals and certificates will appear here.",
+      status: "Pending data",
+      tone: "slate",
+    },
+  ];
+
+  const upcomingActions: PanelItem[] = [
+    {
+      asset: "Review asset compliance register",
+      detail: "Check rego, insurance, service due and inspection expiry dates.",
+      status: "Action",
+      tone: "blue",
+    },
+    {
+      asset: "Upload asset documents",
+      detail: "Attach load charts, insurance, rego, service records and plant risk assessments.",
+      status: "Action",
+      tone: "amber",
+    },
+    {
+      asset: "Set up prestart issue tracking",
+      detail: "Flagged prestart notes will feed directly into this dashboard.",
+      status: "Next",
+      tone: "violet",
+    },
+  ];
+
+  function handlePrintPdf() {
+    window.print();
+  }
+
   return (
-    <div className="p-6 md:p-8 space-y-6">
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="space-y-6 p-6 md:p-8 print:bg-white print:p-4">
+      <style jsx global>{`
+        @media print {
+          aside,
+          nav,
+          header,
+          .no-print {
+            display: none !important;
+          }
+
+          main {
+            width: 100% !important;
+          }
+
+          body {
+            background: white !important;
+          }
+
+          .print\\:shadow-none {
+            box-shadow: none !important;
+          }
+
+          .break-inside-avoid {
+            break-inside: avoid;
+          }
+        }
+      `}</style>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm print:shadow-none">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
@@ -230,18 +322,20 @@ export default function AssetsDashboardPage() {
               Assets Overview
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Track plant, vehicles, equipment, compliance expiries, insurance,
-              prestart issues and maintenance defects from one control dashboard.
+              Compliance dashboard for rego expiry, insurance expiry, service due,
+              prestart issues, open defects and missing asset documents.
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/assets/plant"
+          <div className="no-print flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handlePrintPdf}
               className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
-              Open Plant
-            </Link>
+              Print / Save PDF
+            </button>
+
             <Link
               href="/assets/compliance"
               className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
@@ -250,6 +344,34 @@ export default function AssetsDashboardPage() {
             </Link>
           </div>
         </div>
+      </section>
+
+      <section className="no-print grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <QuickAction
+          label="+ Add Plant"
+          href="/assets/plant"
+          description="Cranes, telehandlers, EWPs and major plant."
+        />
+        <QuickAction
+          label="+ Add Vehicle"
+          href="/assets/vehicles"
+          description="Hiluxes, trucks, trailers and road vehicles."
+        />
+        <QuickAction
+          label="+ Add Equipment"
+          href="/assets/equipment"
+          description="Tools, rigging, lifting gear and site equipment."
+        />
+        <QuickAction
+          label="+ Upload Compliance"
+          href="/assets/compliance"
+          description="Rego, insurance, CraneSafe and inspection records."
+        />
+        <QuickAction
+          label="+ Log Defect"
+          href="/assets/defects-maintenance"
+          description="Breakdowns, repairs and maintenance issues."
+        />
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -265,9 +387,9 @@ export default function AssetsDashboardPage() {
           subtitle="Calculated from current documents and expiries."
         />
         <DonutCard
-          title="Plant Availability"
+          title="Asset Availability"
           value={0}
-          subtitle="In-service assets compared with total plant."
+          subtitle="Available assets compared with total assets."
         />
         <DonutCard
           title="Prestart Health"
@@ -281,22 +403,30 @@ export default function AssetsDashboardPage() {
         />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-2">
+      <section className="grid gap-6 xl:grid-cols-3">
         <ControlPanel
           title="Rego Expiry"
-          subtitle="Vehicles, trucks, trailers and road-registered plant."
+          subtitle="Vehicles, trailers and road-registered plant."
           items={regoItems}
         />
 
         <ControlPanel
           title="Insurance Expiry"
-          subtitle="Insurance, policies and hired plant compliance records."
+          subtitle="Insurance, policies and hired plant records."
           items={insuranceItems}
         />
 
         <ControlPanel
+          title="Service Due"
+          subtitle="Service dates, service hours and workshop planning."
+          items={serviceItems}
+        />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-3">
+        <ControlPanel
           title="Flagged Issues from Prestarts"
-          subtitle="Faults raised by operators during daily checks."
+          subtitle="Faults and notes raised by operators during daily checks."
           items={prestartIssues}
         />
 
@@ -305,42 +435,29 @@ export default function AssetsDashboardPage() {
           subtitle="Repairs, breakdowns and assets requiring attention."
           items={defectItems}
         />
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-3">
-        <ControlPanel
-          title="Inspection / CraneSafe Expiry"
-          subtitle="Major plant inspections and CraneSafe records."
-          items={[
-            {
-              asset: "No inspection records loaded",
-              detail: "CraneSafe, annual inspections and plant inspections will appear here.",
-              status: "Pending data",
-              tone: "slate",
-            },
-          ]}
-        />
-
-        <ControlPanel
-          title="Service Due"
-          subtitle="Service dates, service hours and workshop planning."
-          items={[
-            {
-              asset: "No service records loaded",
-              detail: "Service due dates and service-hour triggers will appear here.",
-              status: "Pending data",
-              tone: "slate",
-            },
-          ]}
-        />
 
         <ControlPanel
           title="Missing Documents"
           subtitle="Load charts, risk assessments, manuals and certificates."
+          items={missingDocumentItems}
+        />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-2">
+        <ControlPanel
+          title="Upcoming Actions"
+          subtitle="Reminders and next steps that need attention."
+          items={upcomingActions}
+        />
+
+        <ControlPanel
+          title="Inspection / CraneSafe Expiry"
+          subtitle="Major plant inspections, CraneSafe and annual inspection records."
           items={[
             {
-              asset: "No missing documents loaded",
-              detail: "Assets missing required documents will appear here.",
+              asset: "No inspection records loaded",
+              detail:
+                "CraneSafe, annual inspections and plant inspection expiries will appear here.",
               status: "Pending data",
               tone: "slate",
             },
