@@ -17,6 +17,13 @@ type TowerIdentity = {
   group: string;
 };
 
+type MatchingTower = {
+  id: string;
+  name: string;
+  number: string;
+  group: string;
+};
+
 function safeString(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (value === null || value === undefined) return "";
@@ -88,6 +95,42 @@ function getTowerIdentity(tower: Tower): TowerIdentity | null {
   return parseComparableTowerName(tower.name);
 }
 
+function getTowerDisplayName(tower: Tower): string {
+  return tower.name || "Unnamed Tower";
+}
+
+function naturalTowerSort(a: Tower, b: Tower) {
+  return getTowerDisplayName(a).localeCompare(
+    getTowerDisplayName(b),
+    undefined,
+    {
+      numeric: true,
+      sensitivity: "base",
+    },
+  );
+}
+
+function naturalMatchingTowerSort(a: MatchingTower, b: MatchingTower) {
+  const numberCompare = a.number.localeCompare(b.number, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  if (numberCompare !== 0) return numberCompare;
+
+  const groupCompare = a.group.localeCompare(b.group, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  if (groupCompare !== 0) return groupCompare;
+
+  return a.name.localeCompare(b.name, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
 export function Sidebar({
   projectId,
   towerId,
@@ -99,58 +142,65 @@ export function Sidebar({
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [projectInfo, setProjectInfo] = useState<{
-  name: string | null;
-  project_number: string | null;
-} | null>(null);
+    name: string | null;
+    project_number: string | null;
+  } | null>(null);
+
   const [towers, setTowers] = useState<Tower[]>([]);
 
   const towerMatch = pathname.match(/\/tower\/([^/]+)/);
   const activeTowerId = towerId || towerMatch?.[1] || null;
 
   useEffect(() => {
-if (!projectId) return;
+    if (!projectId) return;
 
-async function loadProject() {
-  const { data: projectData } = await supabase
-    .from("projects")
-    .select("name, project_number")
-    .eq("id", projectId)
-    .single();
+    async function loadProject() {
+      const { data: projectData } = await supabase
+        .from("projects")
+        .select("name, project_number")
+        .eq("id", projectId)
+        .single();
 
-  if (projectData) {
-    setProjectInfo({
-      name: projectData.name,
-      project_number: projectData.project_number,
-    });
-  }
+      if (projectData) {
+        setProjectInfo({
+          name: projectData.name,
+          project_number: projectData.project_number,
+        });
+      }
 
-  const { data: towerData } = await supabase
-    .from("towers")
-    .select("id,name,line,extra_data")
-    .eq("project_id", projectId)
-    .order("name");
+      const { data: towerData } = await supabase
+        .from("towers")
+        .select("id,name,line,extra_data")
+        .eq("project_id", projectId);
 
-  if (towerData) setTowers(towerData as Tower[]);
-}
+      if (towerData) {
+        setTowers([...(towerData as Tower[])].sort(naturalTowerSort));
+      }
+    }
 
     void loadProject();
   }, [projectId, supabase]);
 
+  const sortedTowers = useMemo(() => {
+    return [...towers].sort(naturalTowerSort);
+  }, [towers]);
+
   const currentTower = useMemo(() => {
     if (!activeTowerId) return null;
-    return towers.find((tower) => tower.id === activeTowerId) || null;
-  }, [towers, activeTowerId]);
+    return sortedTowers.find((tower) => tower.id === activeTowerId) || null;
+  }, [sortedTowers, activeTowerId]);
 
   const currentTowerIndex = useMemo(() => {
     if (!activeTowerId) return -1;
-    return towers.findIndex((t) => t.id === activeTowerId);
-  }, [towers, activeTowerId]);
+    return sortedTowers.findIndex((tower) => tower.id === activeTowerId);
+  }, [sortedTowers, activeTowerId]);
 
-  const previousTower = currentTowerIndex > 0 ? towers[currentTowerIndex - 1] : null;
+  const previousTower =
+    currentTowerIndex > 0 ? sortedTowers[currentTowerIndex - 1] : null;
 
   const nextTower =
-    currentTowerIndex >= 0 && currentTowerIndex < towers.length - 1
-      ? towers[currentTowerIndex + 1]
+    currentTowerIndex >= 0 && currentTowerIndex < sortedTowers.length - 1
+      ? sortedTowers[currentTowerIndex + 1]
       : null;
 
   const matchingTowers = useMemo(() => {
@@ -159,7 +209,7 @@ async function loadProject() {
     const currentIdentity = getTowerIdentity(currentTower);
     if (!currentIdentity) return [];
 
-    return towers
+    return sortedTowers
       .map((tower) => {
         const identity = getTowerIdentity(tower);
 
@@ -169,23 +219,14 @@ async function loadProject() {
 
         return {
           id: tower.id,
-          name: tower.name || "Unnamed Tower",
+          name: getTowerDisplayName(tower),
           number: identity.number,
           group: identity.group,
         };
       })
-      .filter(
-        (
-          item,
-        ): item is {
-          id: string;
-          name: string;
-          number: string;
-          group: string;
-        } => item !== null,
-      )
-      .sort((a, b) => a.group.localeCompare(b.group, undefined, { numeric: true }));
-  }, [towers, currentTower]);
+      .filter((item): item is MatchingTower => item !== null)
+      .sort(naturalMatchingTowerSort);
+  }, [sortedTowers, currentTower]);
 
   function linkStyle(href: string) {
     let isActive = false;
@@ -207,64 +248,62 @@ async function loadProject() {
   }
 
   return (
-<aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
-  <div className="flex-1 p-4 space-y-6">
-
-    {projectId && (
-      <div>
-        <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
-          Current Project
-        </div>
-
-        <div className="bg-slate-100 rounded-2xl px-4 py-3">
-          <div className="font-semibold text-slate-800 truncate">
-            {projectInfo?.name || "Loading..."}
-          </div>
-
-          {projectInfo?.project_number && (
-            <div className="mt-1 text-xs font-medium text-slate-500">
-              {projectInfo.project_number}
+    <aside className="hidden md:flex flex-col w-64 border-r bg-white sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto">
+      <div className="flex-1 p-4 space-y-6">
+        {projectId && (
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
+              Current Project
             </div>
-          )}
-        </div>
-      </div>
-    )}
 
+            <div className="bg-slate-100 rounded-2xl px-4 py-3">
+              <div className="font-semibold text-slate-800 truncate">
+                {projectInfo?.name || "Loading..."}
+              </div>
+
+              {projectInfo?.project_number && (
+                <div className="mt-1 text-xs font-medium text-slate-500">
+                  {projectInfo.project_number}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div>
-<div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
-  Navigation
-</div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
+            Navigation
+          </div>
 
-<nav className="space-y-1">
-  <Link
-    className={linkStyle(`/project/${projectId}`)}
-    href={`/project/${projectId}`}
-  >
-    Dashboard
-  </Link>
+          <nav className="space-y-1">
+            <Link
+              className={linkStyle(`/project/${projectId}`)}
+              href={`/project/${projectId}`}
+            >
+              Dashboard
+            </Link>
 
-  <Link
-    className={linkStyle(`/project/${projectId}/towers`)}
-    href={`/project/${projectId}/towers`}
-  >
-    Towers
-  </Link>
+            <Link
+              className={linkStyle(`/project/${projectId}/towers`)}
+              href={`/project/${projectId}/towers`}
+            >
+              Towers
+            </Link>
 
-  <Link
-    className={linkStyle(`/project/${projectId}/dayworks`)}
-    href={`/project/${projectId}/dayworks`}
-  >
-    Dayworks
-  </Link>
+            <Link
+              className={linkStyle(`/project/${projectId}/dayworks`)}
+              href={`/project/${projectId}/dayworks`}
+            >
+              Dayworks
+            </Link>
 
-  <Link
-    className={linkStyle(`/project/${projectId}/map`)}
-    href={`/project/${projectId}/map`}
-  >
-    Map
-  </Link>
-</nav>
+            <Link
+              className={linkStyle(`/project/${projectId}/map`)}
+              href={`/project/${projectId}/map`}
+            >
+              Map
+            </Link>
+          </nav>
         </div>
 
         {activeTowerId && matchingTowers.length > 0 && (
@@ -306,7 +345,7 @@ async function loadProject() {
                   <div className="min-w-0">
                     <div className="text-xs text-slate-400">Previous</div>
                     <div className="font-medium text-sm truncate">
-                      {previousTower.name}
+                      {getTowerDisplayName(previousTower)}
                     </div>
                   </div>
 
@@ -322,7 +361,7 @@ async function loadProject() {
                   <div className="min-w-0">
                     <div className="text-xs text-slate-400">Next</div>
                     <div className="font-medium text-sm truncate">
-                      {nextTower.name}
+                      {getTowerDisplayName(nextTower)}
                     </div>
                   </div>
 

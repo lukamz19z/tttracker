@@ -38,6 +38,19 @@ function getTowerLabel(tower: Tower) {
   );
 }
 
+
+function naturalTowerSort(a: Tower, b: Tower) {
+  return getTowerLabel(a).localeCompare(getTowerLabel(b), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+
+function sortTowersNaturally<T extends Tower>(towerRows: T[]) {
+  return [...towerRows].sort(naturalTowerSort);
+}
+
 function getTowerType(tower: Tower) {
   const extra = tower.extra_data || {};
 
@@ -129,7 +142,7 @@ export default function TowersPage() {
       setLoading(true);
 
       const [towersRes, docketsRes] = await Promise.all([
-        supabase.from("towers").select("*").eq("project_id", projectId).order("name"),
+        supabase.from("towers").select("*").eq("project_id", projectId),
         supabase
           .from("tower_daily_dockets")
           .select("id, tower_id, assembly_percent, erection_percent")
@@ -150,7 +163,7 @@ export default function TowersPage() {
         console.error(docketsRes.error);
       }
 
-      setTowers((towersRes.data as Tower[]) || []);
+      setTowers(sortTowersNaturally((towersRes.data as Tower[]) || []));
       setDockets((docketsRes.data as DocketRow[]) || []);
       setLoading(false);
     }
@@ -208,7 +221,7 @@ export default function TowersPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return towers.filter((tower) => {
+    return sortTowersNaturally(towers).filter((tower) => {
       const progress = progressByTower[tower.id] || 0;
       const status = normalizeStatusFromProgress(progress);
 
