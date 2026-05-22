@@ -279,40 +279,12 @@ export default function AssetsDashboardPage() {
     },
   ];
 
-  function handlePrintPdf() {
-    window.print();
-  }
 
   return (
-    <div className="space-y-6 p-6 md:p-8 print:bg-white print:p-4">
-      <style jsx global>{`
-        @media print {
-          aside,
-          nav,
-          header,
-          .no-print {
-            display: none !important;
-          }
+    <div className="space-y-6 p-6 md:p-8">
 
-          main {
-            width: 100% !important;
-          }
 
-          body {
-            background: white !important;
-          }
-
-          .print\\:shadow-none {
-            box-shadow: none !important;
-          }
-
-          .break-inside-avoid {
-            break-inside: avoid;
-          }
-        }
-      `}</style>
-
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm print:shadow-none">
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
