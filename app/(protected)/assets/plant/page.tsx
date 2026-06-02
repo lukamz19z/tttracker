@@ -54,7 +54,10 @@ type EnhancedPlantAsset = PlantAsset & {
 
 type CrewOption = {
   id: string;
-  name: string;
+  crew_number: string;
+  crew_name: string | null;
+  leading_hand: string | null;
+  active: boolean | null;
 };
 
 type ProjectOption = {
@@ -208,12 +211,21 @@ export default function PlantPage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchInitialData() {
-      const [assetResult, crewResult, projectResult] = await Promise.all([
-        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
-        supabase.from("crews").select("id, name").order("name", { ascending: true }),
-        supabase.from("projects").select("id, name").order("name", { ascending: true }),
-      ]);
+async function fetchInitialData() {
+  const [assetResult, crewResult, projectResult] = await Promise.all([
+    supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
+
+    supabase
+      .from("crews")
+      .select("id, crew_number, crew_name, leading_hand, active")
+      .neq("active", false)
+      .order("crew_number", { ascending: true }),
+
+    supabase
+      .from("projects")
+      .select("id, name")
+      .order("name", { ascending: true }),
+  ]);
 
       if (cancelled) return;
 
@@ -817,11 +829,20 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 >
                   <option value="">Unassigned</option>
-                  {crews.map((crew) => (
-                    <option key={crew.id} value={crew.name}>
-                      {crew.name}
-                    </option>
-                  ))}
+{crews.map((crew) => {
+  const label = crew.crew_name
+    ? `${crew.crew_number} - ${crew.crew_name}`
+    : crew.crew_number;
+
+  return (
+    <option
+      key={crew.id}
+      value={label}
+    >
+      {label}
+    </option>
+  );
+})}
                 </select>
               </label>
 
