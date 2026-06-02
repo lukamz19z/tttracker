@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { requireAdmin } from "@/lib/admin-auth";
+import { createSupabaseAdmin } from "@/lib/supabase-admin";
 
 type Role = "admin" | "editor" | "viewer";
 
 export async function POST(req: Request) {
   try {
+    const auth = await requireAdmin();
+    if (auth.response) return auth.response;
+
     const body = (await req.json()) as {
       user_id?: string;
       role?: Role;
@@ -21,10 +25,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
+    const supabaseAdmin = createSupabaseAdmin();
 
     const { error } = await supabaseAdmin.from("user_roles").upsert(
       {

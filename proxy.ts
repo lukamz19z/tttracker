@@ -1,30 +1,30 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase-config";
 
 export async function proxy(req: NextRequest) {
-  const response = NextResponse.next();
+  let response = NextResponse.next({
+    request: req,
+  });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    getSupabaseUrl(),
+    getSupabaseAnonKey(),
     {
       cookies: {
-        get(name: string) {
-          return req.cookies.get(name)?.value;
+        getAll() {
+          return req.cookies.getAll();
         },
-        set(name: string, value: string, options) {
-          response.cookies.set({
-            name,
-            value,
-            ...options,
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) => {
+            req.cookies.set(name, value);
           });
-        },
-        remove(name: string, options) {
-          response.cookies.set({
-            name,
-            value: "",
-            ...options,
+          response = NextResponse.next({
+            request: req,
+          });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options);
           });
         },
       },
@@ -36,8 +36,9 @@ export async function proxy(req: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isLoginPage = req.nextUrl.pathname.startsWith("/login");
+  const isProtectedPage = !isLoginPage;
 
-  if (!user && !isLoginPage) {
+  if (!user && isProtectedPage) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
@@ -49,5 +50,7 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|favicon.ico).*)"],
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

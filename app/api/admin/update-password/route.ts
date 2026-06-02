@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { requireAdmin } from "@/lib/admin-auth";
+import { createSupabaseAdmin } from "@/lib/supabase-admin";
 
 export async function POST(req: Request) {
   try {
+    const auth = await requireAdmin();
+    if (auth.response) return auth.response;
+
     const body = (await req.json()) as {
       user_id?: string;
       password?: string;
@@ -22,10 +26,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
+    const supabaseAdmin = createSupabaseAdmin();
 
     const { error } = await supabaseAdmin.auth.admin.updateUserById(
       body.user_id,

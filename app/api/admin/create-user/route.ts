@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { requireAdmin } from "@/lib/admin-auth";
+import { createSupabaseAdmin } from "@/lib/supabase-admin";
 
 export async function POST(req: Request) {
   try {
+    const auth = await requireAdmin();
+    if (auth.response) return auth.response;
+
+    const supabaseAdmin = createSupabaseAdmin();
     const { email, password, role } = await req.json();
 
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ success: true });
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

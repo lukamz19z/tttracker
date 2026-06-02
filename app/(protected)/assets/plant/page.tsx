@@ -1,10 +1,20 @@
-import { Plus, RotateCw, Wrench } from "lucide-react";
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import Papa from "papaparse";
+import {
+  Download,
+  FileUp,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import {
   ActionButton,
-  DetailGrid,
-  FilterBar,
-  FilterInput,
-  FilterSelect,
   KpiCard,
   PageHeader,
   PageShell,
@@ -13,173 +23,639 @@ import {
 } from "../components";
 import { RecordActions } from "../record-actions";
 
+type Tone = "emerald" | "amber" | "rose" | "blue";
+
 type PlantAsset = {
   id: string;
-  assetId: string;
-  name: string;
-  make: string;
-  type: string;
-  crew: string;
-  project: string;
-  status: string;
-  nextService: string;
-  craneSafe: string;
-  rego: string;
-  hired: string;
-  tone: "emerald" | "amber" | "rose" | "blue";
+  asset_id: string | null;
+  name: string | null;
+  make: string | null;
+  model: string | null;
+  plant_type: string | null;
+  serial_number: string | null;
+  rego: string | null;
+  crew: string | null;
+  project: string | null;
+  site: string | null;
+  status: string | null;
+  next_service_date: string | null;
+  cranesafe_expiry: string | null;
+  insurance_expiry: string | null;
+  hired: boolean | null;
+  supplier: string | null;
+  notes: string | null;
 };
 
-const plantAssets: PlantAsset[] = [
-  {
-    id: "mc001",
-    assetId: "MC001",
-    name: "Liebherr LTM1220",
-    make: "Liebherr",
-    type: "Mobile Crane",
-    crew: "Crew 1",
-    project: "Snowy 2.0",
-    status: "Available",
-    nextService: "09 Sep 2026",
-    craneSafe: "09 Mar 2027",
-    rego: "SB16HG",
-    hired: "No",
-    tone: "emerald",
-  },
-  {
-    id: "mc003",
-    assetId: "MC003",
-    name: "Grove GMK5220",
-    make: "Grove",
-    type: "Mobile Crane",
-    crew: "Lifting Crew",
-    project: "Maragle",
-    status: "Due Soon",
-    nextService: "05 Nov 2025",
-    craneSafe: "20 Jun 2026",
-    rego: "No Rego",
-    hired: "Yes",
-    tone: "amber",
-  },
-  {
-    id: "th003",
-    assetId: "TH003",
-    name: "Merlo P40.17EE",
-    make: "Merlo",
-    type: "Telehandler",
-    crew: "Workshop",
-    project: "Unassigned",
-    status: "In Use",
-    nextService: "05 Mar 2026",
-    craneSafe: "N/A",
-    rego: "No Rego",
-    hired: "No",
-    tone: "blue",
-  },
-  {
-    id: "th004",
-    assetId: "TH004",
-    name: "Merlo P40.17PLUS",
-    make: "Merlo",
-    type: "Telehandler",
-    crew: "Crew 2",
-    project: "Maragle",
-    status: "Review",
-    nextService: "06 Jul 2026",
-    craneSafe: "N/A",
-    rego: "No Rego",
-    hired: "Yes",
-    tone: "rose",
-  },
-];
+type PlantForm = Omit<PlantAsset, "id">;
+
+type EnhancedPlantAsset = PlantAsset & {
+  calculatedStatus: string;
+  tone: Tone;
+};
+
+const emptyAsset: PlantForm = {
+  asset_id: "",
+  name: "",
+  make: "",
+  model: "",
+  plant_type: "",
+  serial_number: "",
+  rego: "",
+  crew: "",
+  project: "",
+  site: "",
+  status: "",
+  next_service_date: "",
+  cranesafe_expiry: "",
+  insurance_expiry: "",
+  hired: false,
+  supplier: "",
+  notes: "",
+};
+
+function clean(value: string | null | undefined) {
+  return value?.trim() ?? "";
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "N/A";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function daysUntil(value: string | null) {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+
+  return Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
+}
+
+function getAssetStatus(asset: PlantAsset) {
+  if (clean(asset.status)) return clean(asset.status);
+
+  const serviceDays = daysUntil(asset.next_service_date);
+  const cranesafeDays = daysUntil(asset.cranesafe_expiry);
+  const insuranceDays = daysUntil(asset.insurance_expiry);
+
+  const expiryDays = [serviceDays, cranesafeDays, insuranceDays].filter(
+    (day): day is number => day !== null
+  );
+
+  if (expiryDays.some((day) => day < 0)) return "Review";
+  if (expiryDays.some((day) => day <= 30)) return "Due Soon";
+  if (clean(asset.crew) || clean(asset.project) || clean(asset.site)) return "In Use";
+
+  return "Available";
+}
+
+function getTone(status: string): Tone {
+  const value = status.toLowerCase();
+
+  if (value.includes("available")) return "emerald";
+  if (value.includes("due")) return "amber";
+  if (value.includes("review") || value.includes("expired") || value.includes("out")) {
+    return "rose";
+  }
+
+  return "blue";
+}
+
+function normaliseKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function readValue(row: Record<string, unknown>, keys: string[]) {
+  const lookup = new Map<string, unknown>();
+
+  Object.entries(row).forEach(([key, value]) => {
+    lookup.set(normaliseKey(key), value);
+  });
+
+  for (const key of keys) {
+    const value = lookup.get(normaliseKey(key));
+
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+
+  return "";
+}
+
+function toBoolean(value: string) {
+  const cleanValue = value.toLowerCase().trim();
+
+  return ["yes", "y", "true", "1", "hired"].includes(cleanValue);
+}
+
+function toDateInput(value: string) {
+  if (!value) return "";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  return parsed.toISOString().slice(0, 10);
+}
 
 export default function PlantPage() {
+  const supabase = useMemo(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Missing Supabase environment variables.");
+    }
+
+    return createClient(supabaseUrl, supabaseAnonKey);
+  }, []);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [assets, setAssets] = useState<PlantAsset[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("All plant types");
+  const [siteFilter, setSiteFilter] = useState("All sites");
+  const [statusFilter, setStatusFilter] = useState("All statuses");
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<PlantForm>(emptyAsset);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchInitialAssets() {
+      const { data, error } = await supabase
+        .from("plant_assets")
+        .select("*")
+        .order("asset_id", { ascending: true });
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error(error.message);
+        setAssets([]);
+      } else {
+        setAssets((data ?? []) as PlantAsset[]);
+      }
+
+      setLoading(false);
+    }
+
+    void fetchInitialAssets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  async function loadAssets() {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from("plant_assets")
+      .select("*")
+      .order("asset_id", { ascending: true });
+
+    if (error) {
+      console.error(error.message);
+      setAssets([]);
+    } else {
+      setAssets((data ?? []) as PlantAsset[]);
+    }
+
+    setLoading(false);
+  }
+
+  const enhancedAssets = useMemo<EnhancedPlantAsset[]>(() => {
+    return assets.map((asset) => {
+      const calculatedStatus = getAssetStatus(asset);
+
+      return {
+        ...asset,
+        calculatedStatus,
+        tone: getTone(calculatedStatus),
+      };
+    });
+  }, [assets]);
+
+  const plantTypes = useMemo(() => {
+    return [
+      "All plant types",
+      ...Array.from(new Set(assets.map((asset) => clean(asset.plant_type)).filter(Boolean))).sort(),
+    ];
+  }, [assets]);
+
+  const sites = useMemo(() => {
+    return [
+      "All sites",
+      ...Array.from(
+        new Set(assets.map((asset) => clean(asset.site) || clean(asset.project)).filter(Boolean))
+      ).sort(),
+    ];
+  }, [assets]);
+
+  const statuses = useMemo(() => {
+    return [
+      "All statuses",
+      ...Array.from(new Set(enhancedAssets.map((asset) => asset.calculatedStatus))).sort(),
+    ];
+  }, [enhancedAssets]);
+
+  const filteredAssets = useMemo(() => {
+    const query = search.toLowerCase().trim();
+
+    return enhancedAssets.filter((asset) => {
+      const haystack = [
+        asset.asset_id,
+        asset.name,
+        asset.make,
+        asset.model,
+        asset.plant_type,
+        asset.serial_number,
+        asset.rego,
+        asset.crew,
+        asset.project,
+        asset.site,
+        asset.supplier,
+        asset.notes,
+      ]
+        .map((value) => clean(value))
+        .join(" ")
+        .toLowerCase();
+
+      const matchesSearch = !query || haystack.includes(query);
+      const matchesType = typeFilter === "All plant types" || clean(asset.plant_type) === typeFilter;
+      const matchesSite =
+        siteFilter === "All sites" ||
+        clean(asset.site) === siteFilter ||
+        clean(asset.project) === siteFilter;
+      const matchesStatus =
+        statusFilter === "All statuses" || asset.calculatedStatus === statusFilter;
+
+      return matchesSearch && matchesType && matchesSite && matchesStatus;
+    });
+  }, [enhancedAssets, search, typeFilter, siteFilter, statusFilter]);
+
+  const kpis = useMemo(() => {
+    return {
+      total: assets.length,
+      available: enhancedAssets.filter((asset) => asset.calculatedStatus === "Available").length,
+      dueSoon: enhancedAssets.filter((asset) => asset.calculatedStatus === "Due Soon").length,
+      review: enhancedAssets.filter((asset) => asset.calculatedStatus === "Review").length,
+    };
+  }, [assets.length, enhancedAssets]);
+
+  function openNewForm() {
+    setEditingId(null);
+    setForm(emptyAsset);
+    setFormOpen(true);
+  }
+
+  function openEditForm(asset: PlantAsset) {
+    setEditingId(asset.id);
+    setForm({
+      asset_id: clean(asset.asset_id),
+      name: clean(asset.name),
+      make: clean(asset.make),
+      model: clean(asset.model),
+      plant_type: clean(asset.plant_type),
+      serial_number: clean(asset.serial_number),
+      rego: clean(asset.rego),
+      crew: clean(asset.crew),
+      project: clean(asset.project),
+      site: clean(asset.site),
+      status: clean(asset.status),
+      next_service_date: clean(asset.next_service_date),
+      cranesafe_expiry: clean(asset.cranesafe_expiry),
+      insurance_expiry: clean(asset.insurance_expiry),
+      hired: Boolean(asset.hired),
+      supplier: clean(asset.supplier),
+      notes: clean(asset.notes),
+    });
+    setFormOpen(true);
+  }
+
+  async function saveAsset() {
+    if (!clean(form.asset_id)) {
+      alert("Asset ID is required.");
+      return;
+    }
+
+    setSaving(true);
+
+    const payload = {
+      ...form,
+      asset_id: clean(form.asset_id),
+      updated_at: new Date().toISOString(),
+    };
+
+    const result = editingId
+      ? await supabase.from("plant_assets").update(payload).eq("id", editingId)
+      : await supabase.from("plant_assets").upsert(payload, { onConflict: "asset_id" });
+
+    if (result.error) {
+      alert(result.error.message);
+    } else {
+      setFormOpen(false);
+      await loadAssets();
+    }
+
+    setSaving(false);
+  }
+
+  async function deleteAsset(id: string) {
+    const confirmed = window.confirm("Delete this plant item?");
+    if (!confirmed) return;
+
+    const { error } = await supabase.from("plant_assets").delete().eq("id", id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await loadAssets();
+  }
+
+  function handleCsvUpload(file: File) {
+    Papa.parse<Record<string, unknown>>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async ({ data }) => {
+        const rows = data
+          .map((row) => ({
+            asset_id: readValue(row, ["Asset ID", "Asset", "Plant ID", "Plant No", "Plant Number"]),
+            name: readValue(row, ["Name", "Description", "Asset Name", "Plant Name"]),
+            make: readValue(row, ["Make", "Manufacturer"]),
+            model: readValue(row, ["Model"]),
+            plant_type: readValue(row, ["Type", "Plant Type", "Category"]),
+            serial_number: readValue(row, ["Serial", "Serial Number", "VIN"]),
+            rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
+            crew: readValue(row, ["Crew", "Allocated Crew"]),
+            project: readValue(row, ["Project", "Job", "Allocation"]),
+            site: readValue(row, ["Site", "Location"]),
+            status: readValue(row, ["Status"]),
+            next_service_date: toDateInput(
+              readValue(row, ["Next Service", "Next Service Date", "Service Due"])
+            ),
+            cranesafe_expiry: toDateInput(
+              readValue(row, ["CraneSafe", "Crane Safe", "CraneSafe Expiry"])
+            ),
+            insurance_expiry: toDateInput(readValue(row, ["Insurance", "Insurance Expiry"])),
+            hired: toBoolean(readValue(row, ["Hired", "Hire", "Wet Hire", "Dry Hire"])),
+            supplier: readValue(row, ["Supplier", "Hire Company", "Owner"]),
+            notes: readValue(row, ["Notes", "Comments"]),
+            updated_at: new Date().toISOString(),
+          }))
+          .filter((row) => clean(row.asset_id));
+
+        if (!rows.length) {
+          alert("No valid plant rows found. Make sure the CSV has an Asset ID column.");
+          return;
+        }
+
+        setSaving(true);
+
+        const { error } = await supabase
+          .from("plant_assets")
+          .upsert(rows, { onConflict: "asset_id" });
+
+        if (error) {
+          alert(error.message);
+        } else {
+          await loadAssets();
+        }
+
+        setSaving(false);
+      },
+      error: (error) => {
+        alert(error.message);
+      },
+    });
+  }
+
+  function exportCsv() {
+    const rows = filteredAssets.map((asset) => ({
+      "Asset ID": clean(asset.asset_id),
+      Name: clean(asset.name),
+      Make: clean(asset.make),
+      Model: clean(asset.model),
+      Type: clean(asset.plant_type),
+      Serial: clean(asset.serial_number),
+      Rego: clean(asset.rego),
+      Crew: clean(asset.crew),
+      Project: clean(asset.project),
+      Site: clean(asset.site),
+      Status: asset.calculatedStatus,
+      "Next Service": clean(asset.next_service_date),
+      "CraneSafe Expiry": clean(asset.cranesafe_expiry),
+      "Insurance Expiry": clean(asset.insurance_expiry),
+      Hired: asset.hired ? "Yes" : "No",
+      Supplier: clean(asset.supplier),
+      Notes: clean(asset.notes),
+    }));
+
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "plant-assets.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <PageShell>
       <PageHeader
         eyebrow="Asset Register"
         title="Plant"
-        description="Major plant register for cranes, telehandlers, generators and hired plant. The register shows current allocation and key expiry dates; each asset view holds full history."
+        description="Major plant register for cranes, telehandlers, generators and hired plant. Upload, save, edit and manage live plant records."
         actions={
           <>
             <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
               Raise Job
             </ActionButton>
-            <ActionButton href="/assets/plant/new" icon={<Plus size={16} />}>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <FileUp size={16} />
+              Upload CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <Download size={16} />
+              Export
+            </button>
+
+            <button
+              type="button"
+              onClick={openNewForm}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+            >
+              <Plus size={16} />
               Add Plant
-            </ActionButton>
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+
+                if (file) handleCsvUpload(file);
+
+                event.target.value = "";
+              }}
+            />
           </>
         }
       />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total Plant" value="4" detail="sample register rows" tone="blue" />
-        <KpiCard label="Available" value="2" detail="ready for allocation" tone="emerald" />
-        <KpiCard label="Due Soon" value="1" detail="service or compliance" tone="amber" />
-        <KpiCard label="Review" value="1" detail="fleet manager check" tone="rose" />
+        <KpiCard label="Total Plant" value={String(kpis.total)} detail="live register rows" tone="blue" />
+        <KpiCard label="Available" value={String(kpis.available)} detail="ready for allocation" tone="emerald" />
+        <KpiCard label="Due Soon" value={String(kpis.dueSoon)} detail="service or compliance" tone="amber" />
+        <KpiCard label="Review" value={String(kpis.review)} detail="expired or fleet check" tone="rose" />
       </section>
 
-      <FilterBar>
-        <FilterInput placeholder="Search asset, rego, make, serial..." />
-        <FilterSelect label="Plant type" options={["All plant types", "Mobile Crane", "Telehandler", "Generator"]} />
-        <FilterSelect label="Site" options={["All sites", "Lobs Hole", "Maragle", "Depot"]} />
-        <FilterSelect label="Status" options={["All statuses", "Available", "In Use", "Due Soon", "Review"]} />
-      </FilterBar>
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 lg:grid-cols-4">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search asset, rego, make, serial..."
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+          />
+
+          <select
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+          >
+            {plantTypes.map((type) => (
+              <option key={type}>{type}</option>
+            ))}
+          </select>
+
+          <select
+            value={siteFilter}
+            onChange={(event) => setSiteFilter(event.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+          >
+            {sites.map((site) => (
+              <option key={site}>{site}</option>
+            ))}
+          </select>
+
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+          >
+            {statuses.map((status) => (
+              <option key={status}>{status}</option>
+            ))}
+          </select>
+        </div>
+      </section>
 
       <RegisterList
         title="Plant Register"
-        description="Use Update Asset to add a new service, rego, insurance, CraneSafe or document event to an existing plant record."
-        items={plantAssets}
+        description={loading ? "Loading plant register..." : `${filteredAssets.length} plant items shown.`}
+        items={filteredAssets}
         getKey={(asset) => asset.id}
         columns={[
           {
             label: "Asset",
             render: (asset) => (
               <div>
-                <p className="font-semibold text-slate-950">{asset.assetId}</p>
-                <p className="mt-1 text-slate-600">{asset.name}</p>
+                <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
+                <p className="mt-1 text-slate-600">{clean(asset.name) || "Unnamed plant"}</p>
               </div>
             ),
           },
-          { label: "Type", render: (asset) => asset.type },
-          { label: "Make", render: (asset) => asset.make },
+          { label: "Type", render: (asset) => clean(asset.plant_type) || "N/A" },
+          {
+            label: "Make / Model",
+            render: (asset) => `${clean(asset.make) || "N/A"} ${clean(asset.model)}`.trim(),
+          },
           {
             label: "Allocation",
             render: (asset) => (
               <div>
-                <p className="font-semibold text-slate-950">{asset.crew}</p>
-                <p className="mt-1 text-slate-600">{asset.project}</p>
+                <p className="font-semibold text-slate-950">{clean(asset.crew) || "Unassigned"}</p>
+                <p className="mt-1 text-slate-600">
+                  {clean(asset.project) || clean(asset.site) || "No site"}
+                </p>
               </div>
             ),
           },
-          { label: "Rego", render: (asset) => asset.rego },
-          { label: "Next Service", render: (asset) => asset.nextService },
-          { label: "CraneSafe", render: (asset) => asset.craneSafe },
-          { label: "Hired", render: (asset) => asset.hired },
-          {
-            label: "Update",
-            render: (asset) => (
-              <ActionButton
-                href={`/assets/plant/${asset.id}/update`}
-                variant="secondary"
-                icon={<RotateCw size={14} />}
-              >
-                Update Asset
-              </ActionButton>
-            ),
-          },
+          { label: "Rego", render: (asset) => clean(asset.rego) || "No Rego" },
+          { label: "Next Service", render: (asset) => formatDate(asset.next_service_date) },
+          { label: "CraneSafe", render: (asset) => formatDate(asset.cranesafe_expiry) },
+          { label: "Hired", render: (asset) => (asset.hired ? "Yes" : "No") },
           {
             label: "Status",
-            render: (asset) => <StatusBadge label={asset.status} tone={asset.tone} />,
+            render: (asset) => <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />,
           },
           {
             label: "Actions",
             render: (asset) => (
-              <RecordActions
-                recordType="plant"
-                recordLabel={`${asset.assetId} ${asset.name}`}
-                viewHref={`/assets/plant/${asset.id}`}
-                editHref={`/assets/plant/${asset.id}/edit`}
-              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openEditForm(asset)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw size={14} />
+                  Update
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void deleteAsset(asset.id)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                >
+                  <Trash2 size={14} />
+                  Delete
+                </button>
+
+                <RecordActions
+                  recordType="plant"
+                  recordLabel={`${clean(asset.asset_id)} ${clean(asset.name)}`}
+                  viewHref={`/assets/plant/${asset.id}`}
+                  editHref={`/assets/plant/${asset.id}/edit`}
+                />
+              </div>
             ),
           },
         ]}
@@ -187,36 +663,194 @@ export default function PlantPage() {
           <div className="space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="font-semibold text-slate-950">{asset.assetId}</p>
-                <p className="mt-1 text-sm text-slate-600">{asset.name}</p>
+                <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
+                <p className="mt-1 text-sm text-slate-600">{clean(asset.name) || "Unnamed plant"}</p>
               </div>
-              <StatusBadge label={asset.status} tone={asset.tone} />
+
+              <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />
             </div>
-            <DetailGrid
-              items={[
-                { label: "Type", value: asset.type },
-                { label: "Crew", value: asset.crew },
-                { label: "Project", value: asset.project },
-                { label: "Service", value: asset.nextService },
-                { label: "CraneSafe", value: asset.craneSafe },
-              ]}
-            />
-            <RecordActions
-              recordType="plant"
-              recordLabel={`${asset.assetId} ${asset.name}`}
-              viewHref={`/assets/plant/${asset.id}`}
-              editHref={`/assets/plant/${asset.id}/edit`}
-            />
-            <ActionButton
-              href={`/assets/plant/${asset.id}/update`}
-              variant="secondary"
-              icon={<RotateCw size={14} />}
+
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-400">Type</p>
+                <p>{clean(asset.plant_type) || "N/A"}</p>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-400">Rego</p>
+                <p>{clean(asset.rego) || "No Rego"}</p>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-400">Crew</p>
+                <p>{clean(asset.crew) || "Unassigned"}</p>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-400">Service</p>
+                <p>{formatDate(asset.next_service_date)}</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => openEditForm(asset)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
+              <RefreshCw size={14} />
               Update Asset
-            </ActionButton>
+            </button>
           </div>
         )}
       />
+
+      {formOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+                  {editingId ? "Update Plant" : "Add Plant"}
+                </p>
+                <h2 className="text-xl font-bold text-slate-950">Plant Asset Details</h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setFormOpen(false)}
+                className="rounded-lg p-2 hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              {[
+                ["Asset ID", "asset_id"],
+                ["Name", "name"],
+                ["Make", "make"],
+                ["Model", "model"],
+                ["Type", "plant_type"],
+                ["Serial Number", "serial_number"],
+                ["Rego", "rego"],
+                ["Crew", "crew"],
+                ["Project", "project"],
+                ["Site", "site"],
+                ["Supplier", "supplier"],
+                ["Status Override", "status"],
+              ].map(([label, key]) => (
+                <label key={key} className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">{label}</span>
+                  <input
+                    value={String(form[key as keyof PlantForm] ?? "")}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        [key]: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  />
+                </label>
+              ))}
+
+              <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Next Service</span>
+                <input
+                  type="date"
+                  value={clean(form.next_service_date)}
+                  onChange={(event) =>
+                    setForm((previous) => ({
+                      ...previous,
+                      next_service_date: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">CraneSafe Expiry</span>
+                <input
+                  type="date"
+                  value={clean(form.cranesafe_expiry)}
+                  onChange={(event) =>
+                    setForm((previous) => ({
+                      ...previous,
+                      cranesafe_expiry: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                />
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Insurance Expiry</span>
+                <input
+                  type="date"
+                  value={clean(form.insurance_expiry)}
+                  onChange={(event) =>
+                    setForm((previous) => ({
+                      ...previous,
+                      insurance_expiry: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                />
+              </label>
+            </div>
+
+            <label className="mt-3 flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={Boolean(form.hired)}
+                onChange={(event) =>
+                  setForm((previous) => ({
+                    ...previous,
+                    hired: event.target.checked,
+                  }))
+                }
+              />
+              Hired plant
+            </label>
+
+            <label className="mt-3 block space-y-1 text-sm">
+              <span className="font-semibold text-slate-600">Notes</span>
+              <textarea
+                value={clean(form.notes)}
+                onChange={(event) =>
+                  setForm((previous) => ({
+                    ...previous,
+                    notes: event.target.value,
+                  }))
+                }
+                rows={4}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+              />
+            </label>
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setFormOpen(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void saveAsset()}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                <Save size={16} />
+                {saving ? "Saving..." : "Save Asset"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageShell>
   );
 }
