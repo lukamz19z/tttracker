@@ -10,13 +10,14 @@ const topNav = [
 ];
 
 const assetNav = [
-  { label: "Overview", href: "/assets" },
+  { label: "Dashboard", href: "/assets" },
+  { label: "Fleet Jobs", href: "/assets/maintenance" },
   { label: "Plant", href: "/assets/plant" },
   { label: "Vehicles", href: "/assets/vehicles" },
   { label: "Equipment", href: "/assets/equipment" },
-  { label: "Compliance", href: "/assets/compliance" },
   { label: "Prestarts", href: "/assets/prestarts" },
-  { label: "Defects & Maintenance", href: "/assets/maintenance" },
+  { label: "Compliance", href: "/assets/compliance" },
+  { label: "Documents", href: "/assets/documents" },
 ];
 
 export default function AssetsLayout({
@@ -55,7 +56,7 @@ export default function AssetsLayout({
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                  className={`px-4 py-2 text-sm font-medium transition ${
                       active
                         ? "bg-slate-900 text-white"
                         : "text-slate-600 hover:bg-slate-100"
@@ -71,7 +72,7 @@ export default function AssetsLayout({
           <div className="flex items-center gap-3">
             <Link
               href="/settings"
-              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Settings
             </Link>
@@ -95,11 +96,11 @@ export default function AssetsLayout({
             </p>
 
             <h2 className="mt-2 text-2xl font-bold text-slate-900">
-              Assets
+              Fleet Assets
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
-              Plant, equipment, compliance, prestarts and maintenance tracking.
+              Plant, vehicles, equipment, prestarts and Fleet Jobs.
             </p>
 
           </div>

@@ -1,425 +1,192 @@
-"use client";
+import {
+  AlertTriangle,
+  ClipboardCheck,
+  Plus,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
+import {
+  ActionButton,
+  DetailGrid,
+  KpiCard,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+} from "./components";
 
-import Link from "next/link";
-
-type Accent = "blue" | "emerald" | "amber" | "rose" | "violet" | "slate";
-
-type KpiCard = {
-  title: string;
-  value: string;
-  subtitle: string;
-  accent: Accent;
-};
-
-type PanelItem = {
+type ActionItem = {
   asset: string;
   detail: string;
   status: string;
-  tone: "red" | "amber" | "green" | "blue" | "violet" | "slate";
+  tone: "blue" | "amber" | "emerald" | "rose" | "slate" | "violet";
 };
 
-function accentClasses(accent: Accent) {
-  switch (accent) {
-    case "blue":
-      return "border-blue-100 bg-blue-50";
-    case "emerald":
-      return "border-emerald-100 bg-emerald-50";
-    case "amber":
-      return "border-amber-100 bg-amber-50";
-    case "rose":
-      return "border-rose-100 bg-rose-50";
-    case "violet":
-      return "border-violet-100 bg-violet-50";
-    default:
-      return "border-slate-200 bg-white";
-  }
-}
+const urgentJobs: ActionItem[] = [
+  {
+    asset: "MC003 Grove GMK5220",
+    detail: "CraneSafe due soon and hydraulic inspection note to review.",
+    status: "High",
+    tone: "rose" as const,
+  },
+  {
+    asset: "HV002 Isuzu FZM",
+    detail: "Insurance expired in register. Confirm renewal before allocation.",
+    status: "Review",
+    tone: "amber" as const,
+  },
+  {
+    asset: "LV002 Toyota Hilux",
+    detail: "Rego due this month. Fleet manager action required.",
+    status: "Due Soon",
+    tone: "amber" as const,
+  },
+];
 
-function badgeClasses(tone: PanelItem["tone"]) {
-  switch (tone) {
-    case "red":
-      return "bg-rose-100 text-rose-700";
-    case "amber":
-      return "bg-amber-100 text-amber-700";
-    case "green":
-      return "bg-emerald-100 text-emerald-700";
-    case "blue":
-      return "bg-blue-100 text-blue-700";
-    case "violet":
-      return "bg-violet-100 text-violet-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
+const prestartFlags: ActionItem[] = [
+  {
+    asset: "LV004 Hilux",
+    detail: "Morning prestart flagged tyre wear and damaged beacon.",
+    status: "New",
+    tone: "blue" as const,
+  },
+  {
+    asset: "TH003 Merlo",
+    detail: "Operator reported intermittent warning light.",
+    status: "Triage",
+    tone: "violet" as const,
+  },
+];
 
-function KpiTile({ title, value, subtitle, accent }: KpiCard) {
-  return (
-    <div className={`rounded-3xl border p-5 shadow-sm ${accentClasses(accent)}`}>
-      <p className="text-sm font-medium text-slate-500">{title}</p>
-      <p className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
-        {value}
-      </p>
-      <p className="mt-2 text-sm text-slate-600">{subtitle}</p>
-    </div>
-  );
-}
+const reminders = [
+  { label: "Rego", value: "3", detail: "vehicles or trailers due soon" },
+  { label: "Insurance", value: "2", detail: "records needing review" },
+  { label: "Service", value: "4", detail: "assets due or overdue" },
+  { label: "CraneSafe", value: "2", detail: "major plant reminders" },
+];
 
-function DonutCard({
+function ActionPanel({
   title,
-  value,
-  subtitle,
-}: {
-  title: string;
-  value: number;
-  subtitle: string;
-}) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-5">
-        <div
-          className="grid h-24 w-24 place-items-center rounded-full"
-          style={{
-            background: `conic-gradient(#0f172a ${value * 3.6}deg, #e2e8f0 0deg)`,
-          }}
-        >
-          <div className="grid h-16 w-16 place-items-center rounded-full bg-white">
-            <span className="text-xl font-bold text-slate-900">{value}%</span>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="font-semibold text-slate-900">{title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ControlPanel({
-  title,
-  subtitle,
   items,
 }: {
   title: string;
-  subtitle: string;
-  items: PanelItem[];
+  items: ActionItem[];
 }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm break-inside-avoid">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-lg font-bold text-slate-900">{title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-          {items.length}
-        </span>
+    <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-bold tracking-tight text-slate-950">
+          {title}
+        </h2>
+        <StatusBadge label={String(items.length)} />
       </div>
-
-      <div className="mt-5 space-y-3">
-        {items.map((item, index) => (
-          <div
-            key={`${item.asset}-${index}`}
-            className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-          >
+      <div className="mt-4 space-y-3">
+        {items.map((item) => (
+          <div key={item.asset} className="border border-slate-200 bg-slate-50 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="font-semibold text-slate-900">{item.asset}</div>
-                <div className="mt-1 text-sm text-slate-500">{item.detail}</div>
+                <p className="font-semibold text-slate-950">{item.asset}</p>
+                <p className="mt-1 text-sm leading-5 text-slate-600">
+                  {item.detail}
+                </p>
               </div>
-
-              <span
-                className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${badgeClasses(
-                  item.tone,
-                )}`}
-              >
-                {item.status}
-              </span>
+              <StatusBadge label={item.status} tone={item.tone} />
             </div>
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function QuickAction({
-  label,
-  href,
-  description,
-}: {
-  label: string;
-  href: string;
-  description: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-    >
-      <p className="font-bold text-slate-900">{label}</p>
-      <p className="mt-1 text-sm text-slate-500">{description}</p>
-    </Link>
+    </section>
   );
 }
 
 export default function AssetsDashboardPage() {
-  const kpis: KpiCard[] = [
-    {
-      title: "Total Assets",
-      value: "0",
-      subtitle: "Plant, vehicles and equipment",
-      accent: "blue",
-    },
-    {
-      title: "Compliant Assets",
-      value: "0",
-      subtitle: "Ready for site use",
-      accent: "emerald",
-    },
-    {
-      title: "Expiring Soon",
-      value: "0",
-      subtitle: "Due within 30 days",
-      accent: "amber",
-    },
-    {
-      title: "Expired Items",
-      value: "0",
-      subtitle: "Requires urgent action",
-      accent: "rose",
-    },
-    {
-      title: "Flagged Prestarts",
-      value: "0",
-      subtitle: "Issues raised by operators",
-      accent: "violet",
-    },
-    {
-      title: "Open Defects",
-      value: "0",
-      subtitle: "Maintenance or repair required",
-      accent: "slate",
-    },
-  ];
-
-  const regoItems: PanelItem[] = [
-    {
-      asset: "No rego expiries loaded",
-      detail: "Vehicle and road-registered plant expiry dates will appear here.",
-      status: "Pending data",
-      tone: "slate",
-    },
-  ];
-
-  const insuranceItems: PanelItem[] = [
-    {
-      asset: "No insurance records loaded",
-      detail: "Insurance and policy expiry dates will appear here.",
-      status: "Pending data",
-      tone: "slate",
-    },
-  ];
-
-  const serviceItems: PanelItem[] = [
-    {
-      asset: "No service records loaded",
-      detail: "Service due dates, service hours and workshop planning will appear here.",
-      status: "Pending data",
-      tone: "slate",
-    },
-  ];
-
-  const prestartIssues: PanelItem[] = [
-    {
-      asset: "No flagged prestarts",
-      detail: "Operator-reported faults from daily prestarts will appear here.",
-      status: "Clear",
-      tone: "green",
-    },
-  ];
-
-  const defectItems: PanelItem[] = [
-    {
-      asset: "No open defects",
-      detail: "Open maintenance items, breakdowns and repairs will appear here.",
-      status: "Clear",
-      tone: "green",
-    },
-  ];
-
-  const missingDocumentItems: PanelItem[] = [
-    {
-      asset: "No missing documents loaded",
-      detail: "Missing load charts, risk assessments, manuals and certificates will appear here.",
-      status: "Pending data",
-      tone: "slate",
-    },
-  ];
-
-  const upcomingActions: PanelItem[] = [
-    {
-      asset: "Review asset compliance register",
-      detail: "Check rego, insurance, service due and inspection expiry dates.",
-      status: "Action",
-      tone: "blue",
-    },
-    {
-      asset: "Upload asset documents",
-      detail: "Attach load charts, insurance, rego, service records and plant risk assessments.",
-      status: "Action",
-      tone: "amber",
-    },
-    {
-      asset: "Set up prestart issue tracking",
-      detail: "Flagged prestart notes will feed directly into this dashboard.",
-      status: "Next",
-      tone: "violet",
-    },
-  ];
-
-
   return (
-    <div className="space-y-6 p-6 md:p-8">
+    <PageShell>
+      <PageHeader
+        eyebrow="Fleet Assets"
+        title="Fleet Dashboard"
+        description="Daily command centre for plant, vehicles, equipment, prestart flags, service reminders and Fleet Jobs raised for the fleet manager."
+        actions={
+          <>
+            <ActionButton href="/assets/maintenance" icon={<Wrench size={16} />}>
+              Fleet Jobs
+            </ActionButton>
+            <ActionButton
+              href="/assets/prestarts"
+              variant="secondary"
+              icon={<ClipboardCheck size={16} />}
+            >
+              Prestarts
+            </ActionButton>
+          </>
+        }
+      />
 
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <KpiCard label="Open Jobs" value="8" detail="awaiting action" tone="rose" />
+        <KpiCard label="Out of Service" value="2" detail="assets unavailable" tone="amber" />
+        <KpiCard label="Prestart Flags" value="2" detail="raised today" tone="violet" />
+        <KpiCard label="Available" value="41" detail="plant and vehicles" tone="emerald" />
+        <KpiCard label="Due Soon" value="9" detail="compliance reminders" tone="blue" />
+        <KpiCard label="Failed Gear" value="0" detail="equipment register" />
+      </section>
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
-              Asset Manager
-            </p>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
-              Assets Overview
-            </h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Compliance dashboard for rego expiry, insurance expiry, service due,
-              prestart issues, open defects and missing asset documents.
-            </p>
+      <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <ActionPanel title="Fleet Jobs Needing Attention" items={urgentJobs} />
+        <ActionPanel title="Prestart Flags" items={prestartFlags} />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={18} className="text-slate-500" />
+            <h2 className="text-lg font-bold tracking-tight text-slate-950">
+              Compliance Reminders
+            </h2>
           </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {reminders.map((item) => (
+              <div key={item.label} className="border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-600">{item.label}</p>
+                <p className="mt-2 text-2xl font-bold text-slate-950">{item.value}</p>
+                <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
 
+        <div className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={18} className="text-slate-500" />
+            <h2 className="text-lg font-bold tracking-tight text-slate-950">
+              Quick Actions
+            </h2>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <ActionButton href="/assets/plant" variant="secondary" icon={<Plus size={16} />}>
+              Add Plant
+            </ActionButton>
+            <ActionButton href="/assets/vehicles" variant="secondary" icon={<Plus size={16} />}>
+              Add Vehicle
+            </ActionButton>
+            <ActionButton href="/assets/equipment" variant="secondary" icon={<Plus size={16} />}>
+              Add Equipment
+            </ActionButton>
+            <ActionButton href="/assets/maintenance" variant="secondary" icon={<Plus size={16} />}>
+              Log Fleet Job
+            </ActionButton>
+          </div>
+          <div className="mt-5 border border-slate-200 bg-slate-50 p-4">
+            <DetailGrid
+              items={[
+                { label: "Plant", value: "Crane, telehandler, generator" },
+                { label: "Vehicle", value: "LV, HV, trailer" },
+                { label: "Equipment", value: "Lifting gear, tools" },
+                { label: "Workflow", value: "Issue to close-out" },
+              ]}
+            />
+          </div>
         </div>
       </section>
-
-      <section className="no-print grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <QuickAction
-          label="+ Add Plant"
-          href="/assets/plant"
-          description="Cranes, telehandlers, EWPs and major plant."
-        />
-        <QuickAction
-          label="+ Add Vehicle"
-          href="/assets/vehicles"
-          description="Hiluxes, trucks, trailers and road vehicles."
-        />
-        <QuickAction
-          label="+ Add Equipment"
-          href="/assets/equipment"
-          description="Tools, rigging, lifting gear and site equipment."
-        />
-        <QuickAction
-          label="+ Upload Compliance"
-          href="/assets/compliance"
-          description="Rego, insurance, CraneSafe and inspection records."
-        />
-        <QuickAction
-          label="+ Log Defect"
-          href="/assets/defects-maintenance"
-          description="Breakdowns, repairs and maintenance issues."
-        />
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {kpis.map((kpi) => (
-          <KpiTile key={kpi.title} {...kpi} />
-        ))}
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-4">
-        <DonutCard
-          title="Compliance Health"
-          value={0}
-          subtitle="Calculated from current documents and expiries."
-        />
-        <DonutCard
-          title="Asset Availability"
-          value={0}
-          subtitle="Available assets compared with total assets."
-        />
-        <DonutCard
-          title="Prestart Health"
-          value={0}
-          subtitle="Daily submissions without flagged issues."
-        />
-        <DonutCard
-          title="Maintenance Closure"
-          value={0}
-          subtitle="Closed defects compared with total raised."
-        />
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-3">
-        <ControlPanel
-          title="Rego Expiry"
-          subtitle="Vehicles, trailers and road-registered plant."
-          items={regoItems}
-        />
-
-        <ControlPanel
-          title="Insurance Expiry"
-          subtitle="Insurance, policies and hired plant records."
-          items={insuranceItems}
-        />
-
-        <ControlPanel
-          title="Service Due"
-          subtitle="Service dates, service hours and workshop planning."
-          items={serviceItems}
-        />
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-3">
-        <ControlPanel
-          title="Flagged Issues from Prestarts"
-          subtitle="Faults and notes raised by operators during daily checks."
-          items={prestartIssues}
-        />
-
-        <ControlPanel
-          title="Open Defects / Maintenance"
-          subtitle="Repairs, breakdowns and assets requiring attention."
-          items={defectItems}
-        />
-
-        <ControlPanel
-          title="Missing Documents"
-          subtitle="Load charts, risk assessments, manuals and certificates."
-          items={missingDocumentItems}
-        />
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-2">
-        <ControlPanel
-          title="Upcoming Actions"
-          subtitle="Reminders and next steps that need attention."
-          items={upcomingActions}
-        />
-
-        <ControlPanel
-          title="Inspection / CraneSafe Expiry"
-          subtitle="Major plant inspections, CraneSafe and annual inspection records."
-          items={[
-            {
-              asset: "No inspection records loaded",
-              detail:
-                "CraneSafe, annual inspections and plant inspection expiries will appear here.",
-              status: "Pending data",
-              tone: "slate",
-            },
-          ]}
-        />
-      </section>
-    </div>
+    </PageShell>
   );
 }
