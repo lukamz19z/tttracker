@@ -1,4 +1,4 @@
-import { Plus, Wrench } from "lucide-react";
+import { Plus, RotateCw, Wrench } from "lucide-react";
 import {
   ActionButton,
   DetailGrid,
@@ -19,7 +19,7 @@ type PlantAsset = {
   name: string;
   make: string;
   type: string;
-  site: string;
+  crew: string;
   project: string;
   status: string;
   nextService: string;
@@ -36,7 +36,7 @@ const plantAssets: PlantAsset[] = [
     name: "Liebherr LTM1220",
     make: "Liebherr",
     type: "Mobile Crane",
-    site: "Lobs Hole",
+    crew: "Crew 1",
     project: "Snowy 2.0",
     status: "Available",
     nextService: "09 Sep 2026",
@@ -51,7 +51,7 @@ const plantAssets: PlantAsset[] = [
     name: "Grove GMK5220",
     make: "Grove",
     type: "Mobile Crane",
-    site: "Maragle",
+    crew: "Lifting Crew",
     project: "Maragle",
     status: "Due Soon",
     nextService: "05 Nov 2025",
@@ -66,7 +66,7 @@ const plantAssets: PlantAsset[] = [
     name: "Merlo P40.17EE",
     make: "Merlo",
     type: "Telehandler",
-    site: "Depot",
+    crew: "Workshop",
     project: "Unassigned",
     status: "In Use",
     nextService: "05 Mar 2026",
@@ -81,7 +81,7 @@ const plantAssets: PlantAsset[] = [
     name: "Merlo P40.17PLUS",
     make: "Merlo",
     type: "Telehandler",
-    site: "Maragle",
+    crew: "Crew 2",
     project: "Maragle",
     status: "Review",
     nextService: "06 Jul 2026",
@@ -98,7 +98,7 @@ export default function PlantPage() {
       <PageHeader
         eyebrow="Asset Register"
         title="Plant"
-        description="Major plant register for cranes, telehandlers, generators and hired plant. Keep the visible fields focused on status, site allocation, service and key compliance dates."
+        description="Major plant register for cranes, telehandlers, generators and hired plant. The register shows current allocation and key expiry dates; each asset view holds full history."
         actions={
           <>
             <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
@@ -127,7 +127,7 @@ export default function PlantPage() {
 
       <RegisterList
         title="Plant Register"
-        description="Compact list for iPad and mobile first, with the fuller register available on desktop."
+        description="Use Update Asset to add a new service, rego, insurance, CraneSafe or document event to an existing plant record."
         items={plantAssets}
         getKey={(asset) => asset.id}
         columns={[
@@ -146,7 +146,7 @@ export default function PlantPage() {
             label: "Allocation",
             render: (asset) => (
               <div>
-                <p className="font-semibold text-slate-950">{asset.site}</p>
+                <p className="font-semibold text-slate-950">{asset.crew}</p>
                 <p className="mt-1 text-slate-600">{asset.project}</p>
               </div>
             ),
@@ -155,6 +155,18 @@ export default function PlantPage() {
           { label: "Next Service", render: (asset) => asset.nextService },
           { label: "CraneSafe", render: (asset) => asset.craneSafe },
           { label: "Hired", render: (asset) => asset.hired },
+          {
+            label: "Update",
+            render: (asset) => (
+              <ActionButton
+                href={`/assets/plant/${asset.id}/update`}
+                variant="secondary"
+                icon={<RotateCw size={14} />}
+              >
+                Update Asset
+              </ActionButton>
+            ),
+          },
           {
             label: "Status",
             render: (asset) => <StatusBadge label={asset.status} tone={asset.tone} />,
@@ -183,7 +195,7 @@ export default function PlantPage() {
             <DetailGrid
               items={[
                 { label: "Type", value: asset.type },
-                { label: "Site", value: asset.site },
+                { label: "Crew", value: asset.crew },
                 { label: "Project", value: asset.project },
                 { label: "Service", value: asset.nextService },
                 { label: "CraneSafe", value: asset.craneSafe },
@@ -195,6 +207,13 @@ export default function PlantPage() {
               viewHref={`/assets/plant/${asset.id}`}
               editHref={`/assets/plant/${asset.id}/edit`}
             />
+            <ActionButton
+              href={`/assets/plant/${asset.id}/update`}
+              variant="secondary"
+              icon={<RotateCw size={14} />}
+            >
+              Update Asset
+            </ActionButton>
           </div>
         )}
       />
