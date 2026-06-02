@@ -36,13 +36,12 @@ type PlantAsset = {
   rego: string | null;
   crew: string | null;
   project: string | null;
-  site: string | null;
-  status: string | null;
   next_service_date: string | null;
   cranesafe_expiry: string | null;
   insurance_expiry: string | null;
   hired: boolean | null;
-  supplier: string | null;
+  hired_from: string | null;
+  hire_term: string | null;
   notes: string | null;
 };
 
@@ -51,6 +50,16 @@ type PlantForm = Omit<PlantAsset, "id">;
 type EnhancedPlantAsset = PlantAsset & {
   calculatedStatus: string;
   tone: Tone;
+};
+
+type CrewOption = {
+  id: string;
+  name: string;
+};
+
+type ProjectOption = {
+  id: string;
+  name: string;
 };
 
 const emptyAsset: PlantForm = {
@@ -63,13 +72,12 @@ const emptyAsset: PlantForm = {
   rego: "",
   crew: "",
   project: "",
-  site: "",
-  status: "",
   next_service_date: "",
   cranesafe_expiry: "",
   insurance_expiry: "",
   hired: false,
-  supplier: "",
+  hired_from: "",
+  hire_term: "",
   notes: "",
 };
 
@@ -104,8 +112,6 @@ function daysUntil(value: string | null) {
 }
 
 function getAssetStatus(asset: PlantAsset) {
-  if (clean(asset.status)) return clean(asset.status);
-
   const serviceDays = daysUntil(asset.next_service_date);
   const cranesafeDays = daysUntil(asset.cranesafe_expiry);
   const insuranceDays = daysUntil(asset.insurance_expiry);
@@ -116,7 +122,7 @@ function getAssetStatus(asset: PlantAsset) {
 
   if (expiryDays.some((day) => day < 0)) return "Review";
   if (expiryDays.some((day) => day <= 30)) return "Due Soon";
-  if (clean(asset.crew) || clean(asset.project) || clean(asset.site)) return "In Use";
+  if (clean(asset.crew) || clean(asset.project)) return "In Use";
 
   return "Available";
 }
@@ -185,12 +191,14 @@ export default function PlantPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [assets, setAssets] = useState<PlantAsset[]>([]);
+  const [crews, setCrews] = useState<CrewOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All plant types");
-  const [siteFilter, setSiteFilter] = useState("All sites");
+  const [projectFilter, setProjectFilter] = useState("All projects");
   const [statusFilter, setStatusFilter] = useState("All statuses");
 
   const [formOpen, setFormOpen] = useState(false);
@@ -200,25 +208,40 @@ export default function PlantPage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchInitialAssets() {
-      const { data, error } = await supabase
-        .from("plant_assets")
-        .select("*")
-        .order("asset_id", { ascending: true });
+    async function fetchInitialData() {
+      const [assetResult, crewResult, projectResult] = await Promise.all([
+        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
+        supabase.from("crews").select("id, name").order("name", { ascending: true }),
+        supabase.from("projects").select("id, name").order("name", { ascending: true }),
+      ]);
 
       if (cancelled) return;
 
-      if (error) {
-        console.error(error.message);
+      if (assetResult.error) {
+        console.error(assetResult.error.message);
         setAssets([]);
       } else {
-        setAssets((data ?? []) as PlantAsset[]);
+        setAssets((assetResult.data ?? []) as PlantAsset[]);
+      }
+
+      if (crewResult.error) {
+        console.error(crewResult.error.message);
+        setCrews([]);
+      } else {
+        setCrews((crewResult.data ?? []) as CrewOption[]);
+      }
+
+      if (projectResult.error) {
+        console.error(projectResult.error.message);
+        setProjects([]);
+      } else {
+        setProjects((projectResult.data ?? []) as ProjectOption[]);
       }
 
       setLoading(false);
     }
 
-    void fetchInitialAssets();
+    void fetchInitialData();
 
     return () => {
       cancelled = true;
@@ -262,12 +285,10 @@ export default function PlantPage() {
     ];
   }, [assets]);
 
-  const sites = useMemo(() => {
+  const projectOptions = useMemo(() => {
     return [
-      "All sites",
-      ...Array.from(
-        new Set(assets.map((asset) => clean(asset.site) || clean(asset.project)).filter(Boolean))
-      ).sort(),
+      "All projects",
+      ...Array.from(new Set(assets.map((asset) => clean(asset.project)).filter(Boolean))).sort(),
     ];
   }, [assets]);
 
@@ -292,8 +313,8 @@ export default function PlantPage() {
         asset.rego,
         asset.crew,
         asset.project,
-        asset.site,
-        asset.supplier,
+        asset.hired_from,
+        asset.hire_term,
         asset.notes,
       ]
         .map((value) => clean(value))
@@ -302,16 +323,14 @@ export default function PlantPage() {
 
       const matchesSearch = !query || haystack.includes(query);
       const matchesType = typeFilter === "All plant types" || clean(asset.plant_type) === typeFilter;
-      const matchesSite =
-        siteFilter === "All sites" ||
-        clean(asset.site) === siteFilter ||
-        clean(asset.project) === siteFilter;
+      const matchesProject =
+        projectFilter === "All projects" || clean(asset.project) === projectFilter;
       const matchesStatus =
         statusFilter === "All statuses" || asset.calculatedStatus === statusFilter;
 
-      return matchesSearch && matchesType && matchesSite && matchesStatus;
+      return matchesSearch && matchesType && matchesProject && matchesStatus;
     });
-  }, [enhancedAssets, search, typeFilter, siteFilter, statusFilter]);
+  }, [enhancedAssets, search, typeFilter, projectFilter, statusFilter]);
 
   const kpis = useMemo(() => {
     return {
@@ -340,13 +359,12 @@ export default function PlantPage() {
       rego: clean(asset.rego),
       crew: clean(asset.crew),
       project: clean(asset.project),
-      site: clean(asset.site),
-      status: clean(asset.status),
       next_service_date: clean(asset.next_service_date),
       cranesafe_expiry: clean(asset.cranesafe_expiry),
       insurance_expiry: clean(asset.insurance_expiry),
       hired: Boolean(asset.hired),
-      supplier: clean(asset.supplier),
+      hired_from: clean(asset.hired_from),
+      hire_term: clean(asset.hire_term),
       notes: clean(asset.notes),
     });
     setFormOpen(true);
@@ -363,6 +381,8 @@ export default function PlantPage() {
     const payload = {
       ...form,
       asset_id: clean(form.asset_id),
+      hired_from: form.hired ? clean(form.hired_from) : "",
+      hire_term: form.hired ? clean(form.hire_term) : "",
       updated_at: new Date().toISOString(),
     };
 
@@ -394,36 +414,71 @@ export default function PlantPage() {
     await loadAssets();
   }
 
+  async function uploadPlantDocument(assetId: string, documentType: string, file: File) {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const folder = documentType.replace(/\s+/g, "_").toLowerCase();
+    const uniqueName = crypto.randomUUID();
+const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
+
+    const upload = await supabase.storage.from("plant_docs").upload(path, file, {
+      upsert: false,
+    });
+
+    if (upload.error) {
+      alert(upload.error.message);
+      return;
+    }
+
+    const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
+
+    const insert = await supabase.from("plant_asset_documents").insert({
+      plant_asset_id: assetId,
+      document_type: documentType,
+      file_name: file.name,
+      file_url: data.publicUrl,
+    });
+
+    if (insert.error) {
+      alert(insert.error.message);
+      return;
+    }
+
+    alert(`${documentType} uploaded.`);
+  }
+
   function handleCsvUpload(file: File) {
     Papa.parse<Record<string, unknown>>(file, {
       header: true,
       skipEmptyLines: true,
       complete: async ({ data }) => {
         const rows = data
-          .map((row) => ({
-            asset_id: readValue(row, ["Asset ID", "Asset", "Plant ID", "Plant No", "Plant Number"]),
-            name: readValue(row, ["Name", "Description", "Asset Name", "Plant Name"]),
-            make: readValue(row, ["Make", "Manufacturer"]),
-            model: readValue(row, ["Model"]),
-            plant_type: readValue(row, ["Type", "Plant Type", "Category"]),
-            serial_number: readValue(row, ["Serial", "Serial Number", "VIN"]),
-            rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
-            crew: readValue(row, ["Crew", "Allocated Crew"]),
-            project: readValue(row, ["Project", "Job", "Allocation"]),
-            site: readValue(row, ["Site", "Location"]),
-            status: readValue(row, ["Status"]),
-            next_service_date: toDateInput(
-              readValue(row, ["Next Service", "Next Service Date", "Service Due"])
-            ),
-            cranesafe_expiry: toDateInput(
-              readValue(row, ["CraneSafe", "Crane Safe", "CraneSafe Expiry"])
-            ),
-            insurance_expiry: toDateInput(readValue(row, ["Insurance", "Insurance Expiry"])),
-            hired: toBoolean(readValue(row, ["Hired", "Hire", "Wet Hire", "Dry Hire"])),
-            supplier: readValue(row, ["Supplier", "Hire Company", "Owner"]),
-            notes: readValue(row, ["Notes", "Comments"]),
-            updated_at: new Date().toISOString(),
-          }))
+          .map((row) => {
+            const hired = toBoolean(readValue(row, ["Hired", "Hire", "Wet Hire", "Dry Hire"]));
+
+            return {
+              asset_id: readValue(row, ["Asset ID", "Asset", "Plant ID", "Plant No", "Plant Number"]),
+              name: readValue(row, ["Name", "Description", "Asset Name", "Plant Name"]),
+              make: readValue(row, ["Make", "Manufacturer"]),
+              model: readValue(row, ["Model"]),
+              plant_type: readValue(row, ["Type", "Plant Type", "Category"]),
+              serial_number: readValue(row, ["Serial", "Serial Number", "VIN"]),
+              rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
+              crew: readValue(row, ["Crew", "Allocated Crew"]),
+              project: readValue(row, ["Project", "Job", "Allocation"]),
+              next_service_date: toDateInput(
+                readValue(row, ["Next Service", "Next Service Date", "Service Due"])
+              ),
+              cranesafe_expiry: toDateInput(
+                readValue(row, ["CraneSafe", "Crane Safe", "CraneSafe Expiry"])
+              ),
+              insurance_expiry: toDateInput(readValue(row, ["Insurance", "Insurance Expiry"])),
+              hired,
+              hired_from: hired ? readValue(row, ["Hired From", "Hire Company", "Owner"]) : "",
+              hire_term: hired ? readValue(row, ["Hire Term", "Term"]) : "",
+              notes: readValue(row, ["Notes", "Comments"]),
+              updated_at: new Date().toISOString(),
+            };
+          })
           .filter((row) => clean(row.asset_id));
 
         if (!rows.length) {
@@ -462,13 +517,13 @@ export default function PlantPage() {
       Rego: clean(asset.rego),
       Crew: clean(asset.crew),
       Project: clean(asset.project),
-      Site: clean(asset.site),
       Status: asset.calculatedStatus,
       "Next Service": clean(asset.next_service_date),
       "CraneSafe Expiry": clean(asset.cranesafe_expiry),
       "Insurance Expiry": clean(asset.insurance_expiry),
       Hired: asset.hired ? "Yes" : "No",
-      Supplier: clean(asset.supplier),
+      "Hired From": clean(asset.hired_from),
+      "Hire Term": clean(asset.hire_term),
       Notes: clean(asset.notes),
     }));
 
@@ -567,12 +622,12 @@ export default function PlantPage() {
           </select>
 
           <select
-            value={siteFilter}
-            onChange={(event) => setSiteFilter(event.target.value)}
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
           >
-            {sites.map((site) => (
-              <option key={site}>{site}</option>
+            {projectOptions.map((project) => (
+              <option key={project}>{project}</option>
             ))}
           </select>
 
@@ -613,16 +668,19 @@ export default function PlantPage() {
             render: (asset) => (
               <div>
                 <p className="font-semibold text-slate-950">{clean(asset.crew) || "Unassigned"}</p>
-                <p className="mt-1 text-slate-600">
-                  {clean(asset.project) || clean(asset.site) || "No site"}
-                </p>
+                <p className="mt-1 text-slate-600">{clean(asset.project) || "No project"}</p>
               </div>
             ),
           },
           { label: "Rego", render: (asset) => clean(asset.rego) || "No Rego" },
           { label: "Next Service", render: (asset) => formatDate(asset.next_service_date) },
-          { label: "CraneSafe", render: (asset) => formatDate(asset.cranesafe_expiry) },
-          { label: "Hired", render: (asset) => (asset.hired ? "Yes" : "No") },
+          {
+            label: "Hire",
+            render: (asset) =>
+              asset.hired
+                ? `${clean(asset.hired_from) || "Hired"} / ${clean(asset.hire_term) || "No term"}`
+                : "Owned",
+          },
           {
             label: "Status",
             render: (asset) => <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />,
@@ -706,7 +764,7 @@ export default function PlantPage() {
 
       {formOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -733,11 +791,6 @@ export default function PlantPage() {
                 ["Type", "plant_type"],
                 ["Serial Number", "serial_number"],
                 ["Rego", "rego"],
-                ["Crew", "crew"],
-                ["Project", "project"],
-                ["Site", "site"],
-                ["Supplier", "supplier"],
-                ["Status Override", "status"],
               ].map(([label, key]) => (
                 <label key={key} className="space-y-1 text-sm">
                   <span className="font-semibold text-slate-600">{label}</span>
@@ -753,6 +806,42 @@ export default function PlantPage() {
                   />
                 </label>
               ))}
+
+              <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Crew</span>
+                <select
+                  value={clean(form.crew)}
+                  onChange={(event) =>
+                    setForm((previous) => ({ ...previous, crew: event.target.value }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                >
+                  <option value="">Unassigned</option>
+                  {crews.map((crew) => (
+                    <option key={crew.id} value={crew.name}>
+                      {crew.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Project</span>
+                <select
+                  value={clean(form.project)}
+                  onChange={(event) =>
+                    setForm((previous) => ({ ...previous, project: event.target.value }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                >
+                  <option value="">No project</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.name}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <label className="space-y-1 text-sm">
                 <span className="font-semibold text-slate-600">Next Service</span>
@@ -808,11 +897,46 @@ export default function PlantPage() {
                   setForm((previous) => ({
                     ...previous,
                     hired: event.target.checked,
+                    hired_from: event.target.checked ? previous.hired_from : "",
+                    hire_term: event.target.checked ? previous.hire_term : "",
                   }))
                 }
               />
               Hired plant
             </label>
+
+            {form.hired && (
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">Hired From</span>
+                  <input
+                    value={clean(form.hired_from)}
+                    onChange={(event) =>
+                      setForm((previous) => ({ ...previous, hired_from: event.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  />
+                </label>
+
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">Hire Term</span>
+                  <select
+                    value={clean(form.hire_term)}
+                    onChange={(event) =>
+                      setForm((previous) => ({ ...previous, hire_term: event.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  >
+                    <option value="">Select term</option>
+                    <option value="Weekly">Weekly</option>
+                    <option value="Monthly">Monthly</option>
+                    <option value="Quarterly">Quarterly</option>
+                    <option value="Project Duration">Project Duration</option>
+                    <option value="As Required">As Required</option>
+                  </select>
+                </label>
+              </div>
+            )}
 
             <label className="mt-3 block space-y-1 text-sm">
               <span className="font-semibold text-slate-600">Notes</span>
@@ -828,6 +952,48 @@ export default function PlantPage() {
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
               />
             </label>
+
+            {editingId && (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <h3 className="text-sm font-bold text-slate-950">Plant Documents</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Upload service history, insurance documents and crane compliance documents.
+                </p>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {["Service History", "Insurance Document", "Crane Document"].map((type) => (
+                    <label
+                      key={type}
+                      className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm hover:bg-slate-50"
+                    >
+                      <FileUp size={18} className="mb-2 text-slate-500" />
+                      <span className="font-semibold text-slate-700">{type}</span>
+                      <span className="mt-1 text-xs text-slate-400">PDF, image or document</span>
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+
+                          if (file && editingId) {
+                            void uploadPlantDocument(editingId, type, file);
+                          }
+
+                          event.target.value = "";
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!editingId && (
+              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Save the plant item first, then reopen it to upload service history, insurance
+                documents and crane documents.
+              </div>
+            )}
 
             <div className="mt-5 flex justify-end gap-3">
               <button
