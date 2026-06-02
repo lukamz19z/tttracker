@@ -10,7 +10,7 @@ import {
   PageShell,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type Prestart = {
   id: string;
@@ -107,7 +107,12 @@ function SubmissionCard({ item }: { item: Prestart }) {
       </p>
 
       <div className="mt-4">
-        <RecordActions recordType="prestart" recordLabel={`${item.id} ${item.asset}`} />
+        <RecordActions
+          recordType="prestart"
+          recordLabel={`${item.id} ${item.asset}`}
+          viewHref={`/assets/prestarts/${item.id}`}
+          editHref={`/assets/prestarts/${item.id}/edit`}
+        />
       </div>
     </article>
   );
@@ -128,7 +133,6 @@ export default function AssetsPrestartsPage() {
             <ActionButton href="/assets/prestarts/new" icon={<Plus size={16} />}>
               New Prestart
             </ActionButton>
-            <ModeToggle label="Daily mode" />
           </>
         }
       />

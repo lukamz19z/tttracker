@@ -11,7 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type Vehicle = {
   id: string;
@@ -20,6 +20,10 @@ type Vehicle = {
   category: string;
   vehicle: string;
   site: string;
+  project: string;
+  eHub: string;
+  dashCam: string;
+  fuelCard: string;
   nextService: string;
   regoExpiry: string;
   insuranceExpiry: string;
@@ -35,6 +39,10 @@ const vehicles: Vehicle[] = [
     category: "Light Vehicle",
     vehicle: "Toyota Hilux Dual Cab",
     site: "Depot",
+    project: "Unassigned",
+    eHub: "Yes",
+    dashCam: "Yes",
+    fuelCard: "No",
     nextService: "10 Oct 2025",
     regoExpiry: "21 Jun 2026",
     insuranceExpiry: "30 Sep 2026",
@@ -48,6 +56,10 @@ const vehicles: Vehicle[] = [
     category: "Light Vehicle",
     vehicle: "Toyota Hilux Dual Cab",
     site: "Lobs Hole",
+    project: "Snowy 2.0",
+    eHub: "Yes",
+    dashCam: "Yes",
+    fuelCard: "Yes",
     nextService: "19 Feb 2026",
     regoExpiry: "22 Mar 2027",
     insuranceExpiry: "30 Sep 2026",
@@ -61,6 +73,10 @@ const vehicles: Vehicle[] = [
     category: "Heavy Vehicle",
     vehicle: "Western Star Prime Mover",
     site: "Maragle",
+    project: "Maragle",
+    eHub: "No",
+    dashCam: "No",
+    fuelCard: "Yes",
     nextService: "08 Oct 2026",
     regoExpiry: "14 Apr 2027",
     insuranceExpiry: "30 Sep 2026",
@@ -74,6 +90,10 @@ const vehicles: Vehicle[] = [
     category: "Trailer",
     vehicle: "Semi Trailer",
     site: "Depot",
+    project: "Unassigned",
+    eHub: "N/A",
+    dashCam: "N/A",
+    fuelCard: "N/A",
     nextService: "15 Dec 2024",
     regoExpiry: "11 Jun 2026",
     insuranceExpiry: "N/A",
@@ -97,7 +117,6 @@ export default function AssetsVehiclesPage() {
             <ActionButton href="/assets/vehicles/new" icon={<Plus size={16} />}>
               Add Vehicle
             </ActionButton>
-            <ModeToggle />
           </>
         }
       />
@@ -133,7 +152,15 @@ export default function AssetsVehiclesPage() {
           },
           { label: "Rego", render: (vehicle) => vehicle.rego },
           { label: "Category", render: (vehicle) => vehicle.category },
-          { label: "Site", render: (vehicle) => vehicle.site },
+          {
+            label: "Allocation",
+            render: (vehicle) => (
+              <div>
+                <p className="font-semibold text-slate-950">{vehicle.site}</p>
+                <p className="mt-1 text-slate-600">{vehicle.project}</p>
+              </div>
+            ),
+          },
           { label: "Next Service", render: (vehicle) => vehicle.nextService },
           { label: "Rego Expiry", render: (vehicle) => vehicle.regoExpiry },
           { label: "Insurance", render: (vehicle) => vehicle.insuranceExpiry },
@@ -147,6 +174,8 @@ export default function AssetsVehiclesPage() {
               <RecordActions
                 recordType="vehicle"
                 recordLabel={`${vehicle.assetId} ${vehicle.rego}`}
+                viewHref={`/assets/vehicles/${vehicle.id}`}
+                editHref={`/assets/vehicles/${vehicle.id}/edit`}
               />
             ),
           },
@@ -166,6 +195,7 @@ export default function AssetsVehiclesPage() {
               items={[
                 { label: "Category", value: vehicle.category },
                 { label: "Site", value: vehicle.site },
+                { label: "Project", value: vehicle.project },
                 { label: "Service", value: vehicle.nextService },
                 { label: "Rego", value: vehicle.regoExpiry },
               ]}
@@ -173,6 +203,8 @@ export default function AssetsVehiclesPage() {
             <RecordActions
               recordType="vehicle"
               recordLabel={`${vehicle.assetId} ${vehicle.rego}`}
+              viewHref={`/assets/vehicles/${vehicle.id}`}
+              editHref={`/assets/vehicles/${vehicle.id}/edit`}
             />
           </div>
         )}

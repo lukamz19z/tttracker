@@ -11,7 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type PlantAsset = {
   id: string;
@@ -20,6 +20,7 @@ type PlantAsset = {
   make: string;
   type: string;
   site: string;
+  project: string;
   status: string;
   nextService: string;
   craneSafe: string;
@@ -36,6 +37,7 @@ const plantAssets: PlantAsset[] = [
     make: "Liebherr",
     type: "Mobile Crane",
     site: "Lobs Hole",
+    project: "Snowy 2.0",
     status: "Available",
     nextService: "09 Sep 2026",
     craneSafe: "09 Mar 2027",
@@ -50,6 +52,7 @@ const plantAssets: PlantAsset[] = [
     make: "Grove",
     type: "Mobile Crane",
     site: "Maragle",
+    project: "Maragle",
     status: "Due Soon",
     nextService: "05 Nov 2025",
     craneSafe: "20 Jun 2026",
@@ -64,6 +67,7 @@ const plantAssets: PlantAsset[] = [
     make: "Merlo",
     type: "Telehandler",
     site: "Depot",
+    project: "Unassigned",
     status: "In Use",
     nextService: "05 Mar 2026",
     craneSafe: "N/A",
@@ -78,6 +82,7 @@ const plantAssets: PlantAsset[] = [
     make: "Merlo",
     type: "Telehandler",
     site: "Maragle",
+    project: "Maragle",
     status: "Review",
     nextService: "06 Jul 2026",
     craneSafe: "N/A",
@@ -102,7 +107,6 @@ export default function PlantPage() {
             <ActionButton href="/assets/plant/new" icon={<Plus size={16} />}>
               Add Plant
             </ActionButton>
-            <ModeToggle />
           </>
         }
       />
@@ -138,7 +142,15 @@ export default function PlantPage() {
           },
           { label: "Type", render: (asset) => asset.type },
           { label: "Make", render: (asset) => asset.make },
-          { label: "Site", render: (asset) => asset.site },
+          {
+            label: "Allocation",
+            render: (asset) => (
+              <div>
+                <p className="font-semibold text-slate-950">{asset.site}</p>
+                <p className="mt-1 text-slate-600">{asset.project}</p>
+              </div>
+            ),
+          },
           { label: "Rego", render: (asset) => asset.rego },
           { label: "Next Service", render: (asset) => asset.nextService },
           { label: "CraneSafe", render: (asset) => asset.craneSafe },
@@ -150,7 +162,12 @@ export default function PlantPage() {
           {
             label: "Actions",
             render: (asset) => (
-              <RecordActions recordType="plant" recordLabel={`${asset.assetId} ${asset.name}`} />
+              <RecordActions
+                recordType="plant"
+                recordLabel={`${asset.assetId} ${asset.name}`}
+                viewHref={`/assets/plant/${asset.id}`}
+                editHref={`/assets/plant/${asset.id}/edit`}
+              />
             ),
           },
         ]}
@@ -167,11 +184,17 @@ export default function PlantPage() {
               items={[
                 { label: "Type", value: asset.type },
                 { label: "Site", value: asset.site },
+                { label: "Project", value: asset.project },
                 { label: "Service", value: asset.nextService },
                 { label: "CraneSafe", value: asset.craneSafe },
               ]}
             />
-            <RecordActions recordType="plant" recordLabel={`${asset.assetId} ${asset.name}`} />
+            <RecordActions
+              recordType="plant"
+              recordLabel={`${asset.assetId} ${asset.name}`}
+              viewHref={`/assets/plant/${asset.id}`}
+              editHref={`/assets/plant/${asset.id}/edit`}
+            />
           </div>
         )}
       />

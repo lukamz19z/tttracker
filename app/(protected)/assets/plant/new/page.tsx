@@ -32,6 +32,7 @@ export default function NewPlantPage() {
         <FormField label="Rego" placeholder="Rego or No Rego" />
         <FormField label="Make" placeholder="Liebherr, Merlo, Grove" />
         <FormField label="Model / Type" placeholder="LTM1220, P40.17EE" />
+        <FormSelectField label="Project Assignment" options={["Snowy 2.0", "Maragle", "Tumbarumba", "Unassigned / no project"]} />
         <FormSelectField label="Site Allocation" options={["Depot", "Lobs Hole", "Maragle", "Yass"]} />
         <FormSelectField label="Status" options={["Available", "In Use", "In Workshop", "Out of Service", "Hired"]} />
         <FormField label="Last Service" type="date" />

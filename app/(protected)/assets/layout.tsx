@@ -17,7 +17,6 @@ const assetNav = [
   { label: "Equipment", href: "/assets/equipment" },
   { label: "Prestarts", href: "/assets/prestarts" },
   { label: "Compliance", href: "/assets/compliance" },
-  { label: "Documents", href: "/assets/documents" },
 ];
 
 export default function AssetsLayout({

@@ -11,7 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type AssetDocument = {
   id: string;
@@ -77,7 +77,6 @@ export default function AssetsDocumentsPage() {
             <ActionButton href="/assets/documents/new" icon={<FileUp size={16} />}>
               Upload
             </ActionButton>
-            <ModeToggle label="Document mode" />
           </>
         }
       />
@@ -123,7 +122,12 @@ export default function AssetsDocumentsPage() {
           {
             label: "Actions",
             render: (item) => (
-              <RecordActions recordType="document" recordLabel={`${item.asset} ${item.document}`} />
+              <RecordActions
+                recordType="document"
+                recordLabel={`${item.asset} ${item.document}`}
+                viewHref={`/assets/documents/${item.id}`}
+                editHref={`/assets/documents/${item.id}/edit`}
+              />
             ),
           },
         ]}
@@ -145,7 +149,12 @@ export default function AssetsDocumentsPage() {
                 { label: "SharePoint", value: item.sharePoint },
               ]}
             />
-            <RecordActions recordType="document" recordLabel={`${item.asset} ${item.document}`} />
+            <RecordActions
+              recordType="document"
+              recordLabel={`${item.asset} ${item.document}`}
+              viewHref={`/assets/documents/${item.id}`}
+              editHref={`/assets/documents/${item.id}/edit`}
+            />
           </div>
         )}
       />

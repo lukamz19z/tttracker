@@ -28,6 +28,7 @@ export default function NewEquipmentPage() {
         <FormField label="Serial ID" placeholder="17707931, TW-001" />
         <FormSelectField label="Equipment Type" options={["Round Sling", "Chain Sling", "Harness", "Lever Hoist", "Torque Wrench", "Other"]} />
         <FormField label="Description" placeholder="Legend 1T purple 1.0m" />
+        <FormSelectField label="Project Assignment" options={["Snowy 2.0", "Maragle", "Tumbarumba", "Unassigned / no project"]} />
         <FormSelectField label="Crew / Location" options={["Crew 1", "Crew 2", "Crew 3", "Workshop", "Depot"]} />
         <FormSelectField label="Tag Colour" options={["Green", "Blue", "Yellow", "Red", "N/A"]} />
         <FormSelectField label="Status" options={["Passed", "Due Soon", "Failed", "Quarantined", "Missing"]} />

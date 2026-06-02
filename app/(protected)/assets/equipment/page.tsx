@@ -11,7 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type Equipment = {
   id: string;
@@ -19,6 +19,7 @@ type Equipment = {
   type: string;
   description: string;
   crew: string;
+  project: string;
   tag: string;
   inspected: string;
   due: string;
@@ -33,6 +34,7 @@ const equipment: Equipment[] = [
     type: "Round Sling",
     description: "Legend 1T purple 1.0m",
     crew: "Crew 3",
+    project: "Snowy 2.0",
     tag: "Green",
     inspected: "02 Mar 2026",
     due: "02 Jun 2026",
@@ -45,6 +47,7 @@ const equipment: Equipment[] = [
     type: "Harness",
     description: "Skylotec Ignite Neutron",
     crew: "Crew 1",
+    project: "Snowy 2.0",
     tag: "Green",
     inspected: "26 Feb 2026",
     due: "26 Aug 2026",
@@ -57,6 +60,7 @@ const equipment: Equipment[] = [
     type: "Chain Sling",
     description: "Grade 100 2 leg chain sling",
     crew: "Crew 2",
+    project: "Maragle",
     tag: "Green",
     inspected: "26 Feb 2026",
     due: "26 Aug 2026",
@@ -69,6 +73,7 @@ const equipment: Equipment[] = [
     type: "Torque Wrench",
     description: "Calibrated torque wrench 40-200Nm",
     crew: "Workshop",
+    project: "Unassigned",
     tag: "N/A",
     inspected: "10 Jan 2026",
     due: "10 Jul 2026",
@@ -92,7 +97,6 @@ export default function AssetsEquipmentPage() {
             <ActionButton href="/assets/equipment/new" icon={<Plus size={16} />}>
               Add Equipment
             </ActionButton>
-            <ModeToggle />
           </>
         }
       />
@@ -127,7 +131,15 @@ export default function AssetsEquipmentPage() {
             ),
           },
           { label: "Type", render: (item) => item.type },
-          { label: "Crew", render: (item) => item.crew },
+          {
+            label: "Allocation",
+            render: (item) => (
+              <div>
+                <p className="font-semibold text-slate-950">{item.crew}</p>
+                <p className="mt-1 text-slate-600">{item.project}</p>
+              </div>
+            ),
+          },
           { label: "Tag", render: (item) => item.tag },
           { label: "Inspected", render: (item) => item.inspected },
           { label: "Next Due", render: (item) => item.due },
@@ -138,7 +150,12 @@ export default function AssetsEquipmentPage() {
           {
             label: "Actions",
             render: (item) => (
-              <RecordActions recordType="equipment" recordLabel={`${item.serial} ${item.type}`} />
+              <RecordActions
+                recordType="equipment"
+                recordLabel={`${item.serial} ${item.type}`}
+                viewHref={`/assets/equipment/${item.id}`}
+                editHref={`/assets/equipment/${item.id}/edit`}
+              />
             ),
           },
         ]}
@@ -155,11 +172,17 @@ export default function AssetsEquipmentPage() {
               items={[
                 { label: "Type", value: item.type },
                 { label: "Crew", value: item.crew },
+                { label: "Project", value: item.project },
                 { label: "Tag", value: item.tag },
                 { label: "Due", value: item.due },
               ]}
             />
-            <RecordActions recordType="equipment" recordLabel={`${item.serial} ${item.type}`} />
+            <RecordActions
+              recordType="equipment"
+              recordLabel={`${item.serial} ${item.type}`}
+              viewHref={`/assets/equipment/${item.id}`}
+              editHref={`/assets/equipment/${item.id}/edit`}
+            />
           </div>
         )}
       />

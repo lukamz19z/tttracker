@@ -9,7 +9,7 @@ import {
   PageShell,
   StatusBadge,
 } from "../components";
-import { ModeToggle, RecordActions } from "../record-actions";
+import { RecordActions } from "../record-actions";
 
 type Tone = "blue" | "amber" | "rose" | "emerald" | "violet" | "slate";
 
@@ -119,7 +119,12 @@ function JobCard({ job }: { job: FleetJob }) {
       </div>
 
       <div className="mt-4 border-t border-slate-200 pt-3">
-        <RecordActions recordType="fleet job" recordLabel={`${job.id} ${job.asset}`} />
+        <RecordActions
+          recordType="fleet job"
+          recordLabel={`${job.id} ${job.asset}`}
+          viewHref={`/assets/maintenance/${job.id}`}
+          editHref={`/assets/maintenance/${job.id}/edit`}
+        />
       </div>
     </article>
   );
@@ -137,7 +142,6 @@ export default function FleetJobsPage() {
             <ActionButton href="/assets/maintenance/new" icon={<Plus size={16} />}>
               Log Job
             </ActionButton>
-            <ModeToggle label="Board mode" />
           </>
         }
       />

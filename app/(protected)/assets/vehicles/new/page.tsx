@@ -30,6 +30,7 @@ export default function NewVehiclePage() {
         <FormSelectField label="Category" options={["Light Vehicle", "Heavy Vehicle", "Trailer"]} />
         <FormField label="Make / Type" placeholder="Toyota Hilux, Isuzu FZM" />
         <FormField label="VIN" placeholder="VIN number" />
+        <FormSelectField label="Project Assignment" options={["Snowy 2.0", "Maragle", "Tumbarumba", "Unassigned / no project"]} />
         <FormSelectField label="Site Allocation" options={["Depot", "Lobs Hole", "Maragle", "Tumbarumba"]} />
         <FormField label="Rego Expiry" type="date" />
         <FormField label="Insurance Expiry" type="date" />
