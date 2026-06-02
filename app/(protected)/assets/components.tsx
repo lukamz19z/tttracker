@@ -252,3 +252,92 @@ export function DetailGrid({
     </div>
   );
 }
+
+export function FormCard({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+      <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">{children}</div>
+    </section>
+  );
+}
+
+export function FormField({
+  label,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+      {label}
+      <input
+        type={type}
+        placeholder={placeholder}
+        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+      />
+    </label>
+  );
+}
+
+export function FormSelectField({
+  label,
+  options,
+}: {
+  label: string;
+  options: string[];
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+      {label}
+      <select className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500">
+        {options.map((option) => (
+          <option key={option}>{option}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+export function FormTextArea({
+  label,
+  placeholder,
+}: {
+  label: string;
+  placeholder?: string;
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-semibold text-slate-700 sm:col-span-2">
+      {label}
+      <textarea
+        placeholder={placeholder}
+        rows={5}
+        className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+      />
+    </label>
+  );
+}
+
+export function DisabledSubmit({ label = "Save coming soon" }: { label?: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      className="inline-flex min-h-10 cursor-not-allowed items-center justify-center bg-slate-200 px-4 text-sm font-semibold text-slate-500"
+    >
+      {label}
+    </button>
+  );
+}

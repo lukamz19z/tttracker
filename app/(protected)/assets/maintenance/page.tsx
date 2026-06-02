@@ -1,16 +1,17 @@
-import { Plus } from "lucide-react";
+import { AlertTriangle, Clock, Plus, UserRound, Wrench } from "lucide-react";
 import {
   ActionButton,
-  DetailGrid,
   FilterBar,
   FilterInput,
   FilterSelect,
   KpiCard,
   PageHeader,
   PageShell,
-  RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
+
+type Tone = "blue" | "amber" | "rose" | "emerald" | "violet" | "slate";
 
 type FleetJob = {
   id: string;
@@ -19,9 +20,10 @@ type FleetJob = {
   issue: string;
   reportedBy: string;
   priority: string;
-  status: string;
+  status: "Raised" | "Triage" | "Assigned" | "Waiting Parts";
   safety: string;
-  tone: "blue" | "amber" | "rose" | "emerald" | "violet";
+  due: string;
+  tone: Tone;
 };
 
 const jobs: FleetJob[] = [
@@ -34,6 +36,7 @@ const jobs: FleetJob[] = [
     priority: "High",
     status: "Raised",
     safety: "Restricted Use",
+    due: "Today",
     tone: "rose",
   },
   {
@@ -45,6 +48,7 @@ const jobs: FleetJob[] = [
     priority: "Medium",
     status: "Triage",
     safety: "Monitor",
+    due: "Today",
     tone: "amber",
   },
   {
@@ -56,6 +60,7 @@ const jobs: FleetJob[] = [
     priority: "Medium",
     status: "Assigned",
     safety: "Safe to Use",
+    due: "Tomorrow",
     tone: "blue",
   },
   {
@@ -67,9 +72,58 @@ const jobs: FleetJob[] = [
     priority: "Low",
     status: "Waiting Parts",
     safety: "Do Not Use",
+    due: "This week",
     tone: "violet",
   },
 ];
+
+const columns: Array<{ status: FleetJob["status"]; label: string; tone: Tone }> = [
+  { status: "Raised", label: "Raised", tone: "rose" },
+  { status: "Triage", label: "Triage", tone: "amber" },
+  { status: "Assigned", label: "Assigned", tone: "blue" },
+  { status: "Waiting Parts", label: "Waiting Parts", tone: "violet" },
+];
+
+function JobCard({ job }: { job: FleetJob }) {
+  return (
+    <article className="border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+            {job.id}
+          </p>
+          <h3 className="mt-1 text-base font-bold text-slate-950">{job.asset}</h3>
+        </div>
+        <StatusBadge label={job.priority} tone={job.tone} />
+      </div>
+
+      <p className="mt-3 text-sm leading-6 text-slate-700">{job.issue}</p>
+
+      <div className="mt-4 grid gap-2 text-sm">
+        <div className="flex items-center gap-2 text-slate-600">
+          <Wrench size={15} />
+          <span>{job.type}</span>
+        </div>
+        <div className="flex items-center gap-2 text-slate-600">
+          <AlertTriangle size={15} />
+          <span>{job.safety}</span>
+        </div>
+        <div className="flex items-center gap-2 text-slate-600">
+          <UserRound size={15} />
+          <span>{job.reportedBy}</span>
+        </div>
+        <div className="flex items-center gap-2 text-slate-600">
+          <Clock size={15} />
+          <span>{job.due}</span>
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-slate-200 pt-3">
+        <RecordActions recordType="fleet job" recordLabel={`${job.id} ${job.asset}`} />
+      </div>
+    </article>
+  );
+}
 
 export default function FleetJobsPage() {
   return (
@@ -77,74 +131,61 @@ export default function FleetJobsPage() {
       <PageHeader
         eyebrow="Maintenance Workflow"
         title="Fleet Jobs"
-        description="Job board for defects, prestart faults, breakdowns, damage, servicing and equipment issues. This is where issues move from raised to assigned, repaired and closed."
+        description="Workflow board for defects, prestart faults, breakdowns, damage, servicing and equipment issues. This page is built for triage, assignment and close-out."
         actions={
-          <ActionButton href="/assets/maintenance" icon={<Plus size={16} />}>
-            Log Job
-          </ActionButton>
+          <>
+            <ActionButton href="/assets/maintenance/new" icon={<Plus size={16} />}>
+              Log Job
+            </ActionButton>
+            <ModeToggle label="Board mode" />
+          </>
         }
       />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Raised" value="1" detail="new jobs to review" tone="rose" />
         <KpiCard label="Triage" value="1" detail="fleet manager decision" tone="amber" />
-        <KpiCard label="Assigned" value="1" detail="with mechanic/workshop" tone="blue" />
+        <KpiCard label="Assigned" value="1" detail="with workshop" tone="blue" />
         <KpiCard label="Waiting" value="1" detail="parts or information" tone="violet" />
       </section>
 
       <FilterBar>
         <FilterInput placeholder="Search job, asset, issue..." />
-        <FilterSelect label="Job type" options={["All job types", "Prestart Fault", "Mechanical", "Calibration", "Inspection Finding"]} />
+        <FilterSelect
+          label="Job type"
+          options={["All job types", "Prestart Fault", "Mechanical", "Calibration", "Inspection Finding"]}
+        />
         <FilterSelect label="Priority" options={["All priorities", "High", "Medium", "Low"]} />
-        <FilterSelect label="Status" options={["All statuses", "Raised", "Triage", "Assigned", "Waiting Parts", "Closed"]} />
+        <FilterSelect label="Safety" options={["All safety states", "Safe to Use", "Monitor", "Restricted Use", "Do Not Use"]} />
       </FilterBar>
 
-      <RegisterList
-        title="Job Board"
-        description="A simple workflow for fleet manager triage and workshop follow-up."
-        items={jobs}
-        getKey={(job) => job.id}
-        columns={[
-          {
-            label: "Job",
-            render: (job) => (
-              <div>
-                <p className="font-semibold text-slate-950">{job.id}</p>
-                <p className="mt-1 text-slate-600">{job.asset}</p>
+      <section className="grid gap-4 xl:grid-cols-4">
+        {columns.map((column) => {
+          const columnJobs = jobs.filter((job) => job.status === column.status);
+
+          return (
+            <div key={column.status} className="border border-slate-200 bg-slate-100 p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">
+                    {column.label}
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {columnJobs.length} job{columnJobs.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <StatusBadge label={String(columnJobs.length)} tone={column.tone} />
               </div>
-            ),
-          },
-          { label: "Type", render: (job) => job.type },
-          { label: "Issue", render: (job) => job.issue, className: "max-w-md" },
-          { label: "Reported By", render: (job) => job.reportedBy },
-          { label: "Priority", render: (job) => job.priority },
-          { label: "Safety", render: (job) => job.safety },
-          {
-            label: "Status",
-            render: (job) => <StatusBadge label={job.status} tone={job.tone} />,
-          },
-        ]}
-        renderMobile={(job) => (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-semibold text-slate-950">{job.id}</p>
-                <p className="mt-1 text-sm text-slate-600">{job.asset}</p>
+
+              <div className="space-y-3">
+                {columnJobs.map((job) => (
+                  <JobCard key={job.id} job={job} />
+                ))}
               </div>
-              <StatusBadge label={job.status} tone={job.tone} />
             </div>
-            <p className="text-sm leading-6 text-slate-700">{job.issue}</p>
-            <DetailGrid
-              items={[
-                { label: "Type", value: job.type },
-                { label: "Priority", value: job.priority },
-                { label: "Safety", value: job.safety },
-                { label: "Reported", value: job.reportedBy },
-              ]}
-            />
-          </div>
-        )}
-      />
+          );
+        })}
+      </section>
     </PageShell>
   );
 }

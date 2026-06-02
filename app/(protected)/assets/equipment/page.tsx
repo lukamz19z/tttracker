@@ -11,6 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
 
 type Equipment = {
   id: string;
@@ -85,12 +86,13 @@ export default function AssetsEquipmentPage() {
         description="Lifting gear, fall arrest gear, torque wrenches, hoists and other equipment. Keep this page focused on inspection status, crew allocation and whether gear is safe to use."
         actions={
           <>
-            <ActionButton href="/assets/maintenance" variant="secondary" icon={<Wrench size={16} />}>
+            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
               Raise Job
             </ActionButton>
-            <ActionButton href="/assets/equipment" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/equipment/new" icon={<Plus size={16} />}>
               Add Equipment
             </ActionButton>
+            <ModeToggle />
           </>
         }
       />
@@ -133,6 +135,12 @@ export default function AssetsEquipmentPage() {
             label: "Status",
             render: (item) => <StatusBadge label={item.status} tone={item.tone} />,
           },
+          {
+            label: "Actions",
+            render: (item) => (
+              <RecordActions recordType="equipment" recordLabel={`${item.serial} ${item.type}`} />
+            ),
+          },
         ]}
         renderMobile={(item) => (
           <div className="space-y-4">
@@ -151,6 +159,7 @@ export default function AssetsEquipmentPage() {
                 { label: "Due", value: item.due },
               ]}
             />
+            <RecordActions recordType="equipment" recordLabel={`${item.serial} ${item.type}`} />
           </div>
         )}
       />

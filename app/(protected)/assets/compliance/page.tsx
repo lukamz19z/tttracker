@@ -11,6 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
 
 type ComplianceItem = {
   id: string;
@@ -69,9 +70,12 @@ export default function AssetsCompliancePage() {
         title="Compliance"
         description="Single review page for rego, insurance, service, CraneSafe, risk assessments and other asset documents that expire or need review."
         actions={
-          <ActionButton href="/assets/compliance" icon={<ShieldCheck size={16} />}>
-            Add Record
-          </ActionButton>
+          <>
+            <ActionButton href="/assets/compliance/new" icon={<ShieldCheck size={16} />}>
+              Add Record
+            </ActionButton>
+            <ModeToggle label="Review mode" />
+          </>
         }
       />
 
@@ -106,6 +110,12 @@ export default function AssetsCompliancePage() {
             label: "Status",
             render: (item) => <StatusBadge label={item.status} tone={item.tone} />,
           },
+          {
+            label: "Actions",
+            render: (item) => (
+              <RecordActions recordType="compliance record" recordLabel={`${item.asset} ${item.item}`} />
+            ),
+          },
         ]}
         renderMobile={(item) => (
           <div className="space-y-4">
@@ -122,6 +132,7 @@ export default function AssetsCompliancePage() {
                 { label: "Owner", value: item.owner },
               ]}
             />
+            <RecordActions recordType="compliance record" recordLabel={`${item.asset} ${item.item}`} />
           </div>
         )}
       />

@@ -11,6 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
 
 type AssetDocument = {
   id: string;
@@ -20,6 +21,8 @@ type AssetDocument = {
   updated: string;
   owner: string;
   status: string;
+  clientVisible: string;
+  sharePoint: string;
   tone: "emerald" | "amber" | "slate";
 };
 
@@ -32,6 +35,8 @@ const documents: AssetDocument[] = [
     updated: "09 Mar 2026",
     owner: "Fleet",
     status: "Current",
+    clientVisible: "Yes",
+    sharePoint: "Linked",
     tone: "emerald",
   },
   {
@@ -42,6 +47,8 @@ const documents: AssetDocument[] = [
     updated: "Missing",
     owner: "Safety",
     status: "Required",
+    clientVisible: "No",
+    sharePoint: "Missing",
     tone: "amber",
   },
   {
@@ -52,6 +59,8 @@ const documents: AssetDocument[] = [
     updated: "30 Sep 2025",
     owner: "Admin",
     status: "Current",
+    clientVisible: "No",
+    sharePoint: "Linked",
     tone: "emerald",
   },
 ];
@@ -64,9 +73,12 @@ export default function AssetsDocumentsPage() {
         title="Documents"
         description="A simple document register for certificates, risk assessments, manuals, service records and SharePoint-linked asset folders."
         actions={
-          <ActionButton href="/assets/documents" icon={<FileUp size={16} />}>
-            Upload
-          </ActionButton>
+          <>
+            <ActionButton href="/assets/documents/new" icon={<FileUp size={16} />}>
+              Upload
+            </ActionButton>
+            <ModeToggle label="Document mode" />
+          </>
         }
       />
 
@@ -102,9 +114,17 @@ export default function AssetsDocumentsPage() {
           { label: "Category", render: (item) => item.category },
           { label: "Updated", render: (item) => item.updated },
           { label: "Owner", render: (item) => item.owner },
+          { label: "Client", render: (item) => item.clientVisible },
+          { label: "SharePoint", render: (item) => item.sharePoint },
           {
             label: "Status",
             render: (item) => <StatusBadge label={item.status} tone={item.tone} />,
+          },
+          {
+            label: "Actions",
+            render: (item) => (
+              <RecordActions recordType="document" recordLabel={`${item.asset} ${item.document}`} />
+            ),
           },
         ]}
         renderMobile={(item) => (
@@ -121,8 +141,11 @@ export default function AssetsDocumentsPage() {
                 { label: "Category", value: item.category },
                 { label: "Updated", value: item.updated },
                 { label: "Owner", value: item.owner },
+                { label: "Client", value: item.clientVisible },
+                { label: "SharePoint", value: item.sharePoint },
               ]}
             />
+            <RecordActions recordType="document" recordLabel={`${item.asset} ${item.document}`} />
           </div>
         )}
       />

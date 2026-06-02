@@ -11,6 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
 
 type Vehicle = {
   id: string;
@@ -90,12 +91,13 @@ export default function AssetsVehiclesPage() {
         description="Light vehicles, heavy vehicles and trailers in one readable register. The important day-to-day fields are rego, service, insurance, site allocation and current status."
         actions={
           <>
-            <ActionButton href="/assets/maintenance" variant="secondary" icon={<Wrench size={16} />}>
+            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
               Raise Job
             </ActionButton>
-            <ActionButton href="/assets/vehicles" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/vehicles/new" icon={<Plus size={16} />}>
               Add Vehicle
             </ActionButton>
+            <ModeToggle />
           </>
         }
       />
@@ -139,6 +141,15 @@ export default function AssetsVehiclesPage() {
             label: "Status",
             render: (vehicle) => <StatusBadge label={vehicle.status} tone={vehicle.tone} />,
           },
+          {
+            label: "Actions",
+            render: (vehicle) => (
+              <RecordActions
+                recordType="vehicle"
+                recordLabel={`${vehicle.assetId} ${vehicle.rego}`}
+              />
+            ),
+          },
         ]}
         renderMobile={(vehicle) => (
           <div className="space-y-4">
@@ -158,6 +169,10 @@ export default function AssetsVehiclesPage() {
                 { label: "Service", value: vehicle.nextService },
                 { label: "Rego", value: vehicle.regoExpiry },
               ]}
+            />
+            <RecordActions
+              recordType="vehicle"
+              recordLabel={`${vehicle.assetId} ${vehicle.rego}`}
             />
           </div>
         )}

@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ClipboardCheck,
+  FileText,
   Plus,
   ShieldCheck,
   Wrench,
@@ -135,6 +136,40 @@ export default function AssetsDashboardPage() {
         <ActionPanel title="Prestart Flags" items={prestartFlags} />
       </section>
 
+      <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex items-center gap-2">
+          <FileText size={18} className="text-slate-500" />
+          <h2 className="text-lg font-bold tracking-tight text-slate-950">
+            Information Flow
+          </h2>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          {[
+            {
+              title: "Field Entry",
+              detail: "Operators submit prestarts, issues and photos from site.",
+            },
+            {
+              title: "Fleet Manager",
+              detail: "Fleet Jobs, service reminders and asset status stay visible.",
+            },
+            {
+              title: "Client View",
+              detail: "Approved records can feed a client-facing page without exposing internal notes.",
+            },
+            {
+              title: "SharePoint",
+              detail: "Certificates, manuals and reports can be linked or synced to document folders.",
+            },
+          ].map((item) => (
+            <div key={item.title} className="border border-slate-200 bg-slate-50 p-4">
+              <p className="font-bold text-slate-950">{item.title}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{item.detail}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
         <div className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center gap-2">
@@ -162,16 +197,16 @@ export default function AssetsDashboardPage() {
             </h2>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <ActionButton href="/assets/plant" variant="secondary" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/plant/new" variant="secondary" icon={<Plus size={16} />}>
               Add Plant
             </ActionButton>
-            <ActionButton href="/assets/vehicles" variant="secondary" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/vehicles/new" variant="secondary" icon={<Plus size={16} />}>
               Add Vehicle
             </ActionButton>
-            <ActionButton href="/assets/equipment" variant="secondary" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/equipment/new" variant="secondary" icon={<Plus size={16} />}>
               Add Equipment
             </ActionButton>
-            <ActionButton href="/assets/maintenance" variant="secondary" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Plus size={16} />}>
               Log Fleet Job
             </ActionButton>
           </div>

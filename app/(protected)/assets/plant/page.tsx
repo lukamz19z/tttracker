@@ -11,6 +11,7 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
+import { ModeToggle, RecordActions } from "../record-actions";
 
 type PlantAsset = {
   id: string;
@@ -95,12 +96,13 @@ export default function PlantPage() {
         description="Major plant register for cranes, telehandlers, generators and hired plant. Keep the visible fields focused on status, site allocation, service and key compliance dates."
         actions={
           <>
-            <ActionButton href="/assets/maintenance" variant="secondary" icon={<Wrench size={16} />}>
+            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
               Raise Job
             </ActionButton>
-            <ActionButton href="/assets/plant" icon={<Plus size={16} />}>
+            <ActionButton href="/assets/plant/new" icon={<Plus size={16} />}>
               Add Plant
             </ActionButton>
+            <ModeToggle />
           </>
         }
       />
@@ -145,6 +147,12 @@ export default function PlantPage() {
             label: "Status",
             render: (asset) => <StatusBadge label={asset.status} tone={asset.tone} />,
           },
+          {
+            label: "Actions",
+            render: (asset) => (
+              <RecordActions recordType="plant" recordLabel={`${asset.assetId} ${asset.name}`} />
+            ),
+          },
         ]}
         renderMobile={(asset) => (
           <div className="space-y-4">
@@ -163,6 +171,7 @@ export default function PlantPage() {
                 { label: "CraneSafe", value: asset.craneSafe },
               ]}
             />
+            <RecordActions recordType="plant" recordLabel={`${asset.assetId} ${asset.name}`} />
           </div>
         )}
       />
