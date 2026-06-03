@@ -4,18 +4,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import {
-  ArrowLeft,
-  Calendar,
-  ExternalLink,
-  FileText,
-  ShieldCheck,
-  Truck,
-  Wrench,
-} from "lucide-react";
+import { ArrowLeft, FileUp, Save } from "lucide-react";
 import { PageHeader, PageShell, StatusBadge } from "../../components";
-
-type Tone = "emerald" | "amber" | "rose" | "blue";
 
 type PlantAsset = {
   id: string;
@@ -23,31 +13,16 @@ type PlantAsset = {
   make: string | null;
   model: string | null;
   plant_type: string | null;
-  serial_number: string | null;
-  rego: string | null;
-  crew: string | null;
-  project: string | null;
+  insurance_expiry: string | null;
   rego_expiry: string | null;
   cranesafe_expiry: string | null;
-  insurance_expiry: string | null;
-  hired: boolean | null;
-  hired_from: string | null;
-  hire_term: string | null;
-  last_service_date: string | null;
-  last_service_hours: number | null;
-  service_interval_hours: number | null;
-  updated_at: string | null;
-  created_at: string | null;
-  notes: string | null;
 };
 
 type PlantDocument = {
   id: string;
-  plant_asset_id: string;
   document_type: string;
   file_name: string;
   file_url: string;
-  notes: string | null;
   created_at: string | null;
 };
 
@@ -58,12 +33,8 @@ type ServiceHistory = {
   service_provider: string | null;
   service_type: string | null;
   next_service_interval_hours: number | null;
-  work_completed: string | null;
-  defects_or_recommendations: string | null;
-  invoice_number: string | null;
-  invoice_cost: number | null;
-  document_url: string | null;
   document_name: string | null;
+  document_url: string | null;
   created_at: string | null;
 };
 
@@ -73,6 +44,10 @@ function clean(value: string | null | undefined) {
 
 function isCrane(asset: PlantAsset) {
   return clean(asset.plant_type).toLowerCase() === "crane";
+}
+
+function isTelehandler(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "telehandler";
 }
 
 function formatDate(value: string | null | undefined) {
@@ -88,90 +63,7 @@ function formatDate(value: string | null | undefined) {
   });
 }
 
-function daysUntil(value: string | null | undefined) {
-  if (!value) return null;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-
-  return Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
-}
-
-function getAssetStatus(asset: PlantAsset) {
-  const insuranceDays = daysUntil(asset.insurance_expiry);
-  const regoDays = daysUntil(asset.rego_expiry);
-  const cranesafeDays = isCrane(asset) ? daysUntil(asset.cranesafe_expiry) : null;
-
-  const expiryDays = [insuranceDays, regoDays, cranesafeDays].filter(
-    (day): day is number => day !== null
-  );
-
-  if (expiryDays.some((day) => day < 0)) return "Review";
-  if (expiryDays.some((day) => day <= 30)) return "Due Soon";
-  if (clean(asset.crew) || clean(asset.project)) return "In Use";
-
-  return "Available";
-}
-
-function getTone(status: string): Tone {
-  const value = status.toLowerCase();
-
-  if (value.includes("available")) return "emerald";
-  if (value.includes("due")) return "amber";
-  if (value.includes("review") || value.includes("expired")) return "rose";
-
-  return "blue";
-}
-
-function ExpiryCard({
-  title,
-  date,
-  icon,
-  muted = false,
-}: {
-  title: string;
-  date: string | null | undefined;
-  icon: React.ReactNode;
-  muted?: boolean;
-}) {
-  const remaining = daysUntil(date);
-
-  let tone = "border-slate-200 bg-white text-slate-700";
-  let label = "No date recorded";
-
-  if (muted) {
-    tone = "border-slate-200 bg-slate-50 text-slate-500";
-    label = "Not required for this plant type";
-  } else if (remaining !== null) {
-    if (remaining < 0) {
-      tone = "border-rose-200 bg-rose-50 text-rose-800";
-      label = `Expired ${Math.abs(remaining)} days ago`;
-    } else if (remaining <= 30) {
-      tone = "border-amber-200 bg-amber-50 text-amber-800";
-      label = `Due in ${remaining} days`;
-    } else {
-      tone = "border-emerald-200 bg-emerald-50 text-emerald-800";
-      label = `Valid for ${remaining} days`;
-    }
-  }
-
-  return (
-    <div className={`rounded-2xl border p-4 ${tone}`}>
-      <div className="flex items-center gap-2">
-        {icon}
-        <p className="text-sm font-bold">{title}</p>
-      </div>
-      <p className="mt-3 text-2xl font-bold">{muted ? "N/A" : formatDate(date)}</p>
-      <p className="mt-1 text-sm">{label}</p>
-    </div>
-  );
-}
-
-export default function PlantViewPage() {
+export default function PlantCompliancePage() {
   const params = useParams<{ assetId: string }>();
   const assetId = params.assetId;
 
@@ -189,383 +81,535 @@ export default function PlantViewPage() {
   const [asset, setAsset] = useState<PlantAsset | null>(null);
   const [documents, setDocuments] = useState<PlantDocument[]>([]);
   const [services, setServices] = useState<ServiceHistory[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const [riskAssessmentFile, setRiskAssessmentFile] = useState<File | null>(null);
+  const [insuranceExpiry, setInsuranceExpiry] = useState("");
+  const [regoExpiry, setRegoExpiry] = useState("");
+  const [cranesafeExpiry, setCranesafeExpiry] = useState("");
 
-    async function loadAsset() {
-      const [assetResult, documentResult, serviceResult] = await Promise.all([
-        supabase.from("plant_assets").select("*").eq("id", assetId).single(),
-        supabase
-          .from("plant_asset_documents")
-          .select("*")
-          .eq("plant_asset_id", assetId)
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("plant_service_history")
-          .select("*")
-          .eq("plant_asset_id", assetId)
-          .order("service_date", { ascending: false }),
-      ]);
+  const [insuranceFile, setInsuranceFile] = useState<File | null>(null);
+  const [regoFile, setRegoFile] = useState<File | null>(null);
+  const [cranesafeFile, setCranesafeFile] = useState<File | null>(null);
+  const [plantSpecificFile, setPlantSpecificFile] = useState<File | null>(null);
 
-      if (cancelled) return;
+  const [serviceDate, setServiceDate] = useState("");
+  const [serviceHours, setServiceHours] = useState("");
+  const [serviceProvider, setServiceProvider] = useState("");
+  const [serviceType, setServiceType] = useState("");
+  const [serviceInterval, setServiceInterval] = useState("250");
+  const [workCompleted, setWorkCompleted] = useState("");
+  const [recommendations, setRecommendations] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceCost, setInvoiceCost] = useState("");
+  const [serviceFile, setServiceFile] = useState<File | null>(null);
 
-      if (assetResult.error) {
-        console.error(assetResult.error.message);
-        setAsset(null);
-      } else {
-        setAsset(assetResult.data as PlantAsset);
-      }
+  async function loadData() {
+    const [assetResult, docsResult, serviceResult] = await Promise.all([
+      supabase.from("plant_assets").select("*").eq("id", assetId).single(),
+      supabase
+        .from("plant_asset_documents")
+        .select("*")
+        .eq("plant_asset_id", assetId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("plant_service_history")
+        .select("*")
+        .eq("plant_asset_id", assetId)
+        .order("service_date", { ascending: false }),
+    ]);
 
-      if (documentResult.error) {
-        console.error(documentResult.error.message);
-        setDocuments([]);
-      } else {
-        setDocuments((documentResult.data ?? []) as PlantDocument[]);
-      }
+    if (!assetResult.error) {
+      const loadedAsset = assetResult.data as PlantAsset;
 
-      if (serviceResult.error) {
-        console.error(serviceResult.error.message);
-        setServices([]);
-      } else {
-        setServices((serviceResult.data ?? []) as ServiceHistory[]);
-      }
-
-      setLoading(false);
+      setAsset(loadedAsset);
+      setInsuranceExpiry(clean(loadedAsset.insurance_expiry));
+      setRegoExpiry(clean(loadedAsset.rego_expiry));
+      setCranesafeExpiry(clean(loadedAsset.cranesafe_expiry));
     }
 
-    void loadAsset();
+    if (!docsResult.error) setDocuments((docsResult.data ?? []) as PlantDocument[]);
+    if (!serviceResult.error) setServices((serviceResult.data ?? []) as ServiceHistory[]);
+  }
 
-    return () => {
-      cancelled = true;
+  useEffect(() => {
+    void loadData();
+  }, []);
+
+  async function uploadDocument(documentType: string, file: File) {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const folder = documentType.replace(/\s+/g, "_").toLowerCase();
+    const path = `${assetId}/${folder}/${crypto.randomUUID()}-${safeName}`;
+
+    const upload = await supabase.storage.from("plant_docs").upload(path, file, {
+      upsert: false,
+    });
+
+    if (upload.error) throw new Error(upload.error.message);
+
+    const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
+
+    const insert = await supabase.from("plant_asset_documents").insert({
+      plant_asset_id: assetId,
+      document_type: documentType,
+      file_name: file.name,
+      file_url: data.publicUrl,
+    });
+
+    if (insert.error) throw new Error(insert.error.message);
+
+    return {
+      fileName: file.name,
+      fileUrl: data.publicUrl,
     };
-  }, [assetId, supabase]);
+  }
 
-  if (loading) {
-    return (
-      <PageShell>
-        <p className="text-sm text-slate-500">Loading plant asset...</p>
-      </PageShell>
-    );
+  async function saveCompliance() {
+    if (!asset) return;
+
+    setSaving(true);
+
+    try {
+      if (riskAssessmentFile) await uploadDocument("Risk Assessment", riskAssessmentFile);
+      if (insuranceFile) await uploadDocument("Insurance Document", insuranceFile);
+
+      if (isCrane(asset)) {
+        if (regoFile) await uploadDocument("Registration Document", regoFile);
+        if (cranesafeFile) await uploadDocument("CraneSafe Certificate", cranesafeFile);
+        if (plantSpecificFile) await uploadDocument("Crane Documents", plantSpecificFile);
+      }
+
+      if (isTelehandler(asset) && plantSpecificFile) {
+        await uploadDocument("Telehandler Documents", plantSpecificFile);
+      }
+
+      const assetUpdate = await supabase
+        .from("plant_assets")
+        .update({
+          insurance_expiry: clean(insuranceExpiry) || null,
+          rego_expiry: isCrane(asset) ? clean(regoExpiry) || null : null,
+          cranesafe_expiry: isCrane(asset) ? clean(cranesafeExpiry) || null : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", assetId);
+
+      if (assetUpdate.error) throw new Error(assetUpdate.error.message);
+
+      setRiskAssessmentFile(null);
+      setInsuranceFile(null);
+      setRegoFile(null);
+      setCranesafeFile(null);
+      setPlantSpecificFile(null);
+
+      alert("Compliance updated.");
+      await loadData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to save compliance.");
+    }
+
+    setSaving(false);
+  }
+
+  async function saveServiceHistory() {
+    if (!serviceDate && !serviceHours && !serviceFile) {
+      alert("Add at least a service date, hour reading or file.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      let uploaded: { fileName: string; fileUrl: string } | null = null;
+
+      if (serviceFile) {
+        uploaded = await uploadDocument("Service History", serviceFile);
+      }
+
+      const insert = await supabase.from("plant_service_history").insert({
+        plant_asset_id: assetId,
+        service_date: clean(serviceDate) || null,
+        hour_meter: serviceHours ? Number(serviceHours) : null,
+        service_provider: clean(serviceProvider),
+        service_type: clean(serviceType),
+        next_service_interval_hours: serviceInterval ? Number(serviceInterval) : null,
+        work_completed: clean(workCompleted),
+        defects_or_recommendations: clean(recommendations),
+        invoice_number: clean(invoiceNumber),
+        invoice_cost: invoiceCost ? Number(invoiceCost) : null,
+        document_url: uploaded?.fileUrl ?? null,
+        document_name: uploaded?.fileName ?? null,
+      });
+
+      if (insert.error) throw new Error(insert.error.message);
+
+      const assetUpdate = await supabase
+        .from("plant_assets")
+        .update({
+          last_service_date: clean(serviceDate) || null,
+          last_service_hours: serviceHours ? Number(serviceHours) : null,
+          service_interval_hours: serviceInterval ? Number(serviceInterval) : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", assetId);
+
+      if (assetUpdate.error) throw new Error(assetUpdate.error.message);
+
+      setServiceDate("");
+      setServiceHours("");
+      setServiceProvider("");
+      setServiceType("");
+      setServiceInterval("250");
+      setWorkCompleted("");
+      setRecommendations("");
+      setInvoiceNumber("");
+      setInvoiceCost("");
+      setServiceFile(null);
+
+      alert("Service history saved.");
+      await loadData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to save service history.");
+    }
+
+    setSaving(false);
   }
 
   if (!asset) {
     return (
       <PageShell>
-        <Link
-          href="/assets/plant"
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950"
-        >
-          <ArrowLeft size={16} />
-          Back to Plant Register
-        </Link>
-
-        <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-6">
-          <h1 className="text-xl font-bold text-rose-900">Plant asset not found</h1>
-        </div>
+        <p className="text-sm text-slate-500">Loading compliance...</p>
       </PageShell>
     );
   }
 
-  const status = getAssetStatus(asset);
-  const statusTone = getTone(status);
-  const title = `${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
-    .filter(Boolean)
-    .join(" ")}`;
-    const riskAssessment = documents.find(
-  (document) => document.document_type === "Risk Assessment"
-);
-
-  const latestService = services[0] ?? null;
-  const currentServiceDate = latestService?.service_date ?? asset.last_service_date;
-  const currentServiceHours = latestService?.hour_meter ?? asset.last_service_hours;
-  const currentServiceInterval =
-    latestService?.next_service_interval_hours ?? asset.service_interval_hours;
-
   return (
     <PageShell>
       <PageHeader
-        eyebrow="Plant Asset"
-        title={title}
-        description="View plant details, allocation, compliance expiries, service history and documents."
+        eyebrow="Plant Compliance"
+        title={`${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
+          .filter(Boolean)
+          .join(" ")}`}
+        description="Update risk assessments, insurance, service history and plant-specific compliance documents."
         actions={
-          <>
-            <Link
-              href="/assets/plant"
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <ArrowLeft size={16} />
-              Back to Register
-            </Link>
-
-            <Link
-              href={`/assets/plant/${asset.id}/edit`}
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-            >
-              Edit
-            </Link>
-          </>
+          <Link
+            href="/assets/plant"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            Back to Plant
+          </Link>
         }
       />
 
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-                Asset Details
-              </p>
-              <h2 className="mt-1 text-2xl font-bold text-slate-950">
-                {clean(asset.asset_id)}
-              </h2>
-              <p className="mt-1 text-slate-500">
-                {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") ||
-                  "No make/model recorded"}
-              </p>
-            </div>
-
-            <StatusBadge label={status} tone={statusTone} />
-          </div>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <Info label="Type" value={clean(asset.plant_type) || "N/A"} />
-            <Info label="Registration" value={clean(asset.rego) || "No rego"} />
-            <Info label="Serial Number" value={clean(asset.serial_number) || "N/A"} />
-            <Info label="Ownership" value={asset.hired ? "Hired Plant" : "Owned"} />
-            {asset.hired && (
-              <>
-                <Info label="Hired From" value={clean(asset.hired_from) || "N/A"} />
-                <Info label="Hire Term" value={clean(asset.hire_term) || "N/A"} />
-              </>
-            )}
-          </div>
-
-          {clean(asset.notes) && (
-            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Notes</p>
-              <p className="mt-2 text-sm text-slate-700">{asset.notes}</p>
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-            Current Allocation
-          </p>
-
-          <div className="mt-5 space-y-4">
-            <Info label="Crew" value={clean(asset.crew) || "Unassigned"} />
-            <Info label="Project" value={clean(asset.project) || "No project"} />
-            <Info label="Last Updated" value={formatDate(asset.updated_at)} />
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-3">
-        <ExpiryCard
-          title="Insurance Expiry"
-          date={asset.insurance_expiry}
-          icon={<ShieldCheck size={18} />}
+      <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+        <UploadOnlyCard
+          title="Risk Assessment"
+          description="Upload the current risk assessment for this asset."
+          file={riskAssessmentFile}
+          setFile={setRiskAssessmentFile}
         />
 
-        <ExpiryCard
-          title="Registration Expiry"
-          date={asset.rego_expiry}
-          icon={<Truck size={18} />}
+        <ComplianceCard
+          title="Insurance"
+          description="Upload current insurance document and expiry."
+          expiry={insuranceExpiry}
+          setExpiry={setInsuranceExpiry}
+          file={insuranceFile}
+          setFile={setInsuranceFile}
         />
 
-        <ExpiryCard
-          title="CraneSafe Expiry"
-          date={asset.cranesafe_expiry}
-          icon={<Truck size={18} />}
-          muted={!isCrane(asset)}
-        />
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-2">
-          <Wrench size={18} className="text-slate-500" />
-          <h2 className="text-lg font-bold text-slate-950">Service Status</h2>
-        </div>
-
-        <div className="mt-4 grid gap-4 md:grid-cols-4">
-          <Info label="Last Service Date" value={formatDate(currentServiceDate)} />
-          <Info
-            label="Last Service Hours"
-            value={
-              currentServiceHours !== null && currentServiceHours !== undefined
-                ? `${currentServiceHours} hrs`
-                : "Not recorded"
-            }
+        {isCrane(asset) && (
+          <ComplianceCard
+            title="Registration"
+            description="Upload registration document and expiry for road-registerable crane plant."
+            expiry={regoExpiry}
+            setExpiry={setRegoExpiry}
+            file={regoFile}
+            setFile={setRegoFile}
           />
-          <Info
-            label="Service Interval"
-            value={
-              currentServiceInterval !== null && currentServiceInterval !== undefined
-                ? `${currentServiceInterval} hrs`
-                : "Not recorded"
-            }
+        )}
+
+        {isCrane(asset) ? (
+          <ComplianceCard
+            title="CraneSafe"
+            description="Upload CraneSafe certificate and expiry."
+            expiry={cranesafeExpiry}
+            setExpiry={setCranesafeExpiry}
+            file={cranesafeFile}
+            setFile={setCranesafeFile}
           />
-          <Info
-            label="Next Service Due"
-            value={
-              currentServiceHours !== null &&
-              currentServiceHours !== undefined &&
-              currentServiceInterval !== null &&
-              currentServiceInterval !== undefined
-                ? `${Number(currentServiceHours) + Number(currentServiceInterval)} hrs`
-                : "Waiting on service data"
-            }
-          />
-        </div>
-
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Once prestarts are linked, this section will compare the latest hour-meter reading against
-          the next service due hours.
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-2">
-          <Wrench size={18} className="text-slate-500" />
-          <h2 className="text-lg font-bold text-slate-950">Service History</h2>
-        </div>
-
-        {services.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-            No service history recorded yet.
-          </div>
         ) : (
-          <div className="mt-4 space-y-3">
+          <UploadOnlyCard
+            title="Telehandler Documents"
+            description="Upload telehandler documents such as manuals, load charts, inspection records or compliance documents."
+            file={plantSpecificFile}
+            setFile={setPlantSpecificFile}
+          />
+        )}
+
+        {isCrane(asset) && (
+          <UploadOnlyCard
+            title="Crane Documents"
+            description="Upload crane documents such as lift charts, manuals or additional compliance records."
+            file={plantSpecificFile}
+            setFile={setPlantSpecificFile}
+          />
+        )}
+      </section>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void saveCompliance()}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          <Save size={16} />
+          {saving ? "Saving..." : "Save Compliance"}
+        </button>
+      </div>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">Add Service History</h2>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <Input label="Service Date" type="date" value={serviceDate} onChange={setServiceDate} />
+          <Input label="Hour Meter" value={serviceHours} onChange={setServiceHours} />
+          <Input label="Service Provider" value={serviceProvider} onChange={setServiceProvider} />
+          <Input label="Service Type" value={serviceType} onChange={setServiceType} />
+          <Input label="Next Interval Hours" value={serviceInterval} onChange={setServiceInterval} />
+          <Input label="Invoice Number" value={invoiceNumber} onChange={setInvoiceNumber} />
+          <Input label="Invoice Cost" value={invoiceCost} onChange={setInvoiceCost} />
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <TextArea label="Work Completed" value={workCompleted} onChange={setWorkCompleted} />
+          <TextArea
+            label="Defects / Recommendations"
+            value={recommendations}
+            onChange={setRecommendations}
+          />
+        </div>
+
+        <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+          {serviceFile ? serviceFile.name : "Upload service invoice / report"}
+          <input
+            type="file"
+            className="hidden"
+            onChange={(event) => setServiceFile(event.target.files?.[0] ?? null)}
+          />
+        </label>
+
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void saveServiceHistory()}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            <Save size={16} />
+            Save Service
+          </button>
+        </div>
+      </section>
+
+      <HistorySection title="Service History">
+        {services.length === 0 ? (
+          <p className="text-sm text-slate-500">No service history recorded.</p>
+        ) : (
+          <div className="space-y-3">
             {services.map((service) => (
               <div key={service.id} className="rounded-xl border border-slate-200 p-4">
-                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-                  <div>
-                    <p className="font-bold text-slate-950">
-                      {formatDate(service.service_date)} —{" "}
-                      {clean(service.service_type) || "Service"}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {service.hour_meter ?? "No hours"} hrs ·{" "}
-                      {clean(service.service_provider) || "No provider"}
-                    </p>
-                    {clean(service.invoice_number) && (
-                      <p className="mt-1 text-sm text-slate-500">
-                        Invoice: {service.invoice_number}
-                      </p>
-                    )}
-                  </div>
-
-                  {service.document_url && (
-                    <a
-                      href={service.document_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      Open
-                      <ExternalLink size={14} />
-                    </a>
-                  )}
-                </div>
-
-                {(clean(service.work_completed) || clean(service.defects_or_recommendations)) && (
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    {clean(service.work_completed) && (
-                      <div className="rounded-lg bg-slate-50 p-3">
-                        <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Work Completed
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700">{service.work_completed}</p>
-                      </div>
-                    )}
-
-                    {clean(service.defects_or_recommendations) && (
-                      <div className="rounded-lg bg-slate-50 p-3">
-                        <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                          Defects / Recommendations
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700">
-                          {service.defects_or_recommendations}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                <p className="font-bold text-slate-950">
+                  {formatDate(service.service_date)} — {clean(service.service_type) || "Service"}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {service.hour_meter ?? "No hours"} hrs ·{" "}
+                  {clean(service.service_provider) || "No provider"}
+                </p>
+                {service.document_url && (
+                  <a
+                    href={service.document_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-block text-sm font-semibold text-blue-700 hover:underline"
+                  >
+                    Open document
+                  </a>
                 )}
               </div>
             ))}
           </div>
         )}
-      </section>
-{riskAssessment && (
-  <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-    <h2 className="text-lg font-bold text-slate-950">Current Risk Assessment</h2>
+      </HistorySection>
 
-    <p className="mt-2 text-sm text-slate-500">
-      Uploaded {formatDate(riskAssessment.created_at)}
-    </p>
-
-    <a
-      href={riskAssessment.file_url}
-      target="_blank"
-      rel="noreferrer"
-      className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-    >
-      Open Risk Assessment
-      <ExternalLink size={14} />
-    </a>
-  </section>
-)}
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-2">
-          <FileText size={18} className="text-slate-500" />
-          <h2 className="text-lg font-bold text-slate-950">Document History</h2>
-        </div>
-
+      <HistorySection title="Document History">
         {documents.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-            No documents uploaded yet.
-          </div>
+          <p className="text-sm text-slate-500">No documents uploaded.</p>
         ) : (
-          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+          <div className="space-y-3">
             {documents.map((document) => (
               <div
                 key={document.id}
-                className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 last:border-b-0"
+                className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-4"
               >
                 <div>
-                  <p className="font-semibold text-slate-950">{document.document_type}</p>
-                  <p className="mt-1 text-sm text-slate-500">{document.file_name}</p>
-                  <p className="mt-1 flex items-center gap-1 text-xs text-slate-400">
-                    <Calendar size={13} />
-                    Uploaded {formatDate(document.created_at)}
-                  </p>
+                  <p className="font-bold text-slate-950">{document.document_type}</p>
+                  <p className="text-sm text-slate-500">{document.file_name}</p>
                 </div>
 
                 <a
                   href={document.file_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  className="text-sm font-semibold text-blue-700 hover:underline"
                 >
                   Open
-                  <ExternalLink size={14} />
                 </a>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </HistorySection>
     </PageShell>
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function ComplianceCard({
+  title,
+  description,
+  expiry,
+  setExpiry,
+  file,
+  setFile,
+}: {
+  title: string;
+  description: string;
+  expiry: string;
+  setExpiry: (value: string) => void;
+  file: File | null;
+  setFile: (file: File | null) => void;
+}) {
   return (
-    <div>
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-1 font-semibold text-slate-800">{value}</p>
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="font-bold text-slate-950">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+      <p className="mt-3 text-sm text-slate-500">Current expiry: {formatDate(expiry)}</p>
+
+      <label className="mt-4 block space-y-1 text-sm">
+        <span className="font-semibold text-slate-600">New Expiry</span>
+        <input
+          type="date"
+          value={expiry}
+          onChange={(event) => setExpiry(event.target.value)}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+        />
+      </label>
+
+      <UploadInput file={file} setFile={setFile} label="Upload document" />
     </div>
+  );
+}
+
+function UploadOnlyCard({
+  title,
+  description,
+  file,
+  setFile,
+}: {
+  title: string;
+  description: string;
+  file: File | null;
+  setFile: (file: File | null) => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="font-bold text-slate-950">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+      <UploadInput file={file} setFile={setFile} label={`Upload ${title.toLowerCase()}`} />
+    </div>
+  );
+}
+
+function UploadInput({
+  file,
+  setFile,
+  label,
+}: {
+  file: File | null;
+  setFile: (file: File | null) => void;
+  label: string;
+}) {
+  return (
+    <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+      <FileUp size={16} />
+      {file ? file.name : label}
+      <input
+        type="file"
+        className="hidden"
+        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+      />
+    </label>
+  );
+}
+
+function HistorySection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <label className="space-y-1 text-sm">
+      <span className="font-semibold text-slate-600">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+      />
+    </label>
+  );
+}
+
+function TextArea({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1 text-sm">
+      <span className="font-semibold text-slate-600">{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={4}
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+      />
+    </label>
   );
 }
