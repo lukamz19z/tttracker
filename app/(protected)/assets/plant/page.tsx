@@ -953,21 +953,6 @@ export default function PlantPage() {
               </label>
 
               <label className="space-y-1 text-sm">
-                <span className="font-semibold text-slate-600">Next Service</span>
-                <input
-                  type="date"
-                  value={clean(form.next_service_date)}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      next_service_date: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
-                />
-              </label>
-
-              <label className="space-y-1 text-sm">
                 <span className="font-semibold text-slate-600">CraneSafe Expiry</span>
                 <input
                   type="date"
