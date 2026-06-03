@@ -754,30 +754,32 @@ export default function PlantPage() {
   render: (asset) => (
     <div className="flex items-center gap-2">
       <button
-        type="button"
-        onClick={() => {
-          window.location.href = `/assets/plant/${asset.id}`;
-        }}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-      >
-        View
-      </button>
 
-      <button
-        type="button"
-        onClick={() => openEditForm(asset)}
-        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-      >
-        Edit
-      </button>
+   type="button"
+  onClick={() => {
+    window.location.href = `/assets/plant/${asset.id}`;
+  }}
+>
+  View
+</button>
 
-      <button
-        type="button"
-        onClick={() => openEditForm(asset)}
-        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-      >
-        + Docs
-      </button>
+<button
+  type="button"
+  onClick={() => {
+    window.location.href = `/assets/plant/${asset.id}/edit`;
+  }}
+>
+  Edit
+</button>
+
+<button
+  type="button"
+  onClick={() => {
+    window.location.href = `/assets/plant/${asset.id}/compliance`;
+  }}
+>
+  Compliance
+</button>
     </div>
   ),
 },
