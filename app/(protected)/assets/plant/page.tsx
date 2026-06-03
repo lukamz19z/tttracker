@@ -6,9 +6,7 @@ import {
   Download,
   FileUp,
   Plus,
-  RefreshCw,
   Save,
-  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -21,7 +19,6 @@ import {
   RegisterList,
   StatusBadge,
 } from "../components";
-import { RecordActions } from "../record-actions";
 
 type Tone = "emerald" | "amber" | "rose" | "blue";
 
@@ -130,7 +127,7 @@ function getAssetStatus(asset: PlantAsset) {
   const cranesafeDays = daysUntil(asset.cranesafe_expiry);
   const insuranceDays = daysUntil(asset.insurance_expiry);
 
-  const expiryDays = [ cranesafeDays, insuranceDays].filter(
+  const expiryDays = [cranesafeDays, insuranceDays].filter(
     (day): day is number => day !== null
   );
 
@@ -230,6 +227,7 @@ export default function PlantPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PlantForm>(emptyAsset);
+  const [openActionId, setOpenActionId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -370,6 +368,7 @@ export default function PlantPage() {
 
   function openNewForm() {
     setEditingId(null);
+    setOpenActionId(null);
     setForm(emptyAsset);
     setPendingDocuments([]);
     setFormOpen(true);
@@ -377,6 +376,7 @@ export default function PlantPage() {
 
   function openEditForm(asset: PlantAsset) {
     setEditingId(asset.id);
+    setOpenActionId(null);
     setPendingDocuments([]);
     setForm({
       asset_id: clean(asset.asset_id),
@@ -487,20 +487,6 @@ export default function PlantPage() {
     setSaving(false);
   }
 
-  async function deleteAsset(id: string) {
-    const confirmed = window.confirm("Delete this plant item?");
-    if (!confirmed) return;
-
-    const { error } = await supabase.from("plant_assets").delete().eq("id", id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    await loadAssets();
-  }
-
   function handleCsvUpload(file: File) {
     Papa.parse<Record<string, unknown>>(file, {
       header: true,
@@ -519,9 +505,6 @@ export default function PlantPage() {
               rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
               crew: readValue(row, ["Crew", "Allocated Crew"]),
               project: readValue(row, ["Project", "Job", "Allocation"]),
-              next_service_date: toDateInput(
-                readValue(row, ["Next Service", "Next Service Date", "Service Due"])
-              ),
               cranesafe_expiry: toDateInput(
                 readValue(row, ["CraneSafe", "Crane Safe", "CraneSafe Expiry"])
               ),
@@ -673,7 +656,7 @@ export default function PlantPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search asset, rego, make, serial..."
+            placeholder="Search asset, rego, make, model, serial..."
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
           />
 
@@ -718,36 +701,48 @@ export default function PlantPage() {
           {
             label: "Asset",
             render: (asset) => (
-              <div>
+              <div className="min-w-[180px]">
                 <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
-                <p className="mt-1 text-slate-600">
+                <p className="mt-1 text-sm text-slate-500">
                   {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "Plant item"}
                 </p>
               </div>
             ),
           },
-          { label: "Type", render: (asset) => clean(asset.plant_type) || "N/A" },
+          {
+            label: "Type",
+            render: (asset) => <span className="text-sm text-slate-700">{clean(asset.plant_type) || "N/A"}</span>,
+          },
           {
             label: "Make / Model",
-            render: (asset) => `${clean(asset.make) || "N/A"} ${clean(asset.model)}`.trim(),
+            render: (asset) => (
+              <span className="text-sm text-slate-700">
+                {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "N/A"}
+              </span>
+            ),
           },
           {
             label: "Allocation",
             render: (asset) => (
-              <div>
+              <div className="min-w-[160px]">
                 <p className="font-semibold text-slate-950">{clean(asset.crew) || "Unassigned"}</p>
-                <p className="mt-1 text-slate-600">{clean(asset.project) || "No project"}</p>
+                <p className="mt-1 text-sm text-slate-500">{clean(asset.project) || "No project"}</p>
               </div>
             ),
           },
-          { label: "Rego", render: (asset) => clean(asset.rego) || "No Rego" },
-
+          {
+            label: "Rego",
+            render: (asset) => <span className="text-sm text-slate-700">{clean(asset.rego) || "No Rego"}</span>,
+          },
           {
             label: "Hire",
-            render: (asset) =>
-              asset.hired
-                ? `${clean(asset.hired_from) || "Hired"} / ${clean(asset.hire_term) || "No term"}`
-                : "Owned",
+            render: (asset) => (
+              <span className="text-sm text-slate-700">
+                {asset.hired
+                  ? `${clean(asset.hired_from) || "Hired"} / ${clean(asset.hire_term) || "No term"}`
+                  : "Owned"}
+              </span>
+            ),
           },
           {
             label: "Status",
@@ -756,31 +751,53 @@ export default function PlantPage() {
           {
             label: "Actions",
             render: (asset) => (
-              <div className="flex items-center gap-2">
+              <div className="relative">
                 <button
                   type="button"
-                  onClick={() => openEditForm(asset)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() =>
+                    setOpenActionId((current) => (current === asset.id ? null : asset.id))
+                  }
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                  <RefreshCw size={14} />
-                  Update
+                  Actions
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => void deleteAsset(asset.id)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                >
-                  <Trash2 size={14} />
-                  Delete
-                </button>
+                {openActionId === asset.id && (
+                  <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenActionId(null);
+                        window.location.href = `/assets/plant/${asset.id}`;
+                      }}
+                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      View
+                    </button>
 
-                <RecordActions
-                  recordType="plant"
-                  recordLabel={`${clean(asset.asset_id)} ${clean(asset.make)} ${clean(asset.model)}`}
-                  viewHref={`/assets/plant/${asset.id}`}
-                  editHref={`/assets/plant/${asset.id}/edit`}
-                />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenActionId(null);
+                        openEditForm(asset);
+                      }}
+                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenActionId(null);
+                        openEditForm(asset);
+                      }}
+                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      + Update Document
+                    </button>
+                  </div>
+                )}
               </div>
             ),
           },
@@ -815,18 +832,38 @@ export default function PlantPage() {
               </div>
 
               <div>
-                <p className="text-xs font-semibold uppercase text-slate-400">Service</p>
+                <p className="text-xs font-semibold uppercase text-slate-400">Insurance</p>
+                <p>{formatDate(asset.insurance_expiry)}</p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => openEditForm(asset)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <RefreshCw size={14} />
-              Update Asset
-            </button>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `/assets/plant/${asset.id}`;
+                }}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                View
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openEditForm(asset)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Edit
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openEditForm(asset)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                + Docs
+              </button>
+            </div>
           </div>
         )}
       />
