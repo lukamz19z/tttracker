@@ -60,12 +60,7 @@ type PendingDocument = {
 
 const plantTypeOptions: PlantType[] = ["Crane", "Telehandler", "Other"];
 
-const documentTypes = [
-  "Service History",
-  "Insurance Document",
-  "Registration Document",
-  "Crane Documents",
-];
+const baseDocumentTypes = ["Service History", "Insurance Document"];
 
 const emptyAsset: PlantForm = {
   asset_id: "",
@@ -86,6 +81,49 @@ const emptyAsset: PlantForm = {
 
 function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
+}
+
+function isAssetCrane(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "crane";
+}
+
+function isAssetTelehandler(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "telehandler";
+}
+
+function isFormCrane(form: PlantForm) {
+  return clean(form.plant_type).toLowerCase() === "crane";
+}
+
+function isFormTelehandler(form: PlantForm) {
+  return clean(form.plant_type).toLowerCase() === "telehandler";
+}
+
+function getDocumentTypesForPlantType(plantType: string | null | undefined) {
+  const type = clean(plantType).toLowerCase();
+
+  if (type === "crane") {
+    return [
+      ...baseDocumentTypes,
+      "Registration Document",
+      "CraneSafe Certificate",
+      "Load Charts",
+      "Operator Manual",
+      "Other Documents",
+    ];
+  }
+
+  if (type === "telehandler") {
+    return [
+      ...baseDocumentTypes,
+      "Prestart / Inspection Document",
+      "Load Charts",
+      "Operator Manual",
+      "Other Documents",
+    ];
+  }
+
+  return [...baseDocumentTypes, "Manual", "Other Documents"];
 }
 
 function formatDate(value: string | null) {
@@ -115,10 +153,10 @@ function daysUntil(value: string | null) {
 }
 
 function getAssetStatus(asset: PlantAsset) {
-  const cranesafeDays = daysUntil(asset.cranesafe_expiry);
   const insuranceDays = daysUntil(asset.insurance_expiry);
+  const cranesafeDays = isAssetCrane(asset) ? daysUntil(asset.cranesafe_expiry) : null;
 
-  const expiryDays = [cranesafeDays, insuranceDays].filter(
+  const expiryDays = [insuranceDays, cranesafeDays].filter(
     (day): day is number => day !== null
   );
 
@@ -373,6 +411,8 @@ export default function PlantPage() {
       ...form,
       asset_id: clean(form.asset_id),
       plant_type: clean(form.plant_type),
+      rego: isFormTelehandler(form) ? "" : clean(form.rego),
+      cranesafe_expiry: isFormCrane(form) ? clean(form.cranesafe_expiry) || null : null,
       hired_from: form.hired ? clean(form.hired_from) : "",
       hire_term: form.hired ? clean(form.hire_term) : "",
       updated_at: new Date().toISOString(),
@@ -424,11 +464,11 @@ export default function PlantPage() {
       Model: clean(asset.model),
       Type: clean(asset.plant_type),
       Serial: clean(asset.serial_number),
-      Rego: clean(asset.rego),
+      Rego: isAssetTelehandler(asset) ? "N/A" : clean(asset.rego),
       Crew: clean(asset.crew),
       Project: clean(asset.project),
       Status: asset.calculatedStatus,
-      "CraneSafe Expiry": clean(asset.cranesafe_expiry),
+      "CraneSafe Expiry": isAssetCrane(asset) ? clean(asset.cranesafe_expiry) : "N/A",
       "Insurance Expiry": clean(asset.insurance_expiry),
       Hired: asset.hired ? "Yes" : "No",
       "Hired From": clean(asset.hired_from),
@@ -505,7 +545,7 @@ export default function PlantPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search asset, rego, make, model, serial..."
+            placeholder="Search asset, make, model, serial..."
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
           />
 
@@ -576,7 +616,9 @@ export default function PlantPage() {
           {
             label: "Rego",
             render: (asset) => (
-              <span className="text-sm text-slate-700">{clean(asset.rego) || "No Rego"}</span>
+              <span className="text-sm text-slate-700">
+                {isAssetTelehandler(asset) ? "N/A" : clean(asset.rego) || "No Rego"}
+              </span>
             ),
           },
           {
@@ -651,7 +693,7 @@ export default function PlantPage() {
 
               <div>
                 <p className="text-xs font-semibold uppercase text-slate-400">Rego</p>
-                <p>{clean(asset.rego) || "No Rego"}</p>
+                <p>{isAssetTelehandler(asset) ? "N/A" : clean(asset.rego) || "No Rego"}</p>
               </div>
 
               <div>
@@ -716,7 +758,7 @@ export default function PlantPage() {
                 ["Make", "make"],
                 ["Model", "model"],
                 ["Serial Number", "serial_number"],
-                ["Rego", "rego"],
+                ...(isFormTelehandler(form) ? [] : [["Rego", "rego"]]),
               ].map(([label, key]) => (
                 <label key={key} className="space-y-1 text-sm">
                   <span className="font-semibold text-slate-600">{label}</span>
@@ -737,12 +779,16 @@ export default function PlantPage() {
                 <span className="font-semibold text-slate-600">Type</span>
                 <select
                   value={clean(form.plant_type)}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextType = event.target.value;
+
                     setForm((previous) => ({
                       ...previous,
-                      plant_type: event.target.value,
-                    }))
-                  }
+                      plant_type: nextType,
+                      rego: nextType === "Telehandler" ? "" : previous.rego,
+                      cranesafe_expiry: nextType === "Crane" ? previous.cranesafe_expiry : "",
+                    }));
+                  }}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 >
                   <option value="">Select type</option>
@@ -805,20 +851,22 @@ export default function PlantPage() {
                 </select>
               </label>
 
-              <label className="space-y-1 text-sm">
-                <span className="font-semibold text-slate-600">CraneSafe Expiry</span>
-                <input
-                  type="date"
-                  value={clean(form.cranesafe_expiry)}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      cranesafe_expiry: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
-                />
-              </label>
+              {isFormCrane(form) && (
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">CraneSafe Expiry</span>
+                  <input
+                    type="date"
+                    value={clean(form.cranesafe_expiry)}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        cranesafe_expiry: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  />
+                </label>
+              )}
 
               <label className="space-y-1 text-sm">
                 <span className="font-semibold text-slate-600">Insurance Expiry</span>
@@ -903,11 +951,11 @@ export default function PlantPage() {
             <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <h3 className="text-sm font-bold text-slate-950">Initial Documentation</h3>
               <p className="mt-1 text-sm text-slate-500">
-                Add service, insurance, registration and crane-related documents before saving.
+                Add service, insurance, manuals, load charts and plant-specific documents before saving.
               </p>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-4">
-                {documentTypes.map((type) => (
+              <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+                {getDocumentTypesForPlantType(form.plant_type).map((type) => (
                   <label
                     key={type}
                     className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm hover:bg-slate-50"
