@@ -227,7 +227,7 @@ export default function PlantPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PlantForm>(emptyAsset);
-  const [openActionId, setOpenActionId] = useState<string | null>(null);
+  
 
   useEffect(() => {
     let cancelled = false;
@@ -368,7 +368,7 @@ export default function PlantPage() {
 
   function openNewForm() {
     setEditingId(null);
-    setOpenActionId(null);
+    
     setForm(emptyAsset);
     setPendingDocuments([]);
     setFormOpen(true);
@@ -376,7 +376,7 @@ export default function PlantPage() {
 
   function openEditForm(asset: PlantAsset) {
     setEditingId(asset.id);
-    setOpenActionId(null);
+    
     setPendingDocuments([]);
     setForm({
       asset_id: clean(asset.asset_id),
@@ -748,59 +748,39 @@ export default function PlantPage() {
             label: "Status",
             render: (asset) => <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />,
           },
-          {
-            label: "Actions",
-            render: (asset) => (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setOpenActionId((current) => (current === asset.id ? null : asset.id))
-                  }
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Actions
-                </button>
+        
+{
+  label: "Actions",
+  render: (asset) => (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          window.location.href = `/assets/plant/${asset.id}`;
+        }}
+        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+      >
+        View
+      </button>
 
-                {openActionId === asset.id && (
-                  <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenActionId(null);
-                        window.location.href = `/assets/plant/${asset.id}`;
-                      }}
-                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      View
-                    </button>
+      <button
+        type="button"
+        onClick={() => openEditForm(asset)}
+        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+      >
+        Edit
+      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenActionId(null);
-                        openEditForm(asset);
-                      }}
-                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenActionId(null);
-                        openEditForm(asset);
-                      }}
-                      className="block w-full px-4 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      + Update Document
-                    </button>
-                  </div>
-                )}
-              </div>
-            ),
-          },
+      <button
+        type="button"
+        onClick={() => openEditForm(asset)}
+        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+      >
+        + Docs
+      </button>
+    </div>
+  ),
+},
         ]}
         renderMobile={(asset) => (
           <div className="space-y-4">
