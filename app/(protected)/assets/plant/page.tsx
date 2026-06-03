@@ -60,7 +60,11 @@ type PendingDocument = {
 
 const plantTypeOptions: PlantType[] = ["Crane", "Telehandler", "Other"];
 
-const baseDocumentTypes = ["Service History", "Insurance Document"];
+const baseDocumentTypes = [
+  "Risk Assessment",
+  "Service History",
+  "Insurance Document",
+];
 
 const emptyAsset: PlantForm = {
   asset_id: "",

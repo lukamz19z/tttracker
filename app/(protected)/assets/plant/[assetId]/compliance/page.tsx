@@ -91,7 +91,8 @@ export default function PlantCompliancePage() {
   const [regoFile, setRegoFile] = useState<File | null>(null);
   const [cranesafeFile, setCranesafeFile] = useState<File | null>(null);
   const [telehandlerFile, setTelehandlerFile] = useState<File | null>(null);
-
+const [riskAssessmentFile, setRiskAssessmentFile] =
+  useState<File | null>(null);
   const [serviceDate, setServiceDate] = useState("");
   const [serviceHours, setServiceHours] = useState("");
   const [serviceProvider, setServiceProvider] = useState("");
@@ -169,6 +170,9 @@ export default function PlantCompliancePage() {
     setSaving(true);
 
     try {
+        if (riskAssessmentFile) {
+  await uploadDocument("Risk Assessment", riskAssessmentFile);
+}
       if (insuranceFile) await uploadDocument("Insurance Document", insuranceFile);
       if (regoFile) await uploadDocument("Registration Document", regoFile);
 
@@ -197,6 +201,7 @@ export default function PlantCompliancePage() {
       setRegoFile(null);
       setCranesafeFile(null);
       setTelehandlerFile(null);
+      setRiskAssessmentFile(null);
       await loadData();
     } catch (error) {
       alert(error instanceof Error ? error.message : "Failed to save compliance.");
@@ -297,6 +302,12 @@ export default function PlantCompliancePage() {
       />
 
       <section className="grid gap-4 lg:grid-cols-3">
+        <DocumentOnlyCard
+  title="Risk Assessment"
+  description="Upload the current risk assessment for this asset."
+  file={riskAssessmentFile}
+  setFile={setRiskAssessmentFile}
+/>
         <ComplianceCard
           title="Insurance"
           description="Upload current insurance document and expiry."

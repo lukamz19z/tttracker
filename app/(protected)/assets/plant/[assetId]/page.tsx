@@ -273,6 +273,9 @@ export default function PlantViewPage() {
   const title = `${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
     .filter(Boolean)
     .join(" ")}`;
+    const riskAssessment = documents.find(
+  (document) => document.document_type === "Risk Assessment"
+);
 
   const latestService = services[0] ?? null;
   const currentServiceDate = latestService?.service_date ?? asset.last_service_date;
@@ -495,7 +498,25 @@ export default function PlantViewPage() {
           </div>
         )}
       </section>
+{riskAssessment && (
+  <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <h2 className="text-lg font-bold text-slate-950">Current Risk Assessment</h2>
 
+    <p className="mt-2 text-sm text-slate-500">
+      Uploaded {formatDate(riskAssessment.created_at)}
+    </p>
+
+    <a
+      href={riskAssessment.file_url}
+      target="_blank"
+      rel="noreferrer"
+      className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+    >
+      Open Risk Assessment
+      <ExternalLink size={14} />
+    </a>
+  </section>
+)}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-2">
           <FileText size={18} className="text-slate-500" />
