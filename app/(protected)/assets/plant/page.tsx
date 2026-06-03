@@ -1,19 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
-import {
-  Download,
-  FileUp,
-  Plus,
-  Save,
-  Wrench,
-  X,
-} from "lucide-react";
+import { Download, FileUp, Plus, Save, Wrench, X } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import {
-  ActionButton,
-  KpiCard,
   PageHeader,
   PageShell,
   RegisterList,
@@ -21,7 +13,6 @@ import {
 } from "../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue";
-
 type PlantType = "Crane" | "Telehandler" | "Other" | "";
 
 type PlantAsset = {
@@ -150,51 +141,30 @@ function getTone(status: string): Tone {
   return "blue";
 }
 
-function normaliseKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
+function MiniStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: Tone;
+}) {
+  const toneClass =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : tone === "rose"
+          ? "border-rose-200 bg-rose-50 text-rose-800"
+          : "border-slate-200 bg-white text-slate-800";
 
-function readValue(row: Record<string, unknown>, keys: string[]) {
-  const lookup = new Map<string, unknown>();
-
-  Object.entries(row).forEach(([key, value]) => {
-    lookup.set(normaliseKey(key), value);
-  });
-
-  for (const key of keys) {
-    const value = lookup.get(normaliseKey(key));
-
-    if (value !== undefined && value !== null && String(value).trim() !== "") {
-      return String(value).trim();
-    }
-  }
-
-  return "";
-}
-
-function toBoolean(value: string) {
-  const cleanValue = value.toLowerCase().trim();
-
-  return ["yes", "y", "true", "1", "hired"].includes(cleanValue);
-}
-
-function toDateInput(value: string) {
-  if (!value) return "";
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-
-  return parsed.toISOString().slice(0, 10);
-}
-
-function normalisePlantType(value: string): PlantType {
-  const cleanValue = value.toLowerCase().trim();
-
-  if (cleanValue.includes("crane")) return "Crane";
-  if (cleanValue.includes("tele")) return "Telehandler";
-  if (cleanValue) return "Other";
-
-  return "";
+  return (
+    <div className={`rounded-xl border px-4 py-3 shadow-sm ${toneClass}`}>
+      <p className="text-xs font-bold uppercase tracking-wide opacity-70">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+    </div>
+  );
 }
 
 export default function PlantPage() {
@@ -208,8 +178,6 @@ export default function PlantPage() {
 
     return createClient(supabaseUrl, supabaseAnonKey);
   }, []);
-
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [assets, setAssets] = useState<PlantAsset[]>([]);
   const [crews, setCrews] = useState<CrewOption[]>([]);
@@ -227,7 +195,6 @@ export default function PlantPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PlantForm>(emptyAsset);
-  
 
   useEffect(() => {
     let cancelled = false;
@@ -235,38 +202,18 @@ export default function PlantPage() {
     async function fetchInitialData() {
       const [assetResult, crewResult, projectResult] = await Promise.all([
         supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
-
         supabase
           .from("crews")
           .select("id, crew_number, crew_name, leading_hand, active")
           .order("crew_number", { ascending: true }),
-
         supabase.from("projects").select("id, name").order("name", { ascending: true }),
       ]);
 
       if (cancelled) return;
 
-      if (assetResult.error) {
-        console.error(assetResult.error.message);
-        setAssets([]);
-      } else {
-        setAssets((assetResult.data ?? []) as PlantAsset[]);
-      }
-
-      if (crewResult.error) {
-        console.error(crewResult.error.message);
-        setCrews([]);
-      } else {
-        setCrews((crewResult.data ?? []) as CrewOption[]);
-      }
-
-      if (projectResult.error) {
-        console.error(projectResult.error.message);
-        setProjects([]);
-      } else {
-        setProjects((projectResult.data ?? []) as ProjectOption[]);
-      }
-
+      setAssets(assetResult.error ? [] : ((assetResult.data ?? []) as PlantAsset[]));
+      setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
+      setProjects(projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]));
       setLoading(false);
     }
 
@@ -285,13 +232,7 @@ export default function PlantPage() {
       .select("*")
       .order("asset_id", { ascending: true });
 
-    if (error) {
-      console.error(error.message);
-      setAssets([]);
-    } else {
-      setAssets((data ?? []) as PlantAsset[]);
-    }
-
+    setAssets(error ? [] : ((data ?? []) as PlantAsset[]));
     setLoading(false);
   }
 
@@ -307,9 +248,7 @@ export default function PlantPage() {
     });
   }, [assets]);
 
-  const plantTypes = useMemo(() => {
-    return ["All plant types", ...plantTypeOptions];
-  }, []);
+  const plantTypes = useMemo(() => ["All plant types", ...plantTypeOptions], []);
 
   const projectOptions = useMemo(() => {
     return [
@@ -346,14 +285,12 @@ export default function PlantPage() {
         .join(" ")
         .toLowerCase();
 
-      const matchesSearch = !query || haystack.includes(query);
-      const matchesType = typeFilter === "All plant types" || clean(asset.plant_type) === typeFilter;
-      const matchesProject =
-        projectFilter === "All projects" || clean(asset.project) === projectFilter;
-      const matchesStatus =
-        statusFilter === "All statuses" || asset.calculatedStatus === statusFilter;
-
-      return matchesSearch && matchesType && matchesProject && matchesStatus;
+      return (
+        (!query || haystack.includes(query)) &&
+        (typeFilter === "All plant types" || clean(asset.plant_type) === typeFilter) &&
+        (projectFilter === "All projects" || clean(asset.project) === projectFilter) &&
+        (statusFilter === "All statuses" || asset.calculatedStatus === statusFilter)
+      );
     });
   }, [enhancedAssets, search, typeFilter, projectFilter, statusFilter]);
 
@@ -368,7 +305,6 @@ export default function PlantPage() {
 
   function openNewForm() {
     setEditingId(null);
-    
     setForm(emptyAsset);
     setPendingDocuments([]);
     setFormOpen(true);
@@ -376,7 +312,6 @@ export default function PlantPage() {
 
   function openEditForm(asset: PlantAsset) {
     setEditingId(asset.id);
-    
     setPendingDocuments([]);
     setForm({
       asset_id: clean(asset.asset_id),
@@ -407,9 +342,7 @@ export default function PlantPage() {
       upsert: false,
     });
 
-    if (upload.error) {
-      throw new Error(upload.error.message);
-    }
+    if (upload.error) throw new Error(upload.error.message);
 
     const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
 
@@ -420,9 +353,7 @@ export default function PlantPage() {
       file_url: data.publicUrl,
     });
 
-    if (insert.error) {
-      throw new Error(insert.error.message);
-    }
+    if (insert.error) throw new Error(insert.error.message);
   }
 
   async function saveAsset() {
@@ -474,8 +405,7 @@ export default function PlantPage() {
           await uploadPlantDocument(savedAssetId, document.documentType, document.file);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Document upload failed.";
-        alert(message);
+        alert(error instanceof Error ? error.message : "Document upload failed.");
         setSaving(false);
         return;
       }
@@ -485,62 +415,6 @@ export default function PlantPage() {
     setPendingDocuments([]);
     await loadAssets();
     setSaving(false);
-  }
-
-  function handleCsvUpload(file: File) {
-    Papa.parse<Record<string, unknown>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async ({ data }) => {
-        const rows = data
-          .map((row) => {
-            const hired = toBoolean(readValue(row, ["Hired", "Hire", "Wet Hire", "Dry Hire"]));
-
-            return {
-              asset_id: readValue(row, ["Asset ID", "Asset", "Plant ID", "Plant No", "Plant Number"]),
-              make: readValue(row, ["Make", "Manufacturer"]),
-              model: readValue(row, ["Model"]),
-              plant_type: normalisePlantType(readValue(row, ["Type", "Plant Type", "Category"])),
-              serial_number: readValue(row, ["Serial", "Serial Number", "VIN"]),
-              rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
-              crew: readValue(row, ["Crew", "Allocated Crew"]),
-              project: readValue(row, ["Project", "Job", "Allocation"]),
-              cranesafe_expiry: toDateInput(
-                readValue(row, ["CraneSafe", "Crane Safe", "CraneSafe Expiry"])
-              ),
-              insurance_expiry: toDateInput(readValue(row, ["Insurance", "Insurance Expiry"])),
-              hired,
-              hired_from: hired ? readValue(row, ["Hired From", "Hire Company", "Owner"]) : "",
-              hire_term: hired ? readValue(row, ["Hire Term", "Term"]) : "",
-              notes: readValue(row, ["Notes", "Comments"]),
-              updated_at: new Date().toISOString(),
-            };
-          })
-          .filter((row) => clean(row.asset_id));
-
-        if (!rows.length) {
-          alert("No valid plant rows found. Make sure the CSV has an Asset ID column.");
-          return;
-        }
-
-        setSaving(true);
-
-        const { error } = await supabase
-          .from("plant_assets")
-          .upsert(rows, { onConflict: "asset_id" });
-
-        if (error) {
-          alert(error.message);
-        } else {
-          await loadAssets();
-        }
-
-        setSaving(false);
-      },
-      error: (error) => {
-        alert(error.message);
-      },
-    });
   }
 
   function exportCsv() {
@@ -575,13 +449,7 @@ export default function PlantPage() {
   }
 
   function addPendingDocument(documentType: string, file: File) {
-    setPendingDocuments((previous) => [
-      ...previous,
-      {
-        documentType,
-        file,
-      },
-    ]);
+    setPendingDocuments((previous) => [...previous, { documentType, file }]);
   }
 
   function removePendingDocument(index: number) {
@@ -593,26 +461,21 @@ export default function PlantPage() {
       <PageHeader
         eyebrow="Asset Register"
         title="Plant"
-        description="Major plant register for cranes, telehandlers, generators and hired plant. Upload, save, edit and manage live plant records."
+        description="Major plant register for cranes, telehandlers, generators and hired plant."
         actions={
           <>
-            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
-              Raise Job
-            </ActionButton>
-
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            <Link
+              href="/assets/maintenance/new"
+              className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 lg:inline-flex"
             >
-              <FileUp size={16} />
-              Upload CSV
-            </button>
+              <Wrench size={16} />
+              Raise Job
+            </Link>
 
             <button
               type="button"
               onClick={exportCsv}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+              className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 lg:inline-flex"
             >
               <Download size={16} />
               Export
@@ -626,29 +489,15 @@ export default function PlantPage() {
               <Plus size={16} />
               Add Plant
             </button>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-
-                if (file) handleCsvUpload(file);
-
-                event.target.value = "";
-              }}
-            />
           </>
         }
       />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total Plant" value={String(kpis.total)} detail="live register rows" tone="blue" />
-        <KpiCard label="Available" value={String(kpis.available)} detail="ready for allocation" tone="emerald" />
-        <KpiCard label="Due Soon" value={String(kpis.dueSoon)} detail="service or compliance" tone="amber" />
-        <KpiCard label="Review" value={String(kpis.review)} detail="expired or fleet check" tone="rose" />
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <MiniStat label="Plant" value={kpis.total} tone="blue" />
+        <MiniStat label="Available" value={kpis.available} tone="emerald" />
+        <MiniStat label="Due Soon" value={kpis.dueSoon} tone="amber" />
+        <MiniStat label="Review" value={kpis.review} tone="rose" />
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -701,7 +550,7 @@ export default function PlantPage() {
           {
             label: "Asset",
             render: (asset) => (
-              <div className="min-w-[180px]">
+              <div className="min-w-[220px]">
                 <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
                 <p className="mt-1 text-sm text-slate-500">
                   {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "Plant item"}
@@ -711,20 +560,14 @@ export default function PlantPage() {
           },
           {
             label: "Type",
-            render: (asset) => <span className="text-sm text-slate-700">{clean(asset.plant_type) || "N/A"}</span>,
-          },
-          {
-            label: "Make / Model",
             render: (asset) => (
-              <span className="text-sm text-slate-700">
-                {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "N/A"}
-              </span>
+              <span className="text-sm text-slate-700">{clean(asset.plant_type) || "N/A"}</span>
             ),
           },
           {
             label: "Allocation",
             render: (asset) => (
-              <div className="min-w-[160px]">
+              <div className="min-w-[180px]">
                 <p className="font-semibold text-slate-950">{clean(asset.crew) || "Unassigned"}</p>
                 <p className="mt-1 text-sm text-slate-500">{clean(asset.project) || "No project"}</p>
               </div>
@@ -732,7 +575,9 @@ export default function PlantPage() {
           },
           {
             label: "Rego",
-            render: (asset) => <span className="text-sm text-slate-700">{clean(asset.rego) || "No Rego"}</span>,
+            render: (asset) => (
+              <span className="text-sm text-slate-700">{clean(asset.rego) || "No Rego"}</span>
+            ),
           },
           {
             label: "Hire",
@@ -748,41 +593,42 @@ export default function PlantPage() {
             label: "Status",
             render: (asset) => <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />,
           },
-        
-{
-  label: "Actions",
-  render: (asset) => (
-    <div className="flex items-center gap-2">
-      <button
+          {
+            label: "Actions",
+            render: (asset) => (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = `/assets/plant/${asset.id}`;
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  View
+                </button>
 
-   type="button"
-  onClick={() => {
-    window.location.href = `/assets/plant/${asset.id}`;
-  }}
->
-  View
-</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = `/assets/plant/${asset.id}/edit`;
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Edit
+                </button>
 
-<button
-  type="button"
-  onClick={() => {
-    window.location.href = `/assets/plant/${asset.id}/edit`;
-  }}
->
-  Edit
-</button>
-
-<button
-  type="button"
-  onClick={() => {
-    window.location.href = `/assets/plant/${asset.id}/compliance`;
-  }}
->
-  Compliance
-</button>
-    </div>
-  ),
-},
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.href = `/assets/plant/${asset.id}/compliance`;
+                  }}
+                  className="hidden rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 lg:inline-flex"
+                >
+                  Compliance
+                </button>
+              </div>
+            ),
+          },
         ]}
         renderMobile={(asset) => (
           <div className="space-y-4">
@@ -819,7 +665,7 @@ export default function PlantPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -832,18 +678,12 @@ export default function PlantPage() {
 
               <button
                 type="button"
-                onClick={() => openEditForm(asset)}
+                onClick={() => {
+                  window.location.href = `/assets/plant/${asset.id}/edit`;
+                }}
                 className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Edit
-              </button>
-
-              <button
-                type="button"
-                onClick={() => openEditForm(asset)}
-                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                + Docs
               </button>
             </div>
           </div>
