@@ -54,7 +54,7 @@ type EnhancedPlantAsset = PlantAsset & {
 
 type CrewOption = {
   id: string;
-  crew_number: string;
+  crew_number: string | null;
   crew_name: string | null;
   leading_hand: string | null;
   active: boolean | null;
@@ -215,11 +215,10 @@ async function fetchInitialData() {
   const [assetResult, crewResult, projectResult] = await Promise.all([
     supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
 
-    supabase
-      .from("crews")
-      .select("id, crew_number, crew_name, leading_hand, active")
-      .neq("active", false)
-      .order("crew_number", { ascending: true }),
+supabase
+  .from("crews")
+  .select("id, crew_number, crew_name, leading_hand, active")
+  .order("crew_number", { ascending: true }),
 
     supabase
       .from("projects")
@@ -830,20 +829,26 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
                 >
                   <option value="">Unassigned</option>
 {crews.map((crew) => {
-  const label = crew.crew_name
-    ? `${crew.crew_number} - ${crew.crew_name}`
-    : crew.crew_number;
+  const crewNumber = clean(crew.crew_number);
+  const crewName = clean(crew.crew_name);
+  const leadingHand = clean(crew.leading_hand);
+
+  const label = [
+    crewNumber || "Unnamed Crew",
+    crewName,
+    leadingHand ? `LH: ${leadingHand}` : "",
+  ]
+    .filter(Boolean)
+    .join(" - ");
 
   return (
-    <option
-      key={crew.id}
-      value={label}
-    >
+    <option key={crew.id} value={crewNumber || label}>
       {label}
     </option>
   );
 })}
                 </select>
+                <p className="text-xs text-slate-400">Loaded crews: {crews.length}</p>
               </label>
 
               <label className="space-y-1 text-sm">
