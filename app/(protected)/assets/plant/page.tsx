@@ -37,7 +37,6 @@ type PlantAsset = {
   rego: string | null;
   crew: string | null;
   project: string | null;
-  next_service_date: string | null;
   cranesafe_expiry: string | null;
   insurance_expiry: string | null;
   hired: boolean | null;
@@ -89,7 +88,6 @@ const emptyAsset: PlantForm = {
   rego: "",
   crew: "",
   project: "",
-  next_service_date: "",
   cranesafe_expiry: "",
   insurance_expiry: "",
   hired: false,
@@ -129,11 +127,10 @@ function daysUntil(value: string | null) {
 }
 
 function getAssetStatus(asset: PlantAsset) {
-  const serviceDays = daysUntil(asset.next_service_date);
   const cranesafeDays = daysUntil(asset.cranesafe_expiry);
   const insuranceDays = daysUntil(asset.insurance_expiry);
 
-  const expiryDays = [serviceDays, cranesafeDays, insuranceDays].filter(
+  const expiryDays = [ cranesafeDays, insuranceDays].filter(
     (day): day is number => day !== null
   );
 
@@ -390,7 +387,6 @@ export default function PlantPage() {
       rego: clean(asset.rego),
       crew: clean(asset.crew),
       project: clean(asset.project),
-      next_service_date: clean(asset.next_service_date),
       cranesafe_expiry: clean(asset.cranesafe_expiry),
       insurance_expiry: clean(asset.insurance_expiry),
       hired: Boolean(asset.hired),
@@ -575,7 +571,6 @@ export default function PlantPage() {
       Crew: clean(asset.crew),
       Project: clean(asset.project),
       Status: asset.calculatedStatus,
-      "Next Service": clean(asset.next_service_date),
       "CraneSafe Expiry": clean(asset.cranesafe_expiry),
       "Insurance Expiry": clean(asset.insurance_expiry),
       Hired: asset.hired ? "Yes" : "No",
@@ -746,7 +741,7 @@ export default function PlantPage() {
             ),
           },
           { label: "Rego", render: (asset) => clean(asset.rego) || "No Rego" },
-          { label: "Next Service", render: (asset) => formatDate(asset.next_service_date) },
+
           {
             label: "Hire",
             render: (asset) =>
@@ -821,7 +816,6 @@ export default function PlantPage() {
 
               <div>
                 <p className="text-xs font-semibold uppercase text-slate-400">Service</p>
-                <p>{formatDate(asset.next_service_date)}</p>
               </div>
             </div>
 
