@@ -25,10 +25,11 @@ import { RecordActions } from "../record-actions";
 
 type Tone = "emerald" | "amber" | "rose" | "blue";
 
+type PlantType = "Crane" | "Telehandler" | "Other" | "";
+
 type PlantAsset = {
   id: string;
   asset_id: string | null;
-  name: string | null;
   make: string | null;
   model: string | null;
   plant_type: string | null;
@@ -65,9 +66,22 @@ type ProjectOption = {
   name: string;
 };
 
+type PendingDocument = {
+  documentType: string;
+  file: File;
+};
+
+const plantTypeOptions: PlantType[] = ["Crane", "Telehandler", "Other"];
+
+const documentTypes = [
+  "Service History",
+  "Insurance Document",
+  "Registration Document",
+  "Crane Documents",
+];
+
 const emptyAsset: PlantForm = {
   asset_id: "",
-  name: "",
   make: "",
   model: "",
   plant_type: "",
@@ -179,6 +193,16 @@ function toDateInput(value: string) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function normalisePlantType(value: string): PlantType {
+  const cleanValue = value.toLowerCase().trim();
+
+  if (cleanValue.includes("crane")) return "Crane";
+  if (cleanValue.includes("tele")) return "Telehandler";
+  if (cleanValue) return "Other";
+
+  return "";
+}
+
 export default function PlantPage() {
   const supabase = useMemo(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -196,6 +220,8 @@ export default function PlantPage() {
   const [assets, setAssets] = useState<PlantAsset[]>([]);
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -211,20 +237,17 @@ export default function PlantPage() {
   useEffect(() => {
     let cancelled = false;
 
-async function fetchInitialData() {
-  const [assetResult, crewResult, projectResult] = await Promise.all([
-    supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
+    async function fetchInitialData() {
+      const [assetResult, crewResult, projectResult] = await Promise.all([
+        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
 
-supabase
-  .from("crews")
-  .select("id, crew_number, crew_name, leading_hand, active")
-  .order("crew_number", { ascending: true }),
+        supabase
+          .from("crews")
+          .select("id, crew_number, crew_name, leading_hand, active")
+          .order("crew_number", { ascending: true }),
 
-    supabase
-      .from("projects")
-      .select("id, name")
-      .order("name", { ascending: true }),
-  ]);
+        supabase.from("projects").select("id, name").order("name", { ascending: true }),
+      ]);
 
       if (cancelled) return;
 
@@ -290,11 +313,8 @@ supabase
   }, [assets]);
 
   const plantTypes = useMemo(() => {
-    return [
-      "All plant types",
-      ...Array.from(new Set(assets.map((asset) => clean(asset.plant_type)).filter(Boolean))).sort(),
-    ];
-  }, [assets]);
+    return ["All plant types", ...plantTypeOptions];
+  }, []);
 
   const projectOptions = useMemo(() => {
     return [
@@ -316,7 +336,6 @@ supabase
     return enhancedAssets.filter((asset) => {
       const haystack = [
         asset.asset_id,
-        asset.name,
         asset.make,
         asset.model,
         asset.plant_type,
@@ -355,14 +374,15 @@ supabase
   function openNewForm() {
     setEditingId(null);
     setForm(emptyAsset);
+    setPendingDocuments([]);
     setFormOpen(true);
   }
 
   function openEditForm(asset: PlantAsset) {
     setEditingId(asset.id);
+    setPendingDocuments([]);
     setForm({
       asset_id: clean(asset.asset_id),
-      name: clean(asset.name),
       make: clean(asset.make),
       model: clean(asset.model),
       plant_type: clean(asset.plant_type),
@@ -381,9 +401,42 @@ supabase
     setFormOpen(true);
   }
 
+  async function uploadPlantDocument(assetId: string, documentType: string, file: File) {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const folder = documentType.replace(/\s+/g, "_").toLowerCase();
+    const uniqueName = crypto.randomUUID();
+    const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
+
+    const upload = await supabase.storage.from("plant_docs").upload(path, file, {
+      upsert: false,
+    });
+
+    if (upload.error) {
+      throw new Error(upload.error.message);
+    }
+
+    const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
+
+    const insert = await supabase.from("plant_asset_documents").insert({
+      plant_asset_id: assetId,
+      document_type: documentType,
+      file_name: file.name,
+      file_url: data.publicUrl,
+    });
+
+    if (insert.error) {
+      throw new Error(insert.error.message);
+    }
+  }
+
   async function saveAsset() {
     if (!clean(form.asset_id)) {
       alert("Asset ID is required.");
+      return;
+    }
+
+    if (!clean(form.plant_type)) {
+      alert("Plant type is required.");
       return;
     }
 
@@ -392,22 +445,49 @@ supabase
     const payload = {
       ...form,
       asset_id: clean(form.asset_id),
+      plant_type: clean(form.plant_type),
       hired_from: form.hired ? clean(form.hired_from) : "",
       hire_term: form.hired ? clean(form.hire_term) : "",
       updated_at: new Date().toISOString(),
     };
 
     const result = editingId
-      ? await supabase.from("plant_assets").update(payload).eq("id", editingId)
-      : await supabase.from("plant_assets").upsert(payload, { onConflict: "asset_id" });
+      ? await supabase
+          .from("plant_assets")
+          .update(payload)
+          .eq("id", editingId)
+          .select("id")
+          .single()
+      : await supabase
+          .from("plant_assets")
+          .upsert(payload, { onConflict: "asset_id" })
+          .select("id")
+          .single();
 
     if (result.error) {
       alert(result.error.message);
-    } else {
-      setFormOpen(false);
-      await loadAssets();
+      setSaving(false);
+      return;
     }
 
+    const savedAssetId = result.data?.id;
+
+    if (savedAssetId && pendingDocuments.length > 0) {
+      try {
+        for (const document of pendingDocuments) {
+          await uploadPlantDocument(savedAssetId, document.documentType, document.file);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Document upload failed.";
+        alert(message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    setFormOpen(false);
+    setPendingDocuments([]);
+    await loadAssets();
     setSaving(false);
   }
 
@@ -425,38 +505,6 @@ supabase
     await loadAssets();
   }
 
-  async function uploadPlantDocument(assetId: string, documentType: string, file: File) {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const folder = documentType.replace(/\s+/g, "_").toLowerCase();
-    const uniqueName = crypto.randomUUID();
-const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
-
-    const upload = await supabase.storage.from("plant_docs").upload(path, file, {
-      upsert: false,
-    });
-
-    if (upload.error) {
-      alert(upload.error.message);
-      return;
-    }
-
-    const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
-
-    const insert = await supabase.from("plant_asset_documents").insert({
-      plant_asset_id: assetId,
-      document_type: documentType,
-      file_name: file.name,
-      file_url: data.publicUrl,
-    });
-
-    if (insert.error) {
-      alert(insert.error.message);
-      return;
-    }
-
-    alert(`${documentType} uploaded.`);
-  }
-
   function handleCsvUpload(file: File) {
     Papa.parse<Record<string, unknown>>(file, {
       header: true,
@@ -468,10 +516,9 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
 
             return {
               asset_id: readValue(row, ["Asset ID", "Asset", "Plant ID", "Plant No", "Plant Number"]),
-              name: readValue(row, ["Name", "Description", "Asset Name", "Plant Name"]),
               make: readValue(row, ["Make", "Manufacturer"]),
               model: readValue(row, ["Model"]),
-              plant_type: readValue(row, ["Type", "Plant Type", "Category"]),
+              plant_type: normalisePlantType(readValue(row, ["Type", "Plant Type", "Category"])),
               serial_number: readValue(row, ["Serial", "Serial Number", "VIN"]),
               rego: readValue(row, ["Rego", "Registration", "Registration Number"]),
               crew: readValue(row, ["Crew", "Allocated Crew"]),
@@ -520,7 +567,6 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
   function exportCsv() {
     const rows = filteredAssets.map((asset) => ({
       "Asset ID": clean(asset.asset_id),
-      Name: clean(asset.name),
       Make: clean(asset.make),
       Model: clean(asset.model),
       Type: clean(asset.plant_type),
@@ -548,6 +594,20 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
     link.click();
 
     URL.revokeObjectURL(url);
+  }
+
+  function addPendingDocument(documentType: string, file: File) {
+    setPendingDocuments((previous) => [
+      ...previous,
+      {
+        documentType,
+        file,
+      },
+    ]);
+  }
+
+  function removePendingDocument(index: number) {
+    setPendingDocuments((previous) => previous.filter((_, itemIndex) => itemIndex !== index));
   }
 
   return (
@@ -665,7 +725,9 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
             render: (asset) => (
               <div>
                 <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
-                <p className="mt-1 text-slate-600">{clean(asset.name) || "Unnamed plant"}</p>
+                <p className="mt-1 text-slate-600">
+                  {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "Plant item"}
+                </p>
               </div>
             ),
           },
@@ -720,7 +782,7 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
 
                 <RecordActions
                   recordType="plant"
-                  recordLabel={`${clean(asset.asset_id)} ${clean(asset.name)}`}
+                  recordLabel={`${clean(asset.asset_id)} ${clean(asset.make)} ${clean(asset.model)}`}
                   viewHref={`/assets/plant/${asset.id}`}
                   editHref={`/assets/plant/${asset.id}/edit`}
                 />
@@ -733,7 +795,9 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-semibold text-slate-950">{clean(asset.asset_id)}</p>
-                <p className="mt-1 text-sm text-slate-600">{clean(asset.name) || "Unnamed plant"}</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "Plant item"}
+                </p>
               </div>
 
               <StatusBadge label={asset.calculatedStatus} tone={asset.tone} />
@@ -796,10 +860,8 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
             <div className="grid gap-3 md:grid-cols-3">
               {[
                 ["Asset ID", "asset_id"],
-                ["Name", "name"],
                 ["Make", "make"],
                 ["Model", "model"],
-                ["Type", "plant_type"],
                 ["Serial Number", "serial_number"],
                 ["Rego", "rego"],
               ].map(([label, key]) => (
@@ -819,6 +881,27 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
               ))}
 
               <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Type</span>
+                <select
+                  value={clean(form.plant_type)}
+                  onChange={(event) =>
+                    setForm((previous) => ({
+                      ...previous,
+                      plant_type: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                >
+                  <option value="">Select type</option>
+                  {plantTypeOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-sm">
                 <span className="font-semibold text-slate-600">Crew</span>
                 <select
                   value={clean(form.crew)}
@@ -828,27 +911,27 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 >
                   <option value="">Unassigned</option>
-{crews.map((crew) => {
-  const crewNumber = clean(crew.crew_number);
-  const crewName = clean(crew.crew_name);
-  const leadingHand = clean(crew.leading_hand);
 
-  const label = [
-    crewNumber || "Unnamed Crew",
-    crewName,
-    leadingHand ? `LH: ${leadingHand}` : "",
-  ]
-    .filter(Boolean)
-    .join(" - ");
+                  {crews.map((crew) => {
+                    const crewNumber = clean(crew.crew_number);
+                    const crewName = clean(crew.crew_name);
+                    const leadingHand = clean(crew.leading_hand);
 
-  return (
-    <option key={crew.id} value={crewNumber || label}>
-      {label}
-    </option>
-  );
-})}
+                    const label = [
+                      crewNumber || "Unnamed Crew",
+                      crewName,
+                      leadingHand ? `LH: ${leadingHand}` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" - ");
+
+                    return (
+                      <option key={crew.id} value={crewNumber || label}>
+                        {label}
+                      </option>
+                    );
+                  })}
                 </select>
-                <p className="text-xs text-slate-400">Loaded crews: {crews.length}</p>
               </label>
 
               <label className="space-y-1 text-sm">
@@ -979,47 +1062,62 @@ const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
               />
             </label>
 
-            {editingId && (
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <h3 className="text-sm font-bold text-slate-950">Plant Documents</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Upload service history, insurance documents and crane compliance documents.
-                </p>
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <h3 className="text-sm font-bold text-slate-950">Initial Documentation</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Add service, insurance, registration and crane-related documents before saving.
+              </p>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  {["Service History", "Insurance Document", "Crane Document"].map((type) => (
-                    <label
-                      key={type}
-                      className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm hover:bg-slate-50"
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                {documentTypes.map((type) => (
+                  <label
+                    key={type}
+                    className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm hover:bg-slate-50"
+                  >
+                    <FileUp size={18} className="mb-2 text-slate-500" />
+                    <span className="font-semibold text-slate-700">{type}</span>
+                    <span className="mt-1 text-xs text-slate-400">PDF, image or document</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+
+                        if (file) {
+                          addPendingDocument(type, file);
+                        }
+
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+
+              {pendingDocuments.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {pendingDocuments.map((document, index) => (
+                    <div
+                      key={`${document.documentType}-${document.file.name}-${index}`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                     >
-                      <FileUp size={18} className="mb-2 text-slate-500" />
-                      <span className="font-semibold text-slate-700">{type}</span>
-                      <span className="mt-1 text-xs text-slate-400">PDF, image or document</span>
-                      <input
-                        type="file"
-                        className="hidden"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
+                      <div>
+                        <p className="font-semibold text-slate-700">{document.documentType}</p>
+                        <p className="text-xs text-slate-500">{document.file.name}</p>
+                      </div>
 
-                          if (file && editingId) {
-                            void uploadPlantDocument(editingId, type, file);
-                          }
-
-                          event.target.value = "";
-                        }}
-                      />
-                    </label>
+                      <button
+                        type="button"
+                        onClick={() => removePendingDocument(index)}
+                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {!editingId && (
-              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                Save the plant item first, then reopen it to upload service history, insurance
-                documents and crane documents.
-              </div>
-            )}
+              )}
+            </div>
 
             <div className="mt-5 flex justify-end gap-3">
               <button
