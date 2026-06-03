@@ -12,6 +12,7 @@ type PlantAsset = {
   asset_id: string | null;
   make: string | null;
   model: string | null;
+  plant_type: string | null;
   insurance_expiry: string | null;
   rego_expiry: string | null;
   cranesafe_expiry: string | null;
@@ -41,8 +42,17 @@ function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
 }
 
+function isCrane(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "crane";
+}
+
+function isTelehandler(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "telehandler";
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) return "N/A";
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
@@ -80,6 +90,7 @@ export default function PlantCompliancePage() {
   const [insuranceFile, setInsuranceFile] = useState<File | null>(null);
   const [regoFile, setRegoFile] = useState<File | null>(null);
   const [cranesafeFile, setCranesafeFile] = useState<File | null>(null);
+  const [telehandlerFile, setTelehandlerFile] = useState<File | null>(null);
 
   const [serviceDate, setServiceDate] = useState("");
   const [serviceHours, setServiceHours] = useState("");
@@ -109,6 +120,7 @@ export default function PlantCompliancePage() {
 
     if (!assetResult.error) {
       const loadedAsset = assetResult.data as PlantAsset;
+
       setAsset(loadedAsset);
       setInsuranceExpiry(clean(loadedAsset.insurance_expiry));
       setRegoExpiry(clean(loadedAsset.rego_expiry));
@@ -152,19 +164,28 @@ export default function PlantCompliancePage() {
   }
 
   async function saveCompliance() {
+    if (!asset) return;
+
     setSaving(true);
 
     try {
       if (insuranceFile) await uploadDocument("Insurance Document", insuranceFile);
       if (regoFile) await uploadDocument("Registration Document", regoFile);
-      if (cranesafeFile) await uploadDocument("CraneSafe Document", cranesafeFile);
+
+      if (isCrane(asset) && cranesafeFile) {
+        await uploadDocument("CraneSafe Document", cranesafeFile);
+      }
+
+      if (isTelehandler(asset) && telehandlerFile) {
+        await uploadDocument("Telehandler Compliance Document", telehandlerFile);
+      }
 
       const assetUpdate = await supabase
         .from("plant_assets")
         .update({
           insurance_expiry: clean(insuranceExpiry) || null,
           rego_expiry: clean(regoExpiry) || null,
-          cranesafe_expiry: clean(cranesafeExpiry) || null,
+          cranesafe_expiry: isCrane(asset) ? clean(cranesafeExpiry) || null : null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", assetId);
@@ -175,6 +196,7 @@ export default function PlantCompliancePage() {
       setInsuranceFile(null);
       setRegoFile(null);
       setCranesafeFile(null);
+      setTelehandlerFile(null);
       await loadData();
     } catch (error) {
       alert(error instanceof Error ? error.message : "Failed to save compliance.");
@@ -262,14 +284,14 @@ export default function PlantCompliancePage() {
         title={`${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
           .filter(Boolean)
           .join(" ")}`}
-        description="Update insurance, registration, CraneSafe and service documents."
+        description="Update registration, insurance, service history and plant-specific compliance documents."
         actions={
           <Link
-            href={`/assets/plant/${assetId}`}
+            href="/assets/plant"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             <ArrowLeft size={16} />
-            Back
+            Back to Plant
           </Link>
         }
       />
@@ -277,6 +299,7 @@ export default function PlantCompliancePage() {
       <section className="grid gap-4 lg:grid-cols-3">
         <ComplianceCard
           title="Insurance"
+          description="Upload current insurance document and expiry."
           expiry={insuranceExpiry}
           setExpiry={setInsuranceExpiry}
           file={insuranceFile}
@@ -285,19 +308,30 @@ export default function PlantCompliancePage() {
 
         <ComplianceCard
           title="Registration"
+          description="Upload registration document and expiry."
           expiry={regoExpiry}
           setExpiry={setRegoExpiry}
           file={regoFile}
           setFile={setRegoFile}
         />
 
-        <ComplianceCard
-          title="CraneSafe"
-          expiry={cranesafeExpiry}
-          setExpiry={setCranesafeExpiry}
-          file={cranesafeFile}
-          setFile={setCranesafeFile}
-        />
+        {isCrane(asset) ? (
+          <ComplianceCard
+            title="CraneSafe"
+            description="CraneSafe certification is only required for crane assets."
+            expiry={cranesafeExpiry}
+            setExpiry={setCranesafeExpiry}
+            file={cranesafeFile}
+            setFile={setCranesafeFile}
+          />
+        ) : (
+          <DocumentOnlyCard
+            title="Telehandler Documents"
+            description="Upload telehandler-specific compliance documents, such as inspection records, load charts or operator manuals."
+            file={telehandlerFile}
+            setFile={setTelehandlerFile}
+          />
+        )}
       </section>
 
       <div className="flex justify-end">
@@ -327,7 +361,11 @@ export default function PlantCompliancePage() {
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <TextArea label="Work Completed" value={workCompleted} onChange={setWorkCompleted} />
-          <TextArea label="Defects / Recommendations" value={recommendations} onChange={setRecommendations} />
+          <TextArea
+            label="Defects / Recommendations"
+            value={recommendations}
+            onChange={setRecommendations}
+          />
         </div>
 
         <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
@@ -366,7 +404,8 @@ export default function PlantCompliancePage() {
                   {formatDate(service.service_date)} — {clean(service.service_type) || "Service"}
                 </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  {service.hour_meter ?? "No hours"} hrs · {clean(service.service_provider) || "No provider"}
+                  {service.hour_meter ?? "No hours"} hrs ·{" "}
+                  {clean(service.service_provider) || "No provider"}
                 </p>
                 {service.document_url && (
                   <a
@@ -400,6 +439,7 @@ export default function PlantCompliancePage() {
                   <p className="font-bold text-slate-950">{document.document_type}</p>
                   <p className="text-sm text-slate-500">{document.file_name}</p>
                 </div>
+
                 <a
                   href={document.file_url}
                   target="_blank"
@@ -419,12 +459,14 @@ export default function PlantCompliancePage() {
 
 function ComplianceCard({
   title,
+  description,
   expiry,
   setExpiry,
   file,
   setFile,
 }: {
   title: string;
+  description: string;
   expiry: string;
   setExpiry: (value: string) => void;
   file: File | null;
@@ -433,7 +475,8 @@ function ComplianceCard({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="font-bold text-slate-950">{title}</h2>
-      <p className="mt-1 text-sm text-slate-500">Current expiry: {formatDate(expiry)}</p>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+      <p className="mt-3 text-sm text-slate-500">Current expiry: {formatDate(expiry)}</p>
 
       <label className="mt-4 block space-y-1 text-sm">
         <span className="font-semibold text-slate-600">New Expiry</span>
@@ -448,6 +491,39 @@ function ComplianceCard({
       <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
         <FileUp size={16} />
         {file ? file.name : "Upload document"}
+        <input
+          type="file"
+          className="hidden"
+          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+        />
+      </label>
+    </div>
+  );
+}
+
+function DocumentOnlyCard({
+  title,
+  description,
+  file,
+  setFile,
+}: {
+  title: string;
+  description: string;
+  file: File | null;
+  setFile: (file: File | null) => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="font-bold text-slate-950">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+
+      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+        CraneSafe expiry is not required for this plant type.
+      </div>
+
+      <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+        <FileUp size={16} />
+        {file ? file.name : "Upload telehandler document"}
         <input
           type="file"
           className="hidden"

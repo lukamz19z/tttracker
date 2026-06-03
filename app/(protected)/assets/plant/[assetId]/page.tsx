@@ -27,16 +27,17 @@ type PlantAsset = {
   rego: string | null;
   crew: string | null;
   project: string | null;
+  rego_expiry: string | null;
   cranesafe_expiry: string | null;
   insurance_expiry: string | null;
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
-  last_service_date?: string | null;
-  last_service_hours?: number | null;
-  service_interval_hours?: number | null;
-  updated_at?: string | null;
-  created_at?: string | null;
+  last_service_date: string | null;
+  last_service_hours: number | null;
+  service_interval_hours: number | null;
+  updated_at: string | null;
+  created_at: string | null;
   notes: string | null;
 };
 
@@ -50,8 +51,28 @@ type PlantDocument = {
   created_at: string | null;
 };
 
+type ServiceHistory = {
+  id: string;
+  service_date: string | null;
+  hour_meter: number | null;
+  service_provider: string | null;
+  service_type: string | null;
+  next_service_interval_hours: number | null;
+  work_completed: string | null;
+  defects_or_recommendations: string | null;
+  invoice_number: string | null;
+  invoice_cost: number | null;
+  document_url: string | null;
+  document_name: string | null;
+  created_at: string | null;
+};
+
 function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
+}
+
+function isCrane(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "crane";
 }
 
 function formatDate(value: string | null | undefined) {
@@ -81,10 +102,11 @@ function daysUntil(value: string | null | undefined) {
 }
 
 function getAssetStatus(asset: PlantAsset) {
-  const cranesafeDays = daysUntil(asset.cranesafe_expiry);
   const insuranceDays = daysUntil(asset.insurance_expiry);
+  const regoDays = daysUntil(asset.rego_expiry);
+  const cranesafeDays = isCrane(asset) ? daysUntil(asset.cranesafe_expiry) : null;
 
-  const expiryDays = [cranesafeDays, insuranceDays].filter(
+  const expiryDays = [insuranceDays, regoDays, cranesafeDays].filter(
     (day): day is number => day !== null
   );
 
@@ -109,17 +131,22 @@ function ExpiryCard({
   title,
   date,
   icon,
+  muted = false,
 }: {
   title: string;
   date: string | null | undefined;
   icon: React.ReactNode;
+  muted?: boolean;
 }) {
   const remaining = daysUntil(date);
 
   let tone = "border-slate-200 bg-white text-slate-700";
   let label = "No date recorded";
 
-  if (remaining !== null) {
+  if (muted) {
+    tone = "border-slate-200 bg-slate-50 text-slate-500";
+    label = "Not required for this plant type";
+  } else if (remaining !== null) {
     if (remaining < 0) {
       tone = "border-rose-200 bg-rose-50 text-rose-800";
       label = `Expired ${Math.abs(remaining)} days ago`;
@@ -138,7 +165,7 @@ function ExpiryCard({
         {icon}
         <p className="text-sm font-bold">{title}</p>
       </div>
-      <p className="mt-3 text-2xl font-bold">{formatDate(date)}</p>
+      <p className="mt-3 text-2xl font-bold">{muted ? "N/A" : formatDate(date)}</p>
       <p className="mt-1 text-sm">{label}</p>
     </div>
   );
@@ -161,19 +188,25 @@ export default function PlantViewPage() {
 
   const [asset, setAsset] = useState<PlantAsset | null>(null);
   const [documents, setDocuments] = useState<PlantDocument[]>([]);
+  const [services, setServices] = useState<ServiceHistory[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadAsset() {
-      const [assetResult, documentResult] = await Promise.all([
+      const [assetResult, documentResult, serviceResult] = await Promise.all([
         supabase.from("plant_assets").select("*").eq("id", assetId).single(),
         supabase
           .from("plant_asset_documents")
           .select("*")
           .eq("plant_asset_id", assetId)
           .order("created_at", { ascending: false }),
+        supabase
+          .from("plant_service_history")
+          .select("*")
+          .eq("plant_asset_id", assetId)
+          .order("service_date", { ascending: false }),
       ]);
 
       if (cancelled) return;
@@ -190,6 +223,13 @@ export default function PlantViewPage() {
         setDocuments([]);
       } else {
         setDocuments((documentResult.data ?? []) as PlantDocument[]);
+      }
+
+      if (serviceResult.error) {
+        console.error(serviceResult.error.message);
+        setServices([]);
+      } else {
+        setServices((serviceResult.data ?? []) as ServiceHistory[]);
       }
 
       setLoading(false);
@@ -218,7 +258,7 @@ export default function PlantViewPage() {
           className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950"
         >
           <ArrowLeft size={16} />
-          Back to Plant
+          Back to Plant Register
         </Link>
 
         <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-6">
@@ -234,12 +274,18 @@ export default function PlantViewPage() {
     .filter(Boolean)
     .join(" ")}`;
 
+  const latestService = services[0] ?? null;
+  const currentServiceDate = latestService?.service_date ?? asset.last_service_date;
+  const currentServiceHours = latestService?.hour_meter ?? asset.last_service_hours;
+  const currentServiceInterval =
+    latestService?.next_service_interval_hours ?? asset.service_interval_hours;
+
   return (
     <PageShell>
       <PageHeader
         eyebrow="Plant Asset"
         title={title}
-        description="View plant details, allocation, compliance expiries, documents and service status."
+        description="View plant details, allocation, compliance expiries, service history and documents."
         actions={
           <>
             <Link
@@ -247,21 +293,14 @@ export default function PlantViewPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
             >
               <ArrowLeft size={16} />
-              Back
+              Back to Register
             </Link>
 
             <Link
               href={`/assets/plant/${asset.id}/edit`}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              Edit
-            </Link>
-
-            <Link
-              href={`/assets/plant/${asset.id}/docs`}
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
             >
-              + Update Docs
+              Edit
             </Link>
           </>
         }
@@ -320,7 +359,7 @@ export default function PlantViewPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
+      <section className="grid gap-4 md:grid-cols-3">
         <ExpiryCard
           title="Insurance Expiry"
           date={asset.insurance_expiry}
@@ -328,9 +367,16 @@ export default function PlantViewPage() {
         />
 
         <ExpiryCard
+          title="Registration Expiry"
+          date={asset.rego_expiry}
+          icon={<Truck size={18} />}
+        />
+
+        <ExpiryCard
           title="CraneSafe Expiry"
           date={asset.cranesafe_expiry}
           icon={<Truck size={18} />}
+          muted={!isCrane(asset)}
         />
       </section>
 
@@ -340,31 +386,114 @@ export default function PlantViewPage() {
           <h2 className="text-lg font-bold text-slate-950">Service Status</h2>
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <Info label="Last Service Date" value={formatDate(asset.last_service_date)} />
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <Info label="Last Service Date" value={formatDate(currentServiceDate)} />
           <Info
             label="Last Service Hours"
             value={
-              asset.last_service_hours !== null && asset.last_service_hours !== undefined
-                ? `${asset.last_service_hours} hrs`
+              currentServiceHours !== null && currentServiceHours !== undefined
+                ? `${currentServiceHours} hrs`
                 : "Not recorded"
             }
           />
           <Info
             label="Service Interval"
             value={
-              asset.service_interval_hours !== null &&
-              asset.service_interval_hours !== undefined
-                ? `${asset.service_interval_hours} hrs`
+              currentServiceInterval !== null && currentServiceInterval !== undefined
+                ? `${currentServiceInterval} hrs`
                 : "Not recorded"
+            }
+          />
+          <Info
+            label="Next Service Due"
+            value={
+              currentServiceHours !== null &&
+              currentServiceHours !== undefined &&
+              currentServiceInterval !== null &&
+              currentServiceInterval !== undefined
+                ? `${Number(currentServiceHours) + Number(currentServiceInterval)} hrs`
+                : "Waiting on service data"
             }
           />
         </div>
 
         <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Next service due will be calculated from prestart hour-meter readings once the prestart
-          module is linked.
+          Once prestarts are linked, this section will compare the latest hour-meter reading against
+          the next service due hours.
         </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <Wrench size={18} className="text-slate-500" />
+          <h2 className="text-lg font-bold text-slate-950">Service History</h2>
+        </div>
+
+        {services.length === 0 ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+            No service history recorded yet.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {services.map((service) => (
+              <div key={service.id} className="rounded-xl border border-slate-200 p-4">
+                <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+                  <div>
+                    <p className="font-bold text-slate-950">
+                      {formatDate(service.service_date)} —{" "}
+                      {clean(service.service_type) || "Service"}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {service.hour_meter ?? "No hours"} hrs ·{" "}
+                      {clean(service.service_provider) || "No provider"}
+                    </p>
+                    {clean(service.invoice_number) && (
+                      <p className="mt-1 text-sm text-slate-500">
+                        Invoice: {service.invoice_number}
+                      </p>
+                    )}
+                  </div>
+
+                  {service.document_url && (
+                    <a
+                      href={service.document_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Open
+                      <ExternalLink size={14} />
+                    </a>
+                  )}
+                </div>
+
+                {(clean(service.work_completed) || clean(service.defects_or_recommendations)) && (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {clean(service.work_completed) && (
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                          Work Completed
+                        </p>
+                        <p className="mt-1 text-sm text-slate-700">{service.work_completed}</p>
+                      </div>
+                    )}
+
+                    {clean(service.defects_or_recommendations) && (
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                          Defects / Recommendations
+                        </p>
+                        <p className="mt-1 text-sm text-slate-700">
+                          {service.defects_or_recommendations}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

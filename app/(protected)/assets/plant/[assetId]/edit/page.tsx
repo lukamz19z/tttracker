@@ -17,9 +17,12 @@ type PlantAsset = {
   rego: string | null;
   crew: string | null;
   project: string | null;
-  cranesafe_expiry: string | null;
   insurance_expiry: string | null;
   rego_expiry: string | null;
+  cranesafe_expiry: string | null;
+  last_service_date: string | null;
+  last_service_hours: number | null;
+  service_interval_hours: number | null;
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
@@ -46,8 +49,13 @@ function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
 }
 
+function isCrane(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "crane";
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "N/A";
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
@@ -132,9 +140,18 @@ export default function EditPlantPage() {
       rego: clean(asset.rego),
       crew: clean(asset.crew),
       project: clean(asset.project),
-      cranesafe_expiry: clean(asset.cranesafe_expiry) || null,
       insurance_expiry: clean(asset.insurance_expiry) || null,
       rego_expiry: clean(asset.rego_expiry) || null,
+      cranesafe_expiry: isCrane(asset) ? clean(asset.cranesafe_expiry) || null : null,
+      last_service_date: clean(asset.last_service_date) || null,
+      last_service_hours:
+        asset.last_service_hours !== null && asset.last_service_hours !== undefined
+          ? Number(asset.last_service_hours)
+          : null,
+      service_interval_hours:
+        asset.service_interval_hours !== null && asset.service_interval_hours !== undefined
+          ? Number(asset.service_interval_hours)
+          : null,
       hired: Boolean(asset.hired),
       hired_from: asset.hired ? clean(asset.hired_from) : "",
       hire_term: asset.hired ? clean(asset.hire_term) : "",
@@ -169,7 +186,7 @@ export default function EditPlantPage() {
         title={`${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
           .filter(Boolean)
           .join(" ")}`}
-        description="Edit master asset details only. Compliance documents are managed separately."
+        description="Edit asset details, allocation, compliance dates and service setup."
         actions={
           <>
             <Link
@@ -194,7 +211,9 @@ export default function EditPlantPage() {
       />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-4 md:grid-cols-3">
+        <h2 className="text-lg font-bold text-slate-950">Asset Details</h2>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
           <TextInput label="Asset ID" value={asset.asset_id} onChange={(value) => setAsset({ ...asset, asset_id: value })} />
           <TextInput label="Make" value={asset.make} onChange={(value) => setAsset({ ...asset, make: value })} />
           <TextInput label="Model" value={asset.model} onChange={(value) => setAsset({ ...asset, model: value })} />
@@ -205,7 +224,14 @@ export default function EditPlantPage() {
             <span className="font-semibold text-slate-600">Type</span>
             <select
               value={clean(asset.plant_type)}
-              onChange={(event) => setAsset({ ...asset, plant_type: event.target.value })}
+              onChange={(event) =>
+                setAsset({
+                  ...asset,
+                  plant_type: event.target.value,
+                  cranesafe_expiry:
+                    event.target.value === "Crane" ? asset.cranesafe_expiry : null,
+                })
+              }
               className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
             >
               <option value="">Select type</option>
@@ -225,7 +251,14 @@ export default function EditPlantPage() {
               <option value="">Unassigned</option>
               {crews.map((crew) => {
                 const crewNumber = clean(crew.crew_number);
-                const label = [crewNumber || "Unnamed Crew", clean(crew.crew_name)]
+                const crewName = clean(crew.crew_name);
+                const leadingHand = clean(crew.leading_hand);
+
+                const label = [
+                  crewNumber || "Unnamed Crew",
+                  crewName,
+                  leadingHand ? `LH: ${leadingHand}` : "",
+                ]
                   .filter(Boolean)
                   .join(" - ");
 
@@ -253,11 +286,69 @@ export default function EditPlantPage() {
               ))}
             </select>
           </label>
-
-          <DateInput label="Insurance Expiry" value={asset.insurance_expiry} onChange={(value) => setAsset({ ...asset, insurance_expiry: value })} />
-          <DateInput label="Registration Expiry" value={asset.rego_expiry} onChange={(value) => setAsset({ ...asset, rego_expiry: value })} />
-          <DateInput label="CraneSafe Expiry" value={asset.cranesafe_expiry} onChange={(value) => setAsset({ ...asset, cranesafe_expiry: value })} />
         </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">Compliance Dates</h2>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <DateInput
+            label="Insurance Expiry"
+            value={asset.insurance_expiry}
+            onChange={(value) => setAsset({ ...asset, insurance_expiry: value })}
+          />
+
+          <DateInput
+            label="Registration Expiry"
+            value={asset.rego_expiry}
+            onChange={(value) => setAsset({ ...asset, rego_expiry: value })}
+          />
+
+          {isCrane(asset) ? (
+            <DateInput
+              label="CraneSafe Expiry"
+              value={asset.cranesafe_expiry}
+              onChange={(value) => setAsset({ ...asset, cranesafe_expiry: value })}
+            />
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+              <p className="font-semibold text-slate-700">CraneSafe Expiry</p>
+              <p className="mt-1">Only required for Crane assets.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">Service Setup</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Prestarts will later update current hours. For now this stores the last known service setup.
+        </p>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <DateInput
+            label="Last Service Date"
+            value={asset.last_service_date}
+            onChange={(value) => setAsset({ ...asset, last_service_date: value })}
+          />
+
+          <NumberInput
+            label="Last Service Hours"
+            value={asset.last_service_hours}
+            onChange={(value) => setAsset({ ...asset, last_service_hours: value })}
+          />
+
+          <NumberInput
+            label="Service Interval Hours"
+            value={asset.service_interval_hours}
+            onChange={(value) => setAsset({ ...asset, service_interval_hours: value })}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">Hire Details</h2>
 
         <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700">
           <input
@@ -353,6 +444,30 @@ function DateInput({
         type="date"
         value={clean(value)}
         onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+      />
+    </label>
+  );
+}
+
+function NumberInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (value: number | null) => void;
+}) {
+  return (
+    <label className="space-y-1 text-sm">
+      <span className="font-semibold text-slate-600">{label}</span>
+      <input
+        type="number"
+        value={value ?? ""}
+        onChange={(event) =>
+          onChange(event.target.value === "" ? null : Number(event.target.value))
+        }
         className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
       />
     </label>
