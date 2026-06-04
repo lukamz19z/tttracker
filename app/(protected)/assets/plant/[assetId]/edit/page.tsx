@@ -26,6 +26,10 @@ type PlantAsset = {
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
+  asset_status: string | null;
+  off_hire_date: string | null;
+  superseded_by: string | null;
+  inactive_reason: string | null;
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -44,6 +48,7 @@ type ProjectOption = {
 };
 
 const plantTypeOptions = ["Crane", "Telehandler", "Other"];
+const assetStatusOptions = ["Available", "In Use", "Off Hire", "Superseded", "Inactive"];
 
 function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
@@ -51,6 +56,10 @@ function clean(value: string | null | undefined) {
 
 function isCrane(asset: PlantAsset) {
   return clean(asset.plant_type).toLowerCase() === "crane";
+}
+
+function isTelehandler(asset: PlantAsset) {
+  return clean(asset.plant_type).toLowerCase() === "telehandler";
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -85,6 +94,7 @@ export default function EditPlantPage() {
   }, []);
 
   const [asset, setAsset] = useState<PlantAsset | null>(null);
+  const [allAssets, setAllAssets] = useState<PlantAsset[]>([]);
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [saving, setSaving] = useState(false);
@@ -93,8 +103,9 @@ export default function EditPlantPage() {
     let cancelled = false;
 
     async function loadData() {
-      const [assetResult, crewResult, projectResult] = await Promise.all([
+      const [assetResult, assetsResult, crewResult, projectResult] = await Promise.all([
         supabase.from("plant_assets").select("*").eq("id", assetId).single(),
+        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
         supabase
           .from("crews")
           .select("id, crew_number, crew_name, leading_hand")
@@ -105,6 +116,7 @@ export default function EditPlantPage() {
       if (cancelled) return;
 
       if (!assetResult.error) setAsset(assetResult.data as PlantAsset);
+      if (!assetsResult.error) setAllAssets((assetsResult.data ?? []) as PlantAsset[]);
       if (!crewResult.error) setCrews((crewResult.data ?? []) as CrewOption[]);
       if (!projectResult.error) setProjects((projectResult.data ?? []) as ProjectOption[]);
     }
@@ -129,6 +141,8 @@ export default function EditPlantPage() {
       return;
     }
 
+    const status = clean(asset.asset_status) || "Available";
+
     setSaving(true);
 
     const payload = {
@@ -137,12 +151,14 @@ export default function EditPlantPage() {
       model: clean(asset.model),
       plant_type: clean(asset.plant_type),
       serial_number: clean(asset.serial_number),
-      rego: clean(asset.rego),
+      rego: isTelehandler(asset) ? "" : clean(asset.rego),
       crew: clean(asset.crew),
       project: clean(asset.project),
+
       insurance_expiry: clean(asset.insurance_expiry) || null,
-      rego_expiry: clean(asset.rego_expiry) || null,
+      rego_expiry: isTelehandler(asset) ? null : clean(asset.rego_expiry) || null,
       cranesafe_expiry: isCrane(asset) ? clean(asset.cranesafe_expiry) || null : null,
+
       last_service_date: clean(asset.last_service_date) || null,
       last_service_hours:
         asset.last_service_hours !== null && asset.last_service_hours !== undefined
@@ -152,9 +168,19 @@ export default function EditPlantPage() {
         asset.service_interval_hours !== null && asset.service_interval_hours !== undefined
           ? Number(asset.service_interval_hours)
           : null,
+
       hired: Boolean(asset.hired),
       hired_from: asset.hired ? clean(asset.hired_from) : "",
       hire_term: asset.hired ? clean(asset.hire_term) : "",
+
+      asset_status: status,
+      off_hire_date: status === "Off Hire" ? clean(asset.off_hire_date) || null : null,
+      superseded_by: status === "Superseded" ? clean(asset.superseded_by) || null : null,
+      inactive_reason:
+        status === "Off Hire" || status === "Superseded" || status === "Inactive"
+          ? clean(asset.inactive_reason)
+          : "",
+
       notes: clean(asset.notes),
       updated_at: new Date().toISOString(),
     };
@@ -168,7 +194,7 @@ export default function EditPlantPage() {
       return;
     }
 
-    router.push(`/assets/plant/${assetId}`);
+    router.push("/assets/plant");
   }
 
   if (!asset) {
@@ -186,15 +212,15 @@ export default function EditPlantPage() {
         title={`${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
           .filter(Boolean)
           .join(" ")}`}
-        description="Edit asset details, allocation, compliance dates and service setup."
+        description="Edit asset details, allocation, fleet status, hire details and service setup."
         actions={
           <>
             <Link
-              href={`/assets/plant/${assetId}`}
+              href="/assets/plant"
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
             >
               <ArrowLeft size={16} />
-              Back
+              Back to Plant
             </Link>
 
             <button
@@ -218,7 +244,10 @@ export default function EditPlantPage() {
           <TextInput label="Make" value={asset.make} onChange={(value) => setAsset({ ...asset, make: value })} />
           <TextInput label="Model" value={asset.model} onChange={(value) => setAsset({ ...asset, model: value })} />
           <TextInput label="Serial Number" value={asset.serial_number} onChange={(value) => setAsset({ ...asset, serial_number: value })} />
-          <TextInput label="Rego" value={asset.rego} onChange={(value) => setAsset({ ...asset, rego: value })} />
+
+          {!isTelehandler(asset) && (
+            <TextInput label="Rego" value={asset.rego} onChange={(value) => setAsset({ ...asset, rego: value })} />
+          )}
 
           <label className="space-y-1 text-sm">
             <span className="font-semibold text-slate-600">Type</span>
@@ -228,8 +257,9 @@ export default function EditPlantPage() {
                 setAsset({
                   ...asset,
                   plant_type: event.target.value,
-                  cranesafe_expiry:
-                    event.target.value === "Crane" ? asset.cranesafe_expiry : null,
+                  rego: event.target.value === "Telehandler" ? "" : asset.rego,
+                  rego_expiry: event.target.value === "Telehandler" ? null : asset.rego_expiry,
+                  cranesafe_expiry: event.target.value === "Crane" ? asset.cranesafe_expiry : null,
                 })
               }
               className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
@@ -290,27 +320,89 @@ export default function EditPlantPage() {
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">Fleet Status</h2>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <label className="space-y-1 text-sm">
+            <span className="font-semibold text-slate-600">Status</span>
+            <select
+              value={clean(asset.asset_status) || "Available"}
+              onChange={(event) =>
+                setAsset({
+                  ...asset,
+                  asset_status: event.target.value,
+                  off_hire_date: event.target.value === "Off Hire" ? asset.off_hire_date : null,
+                  superseded_by:
+                    event.target.value === "Superseded" ? asset.superseded_by : null,
+                  inactive_reason:
+                    event.target.value === "Off Hire" ||
+                    event.target.value === "Superseded" ||
+                    event.target.value === "Inactive"
+                      ? asset.inactive_reason
+                      : "",
+                })
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+            >
+              {assetStatusOptions.map((status) => (
+                <option key={status}>{status}</option>
+              ))}
+            </select>
+          </label>
+
+          {clean(asset.asset_status) === "Off Hire" && (
+            <DateInput
+              label="Off Hire Date"
+              value={asset.off_hire_date}
+              onChange={(value) => setAsset({ ...asset, off_hire_date: value })}
+            />
+          )}
+
+          {clean(asset.asset_status) === "Superseded" && (
+            <label className="space-y-1 text-sm">
+              <span className="font-semibold text-slate-600">Superseded By</span>
+              <select
+                value={clean(asset.superseded_by)}
+                onChange={(event) => setAsset({ ...asset, superseded_by: event.target.value })}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+              >
+                <option value="">Select replacement asset</option>
+                {allAssets
+                  .filter((item) => item.id !== asset.id)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {clean(item.asset_id)}{" "}
+                      {[clean(item.make), clean(item.model)].filter(Boolean).join(" ")}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+
+          {(clean(asset.asset_status) === "Off Hire" ||
+            clean(asset.asset_status) === "Superseded" ||
+            clean(asset.asset_status) === "Inactive") && (
+            <TextInput
+              label="Reason / Notes"
+              value={asset.inactive_reason}
+              onChange={(value) => setAsset({ ...asset, inactive_reason: value })}
+            />
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">Compliance Dates</h2>
 
         <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <DateInput
-            label="Insurance Expiry"
-            value={asset.insurance_expiry}
-            onChange={(value) => setAsset({ ...asset, insurance_expiry: value })}
-          />
+          <DateInput label="Insurance Expiry" value={asset.insurance_expiry} onChange={(value) => setAsset({ ...asset, insurance_expiry: value })} />
 
-          <DateInput
-            label="Registration Expiry"
-            value={asset.rego_expiry}
-            onChange={(value) => setAsset({ ...asset, rego_expiry: value })}
-          />
+          {!isTelehandler(asset) && (
+            <DateInput label="Registration Expiry" value={asset.rego_expiry} onChange={(value) => setAsset({ ...asset, rego_expiry: value })} />
+          )}
 
           {isCrane(asset) ? (
-            <DateInput
-              label="CraneSafe Expiry"
-              value={asset.cranesafe_expiry}
-              onChange={(value) => setAsset({ ...asset, cranesafe_expiry: value })}
-            />
+            <DateInput label="CraneSafe Expiry" value={asset.cranesafe_expiry} onChange={(value) => setAsset({ ...asset, cranesafe_expiry: value })} />
           ) : (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
               <p className="font-semibold text-slate-700">CraneSafe Expiry</p>
@@ -323,27 +415,13 @@ export default function EditPlantPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">Service Setup</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Prestarts will later update current hours. For now this stores the last known service setup.
+          Optional for now. Prestarts will later update current hours automatically.
         </p>
 
         <div className="mt-4 grid gap-4 md:grid-cols-3">
-          <DateInput
-            label="Last Service Date"
-            value={asset.last_service_date}
-            onChange={(value) => setAsset({ ...asset, last_service_date: value })}
-          />
-
-          <NumberInput
-            label="Last Service Hours"
-            value={asset.last_service_hours}
-            onChange={(value) => setAsset({ ...asset, last_service_hours: value })}
-          />
-
-          <NumberInput
-            label="Service Interval Hours"
-            value={asset.service_interval_hours}
-            onChange={(value) => setAsset({ ...asset, service_interval_hours: value })}
-          />
+          <DateInput label="Last Service Date" value={asset.last_service_date} onChange={(value) => setAsset({ ...asset, last_service_date: value })} />
+          <NumberInput label="Last Service Hours" value={asset.last_service_hours} onChange={(value) => setAsset({ ...asset, last_service_hours: value })} />
+          <NumberInput label="Service Interval Hours" value={asset.service_interval_hours} onChange={(value) => setAsset({ ...asset, service_interval_hours: value })} />
         </div>
       </section>
 
@@ -360,6 +438,10 @@ export default function EditPlantPage() {
                 hired: event.target.checked,
                 hired_from: event.target.checked ? asset.hired_from : "",
                 hire_term: event.target.checked ? asset.hire_term : "",
+                asset_status:
+                  !event.target.checked && clean(asset.asset_status) === "Off Hire"
+                    ? "Available"
+                    : asset.asset_status,
               })
             }
           />
