@@ -322,28 +322,35 @@ export default function VehiclesPage() {
               />
             ),
           },
-          {
-            label: "Actions",
-            render: (vehicle) => (
-              <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}`}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  View
-                </Link>
+{
+  label: "Actions",
+  render: (vehicle) => (
+    <div className="flex flex-wrap gap-2">
+      <Link
+        href={`/assets/vehicles/${vehicle.id}`}
+        className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+      >
+        View
+      </Link>
 
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/edit`}
-                  className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
-                >
-                  Edit
-                </Link>
-              </div>
-            ),
-          },
-        ]}
-        renderMobile={(vehicle) => {
+      <Link
+        href={`/assets/vehicles/${vehicle.id}/edit`}
+        className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+      >
+        Edit
+      </Link>
+
+      <Link
+        href={`/assets/vehicles/${vehicle.id}/update`}
+        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100"
+      >
+        Update Asset
+      </Link>
+    </div>
+  ),
+},
+]}
+renderMobile={(vehicle) => {
           const makeModel = [vehicle.make, vehicle.model]
             .map(clean)
             .filter(Boolean)
@@ -405,23 +412,31 @@ export default function VehiclesPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}`}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-                >
-                  View
-                </Link>
+<div className="flex flex-wrap gap-2">
+  <Link
+    href={`/assets/vehicles/${vehicle.id}`}
+    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+  >
+    View
+  </Link>
 
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/edit`}
-                  className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white"
-                >
-                  Edit
-                </Link>
-              </div>
-            </div>
-          );
+  <Link
+    href={`/assets/vehicles/${vehicle.id}/edit`}
+    className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white"
+  >
+    Edit
+  </Link>
+
+  <Link
+    href={`/assets/vehicles/${vehicle.id}/update`}
+    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700"
+  >
+    Update Asset
+  </Link>
+</div>
+
+</div>
+);
         }}
       />
     </PageShell>
