@@ -17,7 +17,8 @@ type VehicleAsset = {
   make: string | null;
   model: string | null;
   category: string | null;
-  site: string | null;
+  project: string | null;
+  crew: string | null;
   status: string | null;
 };
 
@@ -33,7 +34,13 @@ function clean(value: string | null | undefined) {
 function getTone(status: string): Tone {
   if (status === "Available" || status === "Active") return "emerald";
   if (status === "In Use" || status === "On Hire") return "blue";
-  if (status === "Retired" || status === "Superseded" || status === "Not Hired") {
+  if (
+    status === "Off Hire" ||
+    status === "Inactive" ||
+    status === "Retired" ||
+    status === "Superseded" ||
+    status === "Not Hired"
+  ) {
     return "rose";
   }
 
@@ -84,7 +91,7 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
-  const [siteFilter, setSiteFilter] = useState("All");
+  const [projectFilter, setProjectFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
 
   const loadVehicles = useCallback(async () => {
@@ -92,7 +99,7 @@ export default function VehiclesPage() {
 
     const { data, error } = await supabase
       .from("vehicle_assets")
-      .select("id, vehicle_id, vehicle_rego, make, model, category, site, status")
+      .select("id, vehicle_id, vehicle_rego, make, model, category, project, crew, status")
       .order("vehicle_id", { ascending: true });
 
     if (error) {
@@ -130,10 +137,10 @@ export default function VehiclesPage() {
     ];
   }, [enhancedVehicles]);
 
-  const siteOptions = useMemo(() => {
+  const projectOptions = useMemo(() => {
     return [
       "All",
-      ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.site))))
+      ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.project))))
         .filter(Boolean)
         .sort(),
     ];
@@ -166,7 +173,8 @@ export default function VehiclesPage() {
         vehicle.model,
         makeModel,
         vehicle.category,
-        vehicle.site,
+        vehicle.project,
+        vehicle.crew,
         vehicle.calculated_status,
       ]
         .join(" ")
@@ -175,11 +183,11 @@ export default function VehiclesPage() {
       return (
         searchable.includes(term) &&
         (categoryFilter === "All" || clean(vehicle.category) === categoryFilter) &&
-        (siteFilter === "All" || clean(vehicle.site) === siteFilter) &&
+        (projectFilter === "All" || clean(vehicle.project) === projectFilter) &&
         (statusFilter === "All" || vehicle.calculated_status === statusFilter)
       );
     });
-  }, [enhancedVehicles, search, categoryFilter, siteFilter, statusFilter]);
+  }, [enhancedVehicles, search, categoryFilter, projectFilter, statusFilter]);
 
   const stats = useMemo(() => {
     return {
@@ -251,11 +259,11 @@ export default function VehiclesPage() {
           </select>
 
           <select
-            value={siteFilter}
-            onChange={(event) => setSiteFilter(event.target.value)}
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
           >
-            {siteOptions.map((option) => (
+            {projectOptions.map((option) => (
               <option key={option}>{option}</option>
             ))}
           </select>
@@ -302,8 +310,8 @@ export default function VehiclesPage() {
             },
           },
           {
-            label: "Site",
-            render: (vehicle) => clean(vehicle.site) || "Unassigned",
+            label: "Project",
+            render: (vehicle) => clean(vehicle.project) || "Unallocated",
           },
           {
             label: "Status",
@@ -380,10 +388,19 @@ export default function VehiclesPage() {
 
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Site
+                    Project
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {clean(vehicle.site) || "Unassigned"}
+                    {clean(vehicle.project) || "Unallocated"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">
+                    Crew
+                  </p>
+                  <p className="font-semibold text-slate-800">
+                    {clean(vehicle.crew) || "Unallocated"}
                   </p>
                 </div>
               </div>
