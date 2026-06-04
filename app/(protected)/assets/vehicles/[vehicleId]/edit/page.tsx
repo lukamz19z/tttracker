@@ -572,7 +572,7 @@ export default function EditVehiclePage() {
         await uploadPendingDocuments();
       }
 
-      router.push(`/assets/vehicles/${vehicleId}`);
+      router.push("/assets/vehicles");
       router.refresh();
     } catch (documentError) {
       setErrorMessage(
@@ -594,9 +594,9 @@ export default function EditVehiclePage() {
             : `Edit Vehicle: ${form.vehicle_id || form.vehicle_rego || vehicleId}`
         }
         description="Update vehicle details, allocation, hire status, onboard setup, documents and notes."
-        actions={
-          <Link
-            href={`/assets/vehicles/${vehicleId}`}
+actions={
+  <Link
+    href="/assets/vehicles"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             <ArrowLeft size={16} />
@@ -969,8 +969,8 @@ export default function EditVehiclePage() {
         </Section>
 
         <div className="sticky bottom-4 z-10 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-end">
-          <Link
-            href={`/assets/vehicles/${vehicleId}`}
+<Link
+  href="/assets/vehicles"
             className="inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
           >
             Cancel
