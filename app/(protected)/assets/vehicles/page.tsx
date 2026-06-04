@@ -4,11 +4,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { Car, Eye, Pencil, Plus, RefreshCw, Truck, Wrench } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import { PageHeader, PageShell, RegisterList, StatusBadge } from "../components";
+import { PageHeader, PageShell, RegisterList } from "../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue";
+type Tone = "emerald" | "amber" | "rose" | "blue" | "teal" | "slate";
 
 type VehicleAsset = {
   id: string;
@@ -33,7 +33,7 @@ function clean(value: string | null | undefined) {
 
 function getTone(status: string): Tone {
   if (status === "Available" || status === "Active") return "emerald";
-  if (status === "In Use" || status === "On Hire") return "blue";
+  if (status === "In Use" || status === "On Hire") return "teal";
   if (
     status === "Off Hire" ||
     status === "Inactive" ||
@@ -47,16 +47,48 @@ function getTone(status: string): Tone {
   return "amber";
 }
 
-function MiniStat({
+function getMakeModel(vehicle: VehicleAsset) {
+  return [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ");
+}
+
+function StatusPill({ label, tone }: { label: string; tone: Tone }) {
+  const classes =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : tone === "teal"
+        ? "border-teal-200 bg-teal-50 text-teal-700"
+        : tone === "rose"
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : tone === "amber"
+            ? "border-amber-200 bg-amber-50 text-amber-700"
+            : tone === "blue"
+              ? "border-blue-200 bg-blue-50 text-blue-700"
+              : "border-slate-200 bg-slate-50 text-slate-700";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${classes}`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      {label}
+    </span>
+  );
+}
+
+function StatCard({
   label,
   value,
+  detail,
   tone,
+  icon,
 }: {
   label: string;
   value: number;
+  detail: string;
   tone: Tone;
+  icon: React.ReactNode;
 }) {
-  const toneClass =
+  const classes =
     tone === "emerald"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
       : tone === "amber"
@@ -66,11 +98,17 @@ function MiniStat({
           : "border-blue-200 bg-blue-50 text-blue-800";
 
   return (
-    <div className={`rounded-xl border px-4 py-3 shadow-sm ${toneClass}`}>
-      <p className="text-xs font-bold uppercase tracking-wide opacity-70">
-        {label}
-      </p>
-      <p className="mt-1 text-2xl font-bold">{value}</p>
+    <div className={`rounded-2xl border p-4 shadow-sm ${classes}`}>
+      <div className="flex items-center gap-4">
+        <div className="rounded-2xl bg-white/70 p-3 shadow-sm">{icon}</div>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide opacity-75">
+            {label}
+          </p>
+          <p className="mt-1 text-3xl font-black">{value}</p>
+          <p className="text-sm font-medium opacity-80">{detail}</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -99,7 +137,9 @@ export default function VehiclesPage() {
 
     const { data, error } = await supabase
       .from("vehicle_assets")
-      .select("id, vehicle_id, vehicle_rego, make, model, category, project, crew, status")
+      .select(
+        "id, vehicle_id, vehicle_rego, make, model, category, project, crew, status",
+      )
       .order("vehicle_id", { ascending: true });
 
     if (error) {
@@ -130,7 +170,7 @@ export default function VehiclesPage() {
 
   const categoryOptions = useMemo(() => {
     return [
-      "All",
+      "All Categories",
       ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.category))))
         .filter(Boolean)
         .sort(),
@@ -139,7 +179,7 @@ export default function VehiclesPage() {
 
   const projectOptions = useMemo(() => {
     return [
-      "All",
+      "All Projects",
       ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.project))))
         .filter(Boolean)
         .sort(),
@@ -148,10 +188,8 @@ export default function VehiclesPage() {
 
   const statusOptions = useMemo(() => {
     return [
-      "All",
-      ...Array.from(
-        new Set(enhancedVehicles.map((v) => clean(v.calculated_status))),
-      )
+      "All Statuses",
+      ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.calculated_status))))
         .filter(Boolean)
         .sort(),
     ];
@@ -161,10 +199,7 @@ export default function VehiclesPage() {
     const term = search.trim().toLowerCase();
 
     return enhancedVehicles.filter((vehicle) => {
-      const makeModel = [vehicle.make, vehicle.model]
-        .map(clean)
-        .filter(Boolean)
-        .join(" ");
+      const makeModel = getMakeModel(vehicle);
 
       const searchable = [
         vehicle.vehicle_id,
@@ -182,9 +217,12 @@ export default function VehiclesPage() {
 
       return (
         searchable.includes(term) &&
-        (categoryFilter === "All" || clean(vehicle.category) === categoryFilter) &&
-        (projectFilter === "All" || clean(vehicle.project) === projectFilter) &&
-        (statusFilter === "All" || vehicle.calculated_status === statusFilter)
+        (categoryFilter === "All Categories" ||
+          clean(vehicle.category) === categoryFilter) &&
+        (projectFilter === "All Projects" ||
+          clean(vehicle.project) === projectFilter) &&
+        (statusFilter === "All Statuses" ||
+          vehicle.calculated_status === statusFilter)
       );
     });
   }, [enhancedVehicles, search, categoryFilter, projectFilter, statusFilter]);
@@ -232,26 +270,50 @@ export default function VehiclesPage() {
         }
       />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MiniStat label="Total Vehicles" value={stats.total} tone="blue" />
-        <MiniStat label="Light Vehicles" value={stats.lightVehicles} tone="emerald" />
-        <MiniStat label="Heavy Vehicles" value={stats.heavyVehicles} tone="amber" />
-        <MiniStat label="Trailers" value={stats.trailers} tone="rose" />
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total Vehicles"
+          value={stats.total}
+          detail="All registered vehicles"
+          tone="blue"
+          icon={<Car size={22} />}
+        />
+        <StatCard
+          label="Light Vehicles"
+          value={stats.lightVehicles}
+          detail="Light vehicles"
+          tone="emerald"
+          icon={<Car size={22} />}
+        />
+        <StatCard
+          label="Heavy Vehicles"
+          value={stats.heavyVehicles}
+          detail="Heavy vehicles"
+          tone="amber"
+          icon={<Truck size={22} />}
+        />
+        <StatCard
+          label="Trailers"
+          value={stats.trailers}
+          detail="Trailers"
+          tone="rose"
+          icon={<Truck size={22} />}
+        />
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="grid gap-3 md:grid-cols-4">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search vehicle ID, rego, make, model..."
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           />
 
           <select
             value={categoryFilter}
             onChange={(event) => setCategoryFilter(event.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {categoryOptions.map((option) => (
               <option key={option}>{option}</option>
@@ -261,7 +323,7 @@ export default function VehiclesPage() {
           <select
             value={projectFilter}
             onChange={(event) => setProjectFilter(event.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {projectOptions.map((option) => (
               <option key={option}>{option}</option>
@@ -271,7 +333,7 @@ export default function VehiclesPage() {
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {statusOptions.map((option) => (
               <option key={option}>{option}</option>
@@ -292,7 +354,16 @@ export default function VehiclesPage() {
         columns={[
           {
             label: "Vehicle ID",
-            render: (vehicle) => clean(vehicle.vehicle_id) || "No ID",
+            render: (vehicle) => (
+              <div className="flex items-center gap-3">
+                <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
+                  <Car size={16} />
+                </div>
+                <span className="font-bold text-slate-950">
+                  {clean(vehicle.vehicle_id) || "No ID"}
+                </span>
+              </div>
+            ),
           },
           {
             label: "Rego",
@@ -300,14 +371,7 @@ export default function VehiclesPage() {
           },
           {
             label: "Make & Model",
-            render: (vehicle) => {
-              const makeModel = [vehicle.make, vehicle.model]
-                .map(clean)
-                .filter(Boolean)
-                .join(" ");
-
-              return makeModel || "N/A";
-            },
+            render: (vehicle) => getMakeModel(vehicle) || "N/A",
           },
           {
             label: "Project",
@@ -316,59 +380,61 @@ export default function VehiclesPage() {
           {
             label: "Status",
             render: (vehicle) => (
-              <StatusBadge
-                label={vehicle.calculated_status}
-                tone={vehicle.tone}
-              />
+              <StatusPill label={vehicle.calculated_status} tone={vehicle.tone} />
             ),
           },
-{
-  label: "Actions",
-  render: (vehicle) => (
-    <div className="flex flex-wrap gap-2">
-      <Link
-        href={`/assets/vehicles/${vehicle.id}`}
-        className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-      >
-        View
-      </Link>
+          {
+            label: "Actions",
+            render: (vehicle) => (
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  <Eye size={14} />
+                  View
+                </Link>
 
-      <Link
-        href={`/assets/vehicles/${vehicle.id}/edit`}
-        className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
-      >
-        Edit
-      </Link>
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}/edit`}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+                >
+                  <Pencil size={14} />
+                  Edit
+                </Link>
 
-      <Link
-        href={`/assets/vehicles/${vehicle.id}/update`}
-        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100"
-      >
-        Update Asset
-      </Link>
-    </div>
-  ),
-},
-]}
-renderMobile={(vehicle) => {
-          const makeModel = [vehicle.make, vehicle.model]
-            .map(clean)
-            .filter(Boolean)
-            .join(" ");
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}/update`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700 shadow-sm hover:bg-orange-100"
+                >
+                  <Wrench size={14} />
+                  Update Asset
+                </Link>
+              </div>
+            ),
+          },
+        ]}
+        renderMobile={(vehicle) => {
+          const makeModel = getMakeModel(vehicle);
 
           return (
-            <div className="space-y-4">
+            <div className="space-y-4 rounded-2xl border border-slate-100 bg-white p-1">
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-slate-950">
-                    {clean(vehicle.vehicle_id) || "No ID"}
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    {clean(vehicle.vehicle_rego) || "No rego"}
-                  </p>
+                <div className="flex items-start gap-3">
+                  <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                    <Car size={16} />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-950">
+                      {clean(vehicle.vehicle_id) || "No ID"}
+                    </p>
+                    <p className="text-sm text-slate-600">
+                      {clean(vehicle.vehicle_rego) || "No rego"}
+                    </p>
+                  </div>
                 </div>
 
-                <StatusBadge
+                <StatusPill
                   label={vehicle.calculated_status}
                   tone={vehicle.tone}
                 />
@@ -412,31 +478,33 @@ renderMobile={(vehicle) => {
                 </div>
               </div>
 
-<div className="flex flex-wrap gap-2">
-  <Link
-    href={`/assets/vehicles/${vehicle.id}`}
-    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-  >
-    View
-  </Link>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                >
+                  <Eye size={14} />
+                  View
+                </Link>
 
-  <Link
-    href={`/assets/vehicles/${vehicle.id}/edit`}
-    className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white"
-  >
-    Edit
-  </Link>
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}/edit`}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"
+                >
+                  <Pencil size={14} />
+                  Edit
+                </Link>
 
-  <Link
-    href={`/assets/vehicles/${vehicle.id}/update`}
-    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700"
-  >
-    Update Asset
-  </Link>
-</div>
-
-</div>
-);
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}/update`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700"
+                >
+                  <Wrench size={14} />
+                  Update Asset
+                </Link>
+              </div>
+            </div>
+          );
         }}
       />
     </PageShell>
