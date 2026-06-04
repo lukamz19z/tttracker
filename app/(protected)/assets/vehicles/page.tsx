@@ -351,69 +351,78 @@ return (
         }
         items={filteredVehicles}
         getKey={(vehicle) => vehicle.id}
-        columns={[
-          {
-            label: "Vehicle ID",
-            render: (vehicle) => (
-              <div className="flex items-center gap-3">
-                <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
-                  <Car size={16} />
-                </div>
-                <span className="font-bold text-slate-950">
-                  {clean(vehicle.vehicle_id) || "No ID"}
-                </span>
-              </div>
-            ),
-          },
-          {
-            label: "Rego",
-            render: (vehicle) => clean(vehicle.vehicle_rego) || "No rego",
-          },
-          {
-            label: "Make & Model",
-            render: (vehicle) => getMakeModel(vehicle) || "N/A",
-          },
-          {
-            label: "Project",
-            render: (vehicle) => clean(vehicle.project) || "Unallocated",
-          },
-          {
-            label: "Status",
-            render: (vehicle) => (
-              <StatusPill label={vehicle.calculated_status} tone={vehicle.tone} />
-            ),
-          },
-          {
-            label: "Actions",
-            render: (vehicle) => (
-              <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}`}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                  <Eye size={14} />
-                  View
-                </Link>
+columns={[
+  {
+    label: "Vehicle ID",
+    render: (vehicle) => (
+      <div className="flex items-center gap-3">
+        <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
+          <Car size={16} />
+        </div>
+        <span className="font-bold text-slate-950">
+          {clean(vehicle.vehicle_id) || "No ID"}
+        </span>
+      </div>
+    ),
+  },
+  {
+    label: "Rego",
+    render: (vehicle) => clean(vehicle.vehicle_rego) || "No rego",
+  },
+  {
+    label: "Make & Model",
+    render: (vehicle) => getMakeModel(vehicle) || "N/A",
+  },
+  {
+    label: "Allocation",
+    render: (vehicle) => (
+      <div>
+        <p className="font-semibold text-slate-950">
+          {clean(vehicle.project) || "Unallocated project"}
+        </p>
+        <p className="mt-1 text-xs font-semibold text-slate-500">
+          {clean(vehicle.crew) || "Unallocated crew"}
+        </p>
+      </div>
+    ),
+  },
+  {
+    label: "Status",
+    render: (vehicle) => (
+      <StatusPill label={vehicle.calculated_status} tone={vehicle.tone} />
+    ),
+  },
+  {
+    label: "Actions",
+    render: (vehicle) => (
+      <div className="flex flex-wrap gap-2">
+        <Link
+          href={`/assets/vehicles/${vehicle.id}`}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          <Eye size={14} />
+          View
+        </Link>
 
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/edit`}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
-                >
-                  <Pencil size={14} />
-                  Edit
-                </Link>
+        <Link
+          href={`/assets/vehicles/${vehicle.id}/edit`}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+        >
+          <Pencil size={14} />
+          Edit
+        </Link>
 
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/update`}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700 shadow-sm hover:bg-orange-100"
-                >
-                  <Wrench size={14} />
-                  Update Asset
-                </Link>
-              </div>
-            ),
-          },
-        ]}
+        <Link
+          href={`/assets/vehicles/${vehicle.id}/update`}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700 shadow-sm hover:bg-orange-100"
+        >
+          <Wrench size={14} />
+          Update Asset
+        </Link>
+      </div>
+    ),
+  },
+]}
         renderMobile={(vehicle) => {
           const makeModel = getMakeModel(vehicle);
 
