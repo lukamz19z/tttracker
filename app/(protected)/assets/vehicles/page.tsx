@@ -128,9 +128,9 @@ export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("All");
-  const [projectFilter, setProjectFilter] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("All");
+const [categoryFilter, setCategoryFilter] = useState("All Categories");
+const [projectFilter, setProjectFilter] = useState("All Projects");
+const [statusFilter, setStatusFilter] = useState("All Statuses");
 
   const loadVehicles = useCallback(async () => {
     setLoading(true);
@@ -215,15 +215,15 @@ export default function VehiclesPage() {
         .join(" ")
         .toLowerCase();
 
-      return (
-        searchable.includes(term) &&
-        (categoryFilter === "All Categories" ||
-          clean(vehicle.category) === categoryFilter) &&
-        (projectFilter === "All Projects" ||
-          clean(vehicle.project) === projectFilter) &&
-        (statusFilter === "All Statuses" ||
-          vehicle.calculated_status === statusFilter)
-      );
+return (
+  searchable.includes(term) &&
+  (categoryFilter === "All Categories" ||
+    clean(vehicle.category) === categoryFilter) &&
+  (projectFilter === "All Projects" ||
+    clean(vehicle.project) === projectFilter) &&
+  (statusFilter === "All Statuses" ||
+    vehicle.calculated_status === statusFilter)
+);
     });
   }, [enhancedVehicles, search, categoryFilter, projectFilter, statusFilter]);
 
