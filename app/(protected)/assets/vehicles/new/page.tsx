@@ -25,7 +25,6 @@ type VehicleForm = {
   make: string;
   model: string;
   category: VehicleCategory;
-  site: string;
   crew: string;
   project: string;
   status: VehicleStatus;
@@ -46,8 +45,6 @@ type VehicleForm = {
   dashcam: boolean;
   alert_button: boolean;
   fuel_card: boolean;
-  risk_assessment: string;
-  link: string;
   notes: string;
 };
 
@@ -96,7 +93,6 @@ const emptyVehicle: VehicleForm = {
   make: "",
   model: "",
   category: "",
-  site: "",
   crew: "",
   project: "",
   status: "Available",
@@ -117,8 +113,6 @@ const emptyVehicle: VehicleForm = {
   dashcam: false,
   alert_button: false,
   fuel_card: false,
-  risk_assessment: "",
-  link: "",
   notes: "",
 };
 
@@ -417,7 +411,6 @@ export default function AddVehiclePage() {
       make: form.make.trim() || null,
       model: form.model.trim() || null,
       category: form.category || null,
-      site: form.site.trim() || null,
       crew: form.crew.trim() || null,
       project: form.project.trim() || null,
       status: form.status || null,
@@ -440,8 +433,6 @@ export default function AddVehiclePage() {
       dashcam: form.category === "Trailer" ? false : form.dashcam,
       alert_button: form.category === "Trailer" ? false : form.alert_button,
       fuel_card: form.category === "Trailer" ? false : form.fuel_card,
-      risk_assessment: form.risk_assessment.trim() || null,
-      link: form.link.trim() || null,
       notes: form.notes.trim() || null,
     };
 
@@ -559,10 +550,10 @@ export default function AddVehiclePage() {
             />
 
             <Field
-              label="Site"
-              value={form.site}
-              onChange={(value) => updateField("site", value)}
-              placeholder="Depot, Maragle, Lobs Hole"
+              label="VIN / Chassis Number"
+              value={form.vin_number}
+              onChange={(value) => updateField("vin_number", value.toUpperCase())}
+              placeholder="VIN / chassis number"
             />
 
             <SelectField
@@ -673,13 +664,6 @@ export default function AddVehiclePage() {
             />
 
             <Field
-              label="VIN / Chassis Number"
-              value={form.vin_number}
-              onChange={(value) => updateField("vin_number", value.toUpperCase())}
-              placeholder="VIN / chassis number"
-            />
-
-            <Field
               label="Rego Expiry"
               type="date"
               value={form.rego_expiry}
@@ -698,13 +682,6 @@ export default function AddVehiclePage() {
               type="date"
               value={form.last_service}
               onChange={(value) => updateField("last_service", value)}
-            />
-
-            <Field
-              label="Document Link"
-              value={form.link}
-              onChange={(value) => updateField("link", value)}
-              placeholder="SharePoint / external link"
             />
           </div>
         </Section>
@@ -754,7 +731,9 @@ export default function AddVehiclePage() {
               >
                 <div>
                   <p className="text-sm font-bold text-slate-800">{documentType}</p>
-                  <p className="text-xs text-slate-500">PDF, image or document upload</p>
+                  <p className="text-xs text-slate-500">
+                    PDF, image or document upload
+                  </p>
                 </div>
 
                 <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
@@ -764,7 +743,10 @@ export default function AddVehiclePage() {
                     type="file"
                     className="hidden"
                     onChange={(event) => {
-                      addPendingDocument(documentType, event.target.files?.[0] ?? null);
+                      addPendingDocument(
+                        documentType,
+                        event.target.files?.[0] ?? null,
+                      );
                       event.target.value = "";
                     }}
                   />
@@ -788,7 +770,9 @@ export default function AddVehiclePage() {
                         <p className="font-semibold text-slate-800">
                           {document.documentType}
                         </p>
-                        <p className="text-xs text-slate-500">{document.file.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {document.file.name}
+                        </p>
                       </div>
 
                       <button
@@ -807,38 +791,21 @@ export default function AddVehiclePage() {
         </Section>
 
         <Section
-          title="Compliance Notes"
-          description="Risk assessment and extra notes can be refined later from the edit page."
+          title="Notes"
+          description="General notes for this vehicle."
         >
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-1">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Risk Assessment
-              </span>
-              <textarea
-                value={form.risk_assessment}
-                onChange={(event) =>
-                  updateField("risk_assessment", event.target.value)
-                }
-                placeholder="Risk assessment status, location or notes..."
-                rows={4}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-              />
-            </label>
-
-            <label className="space-y-1">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Notes
-              </span>
-              <textarea
-                value={form.notes}
-                onChange={(event) => updateField("notes", event.target.value)}
-                placeholder="Anything else important..."
-                rows={4}
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-              />
-            </label>
-          </div>
+          <label className="space-y-1">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              Notes
+            </span>
+            <textarea
+              value={form.notes}
+              onChange={(event) => updateField("notes", event.target.value)}
+              placeholder="Anything else important..."
+              rows={4}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            />
+          </label>
         </Section>
 
         <div className="sticky bottom-4 z-10 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-end">
