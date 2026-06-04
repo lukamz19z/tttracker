@@ -5,15 +5,11 @@ import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { Download, FileUp, Plus, Save, Wrench, X } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import {
-  PageHeader,
-  PageShell,
-  RegisterList,
-  StatusBadge,
-} from "../components";
+import { PageHeader, PageShell, RegisterList, StatusBadge } from "../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue";
 type PlantType = "Crane" | "Telehandler" | "Other" | "";
+type AssetStatus = "Available" | "In Use" | "Off Hire" | "Superseded" | "Inactive" | "";
 
 type PlantAsset = {
   id: string;
@@ -30,6 +26,10 @@ type PlantAsset = {
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
+  asset_status: string | null;
+  off_hire_date: string | null;
+  superseded_by: string | null;
+  inactive_reason: string | null;
   notes: string | null;
 };
 
@@ -60,6 +60,14 @@ type PendingDocument = {
 
 const plantTypeOptions: PlantType[] = ["Crane", "Telehandler", "Other"];
 
+const assetStatusOptions: AssetStatus[] = [
+  "Available",
+  "In Use",
+  "Off Hire",
+  "Superseded",
+  "Inactive",
+];
+
 const baseDocumentTypes = [
   "Risk Assessment",
   "Service History",
@@ -80,6 +88,10 @@ const emptyAsset: PlantForm = {
   hired: false,
   hired_from: "",
   hire_term: "",
+  asset_status: "Available",
+  off_hire_date: "",
+  superseded_by: "",
+  inactive_reason: "",
   notes: "",
 };
 
@@ -143,44 +155,25 @@ function formatDate(value: string | null) {
   });
 }
 
-function daysUntil(value: string | null) {
-  if (!value) return null;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-
-  return Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
-}
-
 function getAssetStatus(asset: PlantAsset) {
-  const insuranceDays = daysUntil(asset.insurance_expiry);
-  const cranesafeDays = isAssetCrane(asset) ? daysUntil(asset.cranesafe_expiry) : null;
+  const manualStatus = clean(asset.asset_status);
 
-  const expiryDays = [insuranceDays, cranesafeDays].filter(
-    (day): day is number => day !== null
-  );
+  if (manualStatus === "Off Hire") return "Off Hire";
+  if (manualStatus === "Superseded") return "Superseded";
+  if (manualStatus === "Inactive") return "Inactive";
 
-  if (expiryDays.some((day) => day < 0)) return "Review";
-  if (expiryDays.some((day) => day <= 30)) return "Due Soon";
+  if (asset.hired && clean(asset.off_hire_date)) return "Off Hire";
+  if (clean(asset.superseded_by)) return "Superseded";
   if (clean(asset.crew) || clean(asset.project)) return "In Use";
 
   return "Available";
 }
 
 function getTone(status: string): Tone {
-  const value = status.toLowerCase();
-
-  if (value.includes("available")) return "emerald";
-  if (value.includes("due")) return "amber";
-  if (value.includes("review") || value.includes("expired") || value.includes("out")) {
-    return "rose";
-  }
-
-  return "blue";
+  if (status === "Available") return "emerald";
+  if (status === "In Use") return "blue";
+  if (status === "Off Hire") return "amber";
+  return "rose";
 }
 
 function MiniStat({
@@ -321,6 +314,8 @@ export default function PlantPage() {
         asset.project,
         asset.hired_from,
         asset.hire_term,
+        asset.asset_status,
+        asset.inactive_reason,
         asset.notes,
       ]
         .map((value) => clean(value))
@@ -339,9 +334,9 @@ export default function PlantPage() {
   const kpis = useMemo(() => {
     return {
       total: assets.length,
+      inUse: enhancedAssets.filter((asset) => asset.calculatedStatus === "In Use").length,
       available: enhancedAssets.filter((asset) => asset.calculatedStatus === "Available").length,
-      dueSoon: enhancedAssets.filter((asset) => asset.calculatedStatus === "Due Soon").length,
-      review: enhancedAssets.filter((asset) => asset.calculatedStatus === "Review").length,
+      offHire: enhancedAssets.filter((asset) => asset.calculatedStatus === "Off Hire").length,
     };
   }, [assets.length, enhancedAssets]);
 
@@ -369,6 +364,10 @@ export default function PlantPage() {
       hired: Boolean(asset.hired),
       hired_from: clean(asset.hired_from),
       hire_term: clean(asset.hire_term),
+      asset_status: clean(asset.asset_status) || "Available",
+      off_hire_date: clean(asset.off_hire_date),
+      superseded_by: clean(asset.superseded_by),
+      inactive_reason: clean(asset.inactive_reason),
       notes: clean(asset.notes),
     });
     setFormOpen(true);
@@ -411,6 +410,8 @@ export default function PlantPage() {
 
     setSaving(true);
 
+    const assetStatus = clean(form.asset_status) || "Available";
+
     const payload = {
       ...form,
       asset_id: clean(form.asset_id),
@@ -419,6 +420,13 @@ export default function PlantPage() {
       cranesafe_expiry: isFormCrane(form) ? clean(form.cranesafe_expiry) || null : null,
       hired_from: form.hired ? clean(form.hired_from) : "",
       hire_term: form.hired ? clean(form.hire_term) : "",
+      asset_status: assetStatus,
+      off_hire_date: assetStatus === "Off Hire" ? clean(form.off_hire_date) || null : null,
+      superseded_by: assetStatus === "Superseded" ? clean(form.superseded_by) || null : null,
+      inactive_reason:
+        assetStatus === "Inactive" || assetStatus === "Superseded" || assetStatus === "Off Hire"
+          ? clean(form.inactive_reason)
+          : "",
       updated_at: new Date().toISOString(),
     };
 
@@ -472,6 +480,9 @@ export default function PlantPage() {
       Crew: clean(asset.crew),
       Project: clean(asset.project),
       Status: asset.calculatedStatus,
+      "Off Hire Date": clean(asset.off_hire_date),
+      "Superseded By": clean(asset.superseded_by),
+      "Inactive Reason": clean(asset.inactive_reason),
       "CraneSafe Expiry": isAssetCrane(asset) ? clean(asset.cranesafe_expiry) : "N/A",
       "Insurance Expiry": clean(asset.insurance_expiry),
       Hired: asset.hired ? "Yes" : "No",
@@ -539,9 +550,9 @@ export default function PlantPage() {
 
       <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <MiniStat label="Plant" value={kpis.total} tone="blue" />
+        <MiniStat label="In Use" value={kpis.inUse} tone="blue" />
         <MiniStat label="Available" value={kpis.available} tone="emerald" />
-        <MiniStat label="Due Soon" value={kpis.dueSoon} tone="amber" />
-        <MiniStat label="Review" value={kpis.review} tone="rose" />
+        <MiniStat label="Off Hire" value={kpis.offHire} tone="amber" />
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -706,8 +717,8 @@ export default function PlantPage() {
               </div>
 
               <div>
-                <p className="text-xs font-semibold uppercase text-slate-400">Insurance</p>
-                <p>{formatDate(asset.insurance_expiry)}</p>
+                <p className="text-xs font-semibold uppercase text-slate-400">Hire</p>
+                <p>{asset.hired ? clean(asset.hired_from) || "Hired" : "Owned"}</p>
               </div>
             </div>
 
@@ -805,6 +816,97 @@ export default function PlantPage() {
               </label>
 
               <label className="space-y-1 text-sm">
+                <span className="font-semibold text-slate-600">Status</span>
+                <select
+                  value={clean(form.asset_status) || "Available"}
+                  onChange={(event) =>
+                    setForm((previous) => ({
+                      ...previous,
+                      asset_status: event.target.value,
+                      off_hire_date:
+                        event.target.value === "Off Hire" ? previous.off_hire_date : "",
+                      superseded_by:
+                        event.target.value === "Superseded" ? previous.superseded_by : "",
+                      inactive_reason:
+                        event.target.value === "Inactive" ||
+                        event.target.value === "Superseded" ||
+                        event.target.value === "Off Hire"
+                          ? previous.inactive_reason
+                          : "",
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                >
+                  {assetStatusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {clean(form.asset_status) === "Off Hire" && (
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">Off Hire Date</span>
+                  <input
+                    type="date"
+                    value={clean(form.off_hire_date)}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        off_hire_date: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  />
+                </label>
+              )}
+
+              {clean(form.asset_status) === "Superseded" && (
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">Superseded By</span>
+                  <select
+                    value={clean(form.superseded_by)}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        superseded_by: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  >
+                    <option value="">Select replacement asset</option>
+                    {assets
+                      .filter((asset) => asset.id !== editingId)
+                      .map((asset) => (
+                        <option key={asset.id} value={asset.id}>
+                          {clean(asset.asset_id)}{" "}
+                          {[clean(asset.make), clean(asset.model)].filter(Boolean).join(" ")}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+
+              {(clean(form.asset_status) === "Inactive" ||
+                clean(form.asset_status) === "Superseded" ||
+                clean(form.asset_status) === "Off Hire") && (
+                <label className="space-y-1 text-sm">
+                  <span className="font-semibold text-slate-600">Reason / Notes</span>
+                  <input
+                    value={clean(form.inactive_reason)}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        inactive_reason: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
+                  />
+                </label>
+              )}
+
+              <label className="space-y-1 text-sm">
                 <span className="font-semibold text-slate-600">Crew</span>
                 <select
                   value={clean(form.crew)}
@@ -814,7 +916,6 @@ export default function PlantPage() {
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-slate-400"
                 >
                   <option value="">Unassigned</option>
-
                   {crews.map((crew) => {
                     const crewNumber = clean(crew.crew_number);
                     const crewName = clean(crew.crew_name);
@@ -898,6 +999,10 @@ export default function PlantPage() {
                     hired: event.target.checked,
                     hired_from: event.target.checked ? previous.hired_from : "",
                     hire_term: event.target.checked ? previous.hire_term : "",
+                    asset_status:
+                      !event.target.checked && previous.asset_status === "Off Hire"
+                        ? "Available"
+                        : previous.asset_status,
                   }))
                 }
               />
