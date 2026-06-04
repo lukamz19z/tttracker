@@ -67,7 +67,7 @@ function StatusPill({ label, tone }: { label: string; tone: Tone }) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${classes}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-bold ${classes}`}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {label}
@@ -392,10 +392,11 @@ columns={[
       <StatusPill label={vehicle.calculated_status} tone={vehicle.tone} />
     ),
   },
-  {
-    label: "Actions",
-    render: (vehicle) => (
-      <div className="flex flex-wrap gap-2">
+{
+  label: "Actions",
+  className: "whitespace-nowrap w-px",
+  render: (vehicle) => (
+      <div className="flex w-max items-center gap-2">
         <Link
           href={`/assets/vehicles/${vehicle.id}`}
           className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
