@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { ArrowLeft, FileUp, Save } from "lucide-react";
 import { PageHeader, PageShell } from "../../../components";
@@ -83,6 +83,8 @@ export default function PlantCompliancePage() {
   const [services, setServices] = useState<ServiceHistory[]>([]);
   const [saving, setSaving] = useState(false);
 
+  const [riskAssessmentFile, setRiskAssessmentFile] = useState<File | null>(null);
+
   const [insuranceExpiry, setInsuranceExpiry] = useState("");
   const [regoExpiry, setRegoExpiry] = useState("");
   const [cranesafeExpiry, setCranesafeExpiry] = useState("");
@@ -90,21 +92,20 @@ export default function PlantCompliancePage() {
   const [insuranceFile, setInsuranceFile] = useState<File | null>(null);
   const [regoFile, setRegoFile] = useState<File | null>(null);
   const [cranesafeFile, setCranesafeFile] = useState<File | null>(null);
-  const [telehandlerFile, setTelehandlerFile] = useState<File | null>(null);
-const [riskAssessmentFile, setRiskAssessmentFile] =
-  useState<File | null>(null);
+  const [plantSpecificFile, setPlantSpecificFile] = useState<File | null>(null);
+
   const [serviceDate, setServiceDate] = useState("");
   const [serviceHours, setServiceHours] = useState("");
   const [serviceProvider, setServiceProvider] = useState("");
   const [serviceType, setServiceType] = useState("");
-  const [serviceInterval, setServiceInterval] = useState("250");
+  const [serviceInterval, setServiceInterval] = useState("");
   const [workCompleted, setWorkCompleted] = useState("");
   const [recommendations, setRecommendations] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceCost, setInvoiceCost] = useState("");
   const [serviceFile, setServiceFile] = useState<File | null>(null);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const [assetResult, docsResult, serviceResult] = await Promise.all([
       supabase.from("plant_assets").select("*").eq("id", assetId).single(),
       supabase
@@ -130,11 +131,11 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
 
     if (!docsResult.error) setDocuments((docsResult.data ?? []) as PlantDocument[]);
     if (!serviceResult.error) setServices((serviceResult.data ?? []) as ServiceHistory[]);
-  }
+  }, [assetId, supabase]);
 
   useEffect(() => {
     void loadData();
-  }, []);
+  }, [loadData]);
 
   async function uploadDocument(documentType: string, file: File) {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -170,25 +171,24 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
     setSaving(true);
 
     try {
-        if (riskAssessmentFile) {
-  await uploadDocument("Risk Assessment", riskAssessmentFile);
-}
+      if (riskAssessmentFile) await uploadDocument("Risk Assessment", riskAssessmentFile);
       if (insuranceFile) await uploadDocument("Insurance Document", insuranceFile);
-      if (regoFile) await uploadDocument("Registration Document", regoFile);
 
-      if (isCrane(asset) && cranesafeFile) {
-        await uploadDocument("CraneSafe Document", cranesafeFile);
-      }
-
-      if (isTelehandler(asset) && telehandlerFile) {
-        await uploadDocument("Telehandler Compliance Document", telehandlerFile);
+      if (isCrane(asset)) {
+        if (regoFile) await uploadDocument("Registration Document", regoFile);
+        if (cranesafeFile) await uploadDocument("CraneSafe Certificate", cranesafeFile);
+        if (plantSpecificFile) await uploadDocument("Crane Documents", plantSpecificFile);
+      } else if (isTelehandler(asset)) {
+        if (plantSpecificFile) await uploadDocument("Telehandler Documents", plantSpecificFile);
+      } else if (plantSpecificFile) {
+        await uploadDocument("Plant Documents", plantSpecificFile);
       }
 
       const assetUpdate = await supabase
         .from("plant_assets")
         .update({
           insurance_expiry: clean(insuranceExpiry) || null,
-          rego_expiry: clean(regoExpiry) || null,
+          rego_expiry: isCrane(asset) ? clean(regoExpiry) || null : null,
           cranesafe_expiry: isCrane(asset) ? clean(cranesafeExpiry) || null : null,
           updated_at: new Date().toISOString(),
         })
@@ -196,12 +196,13 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
 
       if (assetUpdate.error) throw new Error(assetUpdate.error.message);
 
-      alert("Compliance updated.");
+      setRiskAssessmentFile(null);
       setInsuranceFile(null);
       setRegoFile(null);
       setCranesafeFile(null);
-      setTelehandlerFile(null);
-      setRiskAssessmentFile(null);
+      setPlantSpecificFile(null);
+
+      alert("Compliance updated.");
       await loadData();
     } catch (error) {
       alert(error instanceof Error ? error.message : "Failed to save compliance.");
@@ -258,7 +259,7 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
       setServiceHours("");
       setServiceProvider("");
       setServiceType("");
-      setServiceInterval("250");
+      setServiceInterval("");
       setWorkCompleted("");
       setRecommendations("");
       setInvoiceNumber("");
@@ -282,14 +283,26 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
     );
   }
 
+  const plantSpecificTitle = isCrane(asset)
+    ? "Crane Documents"
+    : isTelehandler(asset)
+      ? "Telehandler Documents"
+      : "Plant Documents";
+
+  const plantSpecificDescription = isCrane(asset)
+    ? "Upload crane documents such as load charts, manuals, lift information or additional compliance records."
+    : isTelehandler(asset)
+      ? "Upload telehandler documents such as manuals, load charts, inspection records or compliance documents."
+      : "Upload plant-specific manuals, inspection records or compliance documents.";
+
   return (
     <PageShell>
       <PageHeader
         eyebrow="Plant Compliance"
-        title={`${clean(asset.asset_id)} — ${[clean(asset.make), clean(asset.model)]
-          .filter(Boolean)
-          .join(" ")}`}
-        description="Update registration, insurance, service history and plant-specific compliance documents."
+        title={`${clean(asset.asset_id)} — ${
+          [clean(asset.make), clean(asset.model)].filter(Boolean).join(" ") || "Plant Asset"
+        }`}
+        description="Update risk assessment, insurance, plant-specific documents and service history."
         actions={
           <Link
             href="/assets/plant"
@@ -301,13 +314,14 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
         }
       />
 
-      <section className="grid gap-4 lg:grid-cols-3">
-        <DocumentOnlyCard
-  title="Risk Assessment"
-  description="Upload the current risk assessment for this asset."
-  file={riskAssessmentFile}
-  setFile={setRiskAssessmentFile}
-/>
+      <section className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+        <UploadOnlyCard
+          title="Risk Assessment"
+          description="Required for every plant item and vehicle."
+          file={riskAssessmentFile}
+          setFile={setRiskAssessmentFile}
+        />
+
         <ComplianceCard
           title="Insurance"
           description="Upload current insurance document and expiry."
@@ -317,32 +331,34 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
           setFile={setInsuranceFile}
         />
 
-        <ComplianceCard
-          title="Registration"
-          description="Upload registration document and expiry."
-          expiry={regoExpiry}
-          setExpiry={setRegoExpiry}
-          file={regoFile}
-          setFile={setRegoFile}
-        />
+        {isCrane(asset) && (
+          <>
+            <ComplianceCard
+              title="Registration"
+              description="Upload registration document and expiry."
+              expiry={regoExpiry}
+              setExpiry={setRegoExpiry}
+              file={regoFile}
+              setFile={setRegoFile}
+            />
 
-        {isCrane(asset) ? (
-          <ComplianceCard
-            title="CraneSafe"
-            description="CraneSafe certification is only required for crane assets."
-            expiry={cranesafeExpiry}
-            setExpiry={setCranesafeExpiry}
-            file={cranesafeFile}
-            setFile={setCranesafeFile}
-          />
-        ) : (
-          <DocumentOnlyCard
-            title="Telehandler Documents"
-            description="Upload telehandler-specific compliance documents, such as inspection records, load charts or operator manuals."
-            file={telehandlerFile}
-            setFile={setTelehandlerFile}
-          />
+            <ComplianceCard
+              title="CraneSafe"
+              description="Upload CraneSafe certificate and expiry."
+              expiry={cranesafeExpiry}
+              setExpiry={setCranesafeExpiry}
+              file={cranesafeFile}
+              setFile={setCranesafeFile}
+            />
+          </>
         )}
+
+        <UploadOnlyCard
+          title={plantSpecificTitle}
+          description={plantSpecificDescription}
+          file={plantSpecificFile}
+          setFile={setPlantSpecificFile}
+        />
       </section>
 
       <div className="flex justify-end">
@@ -359,6 +375,9 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">Add Service History</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Optional for now. Add service details when available.
+        </p>
 
         <div className="mt-4 grid gap-4 md:grid-cols-3">
           <Input label="Service Date" type="date" value={serviceDate} onChange={setServiceDate} />
@@ -402,13 +421,11 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-950">Service History</h2>
-
+      <HistorySection title="Service History">
         {services.length === 0 ? (
-          <p className="mt-4 text-sm text-slate-500">No service history recorded.</p>
+          <p className="text-sm text-slate-500">No service history recorded.</p>
         ) : (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-3">
             {services.map((service) => (
               <div key={service.id} className="rounded-xl border border-slate-200 p-4">
                 <p className="font-bold text-slate-950">
@@ -432,15 +449,13 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
             ))}
           </div>
         )}
-      </section>
+      </HistorySection>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-950">Document History</h2>
-
+      <HistorySection title="Document History">
         {documents.length === 0 ? (
-          <p className="mt-4 text-sm text-slate-500">No documents uploaded.</p>
+          <p className="text-sm text-slate-500">No documents uploaded.</p>
         ) : (
-          <div className="mt-4 space-y-3">
+          <div className="space-y-3">
             {documents.map((document) => (
               <div
                 key={document.id}
@@ -449,6 +464,9 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
                 <div>
                   <p className="font-bold text-slate-950">{document.document_type}</p>
                   <p className="text-sm text-slate-500">{document.file_name}</p>
+                  <p className="text-xs text-slate-400">
+                    Uploaded {formatDate(document.created_at)}
+                  </p>
                 </div>
 
                 <a
@@ -463,7 +481,7 @@ const [riskAssessmentFile, setRiskAssessmentFile] =
             ))}
           </div>
         )}
-      </section>
+      </HistorySection>
     </PageShell>
   );
 }
@@ -499,20 +517,12 @@ function ComplianceCard({
         />
       </label>
 
-      <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
-        <FileUp size={16} />
-        {file ? file.name : "Upload document"}
-        <input
-          type="file"
-          className="hidden"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-        />
-      </label>
+      <UploadInput file={file} setFile={setFile} label="Upload document" />
     </div>
   );
 }
 
-function DocumentOnlyCard({
+function UploadOnlyCard({
   title,
   description,
   file,
@@ -527,21 +537,45 @@ function DocumentOnlyCard({
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="font-bold text-slate-950">{title}</h2>
       <p className="mt-1 text-sm text-slate-500">{description}</p>
-
-      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-        CraneSafe expiry is not required for this plant type.
-      </div>
-
-      <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
-        <FileUp size={16} />
-        {file ? file.name : "Upload telehandler document"}
-        <input
-          type="file"
-          className="hidden"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-        />
-      </label>
+      <UploadInput file={file} setFile={setFile} label={`Upload ${title.toLowerCase()}`} />
     </div>
+  );
+}
+
+function UploadInput({
+  file,
+  setFile,
+  label,
+}: {
+  file: File | null;
+  setFile: (file: File | null) => void;
+  label: string;
+}) {
+  return (
+    <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+      <FileUp size={16} />
+      {file ? file.name : label}
+      <input
+        type="file"
+        className="hidden"
+        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+      />
+    </label>
+  );
+}
+
+function HistorySection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+      <div className="mt-4">{children}</div>
+    </section>
   );
 }
 
