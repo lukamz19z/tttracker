@@ -35,6 +35,9 @@ type VehicleAsset = {
   last_service: string | null;
   rego_expiry: string | null;
   insurance_expiry: string | null;
+  next_service_due: string | null;
+  next_service_km: number | null;
+  next_inspection_due: string | null;
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
@@ -55,6 +58,25 @@ type VehicleDocument = {
   file_name: string | null;
   file_url: string | null;
   storage_path: string | null;
+  created_at: string | null;
+};
+
+type ServiceHistory = {
+  id: string;
+  record_type: string | null;
+  service_date: string | null;
+  inspection_date: string | null;
+  service_type: string | null;
+  inspection_type: string | null;
+  supplier: string | null;
+  invoice_number: string | null;
+  invoice_cost: number | null;
+  work_completed: string | null;
+  invoice_notes: string | null;
+  next_service_due: string | null;
+  next_inspection_due: string | null;
+  document_url: string | null;
+  document_name: string | null;
   created_at: string | null;
 };
 
@@ -102,7 +124,30 @@ function getTone(status: string | null | undefined): Tone {
 function makeModel(vehicle: VehicleAsset | null) {
   if (!vehicle) return "Vehicle Detail";
 
-  return [vehicle.make, vehicle.model].map(clean).filter((v) => v !== "N/A").join(" ");
+  return [vehicle.make, vehicle.model]
+    .map(clean)
+    .filter((value) => value !== "N/A")
+    .join(" ");
+}
+
+function ImportantDateCard({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-black text-slate-950">{value}</p>
+      <p className="mt-1 text-xs font-medium text-slate-500">{helper}</p>
+    </div>
+  );
 }
 
 function EmptyCard({
@@ -154,6 +199,13 @@ export default async function VehicleDetailPage({
     .order("created_at", { ascending: false })
     .returns<VehicleDocument[]>();
 
+  const { data: serviceHistory } = await supabase
+    .from("vehicle_service_history")
+    .select("*")
+    .eq("vehicle_asset_id", vehicleId)
+    .order("created_at", { ascending: false })
+    .returns<ServiceHistory[]>();
+
   if (!vehicle) {
     return (
       <PageShell>
@@ -175,17 +227,38 @@ export default async function VehicleDetailPage({
     );
   }
 
+  const isTrailer = clean(vehicle.category).toLowerCase() === "trailer";
+
   const vehicleTitle =
     clean(vehicle.vehicle_id) !== "N/A"
-      ? `${clean(vehicle.vehicle_id)} - ${makeModel(vehicle) || clean(vehicle.vehicle_rego)}`
+      ? `${clean(vehicle.vehicle_id)} - ${
+          makeModel(vehicle) || clean(vehicle.vehicle_rego)
+        }`
       : makeModel(vehicle) || clean(vehicle.vehicle_rego);
+
+  const basicDetailItems = [
+    { label: "Vehicle ID", value: clean(vehicle.vehicle_id) },
+    { label: "Rego", value: clean(vehicle.vehicle_rego) },
+    { label: "Category", value: clean(vehicle.category) },
+    { label: "Make", value: clean(vehicle.make) },
+    { label: "Model", value: clean(vehicle.model) },
+    { label: "Year", value: clean(vehicle.year) },
+    ...(isTrailer ? [] : [{ label: "Style", value: clean(vehicle.style) }]),
+    { label: "VIN / Chassis Number", value: clean(vehicle.vin_number) },
+    {
+      label: "Status",
+      value: (
+        <StatusBadge label={clean(vehicle.status)} tone={getTone(vehicle.status)} />
+      ),
+    },
+  ];
 
   return (
     <PageShell>
       <PageHeader
         eyebrow="Vehicle Record"
         title={vehicleTitle}
-        description="Full vehicle profile with registration, ownership, allocation, setup, documents, service history and future prestart history."
+        description="Full asset profile with registration, allocation, documents, service history and future prestart history."
         actions={
           <>
             <ActionButton
@@ -211,11 +284,57 @@ export default async function VehicleDetailPage({
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex items-center gap-3">
               <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                <Calendar size={18} />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Key Dates
+                </h2>
+                <p className="text-sm text-slate-600">
+                  Important expiry and service information.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <ImportantDateCard
+                label="Rego Expiry"
+                value={formatDate(vehicle.rego_expiry)}
+                helper="Registration renewal date"
+              />
+
+              {!isTrailer && (
+                <ImportantDateCard
+                  label="Insurance Expiry"
+                  value={formatDate(vehicle.insurance_expiry)}
+                  helper="Insurance renewal date"
+                />
+              )}
+
+              <ImportantDateCard
+                label={isTrailer ? "Next Inspection" : "Last Service"}
+                value={
+                  isTrailer
+                    ? formatDate(vehicle.next_inspection_due)
+                    : formatDate(vehicle.last_service)
+                }
+                helper={
+                  isTrailer
+                    ? "Trailer inspection due"
+                    : "Most recent recorded service"
+                }
+              />
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex items-center gap-3">
+              <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
                 <Car size={18} />
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
-                  Basic Vehicle Details
+                  Basic Asset Details
                 </h2>
                 <p className="text-sm text-slate-600">
                   Main register and fleet identification details.
@@ -223,27 +342,7 @@ export default async function VehicleDetailPage({
               </div>
             </div>
 
-            <DetailGrid
-              items={[
-                { label: "Vehicle ID", value: clean(vehicle.vehicle_id) },
-                { label: "Rego", value: clean(vehicle.vehicle_rego) },
-                { label: "Category", value: clean(vehicle.category) },
-                { label: "Make", value: clean(vehicle.make) },
-                { label: "Model", value: clean(vehicle.model) },
-                { label: "Year", value: clean(vehicle.year) },
-                { label: "Style", value: clean(vehicle.style) },
-                { label: "VIN / Chassis Number", value: clean(vehicle.vin_number) },
-                {
-                  label: "Status",
-                  value: (
-                    <StatusBadge
-                      label={clean(vehicle.status)}
-                      tone={getTone(vehicle.status)}
-                    />
-                  ),
-                },
-              ]}
-            />
+            <DetailGrid items={basicDetailItems} />
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -271,11 +370,36 @@ export default async function VehicleDetailPage({
                 items={[
                   { label: "Owner", value: clean(vehicle.owner) },
                   { label: "Rego Expiry", value: formatDate(vehicle.rego_expiry) },
+                  ...(isTrailer
+                    ? []
+                    : [
+                        {
+                          label: "Insurance Expiry",
+                          value: formatDate(vehicle.insurance_expiry),
+                        },
+                      ]),
                   {
-                    label: "Insurance Expiry",
-                    value: formatDate(vehicle.insurance_expiry),
+                    label: isTrailer ? "Next Inspection" : "Last Service",
+                    value: isTrailer
+                      ? formatDate(vehicle.next_inspection_due)
+                      : formatDate(vehicle.last_service),
                   },
-                  { label: "Last Service", value: formatDate(vehicle.last_service) },
+                  ...(!isTrailer
+                    ? [
+                        {
+                          label: "Next Service Due",
+                          value: formatDate(vehicle.next_service_due),
+                        },
+                        {
+                          label: "Next Service KM",
+                          value:
+                            vehicle.next_service_km === null ||
+                            vehicle.next_service_km === undefined
+                              ? "N/A"
+                              : `${vehicle.next_service_km.toLocaleString()} km`,
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </div>
@@ -313,23 +437,30 @@ export default async function VehicleDetailPage({
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">Vehicle Setup</h2>
+          {!isTrailer && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-950">
+                Vehicle Setup
+              </h2>
 
-            <div className="mt-5">
-              <DetailGrid
-                items={[
-                  { label: "eHub Fitted", value: yesNo(vehicle.ehub) },
-                  { label: "Dashcam Fitted", value: yesNo(vehicle.dashcam) },
-                  {
-                    label: "Alert Button Fitted",
-                    value: yesNo(vehicle.alert_button),
-                  },
-                  { label: "Fuel Card Issued", value: yesNo(vehicle.fuel_card) },
-                ]}
-              />
-            </div>
-          </section>
+              <div className="mt-5">
+                <DetailGrid
+                  items={[
+                    { label: "eHub Fitted", value: yesNo(vehicle.ehub) },
+                    { label: "Dashcam Fitted", value: yesNo(vehicle.dashcam) },
+                    {
+                      label: "Alert Button Fitted",
+                      value: yesNo(vehicle.alert_button),
+                    },
+                    {
+                      label: "Fuel Card Issued",
+                      value: yesNo(vehicle.fuel_card),
+                    },
+                  ]}
+                />
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="space-y-5">
@@ -341,7 +472,8 @@ export default async function VehicleDetailPage({
               <div>
                 <h2 className="text-lg font-bold text-slate-950">Documents</h2>
                 <p className="text-sm text-slate-600">
-                  Uploaded vehicle documents.
+                  Standard folders: Risk Assessment, Rego, Insurance, Service and
+                  Other.
                 </p>
               </div>
             </div>
@@ -372,7 +504,7 @@ export default async function VehicleDetailPage({
               <EmptyCard
                 icon={<FileText size={18} />}
                 title="No documents uploaded"
-                description="Registration, insurance, risk assessment, service history and other documents will appear here once attached."
+                description="Risk assessment, rego, insurance, service and other documents will appear here once attached."
               />
             )}
           </section>
@@ -384,19 +516,77 @@ export default async function VehicleDetailPage({
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
-                  Service History
+                  {isTrailer ? "Inspection History" : "Service History"}
                 </h2>
                 <p className="text-sm text-slate-600">
-                  Maintenance and service records.
+                  {isTrailer
+                    ? "Trailer inspections, defects and repairs."
+                    : "Vehicle services, repairs and invoice records."}
                 </p>
               </div>
             </div>
 
-            <EmptyCard
-              icon={<Wrench size={18} />}
-              title="Service history coming later"
-              description="Completed services, maintenance jobs, kilometres, next service due and repair notes will be shown here once the service module is connected."
-            />
+            {serviceHistory && serviceHistory.length > 0 ? (
+              <div className="space-y-3">
+                {serviceHistory.map((record) => (
+                  <div
+                    key={record.id}
+                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-950">
+                          {clean(record.service_type || record.inspection_type)}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatDate(record.service_date || record.inspection_date)}
+                        </p>
+                      </div>
+
+                      {record.document_url && (
+                        <a
+                          href={record.document_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700"
+                        >
+                          Invoice
+                        </a>
+                      )}
+                    </div>
+
+                    <p className="mt-3 text-sm text-slate-700">
+                      {clean(record.work_completed)}
+                    </p>
+
+                    {record.invoice_notes ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        {record.invoice_notes}
+                      </p>
+                    ) : null}
+
+                    <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                      <p>Supplier: {clean(record.supplier)}</p>
+                      <p>Invoice: {clean(record.invoice_number)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyCard
+                icon={<Wrench size={18} />}
+                title={
+                  isTrailer
+                    ? "No inspection history yet"
+                    : "No service history yet"
+                }
+                description={
+                  isTrailer
+                    ? "Trailer inspection records will appear here once asset updates are submitted."
+                    : "Service records, invoices, work completed and next service notes will appear here once asset updates are submitted."
+                }
+              />
+            )}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -417,7 +607,7 @@ export default async function VehicleDetailPage({
             <EmptyCard
               icon={<ClipboardCheck size={18} />}
               title="Prestart history coming later"
-              description="Daily vehicle checks, reported defects, driver comments and sign-offs will appear here once prestarts are added."
+              description="Daily checks, reported defects, driver comments and sign-offs will appear here once prestarts are added."
             />
           </section>
 
@@ -428,7 +618,7 @@ export default async function VehicleDetailPage({
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-950">Notes</h2>
-                <p className="text-sm text-slate-600">General vehicle notes.</p>
+                <p className="text-sm text-slate-600">General asset notes.</p>
               </div>
             </div>
 
