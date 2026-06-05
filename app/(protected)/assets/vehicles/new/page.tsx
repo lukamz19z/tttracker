@@ -27,6 +27,8 @@ type VehicleForm = {
   category: VehicleCategory;
   crew: string;
   project: string;
+  project_onboard_date: string;
+  company_onboard_date: string;
   status: VehicleStatus;
   year: string;
   style: string;
@@ -41,6 +43,8 @@ type VehicleForm = {
   off_hire_date: string;
   superseded_by: string;
   inactive_reason: string;
+  spare_key_provided: boolean;
+  spare_key_location: string;
   ehub: boolean;
   dashcam: boolean;
   alert_button: boolean;
@@ -107,6 +111,8 @@ const emptyVehicle: VehicleForm = {
   category: "",
   crew: "",
   project: "",
+  project_onboard_date: "",
+  company_onboard_date: "",
   status: "Available",
   year: "",
   style: "",
@@ -121,6 +127,8 @@ const emptyVehicle: VehicleForm = {
   off_hire_date: "",
   superseded_by: "",
   inactive_reason: "",
+  spare_key_provided: false,
+  spare_key_location: "",
   ehub: false,
   dashcam: false,
   alert_button: false,
@@ -401,6 +409,7 @@ export default function AddVehiclePage() {
       category: form.category || null,
       crew: form.crew.trim() || null,
       project: form.project.trim() || null,
+      company_onboard_date: form.company_onboard_date || null,
       status: form.status || null,
       year: form.year.trim() || null,
       style: isTrailer ? null : form.style.trim() || null,
@@ -417,6 +426,11 @@ export default function AddVehiclePage() {
         form.status === "Superseded" ? form.superseded_by.trim() || null : null,
       inactive_reason:
         form.status === "Inactive" ? form.inactive_reason.trim() || null : null,
+
+      spare_key_provided: form.spare_key_provided,
+      spare_key_location: form.spare_key_provided
+        ? form.spare_key_location.trim() || "Site Office"
+        : null,
 
       ehub: isTrailer ? false : form.ehub,
       dashcam: isTrailer ? false : form.dashcam,
@@ -448,6 +462,17 @@ export default function AddVehiclePage() {
     }
 
     try {
+      if (data?.id && form.project) {
+        await supabase.from("vehicle_project_history").insert({
+          vehicle_asset_id: data.id,
+          project: form.project.trim() || null,
+          crew: form.crew.trim() || null,
+          project_onboard_date: form.project_onboard_date || null,
+          project_offboard_date: null,
+          notes: "Initial project onboarding",
+        });
+      }
+
       if (data?.id && pendingDocuments.length > 0) {
         await uploadPendingDocuments(data.id);
       }
@@ -458,7 +483,7 @@ export default function AddVehiclePage() {
       setErrorMessage(
         documentError instanceof Error
           ? documentError.message
-          : "Vehicle saved, but one or more documents failed to upload.",
+          : "Vehicle saved, but one or more related records failed to save.",
       );
       setSaving(false);
     }
@@ -557,6 +582,28 @@ export default function AddVehiclePage() {
               placeholder="VIN / chassis number"
             />
 
+            <Field
+              label="Company Onboard Date"
+              type="date"
+              value={form.company_onboard_date}
+              onChange={(value) => updateField("company_onboard_date", value)}
+            />
+
+            <SelectField
+              label="Asset Status"
+              value={form.status}
+              onChange={(value) => updateField("status", value as VehicleStatus)}
+              options={vehicleStatuses}
+              placeholder="Select status"
+            />
+          </div>
+        </Section>
+
+        <Section
+          title="Project Allocation"
+          description="Set the current project and create the first project onboarding record."
+        >
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <SelectField
               label="Project Allocation"
               value={form.project}
@@ -573,12 +620,11 @@ export default function AddVehiclePage() {
               placeholder={loadingOptions ? "Loading crews..." : "Unallocated"}
             />
 
-            <SelectField
-              label="Asset Status"
-              value={form.status}
-              onChange={(value) => updateField("status", value as VehicleStatus)}
-              options={vehicleStatuses}
-              placeholder="Select status"
+            <Field
+              label="Project Onboard Date"
+              type="date"
+              value={form.project_onboard_date}
+              onChange={(value) => updateField("project_onboard_date", value)}
             />
           </div>
         </Section>
@@ -653,6 +699,34 @@ export default function AddVehiclePage() {
         </Section>
 
         <Section
+          title="Keys"
+          description="Track whether a spare key has been provided and where it is held."
+        >
+          <div className="space-y-4">
+            <CheckField
+              label="Spare key provided"
+              checked={form.spare_key_provided}
+              onChange={(value) => updateField("spare_key_provided", value)}
+            />
+
+            {form.spare_key_provided && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                Spare key must be handed into the site office.
+              </div>
+            )}
+
+            {form.spare_key_provided && (
+              <Field
+                label="Spare Key Location"
+                value={form.spare_key_location}
+                onChange={(value) => updateField("spare_key_location", value)}
+                placeholder="Site office, depot, project office..."
+              />
+            )}
+          </div>
+        </Section>
+
+        <Section
           title="Registration & Ownership"
           description={
             isTrailer
@@ -698,7 +772,7 @@ export default function AddVehiclePage() {
         {!isTrailer && (
           <Section
             title="Vehicle Setup"
-            description="Tick the required onboard systems and safety equipment fitted to the vehicle."
+            description="Tick the required onboard systems and safety equipment fitted at initial onboarding."
           >
             <div className="mb-4">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-500">

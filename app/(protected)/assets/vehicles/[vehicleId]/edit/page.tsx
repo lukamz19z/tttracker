@@ -32,6 +32,7 @@ type VehicleForm = {
   style: string;
   owner: string;
   vin_number: string;
+  company_onboard_date: string;
   last_service: string;
   rego_expiry: string;
   insurance_expiry: string;
@@ -41,19 +42,8 @@ type VehicleForm = {
   off_hire_date: string;
   superseded_by: string;
   inactive_reason: string;
-  ehub: boolean;
-  dashcam: boolean;
-  alert_button: boolean;
-  fuel_card: boolean;
-  reverse_squawker: boolean;
-  uhf_radio: boolean;
-  fire_extinguisher: boolean;
-  first_aid_kit: boolean;
-  snake_bite_kit: boolean;
-  wheel_nut_indicators: boolean;
-  wheel_chocks: boolean;
-  shovel: boolean;
-  knapsack: boolean;
+  spare_key_provided: boolean;
+  spare_key_location: string;
   notes: string;
 };
 
@@ -122,6 +112,7 @@ const emptyVehicle: VehicleForm = {
   style: "",
   owner: "",
   vin_number: "",
+  company_onboard_date: "",
   last_service: "",
   rego_expiry: "",
   insurance_expiry: "",
@@ -131,19 +122,8 @@ const emptyVehicle: VehicleForm = {
   off_hire_date: "",
   superseded_by: "",
   inactive_reason: "",
-  ehub: false,
-  dashcam: false,
-  alert_button: false,
-  fuel_card: false,
-  reverse_squawker: false,
-  uhf_radio: false,
-  fire_extinguisher: false,
-  first_aid_kit: false,
-  snake_bite_kit: false,
-  wheel_nut_indicators: false,
-  wheel_chocks: false,
-  shovel: false,
-  knapsack: false,
+  spare_key_provided: false,
+  spare_key_location: "",
   notes: "",
 };
 
@@ -316,7 +296,10 @@ export default function EditVehiclePage() {
             .from("crews")
             .select("id, crew_number, crew_name, leading_hand, active")
             .order("crew_number", { ascending: true }),
-          supabase.from("projects").select("id, name").order("name", { ascending: true }),
+          supabase
+            .from("projects")
+            .select("id, name")
+            .order("name", { ascending: true }),
         ]);
 
       if (cancelled) return;
@@ -341,6 +324,7 @@ export default function EditVehiclePage() {
           style: clean(vehicle.style),
           owner: clean(vehicle.owner),
           vin_number: clean(vehicle.vin_number),
+          company_onboard_date: toDateInput(vehicle.company_onboard_date),
           last_service: toDateInput(vehicle.last_service),
           rego_expiry: toDateInput(vehicle.rego_expiry),
           insurance_expiry: toDateInput(vehicle.insurance_expiry),
@@ -350,19 +334,8 @@ export default function EditVehiclePage() {
           off_hire_date: toDateInput(vehicle.off_hire_date),
           superseded_by: clean(vehicle.superseded_by),
           inactive_reason: clean(vehicle.inactive_reason),
-          ehub: Boolean(vehicle.ehub),
-          dashcam: Boolean(vehicle.dashcam),
-          alert_button: Boolean(vehicle.alert_button),
-          fuel_card: Boolean(vehicle.fuel_card),
-          reverse_squawker: Boolean(vehicle.reverse_squawker),
-          uhf_radio: Boolean(vehicle.uhf_radio),
-          fire_extinguisher: Boolean(vehicle.fire_extinguisher),
-          first_aid_kit: Boolean(vehicle.first_aid_kit),
-          snake_bite_kit: Boolean(vehicle.snake_bite_kit),
-          wheel_nut_indicators: Boolean(vehicle.wheel_nut_indicators),
-          wheel_chocks: Boolean(vehicle.wheel_chocks),
-          shovel: Boolean(vehicle.shovel),
-          knapsack: Boolean(vehicle.knapsack),
+          spare_key_provided: Boolean(vehicle.spare_key_provided),
+          spare_key_location: clean(vehicle.spare_key_location),
           notes: clean(vehicle.notes),
         });
       }
@@ -526,6 +499,7 @@ export default function EditVehiclePage() {
       style: isTrailer ? null : form.style.trim() || null,
       owner: form.owner.trim() || null,
       vin_number: form.vin_number.trim() || null,
+      company_onboard_date: form.company_onboard_date || null,
       last_service: isTrailer ? null : form.last_service || null,
       rego_expiry: form.rego_expiry || null,
       insurance_expiry: isTrailer ? null : form.insurance_expiry || null,
@@ -537,21 +511,10 @@ export default function EditVehiclePage() {
         form.status === "Superseded" ? form.superseded_by.trim() || null : null,
       inactive_reason:
         form.status === "Inactive" ? form.inactive_reason.trim() || null : null,
-
-      ehub: isTrailer ? false : form.ehub,
-      dashcam: isTrailer ? false : form.dashcam,
-      alert_button: isTrailer ? false : form.alert_button,
-      fuel_card: isTrailer ? false : form.fuel_card,
-      reverse_squawker: isTrailer ? false : form.reverse_squawker,
-      uhf_radio: isTrailer ? false : form.uhf_radio,
-      fire_extinguisher: isTrailer ? false : form.fire_extinguisher,
-      first_aid_kit: isTrailer ? false : form.first_aid_kit,
-      snake_bite_kit: isTrailer ? false : form.snake_bite_kit,
-      wheel_nut_indicators: isTrailer ? false : form.wheel_nut_indicators,
-      wheel_chocks: isTrailer ? false : form.wheel_chocks,
-      shovel: isTrailer ? false : form.shovel,
-      knapsack: isTrailer ? false : form.knapsack,
-
+      spare_key_provided: form.spare_key_provided,
+      spare_key_location: form.spare_key_provided
+        ? form.spare_key_location.trim() || "Site Office"
+        : null,
       notes: form.notes.trim() || null,
     };
 
@@ -592,7 +555,7 @@ export default function EditVehiclePage() {
             ? "Edit Vehicle"
             : `Edit Vehicle: ${form.vehicle_id || form.vehicle_rego || vehicleId}`
         }
-        description="Update vehicle details, allocation, hire status, onboard setup, documents and notes."
+        description="Edit core asset details, allocation, ownership, documents and notes. Equipment additions are managed through Update Asset."
         actions={
           <Link
             href="/assets/vehicles"
@@ -613,7 +576,7 @@ export default function EditVehiclePage() {
 
         <Section
           title="Basic Vehicle Details"
-          description="Main vehicle identification and register information."
+          description="Core identification details for the asset."
         >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field
@@ -680,6 +643,28 @@ export default function EditVehiclePage() {
               placeholder="VIN / chassis number"
             />
 
+            <Field
+              label="Company Onboard Date"
+              type="date"
+              value={form.company_onboard_date}
+              onChange={(value) => updateField("company_onboard_date", value)}
+            />
+
+            <SelectField
+              label="Asset Status"
+              value={form.status}
+              onChange={(value) => updateField("status", value as VehicleStatus)}
+              options={vehicleStatuses}
+              placeholder="Select status"
+            />
+          </div>
+        </Section>
+
+        <Section
+          title="Current Allocation"
+          description="Current project and crew allocation. Project movement history should be recorded through Update Asset."
+        >
+          <div className="grid gap-4 md:grid-cols-2">
             <SelectField
               label="Project Allocation"
               value={form.project}
@@ -694,14 +679,6 @@ export default function EditVehiclePage() {
               onChange={(value) => updateField("crew", value)}
               options={crewOptions}
               placeholder={loadingOptions ? "Loading crews..." : "Unallocated"}
-            />
-
-            <SelectField
-              label="Asset Status"
-              value={form.status}
-              onChange={(value) => updateField("status", value as VehicleStatus)}
-              options={vehicleStatuses}
-              placeholder="Select status"
             />
           </div>
         </Section>
@@ -776,6 +753,34 @@ export default function EditVehiclePage() {
         </Section>
 
         <Section
+          title="Keys"
+          description="Track whether a spare key has been provided and where it is held."
+        >
+          <div className="space-y-4">
+            <CheckField
+              label="Spare key provided"
+              checked={form.spare_key_provided}
+              onChange={(value) => updateField("spare_key_provided", value)}
+            />
+
+            {form.spare_key_provided && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                Spare key must be handed into the site office.
+              </div>
+            )}
+
+            {form.spare_key_provided && (
+              <Field
+                label="Spare Key Location"
+                value={form.spare_key_location}
+                onChange={(value) => updateField("spare_key_location", value)}
+                placeholder="Site office, depot, project office..."
+              />
+            )}
+          </div>
+        </Section>
+
+        <Section
           title="Registration & Ownership"
           description={
             isTrailer
@@ -817,109 +822,6 @@ export default function EditVehiclePage() {
             )}
           </div>
         </Section>
-
-        {!isTrailer && (
-          <Section
-            title="Vehicle Setup"
-            description="Tick the required onboard systems and safety equipment fitted to the vehicle."
-          >
-            <div className="mb-4">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Electronic Systems
-              </p>
-
-              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <CheckField
-                  label="eHub fitted"
-                  checked={form.ehub}
-                  onChange={(value) => updateField("ehub", value)}
-                />
-
-                <CheckField
-                  label="Dashcam fitted"
-                  checked={form.dashcam}
-                  onChange={(value) => updateField("dashcam", value)}
-                />
-
-                <CheckField
-                  label="Alert button fitted"
-                  checked={form.alert_button}
-                  onChange={(value) => updateField("alert_button", value)}
-                />
-
-                <CheckField
-                  label="UHF radio fitted"
-                  checked={form.uhf_radio}
-                  onChange={(value) => updateField("uhf_radio", value)}
-                />
-
-                <CheckField
-                  label="Reverse squawker fitted"
-                  checked={form.reverse_squawker}
-                  onChange={(value) => updateField("reverse_squawker", value)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                Safety Equipment
-              </p>
-
-              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <CheckField
-                  label="Fire extinguisher"
-                  checked={form.fire_extinguisher}
-                  onChange={(value) => updateField("fire_extinguisher", value)}
-                />
-
-                <CheckField
-                  label="First aid kit"
-                  checked={form.first_aid_kit}
-                  onChange={(value) => updateField("first_aid_kit", value)}
-                />
-
-                <CheckField
-                  label="Snake bite kit"
-                  checked={form.snake_bite_kit}
-                  onChange={(value) => updateField("snake_bite_kit", value)}
-                />
-
-                <CheckField
-                  label="Wheel nut indicators"
-                  checked={form.wheel_nut_indicators}
-                  onChange={(value) =>
-                    updateField("wheel_nut_indicators", value)
-                  }
-                />
-
-                <CheckField
-                  label="Wheel chocks"
-                  checked={form.wheel_chocks}
-                  onChange={(value) => updateField("wheel_chocks", value)}
-                />
-
-                <CheckField
-                  label="Shovel"
-                  checked={form.shovel}
-                  onChange={(value) => updateField("shovel", value)}
-                />
-
-                <CheckField
-                  label="Knapsack"
-                  checked={form.knapsack}
-                  onChange={(value) => updateField("knapsack", value)}
-                />
-
-                <CheckField
-                  label="Fuel card issued"
-                  checked={form.fuel_card}
-                  onChange={(value) => updateField("fuel_card", value)}
-                />
-              </div>
-            </div>
-          </Section>
-        )}
 
         <Section
           title="Documents"
