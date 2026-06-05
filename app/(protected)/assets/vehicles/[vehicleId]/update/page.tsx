@@ -1,5 +1,3 @@
-
-
 "use client";
 
 import Link from "next/link";
@@ -9,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell, StatusBadge } from "../../../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue"  | "slate";
+type Tone = "emerald" | "amber" | "rose" | "blue" | "slate";
 
 type VehicleAsset = {
   id: string;
@@ -32,31 +30,29 @@ type VehicleAsset = {
 type UpdateForm = {
   service_date: string;
   inspection_date: string;
-
   odometer_km: string;
   next_service_km: string;
-
   service_type: string;
   inspection_type: string;
-
   supplier: string;
   invoice_number: string;
   invoice_cost: string;
-
   work_completed: string;
+  mechanic_recommendations: string;
+  follow_up_actions: string;
   invoice_notes: string;
-
   next_service_due: string;
   next_inspection_due: string;
-
   status_after_update: string;
-
+  inspection_outcome: string;
   trailer_registration_checked: boolean;
   trailer_tyres_checked: boolean;
   trailer_brakes_checked: boolean;
   trailer_lights_checked: boolean;
   trailer_coupling_checked: boolean;
   trailer_chains_checked: boolean;
+  trailer_roadworthy: boolean;
+  trailer_safe_for_use: boolean;
   trailer_defects_found: boolean;
   trailer_defect_notes: string;
 };
@@ -64,31 +60,29 @@ type UpdateForm = {
 const emptyForm: UpdateForm = {
   service_date: "",
   inspection_date: "",
-
   odometer_km: "",
   next_service_km: "",
-
   service_type: "",
   inspection_type: "",
-
   supplier: "",
   invoice_number: "",
   invoice_cost: "",
-
   work_completed: "",
+  mechanic_recommendations: "",
+  follow_up_actions: "",
   invoice_notes: "",
-
   next_service_due: "",
   next_inspection_due: "",
-
   status_after_update: "Available",
-
+  inspection_outcome: "",
   trailer_registration_checked: false,
   trailer_tyres_checked: false,
   trailer_brakes_checked: false,
   trailer_lights_checked: false,
   trailer_coupling_checked: false,
   trailer_chains_checked: false,
+  trailer_roadworthy: false,
+  trailer_safe_for_use: false,
   trailer_defects_found: false,
   trailer_defect_notes: "",
 };
@@ -114,10 +108,13 @@ const trailerInspectionTypes = [
   "Other",
 ];
 
+const inspectionOutcomes = ["Passed", "Passed With Defects", "Failed"];
+
 const statusOptions = [
   "Available",
   "In Use",
   "Under Maintenance",
+  "Off Site",
   "Off Hire",
   "Inactive",
 ];
@@ -133,17 +130,30 @@ function display(value: string | null | undefined) {
 function makeModel(vehicle: VehicleAsset | null) {
   if (!vehicle) return "N/A";
 
-  return [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ") || "N/A";
+  return (
+    [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ") || "N/A"
+  );
 }
 
 function toNumber(value: string) {
   const cleaned = value.trim();
-
   if (!cleaned) return null;
 
   const number = Number(cleaned);
-
   return Number.isFinite(number) ? number : null;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "N/A";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+
+  return date.toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function getTone(status: string | null | undefined): Tone {
@@ -306,7 +316,13 @@ function Section({
   );
 }
 
-function SummaryItem({ label, value }: { label: string; value: React.ReactNode }) {
+function SummaryItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
       <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
@@ -385,6 +401,17 @@ export default function UpdateVehiclePage() {
 
   const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
 
+  const kmUntilNextService = useMemo(() => {
+    const currentKm = toNumber(form.odometer_km);
+    const nextKm = toNumber(form.next_service_km);
+
+    if (currentKm === null || nextKm === null) return "N/A";
+
+    const remaining = nextKm - currentKm;
+
+    return `${remaining.toLocaleString()} km`;
+  }, [form.odometer_km, form.next_service_km]);
+
   function updateField<K extends keyof UpdateForm>(
     key: K,
     value: UpdateForm[K],
@@ -462,12 +489,16 @@ export default function UpdateVehiclePage() {
       invoice_cost: toNumber(form.invoice_cost),
 
       work_completed: form.work_completed.trim() || null,
+      mechanic_recommendations: form.mechanic_recommendations.trim() || null,
+      follow_up_actions: form.follow_up_actions.trim() || null,
       invoice_notes: form.invoice_notes.trim() || null,
 
       next_service_due: isTrailer ? null : form.next_service_due || null,
       next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
 
       status_after_update: form.status_after_update || null,
+
+      inspection_outcome: isTrailer ? form.inspection_outcome || null : null,
 
       trailer_registration_checked: isTrailer
         ? form.trailer_registration_checked
@@ -477,6 +508,8 @@ export default function UpdateVehiclePage() {
       trailer_lights_checked: isTrailer ? form.trailer_lights_checked : false,
       trailer_coupling_checked: isTrailer ? form.trailer_coupling_checked : false,
       trailer_chains_checked: isTrailer ? form.trailer_chains_checked : false,
+      trailer_roadworthy: isTrailer ? form.trailer_roadworthy : false,
+      trailer_safe_for_use: isTrailer ? form.trailer_safe_for_use : false,
       trailer_defects_found: isTrailer ? form.trailer_defects_found : false,
       trailer_defect_notes: isTrailer
         ? form.trailer_defect_notes.trim() || null
@@ -546,11 +579,7 @@ export default function UpdateVehiclePage() {
     <PageShell>
       <PageHeader
         eyebrow={isTrailer ? "Trailer Update" : "Vehicle Update"}
-        title={
-          loading
-            ? "Update Asset"
-            : `Update ${display(vehicle?.vehicle_id)}`
-        }
+        title={loading ? "Update Asset" : `Update ${display(vehicle?.vehicle_id)}`}
         description={
           isTrailer
             ? "Record trailer inspections, defects, repairs and next inspection requirements."
@@ -608,10 +637,27 @@ export default function UpdateVehiclePage() {
             label={isTrailer ? "Next Inspection" : "Next Service"}
             value={
               isTrailer
-                ? display(vehicle?.next_inspection_due)
-                : display(vehicle?.next_service_due)
+                ? formatDate(vehicle?.next_inspection_due)
+                : formatDate(vehicle?.next_service_due)
             }
           />
+          {!isTrailer && (
+            <>
+              <SummaryItem
+                label="Last Service"
+                value={formatDate(vehicle?.last_service)}
+              />
+              <SummaryItem
+                label="Next Service KM"
+                value={
+                  vehicle?.next_service_km === null ||
+                  vehicle?.next_service_km === undefined
+                    ? "N/A"
+                    : `${vehicle.next_service_km.toLocaleString()} km`
+                }
+              />
+            </>
+          )}
         </div>
       </section>
 
@@ -637,6 +683,13 @@ export default function UpdateVehiclePage() {
                   onChange={(value) => updateField("inspection_type", value)}
                   options={trailerInspectionTypes}
                   required
+                />
+
+                <SelectField
+                  label="Inspection Outcome"
+                  value={form.inspection_outcome}
+                  onChange={(value) => updateField("inspection_outcome", value)}
+                  options={inspectionOutcomes}
                 />
 
                 <Field
@@ -669,7 +722,7 @@ export default function UpdateVehiclePage() {
                 />
 
                 <SelectField
-                  label="Status After Update"
+                  label="Asset Availability"
                   value={form.status_after_update}
                   onChange={(value) => updateField("status_after_update", value)}
                   options={statusOptions}
@@ -728,6 +781,18 @@ export default function UpdateVehiclePage() {
                   onChange={(value) =>
                     updateField("trailer_chains_checked", value)
                   }
+                />
+
+                <CheckField
+                  label="Roadworthy"
+                  checked={form.trailer_roadworthy}
+                  onChange={(value) => updateField("trailer_roadworthy", value)}
+                />
+
+                <CheckField
+                  label="Safe for use"
+                  checked={form.trailer_safe_for_use}
+                  onChange={(value) => updateField("trailer_safe_for_use", value)}
                 />
 
                 <CheckField
@@ -820,8 +885,14 @@ export default function UpdateVehiclePage() {
                 placeholder="Next service km"
               />
 
+              <Field
+                label="KM Until Next Service"
+                value={kmUntilNextService}
+                onChange={() => undefined}
+              />
+
               <SelectField
-                label="Status After Update"
+                label="Asset Availability"
                 value={form.status_after_update}
                 onChange={(value) => updateField("status_after_update", value)}
                 options={statusOptions}
@@ -848,6 +919,29 @@ export default function UpdateVehiclePage() {
         </Section>
 
         <Section
+          title="Recommendations & Follow Up"
+          description="Capture what still needs attention after this update."
+        >
+          <div className="grid gap-4 md:grid-cols-2">
+            <TextAreaField
+              label="Mechanic Recommendations"
+              value={form.mechanic_recommendations}
+              onChange={(value) =>
+                updateField("mechanic_recommendations", value)
+              }
+              placeholder="Recommendations, monitoring items, parts to order..."
+            />
+
+            <TextAreaField
+              label="Follow Up Actions"
+              value={form.follow_up_actions}
+              onChange={(value) => updateField("follow_up_actions", value)}
+              placeholder="Actions required, responsible person, due date..."
+            />
+          </div>
+        </Section>
+
+        <Section
           title="Invoice / Service Notes"
           description="Digitise important notes from the invoice, report or mechanic."
         >
@@ -855,7 +949,7 @@ export default function UpdateVehiclePage() {
             label="Invoice Notes"
             value={form.invoice_notes}
             onChange={(value) => updateField("invoice_notes", value)}
-            placeholder="Add invoice notes, defects, parts replaced, recommendations or follow-up actions..."
+            placeholder="Invoice notes, parts replaced, restrictions, warranty notes..."
           />
         </Section>
 
