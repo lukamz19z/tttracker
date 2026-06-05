@@ -5,6 +5,7 @@ import {
   ClipboardCheck,
   FileText,
   Pencil,
+  ShieldCheck,
   Wrench,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
@@ -48,6 +49,15 @@ type VehicleAsset = {
   dashcam: boolean | null;
   alert_button: boolean | null;
   fuel_card: boolean | null;
+  reverse_squawker: boolean | null;
+  uhf_radio: boolean | null;
+  fire_extinguisher: boolean | null;
+  first_aid_kit: boolean | null;
+  snake_bite_kit: boolean | null;
+  wheel_nut_indicators: boolean | null;
+  wheel_chocks: boolean | null;
+  shovel: boolean | null;
+  knapsack: boolean | null;
   notes: string | null;
   created_at: string | null;
 };
@@ -72,6 +82,8 @@ type ServiceHistory = {
   invoice_number: string | null;
   invoice_cost: number | null;
   work_completed: string | null;
+  mechanic_recommendations: string | null;
+  follow_up_actions: string | null;
   invoice_notes: string | null;
   next_service_due: string | null;
   next_inspection_due: string | null;
@@ -108,6 +120,7 @@ function getTone(status: string | null | undefined): Tone {
 
   if (value === "Available" || value === "Active") return "emerald";
   if (value === "In Use" || value === "On Hire") return "blue";
+
   if (
     value === "Off Hire" ||
     value === "Inactive" ||
@@ -166,6 +179,31 @@ function EmptyCard({
       </div>
       <p className="font-bold text-slate-800">{title}</p>
       <p className="mt-1">{description}</p>
+    </div>
+  );
+}
+
+function SetupItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: boolean | null | undefined;
+}) {
+  const isFitted = value === true;
+
+  return (
+    <div
+      className={`rounded-xl border p-3 ${
+        isFitted
+          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+          : "border-rose-200 bg-rose-50 text-rose-800"
+      }`}
+    >
+      <p className="text-xs font-bold uppercase tracking-wide opacity-70">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-black">{isFitted ? "Fitted" : "Missing"}</p>
     </div>
   );
 }
@@ -258,7 +296,7 @@ export default async function VehicleDetailPage({
       <PageHeader
         eyebrow="Vehicle Record"
         title={vehicleTitle}
-        description="Full asset profile with registration, allocation, documents, service history and future prestart history."
+        description="Full asset profile with registration, allocation, setup, documents, service history, modification history and future prestart history."
         actions={
           <>
             <ActionButton
@@ -287,9 +325,7 @@ export default async function VehicleDetailPage({
                 <Calendar size={18} />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-slate-950">
-                  Key Dates
-                </h2>
+                <h2 className="text-lg font-bold text-slate-950">Key Dates</h2>
                 <p className="text-sm text-slate-600">
                   Important expiry and service information.
                 </p>
@@ -439,25 +475,61 @@ export default async function VehicleDetailPage({
 
           {!isTrailer && (
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-950">
-                Vehicle Setup
-              </h2>
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                  <ShieldCheck size={18} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">
+                    Vehicle Setup & Compliance Equipment
+                  </h2>
+                  <p className="text-sm text-slate-600">
+                    Required onboard systems and safety equipment for LVs and HVs.
+                  </p>
+                </div>
+              </div>
 
-              <div className="mt-5">
-                <DetailGrid
-                  items={[
-                    { label: "eHub Fitted", value: yesNo(vehicle.ehub) },
-                    { label: "Dashcam Fitted", value: yesNo(vehicle.dashcam) },
-                    {
-                      label: "Alert Button Fitted",
-                      value: yesNo(vehicle.alert_button),
-                    },
-                    {
-                      label: "Fuel Card Issued",
-                      value: yesNo(vehicle.fuel_card),
-                    },
-                  ]}
-                />
+              <div className="space-y-5">
+                <div>
+                  <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Electronic Systems
+                  </p>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <SetupItem label="eHub" value={vehicle.ehub} />
+                    <SetupItem label="Dashcam" value={vehicle.dashcam} />
+                    <SetupItem label="Alert Button" value={vehicle.alert_button} />
+                    <SetupItem label="UHF Radio" value={vehicle.uhf_radio} />
+                    <SetupItem
+                      label="Reverse Squawker"
+                      value={vehicle.reverse_squawker}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Safety Equipment
+                  </p>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <SetupItem
+                      label="Fire Extinguisher"
+                      value={vehicle.fire_extinguisher}
+                    />
+                    <SetupItem label="First Aid Kit" value={vehicle.first_aid_kit} />
+                    <SetupItem
+                      label="Snake Bite Kit"
+                      value={vehicle.snake_bite_kit}
+                    />
+                    <SetupItem
+                      label="Wheel Nut Indicators"
+                      value={vehicle.wheel_nut_indicators}
+                    />
+                    <SetupItem label="Wheel Chocks" value={vehicle.wheel_chocks} />
+                    <SetupItem label="Shovel" value={vehicle.shovel} />
+                    <SetupItem label="Knapsack" value={vehicle.knapsack} />
+                    <SetupItem label="Fuel Card" value={vehicle.fuel_card} />
+                  </div>
+                </div>
               </div>
             </section>
           )}
@@ -472,8 +544,8 @@ export default async function VehicleDetailPage({
               <div>
                 <h2 className="text-lg font-bold text-slate-950">Documents</h2>
                 <p className="text-sm text-slate-600">
-                  Standard folders: Risk Assessment, Rego, Insurance, Service and
-                  Other.
+                  Standard folders: Risk Assessment, Rego, Insurance, Service,
+                  Project Documents, Pictures and Other.
                 </p>
               </div>
             </div>
@@ -504,7 +576,7 @@ export default async function VehicleDetailPage({
               <EmptyCard
                 icon={<FileText size={18} />}
                 title="No documents uploaded"
-                description="Risk assessment, rego, insurance, service and other documents will appear here once attached."
+                description="Risk assessment, rego, insurance, service, project documents, pictures and other documents will appear here once attached."
               />
             )}
           </section>
@@ -516,12 +588,10 @@ export default async function VehicleDetailPage({
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
-                  {isTrailer ? "Inspection History" : "Service History"}
+                  {isTrailer ? "Inspection / Update History" : "Service / Update History"}
                 </h2>
                 <p className="text-sm text-slate-600">
-                  {isTrailer
-                    ? "Trailer inspections, defects and repairs."
-                    : "Vehicle services, repairs and invoice records."}
+                  Service records, inspection records, modifications and additions.
                 </p>
               </div>
             </div>
@@ -536,10 +606,18 @@ export default async function VehicleDetailPage({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-bold text-slate-950">
-                          {clean(record.service_type || record.inspection_type)}
+                          {clean(
+                            record.service_type ||
+                              record.inspection_type ||
+                              record.record_type,
+                          )}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {formatDate(record.service_date || record.inspection_date)}
+                          {formatDate(
+                            record.service_date ||
+                              record.inspection_date ||
+                              record.created_at,
+                          )}
                         </p>
                       </div>
 
@@ -550,7 +628,7 @@ export default async function VehicleDetailPage({
                           rel="noreferrer"
                           className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700"
                         >
-                          Invoice
+                          Attachment
                         </a>
                       )}
                     </div>
@@ -559,9 +637,21 @@ export default async function VehicleDetailPage({
                       {clean(record.work_completed)}
                     </p>
 
+                    {record.mechanic_recommendations ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Recommendations: {record.mechanic_recommendations}
+                      </p>
+                    ) : null}
+
+                    {record.follow_up_actions ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Follow up: {record.follow_up_actions}
+                      </p>
+                    ) : null}
+
                     {record.invoice_notes ? (
                       <p className="mt-2 text-xs text-slate-500">
-                        {record.invoice_notes}
+                        Notes: {record.invoice_notes}
                       </p>
                     ) : null}
 
@@ -575,16 +665,8 @@ export default async function VehicleDetailPage({
             ) : (
               <EmptyCard
                 icon={<Wrench size={18} />}
-                title={
-                  isTrailer
-                    ? "No inspection history yet"
-                    : "No service history yet"
-                }
-                description={
-                  isTrailer
-                    ? "Trailer inspection records will appear here once asset updates are submitted."
-                    : "Service records, invoices, work completed and next service notes will appear here once asset updates are submitted."
-                }
+                title="No update history yet"
+                description="Services, inspections, modifications, additions, invoices and follow-up actions will appear here once asset updates are submitted."
               />
             )}
           </section>
