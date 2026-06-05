@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, FileText, FileUp, Save, Trash2, X } from "lucide-react";
+import { ArrowLeft, FileUp, Save, Trash2, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell } from "../../../components";
@@ -45,6 +45,15 @@ type VehicleForm = {
   dashcam: boolean;
   alert_button: boolean;
   fuel_card: boolean;
+  reverse_squawker: boolean;
+  uhf_radio: boolean;
+  fire_extinguisher: boolean;
+  first_aid_kit: boolean;
+  snake_bite_kit: boolean;
+  wheel_nut_indicators: boolean;
+  wheel_chocks: boolean;
+  shovel: boolean;
+  knapsack: boolean;
   notes: string;
 };
 
@@ -90,11 +99,14 @@ const vehicleStatuses: VehicleStatus[] = [
   "Inactive",
 ];
 
-const baseDocumentTypes = [
+const documentTypes = [
   "Risk Assessment",
-  "Registration Document",
-  "Insurance Document",
-  "Service History",
+  "Rego",
+  "Insurance",
+  "Service",
+  "Project Documents",
+  "Pictures",
+  "Other",
 ];
 
 const emptyVehicle: VehicleForm = {
@@ -123,6 +135,15 @@ const emptyVehicle: VehicleForm = {
   dashcam: false,
   alert_button: false,
   fuel_card: false,
+  reverse_squawker: false,
+  uhf_radio: false,
+  fire_extinguisher: false,
+  first_aid_kit: false,
+  snake_bite_kit: false,
+  wheel_nut_indicators: false,
+  wheel_chocks: false,
+  shovel: false,
+  knapsack: false,
   notes: "",
 };
 
@@ -133,43 +154,6 @@ function clean(value: string | null | undefined) {
 function toDateInput(value: string | null | undefined) {
   if (!value) return "";
   return value.slice(0, 10);
-}
-
-function getDocumentTypesForVehicle(category: string) {
-  const type = clean(category).toLowerCase();
-
-  if (type === "light vehicle") {
-    return [
-      ...baseDocumentTypes,
-      "eHub Document",
-      "Dashcam Document",
-      "Fuel Card Document",
-      "Other Documents",
-    ];
-  }
-
-  if (type === "heavy vehicle") {
-    return [
-      ...baseDocumentTypes,
-      "NHVR / Heavy Vehicle Document",
-      "Maintenance Document",
-      "eHub Document",
-      "Dashcam Document",
-      "Fuel Card Document",
-      "Other Documents",
-    ];
-  }
-
-  if (type === "trailer") {
-    return [
-      ...baseDocumentTypes,
-      "Trailer Inspection Document",
-      "Maintenance Document",
-      "Other Documents",
-    ];
-  }
-
-  return [...baseDocumentTypes, "Other Documents"];
 }
 
 function Field({
@@ -311,6 +295,8 @@ export default function EditVehiclePage() {
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  const isTrailer = clean(form.category).toLowerCase() === "trailer";
+
   useEffect(() => {
     let cancelled = false;
 
@@ -330,10 +316,7 @@ export default function EditVehiclePage() {
             .from("crews")
             .select("id, crew_number, crew_name, leading_hand, active")
             .order("crew_number", { ascending: true }),
-          supabase
-            .from("projects")
-            .select("id, name")
-            .order("name", { ascending: true }),
+          supabase.from("projects").select("id, name").order("name", { ascending: true }),
         ]);
 
       if (cancelled) return;
@@ -371,6 +354,15 @@ export default function EditVehiclePage() {
           dashcam: Boolean(vehicle.dashcam),
           alert_button: Boolean(vehicle.alert_button),
           fuel_card: Boolean(vehicle.fuel_card),
+          reverse_squawker: Boolean(vehicle.reverse_squawker),
+          uhf_radio: Boolean(vehicle.uhf_radio),
+          fire_extinguisher: Boolean(vehicle.fire_extinguisher),
+          first_aid_kit: Boolean(vehicle.first_aid_kit),
+          snake_bite_kit: Boolean(vehicle.snake_bite_kit),
+          wheel_nut_indicators: Boolean(vehicle.wheel_nut_indicators),
+          wheel_chocks: Boolean(vehicle.wheel_chocks),
+          shovel: Boolean(vehicle.shovel),
+          knapsack: Boolean(vehicle.knapsack),
           notes: clean(vehicle.notes),
         });
       }
@@ -426,12 +418,6 @@ export default function EditVehiclePage() {
     return options;
   }, [projects, form.project]);
 
-  const documentTypes = useMemo(() => {
-    return getDocumentTypesForVehicle(form.category);
-  }, [form.category]);
-
-  const isTrailer = clean(form.category).toLowerCase() === "trailer";
-
   function updateField<K extends keyof VehicleForm>(
     key: K,
     value: VehicleForm[K],
@@ -462,8 +448,12 @@ export default function EditVehiclePage() {
 
   async function uploadPendingDocuments() {
     for (const document of pendingDocuments) {
+      const safeDocumentType = document.documentType.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_",
+      );
       const safeFileName = document.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const filePath = `${vehicleId}/${Date.now()}-${safeFileName}`;
+      const filePath = `${vehicleId}/${safeDocumentType}/${Date.now()}-${safeFileName}`;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from("vehicle_documents")
@@ -502,9 +492,7 @@ export default function EditVehiclePage() {
     if (!confirmed) return;
 
     if (document.storage_path) {
-      await supabase.storage
-        .from("vehicle_documents")
-        .remove([document.storage_path]);
+      await supabase.storage.from("vehicle_documents").remove([document.storage_path]);
     }
 
     const { error } = await supabase
@@ -535,12 +523,12 @@ export default function EditVehiclePage() {
       crew: form.crew.trim() || null,
       status: form.status || null,
       year: form.year.trim() || null,
-      style: form.style.trim() || null,
+      style: isTrailer ? null : form.style.trim() || null,
       owner: form.owner.trim() || null,
       vin_number: form.vin_number.trim() || null,
-      last_service: form.last_service || null,
+      last_service: isTrailer ? null : form.last_service || null,
       rego_expiry: form.rego_expiry || null,
-      insurance_expiry: form.insurance_expiry || null,
+      insurance_expiry: isTrailer ? null : form.insurance_expiry || null,
       hired: form.hired,
       hired_from: form.hired ? form.hired_from.trim() || null : null,
       hire_term: form.hired ? form.hire_term.trim() || null : null,
@@ -549,10 +537,21 @@ export default function EditVehiclePage() {
         form.status === "Superseded" ? form.superseded_by.trim() || null : null,
       inactive_reason:
         form.status === "Inactive" ? form.inactive_reason.trim() || null : null,
-      ehub: form.category === "Trailer" ? false : form.ehub,
-      dashcam: form.category === "Trailer" ? false : form.dashcam,
-      alert_button: form.category === "Trailer" ? false : form.alert_button,
-      fuel_card: form.category === "Trailer" ? false : form.fuel_card,
+
+      ehub: isTrailer ? false : form.ehub,
+      dashcam: isTrailer ? false : form.dashcam,
+      alert_button: isTrailer ? false : form.alert_button,
+      fuel_card: isTrailer ? false : form.fuel_card,
+      reverse_squawker: isTrailer ? false : form.reverse_squawker,
+      uhf_radio: isTrailer ? false : form.uhf_radio,
+      fire_extinguisher: isTrailer ? false : form.fire_extinguisher,
+      first_aid_kit: isTrailer ? false : form.first_aid_kit,
+      snake_bite_kit: isTrailer ? false : form.snake_bite_kit,
+      wheel_nut_indicators: isTrailer ? false : form.wheel_nut_indicators,
+      wheel_chocks: isTrailer ? false : form.wheel_chocks,
+      shovel: isTrailer ? false : form.shovel,
+      knapsack: isTrailer ? false : form.knapsack,
+
       notes: form.notes.trim() || null,
     };
 
@@ -594,13 +593,13 @@ export default function EditVehiclePage() {
             : `Edit Vehicle: ${form.vehicle_id || form.vehicle_rego || vehicleId}`
         }
         description="Update vehicle details, allocation, hire status, onboard setup, documents and notes."
-actions={
-  <Link
-    href="/assets/vehicles"
+        actions={
+          <Link
+            href="/assets/vehicles"
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             <ArrowLeft size={16} />
-            Back to Register
+            Back to Vehicles
           </Link>
         }
       />
@@ -646,14 +645,16 @@ actions={
               label="Make"
               value={form.make}
               onChange={(value) => updateField("make", value)}
-              placeholder="Toyota"
+              placeholder={isTrailer ? "Freighter, Vawdrey..." : "Toyota, Isuzu..."}
             />
 
             <Field
               label="Model"
               value={form.model}
               onChange={(value) => updateField("model", value)}
-              placeholder="Hilux"
+              placeholder={
+                isTrailer ? "Semi trailer, dog trailer..." : "Hilux, D-Max..."
+              }
             />
 
             <Field
@@ -663,12 +664,14 @@ actions={
               placeholder="2023"
             />
 
-            <Field
-              label="Style"
-              value={form.style}
-              onChange={(value) => updateField("style", value)}
-              placeholder="Dual cab, prime mover, trailer"
-            />
+            {!isTrailer && (
+              <Field
+                label="Style"
+                value={form.style}
+                onChange={(value) => updateField("style", value)}
+                placeholder="Dual cab, prime mover, service truck"
+              />
+            )}
 
             <Field
               label="VIN / Chassis Number"
@@ -694,7 +697,7 @@ actions={
             />
 
             <SelectField
-              label="Vehicle Status"
+              label="Asset Status"
               value={form.status}
               onChange={(value) => updateField("status", value as VehicleStatus)}
               options={vehicleStatuses}
@@ -743,11 +746,11 @@ actions={
 
         <Section
           title="Hire Details"
-          description="Only complete this section if the vehicle or trailer is hired."
+          description="Only complete this section if the asset is hired."
         >
           <div className="space-y-4">
             <CheckField
-              label="This vehicle is hired"
+              label="This asset is hired"
               checked={form.hired}
               onChange={(value) => updateField("hired", value)}
             />
@@ -774,7 +777,11 @@ actions={
 
         <Section
           title="Registration & Ownership"
-          description="Registration, insurance, service and ownership details."
+          description={
+            isTrailer
+              ? "Trailers generally only need owner and registration details here."
+              : "Registration, insurance, service and ownership details."
+          }
         >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field
@@ -791,58 +798,132 @@ actions={
               onChange={(value) => updateField("rego_expiry", value)}
             />
 
-            <Field
-              label="Insurance Expiry"
-              type="date"
-              value={form.insurance_expiry}
-              onChange={(value) => updateField("insurance_expiry", value)}
-            />
+            {!isTrailer && (
+              <>
+                <Field
+                  label="Insurance Expiry"
+                  type="date"
+                  value={form.insurance_expiry}
+                  onChange={(value) => updateField("insurance_expiry", value)}
+                />
 
-            <Field
-              label="Last Service"
-              type="date"
-              value={form.last_service}
-              onChange={(value) => updateField("last_service", value)}
-            />
+                <Field
+                  label="Last Service"
+                  type="date"
+                  value={form.last_service}
+                  onChange={(value) => updateField("last_service", value)}
+                />
+              </>
+            )}
           </div>
         </Section>
 
         {!isTrailer && (
           <Section
             title="Vehicle Setup"
-            description="These fields are mainly for light vehicles and heavy vehicles."
+            description="Tick the required onboard systems and safety equipment fitted to the vehicle."
           >
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <CheckField
-                label="eHub fitted"
-                checked={form.ehub}
-                onChange={(value) => updateField("ehub", value)}
-              />
+            <div className="mb-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                Electronic Systems
+              </p>
 
-              <CheckField
-                label="Dashcam fitted"
-                checked={form.dashcam}
-                onChange={(value) => updateField("dashcam", value)}
-              />
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <CheckField
+                  label="eHub fitted"
+                  checked={form.ehub}
+                  onChange={(value) => updateField("ehub", value)}
+                />
 
-              <CheckField
-                label="Alert button fitted"
-                checked={form.alert_button}
-                onChange={(value) => updateField("alert_button", value)}
-              />
+                <CheckField
+                  label="Dashcam fitted"
+                  checked={form.dashcam}
+                  onChange={(value) => updateField("dashcam", value)}
+                />
 
-              <CheckField
-                label="Fuel card issued"
-                checked={form.fuel_card}
-                onChange={(value) => updateField("fuel_card", value)}
-              />
+                <CheckField
+                  label="Alert button fitted"
+                  checked={form.alert_button}
+                  onChange={(value) => updateField("alert_button", value)}
+                />
+
+                <CheckField
+                  label="UHF radio fitted"
+                  checked={form.uhf_radio}
+                  onChange={(value) => updateField("uhf_radio", value)}
+                />
+
+                <CheckField
+                  label="Reverse squawker fitted"
+                  checked={form.reverse_squawker}
+                  onChange={(value) => updateField("reverse_squawker", value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                Safety Equipment
+              </p>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <CheckField
+                  label="Fire extinguisher"
+                  checked={form.fire_extinguisher}
+                  onChange={(value) => updateField("fire_extinguisher", value)}
+                />
+
+                <CheckField
+                  label="First aid kit"
+                  checked={form.first_aid_kit}
+                  onChange={(value) => updateField("first_aid_kit", value)}
+                />
+
+                <CheckField
+                  label="Snake bite kit"
+                  checked={form.snake_bite_kit}
+                  onChange={(value) => updateField("snake_bite_kit", value)}
+                />
+
+                <CheckField
+                  label="Wheel nut indicators"
+                  checked={form.wheel_nut_indicators}
+                  onChange={(value) =>
+                    updateField("wheel_nut_indicators", value)
+                  }
+                />
+
+                <CheckField
+                  label="Wheel chocks"
+                  checked={form.wheel_chocks}
+                  onChange={(value) => updateField("wheel_chocks", value)}
+                />
+
+                <CheckField
+                  label="Shovel"
+                  checked={form.shovel}
+                  onChange={(value) => updateField("shovel", value)}
+                />
+
+                <CheckField
+                  label="Knapsack"
+                  checked={form.knapsack}
+                  onChange={(value) => updateField("knapsack", value)}
+                />
+
+                <CheckField
+                  label="Fuel card issued"
+                  checked={form.fuel_card}
+                  onChange={(value) => updateField("fuel_card", value)}
+                />
+              </div>
             </div>
           </Section>
         )}
 
         <Section
           title="Documents"
-          description="View existing documents, remove incorrect files or attach new ones."
+          description="View existing files, remove incorrect files, or attach new documents under the standard categories."
         >
           <div className="space-y-4">
             {documents.length > 0 ? (
@@ -894,7 +975,7 @@ actions={
                       {documentType}
                     </p>
                     <p className="text-xs text-slate-500">
-                      Attach an updated PDF, image or document
+                      Attach a PDF, image or document
                     </p>
                   </div>
 
@@ -969,8 +1050,8 @@ actions={
         </Section>
 
         <div className="sticky bottom-4 z-10 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-end">
-<Link
-  href="/assets/vehicles"
+          <Link
+            href="/assets/vehicles"
             className="inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
           >
             Cancel
