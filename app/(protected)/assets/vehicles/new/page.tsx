@@ -80,11 +80,12 @@ const vehicleStatuses: VehicleStatus[] = [
   "Inactive",
 ];
 
-const baseDocumentTypes = [
+const documentTypes = [
   "Risk Assessment",
-  "Registration Document",
-  "Insurance Document",
-  "Service History",
+  "Rego",
+  "Insurance",
+  "Service",
+  "Other",
 ];
 
 const emptyVehicle: VehicleForm = {
@@ -118,43 +119,6 @@ const emptyVehicle: VehicleForm = {
 
 function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
-}
-
-function getDocumentTypesForVehicle(category: string) {
-  const type = clean(category).toLowerCase();
-
-  if (type === "light vehicle") {
-    return [
-      ...baseDocumentTypes,
-      "eHub Document",
-      "Dashcam Document",
-      "Fuel Card Document",
-      "Other Documents",
-    ];
-  }
-
-  if (type === "heavy vehicle") {
-    return [
-      ...baseDocumentTypes,
-      "NHVR / Heavy Vehicle Document",
-      "Maintenance Document",
-      "eHub Document",
-      "Dashcam Document",
-      "Fuel Card Document",
-      "Other Documents",
-    ];
-  }
-
-  if (type === "trailer") {
-    return [
-      ...baseDocumentTypes,
-      "Trailer Inspection Document",
-      "Maintenance Document",
-      "Other Documents",
-    ];
-  }
-
-  return [...baseDocumentTypes, "Other Documents"];
 }
 
 function Field({
@@ -292,6 +256,8 @@ export default function AddVehiclePage() {
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  const isTrailer = clean(form.category).toLowerCase() === "trailer";
+
   useEffect(() => {
     let cancelled = false;
 
@@ -336,10 +302,6 @@ export default function AddVehiclePage() {
     return projects.map((project) => clean(project.name)).filter(Boolean);
   }, [projects]);
 
-  const documentTypes = useMemo(() => {
-    return getDocumentTypesForVehicle(form.category);
-  }, [form.category]);
-
   function updateField<K extends keyof VehicleForm>(
     key: K,
     value: VehicleForm[K],
@@ -363,13 +325,15 @@ export default function AddVehiclePage() {
   }
 
   function removePendingDocument(index: number) {
-    setPendingDocuments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setPendingDocuments((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
   }
 
   async function uploadPendingDocuments(vehicleDatabaseId: string) {
     for (const document of pendingDocuments) {
       const safeFileName = document.file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const filePath = `${vehicleDatabaseId}/${Date.now()}-${safeFileName}`;
+      const filePath = `${vehicleDatabaseId}/${document.documentType}/${Date.now()}-${safeFileName}`;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from("vehicle_documents")
@@ -415,12 +379,12 @@ export default function AddVehiclePage() {
       project: form.project.trim() || null,
       status: form.status || null,
       year: form.year.trim() || null,
-      style: form.style.trim() || null,
+      style: isTrailer ? null : form.style.trim() || null,
       owner: form.owner.trim() || null,
       vin_number: form.vin_number.trim() || null,
-      last_service: form.last_service || null,
+      last_service: isTrailer ? null : form.last_service || null,
       rego_expiry: form.rego_expiry || null,
-      insurance_expiry: form.insurance_expiry || null,
+      insurance_expiry: isTrailer ? null : form.insurance_expiry || null,
       hired: form.hired,
       hired_from: form.hired ? form.hired_from.trim() || null : null,
       hire_term: form.hired ? form.hire_term.trim() || null : null,
@@ -429,10 +393,10 @@ export default function AddVehiclePage() {
         form.status === "Superseded" ? form.superseded_by.trim() || null : null,
       inactive_reason:
         form.status === "Inactive" ? form.inactive_reason.trim() || null : null,
-      ehub: form.category === "Trailer" ? false : form.ehub,
-      dashcam: form.category === "Trailer" ? false : form.dashcam,
-      alert_button: form.category === "Trailer" ? false : form.alert_button,
-      fuel_card: form.category === "Trailer" ? false : form.fuel_card,
+      ehub: isTrailer ? false : form.ehub,
+      dashcam: isTrailer ? false : form.dashcam,
+      alert_button: isTrailer ? false : form.alert_button,
+      fuel_card: isTrailer ? false : form.fuel_card,
       notes: form.notes.trim() || null,
     };
 
@@ -465,14 +429,12 @@ export default function AddVehiclePage() {
     }
   }
 
-  const isTrailer = clean(form.category).toLowerCase() === "trailer";
-
   return (
     <PageShell>
       <PageHeader
         eyebrow="Asset Register"
         title="Add Vehicle"
-        description="Add a light vehicle, heavy vehicle or trailer. Allocations are pulled live from crews and projects, with vehicle documents attached during setup."
+        description="Add a light vehicle, heavy vehicle or trailer. Project and crew allocations are pulled live from the system."
         actions={
           <Link
             href="/assets/vehicles"
@@ -525,14 +487,14 @@ export default function AddVehiclePage() {
               label="Make"
               value={form.make}
               onChange={(value) => updateField("make", value)}
-              placeholder="Toyota"
+              placeholder={isTrailer ? "Freighter, Vawdrey..." : "Toyota, Isuzu..."}
             />
 
             <Field
               label="Model"
               value={form.model}
               onChange={(value) => updateField("model", value)}
-              placeholder="Hilux"
+              placeholder={isTrailer ? "Semi trailer, dog trailer..." : "Hilux, D-Max..."}
             />
 
             <Field
@@ -542,12 +504,14 @@ export default function AddVehiclePage() {
               placeholder="2023"
             />
 
-            <Field
-              label="Style"
-              value={form.style}
-              onChange={(value) => updateField("style", value)}
-              placeholder="Dual cab, prime mover, trailer"
-            />
+            {!isTrailer && (
+              <Field
+                label="Style"
+                value={form.style}
+                onChange={(value) => updateField("style", value)}
+                placeholder="Dual cab, prime mover, service truck"
+              />
+            )}
 
             <Field
               label="VIN / Chassis Number"
@@ -573,7 +537,7 @@ export default function AddVehiclePage() {
             />
 
             <SelectField
-              label="Vehicle Status"
+              label="Asset Status"
               value={form.status}
               onChange={(value) => updateField("status", value as VehicleStatus)}
               options={vehicleStatuses}
@@ -622,11 +586,11 @@ export default function AddVehiclePage() {
 
         <Section
           title="Hire Details"
-          description="Only complete this section if the vehicle or trailer is hired."
+          description="Only complete this section if the asset is hired."
         >
           <div className="space-y-4">
             <CheckField
-              label="This vehicle is hired"
+              label="This asset is hired"
               checked={form.hired}
               onChange={(value) => updateField("hired", value)}
             />
@@ -653,7 +617,11 @@ export default function AddVehiclePage() {
 
         <Section
           title="Registration & Ownership"
-          description="Useful for the vehicle view page and compliance tracking."
+          description={
+            isTrailer
+              ? "Trailers generally only need owner and registration details here."
+              : "Registration, insurance, service and ownership details."
+          }
         >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <Field
@@ -670,26 +638,30 @@ export default function AddVehiclePage() {
               onChange={(value) => updateField("rego_expiry", value)}
             />
 
-            <Field
-              label="Insurance Expiry"
-              type="date"
-              value={form.insurance_expiry}
-              onChange={(value) => updateField("insurance_expiry", value)}
-            />
+            {!isTrailer && (
+              <>
+                <Field
+                  label="Insurance Expiry"
+                  type="date"
+                  value={form.insurance_expiry}
+                  onChange={(value) => updateField("insurance_expiry", value)}
+                />
 
-            <Field
-              label="Last Service"
-              type="date"
-              value={form.last_service}
-              onChange={(value) => updateField("last_service", value)}
-            />
+                <Field
+                  label="Last Service"
+                  type="date"
+                  value={form.last_service}
+                  onChange={(value) => updateField("last_service", value)}
+                />
+              </>
+            )}
           </div>
         </Section>
 
         {!isTrailer && (
           <Section
             title="Vehicle Setup"
-            description="These are mainly for light vehicles and heavy vehicles. Trailers do not need these fields."
+            description="These fields are for light vehicles and heavy vehicles only."
           >
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <CheckField
@@ -721,7 +693,7 @@ export default function AddVehiclePage() {
 
         <Section
           title="Documents"
-          description="Attach the key vehicle documents now, or add more later from the view page."
+          description="Attach files into the standard document categories: Risk Assessment, Rego, Insurance, Service and Other."
         >
           <div className="space-y-3">
             {documentTypes.map((documentType) => (
@@ -730,7 +702,9 @@ export default function AddVehiclePage() {
                 className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
-                  <p className="text-sm font-bold text-slate-800">{documentType}</p>
+                  <p className="text-sm font-bold text-slate-800">
+                    {documentType}
+                  </p>
                   <p className="text-xs text-slate-500">
                     PDF, image or document upload
                   </p>
@@ -790,10 +764,7 @@ export default function AddVehiclePage() {
           </div>
         </Section>
 
-        <Section
-          title="Notes"
-          description="General notes for this vehicle."
-        >
+        <Section title="Notes" description="General internal asset notes.">
           <label className="space-y-1">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
               Notes
@@ -801,7 +772,7 @@ export default function AddVehiclePage() {
             <textarea
               value={form.notes}
               onChange={(event) => updateField("notes", event.target.value)}
-              placeholder="Anything else important..."
+              placeholder="Restrictions, allocation notes, client visibility, general comments..."
               rows={4}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
             />
