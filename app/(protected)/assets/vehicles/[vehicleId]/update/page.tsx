@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell, StatusBadge } from "../../../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "slate";
-type UpdateType = "Service" | "Modification";
+type UpdateType = "Service" | "Modification" | "Project Transfer";
 
 type VehicleAsset = {
   id: string;
@@ -26,6 +26,8 @@ type VehicleAsset = {
   next_service_due: string | null;
   next_service_km: number | null;
   next_inspection_due: string | null;
+  spare_key_provided: boolean | null;
+  spare_key_location: string | null;
   ehub: boolean | null;
   dashcam: boolean | null;
   alert_button: boolean | null;
@@ -39,6 +41,19 @@ type VehicleAsset = {
   wheel_chocks: boolean | null;
   shovel: boolean | null;
   knapsack: boolean | null;
+};
+
+type CrewOption = {
+  id: string;
+  crew_number: string | null;
+  crew_name: string | null;
+  leading_hand: string | null;
+  active: boolean | null;
+};
+
+type ProjectOption = {
+  id: string;
+  name: string;
 };
 
 type UpdateForm = {
@@ -65,6 +80,8 @@ type UpdateForm = {
   invoice_number: string;
   invoice_cost: string;
   work_completed: string;
+  mechanic_recommendations: string;
+  follow_up_actions: string;
   invoice_notes: string;
   status_after_update: string;
 
@@ -90,6 +107,15 @@ type UpdateForm = {
   wheel_chocks: boolean;
   shovel: boolean;
   knapsack: boolean;
+
+  spare_key_provided: boolean;
+  spare_key_location: string;
+
+  new_project: string;
+  new_crew: string;
+  project_onboard_date: string;
+  project_offboard_date: string;
+  project_transfer_notes: string;
 };
 
 const emptyForm: UpdateForm = {
@@ -116,6 +142,8 @@ const emptyForm: UpdateForm = {
   invoice_number: "",
   invoice_cost: "",
   work_completed: "",
+  mechanic_recommendations: "",
+  follow_up_actions: "",
   invoice_notes: "",
   status_after_update: "Available",
 
@@ -141,6 +169,15 @@ const emptyForm: UpdateForm = {
   wheel_chocks: false,
   shovel: false,
   knapsack: false,
+
+  spare_key_provided: false,
+  spare_key_location: "",
+
+  new_project: "",
+  new_crew: "",
+  project_onboard_date: "",
+  project_offboard_date: "",
+  project_transfer_notes: "",
 };
 
 const vehicleServiceTypes = [
@@ -174,6 +211,8 @@ const modificationTypes = [
   "Added Reverse Squawker",
   "Added Shovel",
   "Added Knapsack",
+  "Added Spare Key",
+  "Removed Spare Key",
   "Replaced Battery",
   "Installed Dashcam",
   "Installed eHub",
@@ -273,12 +312,14 @@ function SelectField({
   onChange,
   options,
   required = false,
+  placeholder = "Select option",
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: string[];
   required?: boolean;
+  placeholder?: string;
 }) {
   return (
     <label className="space-y-1">
@@ -292,7 +333,7 @@ function SelectField({
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
       >
-        <option value="">Select option</option>
+        <option value="">{placeholder}</option>
         {options.map((option) => (
           <option key={`${label}-${option}`} value={option}>
             {option}
@@ -410,6 +451,8 @@ export default function UpdateVehiclePage() {
   }, []);
 
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
@@ -421,22 +464,27 @@ export default function UpdateVehiclePage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadVehicle() {
+    async function loadPageData() {
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from("vehicle_assets")
-        .select("*")
-        .eq("id", vehicleId)
-        .single<VehicleAsset>();
+      const [vehicleResult, projectResult, crewResult] = await Promise.all([
+        supabase.from("vehicle_assets").select("*").eq("id", vehicleId).single<VehicleAsset>(),
+        supabase.from("projects").select("id, name").order("name", { ascending: true }),
+        supabase
+          .from("crews")
+          .select("id, crew_number, crew_name, leading_hand, active")
+          .order("crew_number", { ascending: true }),
+      ]);
 
       if (cancelled) return;
 
-      if (error || !data) {
-        setErrorMessage(error?.message || "Vehicle could not be loaded.");
+      if (vehicleResult.error || !vehicleResult.data) {
+        setErrorMessage(vehicleResult.error?.message || "Vehicle could not be loaded.");
         setVehicle(null);
       } else {
+        const data = vehicleResult.data;
         setVehicle(data);
+
         setForm((current) => ({
           ...current,
           rego_expiry: dateInput(data.rego_expiry),
@@ -463,18 +511,42 @@ export default function UpdateVehiclePage() {
           wheel_chocks: Boolean(data.wheel_chocks),
           shovel: Boolean(data.shovel),
           knapsack: Boolean(data.knapsack),
+
+          spare_key_provided: Boolean(data.spare_key_provided),
+          spare_key_location: clean(data.spare_key_location),
+
+          new_project: clean(data.project),
+          new_crew: clean(data.crew),
         }));
       }
 
+      setProjects(projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]));
+      setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
       setLoading(false);
     }
 
-    void loadVehicle();
+    void loadPageData();
 
     return () => {
       cancelled = true;
     };
   }, [supabase, vehicleId]);
+
+  const projectOptions = useMemo(() => {
+    return projects.map((project) => clean(project.name)).filter(Boolean);
+  }, [projects]);
+
+  const crewOptions = useMemo(() => {
+    return crews
+      .filter((crew) => crew.active !== false)
+      .map((crew) =>
+        [crew.crew_number, crew.crew_name, crew.leading_hand]
+          .map(clean)
+          .filter(Boolean)
+          .join(" - "),
+      )
+      .filter(Boolean);
+  }, [crews]);
 
   const kmUntilNextService = useMemo(() => {
     const currentKm = toNumber(form.odometer_km);
@@ -529,6 +601,76 @@ export default function UpdateVehiclePage() {
     };
   }
 
+  async function saveServiceOrModificationHistory() {
+    const isModification = form.update_type === "Modification";
+
+    const historyPayload = isModification
+      ? {
+          vehicle_asset_id: vehicleId,
+          record_type: "Modification / Addition",
+          modification_date: form.modification_date || null,
+          modification_type: form.modification_type || null,
+          modification_description: form.modification_description.trim() || null,
+          supplier: form.supplier.trim() || null,
+          invoice_number: form.invoice_number.trim() || null,
+          invoice_cost: toNumber(form.invoice_cost),
+          work_completed: form.modification_description.trim() || form.work_completed.trim() || null,
+          mechanic_recommendations: form.mechanic_recommendations.trim() || null,
+          follow_up_actions: form.follow_up_actions.trim() || null,
+          invoice_notes: form.invoice_notes.trim() || null,
+          status_after_update: form.status_after_update || null,
+        }
+      : {
+          vehicle_asset_id: vehicleId,
+          record_type: isTrailer ? "Trailer Inspection" : "Vehicle Service",
+          service_date: isTrailer ? null : form.service_date || null,
+          inspection_date: isTrailer ? form.inspection_date || null : null,
+          odometer_km: isTrailer ? null : toNumber(form.odometer_km),
+          next_service_km: isTrailer ? null : toNumber(form.next_service_km),
+          service_type: isTrailer ? null : form.service_type || null,
+          inspection_type: isTrailer ? form.inspection_type || null : null,
+          supplier: form.supplier.trim() || null,
+          invoice_number: form.invoice_number.trim() || null,
+          invoice_cost: toNumber(form.invoice_cost),
+          work_completed: form.work_completed.trim() || null,
+          mechanic_recommendations: form.mechanic_recommendations.trim() || null,
+          follow_up_actions: form.follow_up_actions.trim() || null,
+          invoice_notes: form.invoice_notes.trim() || null,
+          next_service_due: isTrailer ? null : form.next_service_due || null,
+          next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
+          status_after_update: form.status_after_update || null,
+          trailer_registration_checked: isTrailer ? form.trailer_registration_checked : false,
+          trailer_tyres_checked: isTrailer ? form.trailer_tyres_checked : false,
+          trailer_brakes_checked: isTrailer ? form.trailer_brakes_checked : false,
+          trailer_lights_checked: isTrailer ? form.trailer_lights_checked : false,
+          trailer_coupling_checked: isTrailer ? form.trailer_coupling_checked : false,
+          trailer_chains_checked: isTrailer ? form.trailer_chains_checked : false,
+          trailer_defects_found: isTrailer ? form.trailer_defects_found : false,
+          trailer_defect_notes: isTrailer ? form.trailer_defect_notes.trim() || null : null,
+        };
+
+    const { data: historyData, error: historyError } = await supabase
+      .from("vehicle_service_history")
+      .insert(historyPayload)
+      .select("id")
+      .single();
+
+    if (historyError || !historyData) {
+      throw new Error(historyError?.message || "Failed to save update record.");
+    }
+
+    const documentData = await uploadInvoiceDocument(historyData.id);
+
+    if (documentData.document_url) {
+      const { error } = await supabase
+        .from("vehicle_service_history")
+        .update(documentData)
+        .eq("id", historyData.id);
+
+      if (error) throw new Error(error.message);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -540,98 +682,18 @@ export default function UpdateVehiclePage() {
     setSaving(true);
     setErrorMessage("");
 
-    const isModification = form.update_type === "Modification";
-
-    const historyPayload = isModification
-      ? {
-          vehicle_asset_id: vehicleId,
-          record_type: "Modification / Addition",
-          service_date: form.modification_date || null,
-          inspection_date: null,
-          service_type: form.modification_type || null,
-          inspection_type: null,
-          odometer_km: null,
-          next_service_km: null,
-          supplier: form.supplier.trim() || null,
-          invoice_number: form.invoice_number.trim() || null,
-          invoice_cost: toNumber(form.invoice_cost),
-          work_completed: form.modification_description.trim() || null,
-          invoice_notes: form.invoice_notes.trim() || null,
-          next_service_due: null,
-          next_inspection_due: null,
-          status_after_update: form.status_after_update || null,
-          trailer_registration_checked: false,
-          trailer_tyres_checked: false,
-          trailer_brakes_checked: false,
-          trailer_lights_checked: false,
-          trailer_coupling_checked: false,
-          trailer_chains_checked: false,
-          trailer_defects_found: false,
-          trailer_defect_notes: null,
-        }
-      : {
-          vehicle_asset_id: vehicleId,
-          record_type: isTrailer ? "Trailer Inspection" : "Vehicle Service",
-
-          service_date: isTrailer ? null : form.service_date || null,
-          inspection_date: isTrailer ? form.inspection_date || null : null,
-
-          odometer_km: isTrailer ? null : toNumber(form.odometer_km),
-          next_service_km: isTrailer ? null : toNumber(form.next_service_km),
-
-          service_type: isTrailer ? null : form.service_type || null,
-          inspection_type: isTrailer ? form.inspection_type || null : null,
-
-          supplier: form.supplier.trim() || null,
-          invoice_number: form.invoice_number.trim() || null,
-          invoice_cost: toNumber(form.invoice_cost),
-
-          work_completed: form.work_completed.trim() || null,
-          invoice_notes: form.invoice_notes.trim() || null,
-
-          next_service_due: isTrailer ? null : form.next_service_due || null,
-          next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
-
-          status_after_update: form.status_after_update || null,
-
-          trailer_registration_checked: isTrailer
-            ? form.trailer_registration_checked
-            : false,
-          trailer_tyres_checked: isTrailer ? form.trailer_tyres_checked : false,
-          trailer_brakes_checked: isTrailer ? form.trailer_brakes_checked : false,
-          trailer_lights_checked: isTrailer ? form.trailer_lights_checked : false,
-          trailer_coupling_checked: isTrailer
-            ? form.trailer_coupling_checked
-            : false,
-          trailer_chains_checked: isTrailer ? form.trailer_chains_checked : false,
-          trailer_defects_found: isTrailer ? form.trailer_defects_found : false,
-          trailer_defect_notes: isTrailer
-            ? form.trailer_defect_notes.trim() || null
-            : null,
-        };
-
-    const { data: historyData, error: historyError } = await supabase
-      .from("vehicle_service_history")
-      .insert(historyPayload)
-      .select("id")
-      .single();
-
-    if (historyError || !historyData) {
-      setErrorMessage(historyError?.message || "Failed to save update record.");
-      setSaving(false);
-      return;
-    }
-
     try {
-      const documentData = await uploadInvoiceDocument(historyData.id);
-
-      if (documentData.document_url) {
-        const { error: documentUpdateError } = await supabase
-          .from("vehicle_service_history")
-          .update(documentData)
-          .eq("id", historyData.id);
-
-        if (documentUpdateError) throw new Error(documentUpdateError.message);
+      if (form.update_type === "Project Transfer") {
+        await supabase.from("vehicle_project_history").insert({
+          vehicle_asset_id: vehicleId,
+          project: form.new_project.trim() || null,
+          crew: form.new_crew.trim() || null,
+          project_onboard_date: form.project_onboard_date || null,
+          project_offboard_date: form.project_offboard_date || null,
+          notes: form.project_transfer_notes.trim() || null,
+        });
+      } else {
+        await saveServiceOrModificationHistory();
       }
 
       const vehicleUpdatePayload = {
@@ -644,6 +706,20 @@ export default function UpdateVehiclePage() {
         next_service_due: isTrailer ? null : form.next_service_due || null,
         next_service_km: isTrailer ? null : toNumber(form.next_service_km),
         next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
+
+        project:
+          form.update_type === "Project Transfer"
+            ? form.new_project.trim() || null
+            : vehicle.project,
+        crew:
+          form.update_type === "Project Transfer"
+            ? form.new_crew.trim() || null
+            : vehicle.crew,
+
+        spare_key_provided: form.spare_key_provided,
+        spare_key_location: form.spare_key_provided
+          ? form.spare_key_location.trim() || "Site Office"
+          : null,
 
         ehub: isTrailer ? false : form.ehub,
         dashcam: isTrailer ? false : form.dashcam,
@@ -660,20 +736,18 @@ export default function UpdateVehiclePage() {
         knapsack: isTrailer ? false : form.knapsack,
       };
 
-      const { error: vehicleUpdateError } = await supabase
+      const { error } = await supabase
         .from("vehicle_assets")
         .update(vehicleUpdatePayload)
         .eq("id", vehicleId);
 
-      if (vehicleUpdateError) throw new Error(vehicleUpdateError.message);
+      if (error) throw new Error(error.message);
 
       router.push("/assets/vehicles");
       router.refresh();
     } catch (error) {
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "The update was saved, but something failed after saving.",
+        error instanceof Error ? error.message : "Failed to save asset update.",
       );
       setSaving(false);
     }
@@ -684,7 +758,7 @@ export default function UpdateVehiclePage() {
       <PageHeader
         eyebrow={isTrailer ? "Trailer Update" : "Vehicle Update"}
         title={loading ? "Update Asset" : `Update ${display(vehicle?.vehicle_id)}`}
-        description="Update asset dates, record service history, or record modifications and additions."
+        description="Update asset dates, record service history, modifications, spare key changes or project transfers."
         actions={
           <Link
             href="/assets/vehicles"
@@ -734,12 +808,8 @@ export default function UpdateVehiclePage() {
             }
           />
           <SummaryItem
-            label={isTrailer ? "Next Inspection" : "Next Service"}
-            value={
-              isTrailer
-                ? display(vehicle?.next_inspection_due)
-                : display(vehicle?.next_service_due)
-            }
+            label="Spare Key"
+            value={form.spare_key_provided ? "Provided" : "Not Provided"}
           />
         </div>
       </section>
@@ -747,38 +817,32 @@ export default function UpdateVehiclePage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         <Section
           title="Update Type"
-          description="Choose whether you are recording a service/inspection or a modification/addition."
+          description="Choose the type of update you want to record."
         >
-          <div className="grid gap-3 md:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => updateField("update_type", "Service")}
-              className={`rounded-2xl border p-4 text-left ${
-                form.update_type === "Service"
-                  ? "border-slate-950 bg-slate-950 text-white"
-                  : "border-slate-200 bg-white text-slate-800"
-              }`}
-            >
-              <p className="font-bold">Update Service / Inspection</p>
-              <p className="mt-1 text-sm opacity-80">
-                Service history, inspection history, invoice notes and next due dates.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => updateField("update_type", "Modification")}
-              className={`rounded-2xl border p-4 text-left ${
-                form.update_type === "Modification"
-                  ? "border-slate-950 bg-slate-950 text-white"
-                  : "border-slate-200 bg-white text-slate-800"
-              }`}
-            >
-              <p className="font-bold">Update Modification / Addition</p>
-              <p className="mt-1 text-sm opacity-80">
-                Added equipment, new battery, UHF, extinguisher or other asset changes.
-              </p>
-            </button>
+          <div className="grid gap-3 md:grid-cols-3">
+            {(["Service", "Modification", "Project Transfer"] as UpdateType[]).map(
+              (type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => updateField("update_type", type)}
+                  className={`rounded-2xl border p-4 text-left ${
+                    form.update_type === type
+                      ? "border-slate-950 bg-slate-950 text-white"
+                      : "border-slate-200 bg-white text-slate-800"
+                  }`}
+                >
+                  <p className="font-bold">{type}</p>
+                  <p className="mt-1 text-sm opacity-80">
+                    {type === "Service"
+                      ? "Service, inspection and next due dates."
+                      : type === "Modification"
+                        ? "Added equipment, spare keys or asset changes."
+                        : "Project movement and crew allocation history."}
+                  </p>
+                </button>
+              ),
+            )}
           </div>
         </Section>
 
@@ -830,28 +894,216 @@ export default function UpdateVehiclePage() {
           </div>
         </Section>
 
-        {form.update_type === "Service" ? (
-          isTrailer ? (
-            <>
+        {form.update_type === "Project Transfer" && (
+          <Section
+            title="Project Transfer / Onboarding"
+            description="Record project movement history and update the current project and crew allocation."
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <SelectField
+                label="New Project"
+                value={form.new_project}
+                onChange={(value) => updateField("new_project", value)}
+                options={projectOptions}
+                placeholder="Select project"
+              />
+
+              <SelectField
+                label="New Crew"
+                value={form.new_crew}
+                onChange={(value) => updateField("new_crew", value)}
+                options={crewOptions}
+                placeholder="Select crew"
+              />
+
+              <Field
+                label="Project Onboard Date"
+                type="date"
+                value={form.project_onboard_date}
+                onChange={(value) => updateField("project_onboard_date", value)}
+              />
+
+              <Field
+                label="Project Offboard Date"
+                type="date"
+                value={form.project_offboard_date}
+                onChange={(value) => updateField("project_offboard_date", value)}
+              />
+            </div>
+
+            <div className="mt-4">
+              <TextAreaField
+                label="Project Transfer Notes"
+                value={form.project_transfer_notes}
+                onChange={(value) => updateField("project_transfer_notes", value)}
+                placeholder="Reason for transfer, site office notes, handover notes..."
+              />
+            </div>
+          </Section>
+        )}
+
+        {form.update_type === "Service" && (
+          <>
+            {isTrailer ? (
+              <>
+                <Section
+                  title="Trailer Inspection"
+                  description="Record the inspection details and checks completed."
+                >
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <Field
+                      label="Inspection Date"
+                      type="date"
+                      value={form.inspection_date}
+                      onChange={(value) => updateField("inspection_date", value)}
+                      required
+                    />
+
+                    <SelectField
+                      label="Inspection Type"
+                      value={form.inspection_type}
+                      onChange={(value) => updateField("inspection_type", value)}
+                      options={trailerInspectionTypes}
+                      required
+                    />
+
+                    <Field
+                      label="Supplier / Mechanic"
+                      value={form.supplier}
+                      onChange={(value) => updateField("supplier", value)}
+                      placeholder="Workshop, mechanic or supplier"
+                    />
+
+                    <Field
+                      label="Invoice Number"
+                      value={form.invoice_number}
+                      onChange={(value) => updateField("invoice_number", value)}
+                      placeholder="Invoice or job number"
+                    />
+
+                    <Field
+                      label="Invoice Cost"
+                      type="number"
+                      value={form.invoice_cost}
+                      onChange={(value) => updateField("invoice_cost", value)}
+                      placeholder="0.00"
+                    />
+
+                    <SelectField
+                      label="Asset Availability"
+                      value={form.status_after_update}
+                      onChange={(value) =>
+                        updateField("status_after_update", value)
+                      }
+                      options={statusOptions}
+                    />
+                  </div>
+                </Section>
+
+                <Section
+                  title="Trailer Checks"
+                  description="Tick the checks completed as part of this inspection."
+                >
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <CheckField
+                      label="Registration checked"
+                      checked={form.trailer_registration_checked}
+                      onChange={(value) =>
+                        updateField("trailer_registration_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Tyres / wheels checked"
+                      checked={form.trailer_tyres_checked}
+                      onChange={(value) =>
+                        updateField("trailer_tyres_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Brakes checked"
+                      checked={form.trailer_brakes_checked}
+                      onChange={(value) =>
+                        updateField("trailer_brakes_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Lights / electrical checked"
+                      checked={form.trailer_lights_checked}
+                      onChange={(value) =>
+                        updateField("trailer_lights_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Coupling checked"
+                      checked={form.trailer_coupling_checked}
+                      onChange={(value) =>
+                        updateField("trailer_coupling_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Chains checked"
+                      checked={form.trailer_chains_checked}
+                      onChange={(value) =>
+                        updateField("trailer_chains_checked", value)
+                      }
+                    />
+
+                    <CheckField
+                      label="Defects found"
+                      checked={form.trailer_defects_found}
+                      onChange={(value) =>
+                        updateField("trailer_defects_found", value)
+                      }
+                    />
+                  </div>
+
+                  {form.trailer_defects_found && (
+                    <div className="mt-4">
+                      <TextAreaField
+                        label="Trailer Defect Notes"
+                        value={form.trailer_defect_notes}
+                        onChange={(value) =>
+                          updateField("trailer_defect_notes", value)
+                        }
+                        placeholder="Describe defects found, repairs required or restrictions..."
+                      />
+                    </div>
+                  )}
+                </Section>
+              </>
+            ) : (
               <Section
-                title="Trailer Inspection"
-                description="Record the inspection details and checks completed."
+                title="Vehicle Service"
+                description="Record service details from the invoice or service report."
               >
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <Field
-                    label="Inspection Date"
+                    label="Service Date"
                     type="date"
-                    value={form.inspection_date}
-                    onChange={(value) => updateField("inspection_date", value)}
+                    value={form.service_date}
+                    onChange={(value) => updateField("service_date", value)}
                     required
                   />
 
                   <SelectField
-                    label="Inspection Type"
-                    value={form.inspection_type}
-                    onChange={(value) => updateField("inspection_type", value)}
-                    options={trailerInspectionTypes}
+                    label="Service Type"
+                    value={form.service_type}
+                    onChange={(value) => updateField("service_type", value)}
+                    options={vehicleServiceTypes}
                     required
+                  />
+
+                  <Field
+                    label="Odometer KM"
+                    type="number"
+                    value={form.odometer_km}
+                    onChange={(value) => updateField("odometer_km", value)}
+                    placeholder="Current km"
                   />
 
                   <Field
@@ -876,172 +1128,40 @@ export default function UpdateVehiclePage() {
                     placeholder="0.00"
                   />
 
+                  <Field
+                    label="Next Service KM"
+                    type="number"
+                    value={form.next_service_km}
+                    onChange={(value) => updateField("next_service_km", value)}
+                    placeholder="Next service km"
+                  />
+
+                  <Field
+                    label="KM Until Next Service"
+                    value={kmUntilNextService}
+                    onChange={() => undefined}
+                    disabled
+                  />
+
                   <SelectField
                     label="Asset Availability"
                     value={form.status_after_update}
-                    onChange={(value) => updateField("status_after_update", value)}
+                    onChange={(value) =>
+                      updateField("status_after_update", value)
+                    }
                     options={statusOptions}
                   />
                 </div>
               </Section>
+            )}
+          </>
+        )}
 
-              <Section
-                title="Trailer Checks"
-                description="Tick the checks completed as part of this inspection."
-              >
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <CheckField
-                    label="Registration checked"
-                    checked={form.trailer_registration_checked}
-                    onChange={(value) =>
-                      updateField("trailer_registration_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Tyres / wheels checked"
-                    checked={form.trailer_tyres_checked}
-                    onChange={(value) =>
-                      updateField("trailer_tyres_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Brakes checked"
-                    checked={form.trailer_brakes_checked}
-                    onChange={(value) =>
-                      updateField("trailer_brakes_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Lights / electrical checked"
-                    checked={form.trailer_lights_checked}
-                    onChange={(value) =>
-                      updateField("trailer_lights_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Coupling checked"
-                    checked={form.trailer_coupling_checked}
-                    onChange={(value) =>
-                      updateField("trailer_coupling_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Chains checked"
-                    checked={form.trailer_chains_checked}
-                    onChange={(value) =>
-                      updateField("trailer_chains_checked", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Defects found"
-                    checked={form.trailer_defects_found}
-                    onChange={(value) =>
-                      updateField("trailer_defects_found", value)
-                    }
-                  />
-                </div>
-
-                {form.trailer_defects_found && (
-                  <div className="mt-4">
-                    <TextAreaField
-                      label="Trailer Defect Notes"
-                      value={form.trailer_defect_notes}
-                      onChange={(value) =>
-                        updateField("trailer_defect_notes", value)
-                      }
-                      placeholder="Describe defects found, repairs required or restrictions..."
-                    />
-                  </div>
-                )}
-              </Section>
-            </>
-          ) : (
-            <Section
-              title="Vehicle Service"
-              description="Record service details from the invoice or service report."
-            >
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <Field
-                  label="Service Date"
-                  type="date"
-                  value={form.service_date}
-                  onChange={(value) => updateField("service_date", value)}
-                  required
-                />
-
-                <SelectField
-                  label="Service Type"
-                  value={form.service_type}
-                  onChange={(value) => updateField("service_type", value)}
-                  options={vehicleServiceTypes}
-                  required
-                />
-
-                <Field
-                  label="Odometer KM"
-                  type="number"
-                  value={form.odometer_km}
-                  onChange={(value) => updateField("odometer_km", value)}
-                  placeholder="Current km"
-                />
-
-                <Field
-                  label="Supplier / Mechanic"
-                  value={form.supplier}
-                  onChange={(value) => updateField("supplier", value)}
-                  placeholder="Workshop, mechanic or supplier"
-                />
-
-                <Field
-                  label="Invoice Number"
-                  value={form.invoice_number}
-                  onChange={(value) => updateField("invoice_number", value)}
-                  placeholder="Invoice or job number"
-                />
-
-                <Field
-                  label="Invoice Cost"
-                  type="number"
-                  value={form.invoice_cost}
-                  onChange={(value) => updateField("invoice_cost", value)}
-                  placeholder="0.00"
-                />
-
-                <Field
-                  label="Next Service KM"
-                  type="number"
-                  value={form.next_service_km}
-                  onChange={(value) => updateField("next_service_km", value)}
-                  placeholder="Next service km"
-                />
-
-                <Field
-                  label="KM Until Next Service"
-                  value={kmUntilNextService}
-                  onChange={() => undefined}
-                  disabled
-                />
-
-                <SelectField
-                  label="Asset Availability"
-                  value={form.status_after_update}
-                  onChange={(value) => updateField("status_after_update", value)}
-                  options={statusOptions}
-                />
-              </div>
-            </Section>
-          )
-        ) : (
+        {form.update_type === "Modification" && (
           <>
             <Section
               title="Modification / Addition"
-              description="Record equipment added, replacement parts, upgrades or asset changes."
+              description="Record equipment added, replacement parts, upgrades, spare key changes or asset changes."
             >
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field
@@ -1085,7 +1205,9 @@ export default function UpdateVehiclePage() {
                 <SelectField
                   label="Asset Availability"
                   value={form.status_after_update}
-                  onChange={(value) => updateField("status_after_update", value)}
+                  onChange={(value) =>
+                    updateField("status_after_update", value)
+                  }
                   options={statusOptions}
                 />
               </div>
@@ -1100,6 +1222,38 @@ export default function UpdateVehiclePage() {
                   placeholder="Example: Added new fire extinguisher, replaced battery, installed UHF radio..."
                   required
                 />
+              </div>
+            </Section>
+
+            <Section
+              title="Spare Key"
+              description="Track if a spare key has been provided and where it is held."
+            >
+              <div className="space-y-4">
+                <CheckField
+                  label="Spare key provided"
+                  checked={form.spare_key_provided}
+                  onChange={(value) =>
+                    updateField("spare_key_provided", value)
+                  }
+                />
+
+                {form.spare_key_provided && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                    Spare key must be handed into the site office.
+                  </div>
+                )}
+
+                {form.spare_key_provided && (
+                  <Field
+                    label="Spare Key Location"
+                    value={form.spare_key_location}
+                    onChange={(value) =>
+                      updateField("spare_key_location", value)
+                    }
+                    placeholder="Site office, depot, project office..."
+                  />
+                )}
               </div>
             </Section>
 
@@ -1194,59 +1348,86 @@ export default function UpdateVehiclePage() {
           </>
         )}
 
-        <Section
-          title="Work Completed"
-          description="Summarise what was completed for this update."
-        >
-          <TextAreaField
-            label="Work Completed"
-            value={form.work_completed}
-            onChange={(value) => updateField("work_completed", value)}
-            placeholder="Summarise the work completed..."
-            required={form.update_type === "Service"}
-          />
-        </Section>
-
-        <Section
-          title="Notes"
-          description="Digitise important invoice notes, recommendations or follow-up actions."
-        >
-          <TextAreaField
-            label="Invoice / Update Notes"
-            value={form.invoice_notes}
-            onChange={(value) => updateField("invoice_notes", value)}
-            placeholder="Invoice notes, parts replaced, restrictions, warranty notes, follow-up actions..."
-          />
-        </Section>
-
-        <Section
-          title="Attach Invoice / Report"
-          description="Attach the invoice, service report, modification record or supporting photo."
-        >
-          <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-bold text-slate-800">
-                {invoiceFile ? invoiceFile.name : "No file selected"}
-              </p>
-              <p className="text-xs text-slate-500">
-                PDF, image or document upload
-              </p>
-            </div>
-
-            <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
-              <FileUp size={14} />
-              Attach file
-              <input
-                type="file"
-                className="hidden"
-                onChange={(event) => {
-                  setInvoiceFile(event.target.files?.[0] ?? null);
-                  event.target.value = "";
-                }}
+        {form.update_type !== "Project Transfer" && (
+          <>
+            <Section
+              title="Work Completed"
+              description="Summarise what was completed for this update."
+            >
+              <TextAreaField
+                label="Work Completed"
+                value={form.work_completed}
+                onChange={(value) => updateField("work_completed", value)}
+                placeholder="Summarise the work completed..."
+                required={form.update_type === "Service"}
               />
-            </span>
-          </label>
-        </Section>
+            </Section>
+
+            <Section
+              title="Recommendations / Follow Up"
+              description="Capture recommendations, issues to monitor or follow-up actions."
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <TextAreaField
+                  label="Mechanic Recommendations"
+                  value={form.mechanic_recommendations}
+                  onChange={(value) =>
+                    updateField("mechanic_recommendations", value)
+                  }
+                  placeholder="Recommendations from mechanic or supplier..."
+                />
+
+                <TextAreaField
+                  label="Follow Up Actions"
+                  value={form.follow_up_actions}
+                  onChange={(value) => updateField("follow_up_actions", value)}
+                  placeholder="Who needs to action what and by when..."
+                />
+              </div>
+            </Section>
+
+            <Section
+              title="Notes"
+              description="Digitise important invoice notes or update notes."
+            >
+              <TextAreaField
+                label="Invoice / Update Notes"
+                value={form.invoice_notes}
+                onChange={(value) => updateField("invoice_notes", value)}
+                placeholder="Invoice notes, parts replaced, restrictions, warranty notes..."
+              />
+            </Section>
+
+            <Section
+              title="Attach Invoice / Report"
+              description="Attach the invoice, service report, modification record or supporting photo."
+            >
+              <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">
+                    {invoiceFile ? invoiceFile.name : "No file selected"}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    PDF, image or document upload
+                  </p>
+                </div>
+
+                <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                  <FileUp size={14} />
+                  Attach file
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(event) => {
+                      setInvoiceFile(event.target.files?.[0] ?? null);
+                      event.target.value = "";
+                    }}
+                  />
+                </span>
+              </label>
+            </Section>
+          </>
+        )}
 
         <div className="sticky bottom-4 z-10 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-end">
           <Link
