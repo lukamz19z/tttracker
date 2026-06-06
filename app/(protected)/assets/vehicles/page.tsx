@@ -4,7 +4,17 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Car, Eye, Pencil, Plus, RefreshCw, Truck, Wrench } from "lucide-react";
+import {
+  Car,
+  Download,
+  Eye,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Settings,
+  Truck,
+  Wrench,
+} from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell, RegisterList } from "../components";
 
@@ -34,6 +44,7 @@ function clean(value: string | null | undefined) {
 function getTone(status: string): Tone {
   if (status === "Available" || status === "Active") return "emerald";
   if (status === "In Use" || status === "On Hire") return "teal";
+
   if (
     status === "Off Hire" ||
     status === "Inactive" ||
@@ -49,6 +60,11 @@ function getTone(status: string): Tone {
 
 function getMakeModel(vehicle: VehicleAsset) {
   return [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ");
+}
+
+function csvSafe(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
@@ -128,9 +144,10 @@ export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-const [categoryFilter, setCategoryFilter] = useState("All Categories");
-const [projectFilter, setProjectFilter] = useState("All Projects");
-const [statusFilter, setStatusFilter] = useState("All Statuses");
+  const [categoryFilter, setCategoryFilter] = useState("All Categories");
+  const [projectFilter, setProjectFilter] = useState("All Projects");
+  const [statusFilter, setStatusFilter] = useState("All Statuses");
+  const [openManageId, setOpenManageId] = useState<string | null>(null);
 
   const loadVehicles = useCallback(async () => {
     setLoading(true);
@@ -189,7 +206,9 @@ const [statusFilter, setStatusFilter] = useState("All Statuses");
   const statusOptions = useMemo(() => {
     return [
       "All Statuses",
-      ...Array.from(new Set(enhancedVehicles.map((v) => clean(v.calculated_status))))
+      ...Array.from(
+        new Set(enhancedVehicles.map((v) => clean(v.calculated_status))),
+      )
         .filter(Boolean)
         .sort(),
     ];
@@ -215,15 +234,15 @@ const [statusFilter, setStatusFilter] = useState("All Statuses");
         .join(" ")
         .toLowerCase();
 
-return (
-  searchable.includes(term) &&
-  (categoryFilter === "All Categories" ||
-    clean(vehicle.category) === categoryFilter) &&
-  (projectFilter === "All Projects" ||
-    clean(vehicle.project) === projectFilter) &&
-  (statusFilter === "All Statuses" ||
-    vehicle.calculated_status === statusFilter)
-);
+      return (
+        searchable.includes(term) &&
+        (categoryFilter === "All Categories" ||
+          clean(vehicle.category) === categoryFilter) &&
+        (projectFilter === "All Projects" ||
+          clean(vehicle.project) === projectFilter) &&
+        (statusFilter === "All Statuses" ||
+          vehicle.calculated_status === statusFilter)
+      );
     });
   }, [enhancedVehicles, search, categoryFilter, projectFilter, statusFilter]);
 
@@ -242,12 +261,93 @@ return (
     };
   }, [enhancedVehicles]);
 
+  function exportFilteredVehicles() {
+    const headers = [
+      "Vehicle ID",
+      "Rego",
+      "Make",
+      "Model",
+      "Category",
+      "Project",
+      "Crew",
+      "Status",
+    ];
+
+    const rows = filteredVehicles.map((vehicle) => [
+      clean(vehicle.vehicle_id),
+      clean(vehicle.vehicle_rego),
+      clean(vehicle.make),
+      clean(vehicle.model),
+      clean(vehicle.category),
+      clean(vehicle.project),
+      clean(vehicle.crew),
+      clean(vehicle.calculated_status),
+    ]);
+
+    const csv = [
+      headers.map(csvSafe).join(","),
+      ...rows.map((row) => row.map(csvSafe).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `vehicle-register-${date}.csv`;
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }
+
+  function ManagePanel({ vehicle }: { vehicle: EnhancedVehicle }) {
+    return (
+      <div className="mt-2 w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-lg sm:w-72">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+          Manage Asset
+        </p>
+
+        <div className="mt-3 grid gap-2">
+          <Link
+            href={`/assets/vehicles/${vehicle.id}/edit`}
+            className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left hover:bg-white"
+          >
+            <Pencil size={16} className="mt-0.5 text-slate-600" />
+            <div>
+              <p className="text-sm font-bold text-slate-900">Edit Details</p>
+              <p className="text-xs text-slate-500">
+                Rego, allocation, ownership, documents and notes.
+              </p>
+            </div>
+          </Link>
+
+          <Link
+            href={`/assets/vehicles/${vehicle.id}/update`}
+            className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 p-3 text-left hover:bg-orange-100"
+          >
+            <Wrench size={16} className="mt-0.5 text-orange-700" />
+            <div>
+              <p className="text-sm font-bold text-orange-800">Update Asset</p>
+              <p className="text-xs text-orange-700">
+                Service, modifications, spare keys and project transfers.
+              </p>
+            </div>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <PageShell>
       <PageHeader
         eyebrow="Asset Register"
         title="Vehicles"
-        description="Track light vehicles, heavy vehicles and trailers. Keep the register simple here, then open the view page for service, insurance, documents and compliance details."
+        description="Track light vehicles, heavy vehicles and trailers. Keep the register simple here, then open the view page for full detail."
         actions={
           <div className="flex flex-wrap gap-2">
             <button
@@ -257,6 +357,16 @@ return (
             >
               <RefreshCw size={16} />
               Refresh
+            </button>
+
+            <button
+              type="button"
+              onClick={exportFilteredVehicles}
+              disabled={filteredVehicles.length === 0}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download size={16} />
+              Export CSV
             </button>
 
             <Link
@@ -278,6 +388,7 @@ return (
           tone="blue"
           icon={<Car size={22} />}
         />
+
         <StatCard
           label="Light Vehicles"
           value={stats.lightVehicles}
@@ -285,6 +396,7 @@ return (
           tone="emerald"
           icon={<Car size={22} />}
         />
+
         <StatCard
           label="Heavy Vehicles"
           value={stats.heavyVehicles}
@@ -292,6 +404,7 @@ return (
           tone="amber"
           icon={<Truck size={22} />}
         />
+
         <StatCard
           label="Trailers"
           value={stats.trailers}
@@ -305,14 +418,20 @@ return (
         <div className="grid gap-3 md:grid-cols-4">
           <input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOpenManageId(null);
+            }}
             placeholder="Search vehicle ID, rego, make, model..."
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           />
 
           <select
             value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value)}
+            onChange={(event) => {
+              setCategoryFilter(event.target.value);
+              setOpenManageId(null);
+            }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {categoryOptions.map((option) => (
@@ -322,7 +441,10 @@ return (
 
           <select
             value={projectFilter}
-            onChange={(event) => setProjectFilter(event.target.value)}
+            onChange={(event) => {
+              setProjectFilter(event.target.value);
+              setOpenManageId(null);
+            }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {projectOptions.map((option) => (
@@ -332,13 +454,21 @@ return (
 
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
+            onChange={(event) => {
+              setStatusFilter(event.target.value);
+              setOpenManageId(null);
+            }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
             {statusOptions.map((option) => (
               <option key={option}>{option}</option>
             ))}
           </select>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Export CSV will export the vehicles currently shown after search and
+          filters.
         </div>
       </section>
 
@@ -351,79 +481,85 @@ return (
         }
         items={filteredVehicles}
         getKey={(vehicle) => vehicle.id}
-columns={[
-  {
-    label: "Vehicle ID",
-    render: (vehicle) => (
-      <div className="flex items-center gap-3">
-        <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
-          <Car size={16} />
-        </div>
-        <span className="font-bold text-slate-950">
-          {clean(vehicle.vehicle_id) || "No ID"}
-        </span>
-      </div>
-    ),
-  },
-  {
-    label: "Rego",
-    render: (vehicle) => clean(vehicle.vehicle_rego) || "No rego",
-  },
-  {
-    label: "Make & Model",
-    render: (vehicle) => getMakeModel(vehicle) || "N/A",
-  },
-  {
-    label: "Allocation",
-    render: (vehicle) => (
-      <div>
-        <p className="font-semibold text-slate-950">
-          {clean(vehicle.project) || "Unallocated project"}
-        </p>
-        <p className="mt-1 text-xs font-semibold text-slate-500">
-          {clean(vehicle.crew) || "Unallocated crew"}
-        </p>
-      </div>
-    ),
-  },
-  {
-    label: "Status",
-    render: (vehicle) => (
-      <StatusPill label={vehicle.calculated_status} tone={vehicle.tone} />
-    ),
-  },
-{
-  label: "Actions",
-  className: "whitespace-nowrap w-px",
-  render: (vehicle) => (
-      <div className="flex w-max items-center gap-2">
-        <Link
-          href={`/assets/vehicles/${vehicle.id}`}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-        >
-          <Eye size={14} />
-          View
-        </Link>
+        columns={[
+          {
+            label: "Vehicle ID",
+            render: (vehicle) => (
+              <div className="flex items-center gap-3">
+                <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
+                  <Car size={16} />
+                </div>
 
-        <Link
-          href={`/assets/vehicles/${vehicle.id}/edit`}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
-        >
-          <Pencil size={14} />
-          Edit
-        </Link>
+                <span className="font-bold text-slate-950">
+                  {clean(vehicle.vehicle_id) || "No ID"}
+                </span>
+              </div>
+            ),
+          },
+          {
+            label: "Rego",
+            render: (vehicle) => clean(vehicle.vehicle_rego) || "No rego",
+          },
+          {
+            label: "Make & Model",
+            render: (vehicle) => getMakeModel(vehicle) || "N/A",
+          },
+          {
+            label: "Allocation",
+            render: (vehicle) => (
+              <div>
+                <p className="font-semibold text-slate-950">
+                  {clean(vehicle.project) || "Unallocated project"}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {clean(vehicle.crew) || "Unallocated crew"}
+                </p>
+              </div>
+            ),
+          },
+          {
+            label: "Status",
+            render: (vehicle) => (
+              <StatusPill
+                label={vehicle.calculated_status}
+                tone={vehicle.tone}
+              />
+            ),
+          },
+          {
+            label: "Actions",
+            render: (vehicle) => (
+              <div className="min-w-[220px]">
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    href={`/assets/vehicles/${vehicle.id}`}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                  >
+                    <Eye size={14} />
+                    View Asset
+                  </Link>
 
-        <Link
-          href={`/assets/vehicles/${vehicle.id}/update`}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700 shadow-sm hover:bg-orange-100"
-        >
-          <Wrench size={14} />
-          Update Asset
-        </Link>
-      </div>
-    ),
-  },
-]}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpenManageId((current) =>
+                        current === vehicle.id ? null : vehicle.id,
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+                  >
+                    <Settings size={14} />
+                    Manage
+                  </button>
+                </div>
+
+                {openManageId === vehicle.id ? (
+                  <ManagePanel vehicle={vehicle} />
+                ) : null}
+              </div>
+            ),
+          },
+        ]}
         renderMobile={(vehicle) => {
           const makeModel = getMakeModel(vehicle);
 
@@ -434,6 +570,7 @@ columns={[
                   <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
                     <Car size={16} />
                   </div>
+
                   <div>
                     <p className="font-bold text-slate-950">
                       {clean(vehicle.vehicle_id) || "No ID"}
@@ -494,25 +631,26 @@ columns={[
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
                 >
                   <Eye size={14} />
-                  View
+                  View Asset
                 </Link>
 
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/edit`}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenManageId((current) =>
+                      current === vehicle.id ? null : vehicle.id,
+                    )
+                  }
                   className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"
                 >
-                  <Pencil size={14} />
-                  Edit
-                </Link>
-
-                <Link
-                  href={`/assets/vehicles/${vehicle.id}/update`}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-bold text-orange-700"
-                >
-                  <Wrench size={14} />
-                  Update Asset
-                </Link>
+                  <Settings size={14} />
+                  Manage
+                </button>
               </div>
+
+              {openManageId === vehicle.id ? (
+                <ManagePanel vehicle={vehicle} />
+              ) : null}
             </div>
           );
         }}
