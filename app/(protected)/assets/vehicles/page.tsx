@@ -147,7 +147,9 @@ export default function VehiclesPage() {
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [projectFilter, setProjectFilter] = useState("All Projects");
   const [statusFilter, setStatusFilter] = useState("All Statuses");
-  const [openManageId, setOpenManageId] = useState<string | null>(null);
+  const [manageVehicle, setManageVehicle] = useState<EnhancedVehicle | null>(
+    null,
+  );
 
   const loadVehicles = useCallback(async () => {
     setLoading(true);
@@ -304,44 +306,6 @@ export default function VehiclesPage() {
     URL.revokeObjectURL(url);
   }
 
-  function ManagePanel({ vehicle }: { vehicle: EnhancedVehicle }) {
-    return (
-      <div className="mt-2 w-full rounded-2xl border border-slate-200 bg-white p-3 shadow-lg sm:w-72">
-        <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-          Manage Asset
-        </p>
-
-        <div className="mt-3 grid gap-2">
-          <Link
-            href={`/assets/vehicles/${vehicle.id}/edit`}
-            className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left hover:bg-white"
-          >
-            <Pencil size={16} className="mt-0.5 text-slate-600" />
-            <div>
-              <p className="text-sm font-bold text-slate-900">Edit Details</p>
-              <p className="text-xs text-slate-500">
-                Rego, allocation, ownership, documents and notes.
-              </p>
-            </div>
-          </Link>
-
-          <Link
-            href={`/assets/vehicles/${vehicle.id}/update`}
-            className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 p-3 text-left hover:bg-orange-100"
-          >
-            <Wrench size={16} className="mt-0.5 text-orange-700" />
-            <div>
-              <p className="text-sm font-bold text-orange-800">Update Asset</p>
-              <p className="text-xs text-orange-700">
-                Service, modifications, spare keys and project transfers.
-              </p>
-            </div>
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <PageShell>
       <PageHeader
@@ -420,7 +384,7 @@ export default function VehiclesPage() {
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
-              setOpenManageId(null);
+              setManageVehicle(null);
             }}
             placeholder="Search vehicle ID, rego, make, model..."
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
@@ -430,7 +394,7 @@ export default function VehiclesPage() {
             value={categoryFilter}
             onChange={(event) => {
               setCategoryFilter(event.target.value);
-              setOpenManageId(null);
+              setManageVehicle(null);
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
@@ -443,7 +407,7 @@ export default function VehiclesPage() {
             value={projectFilter}
             onChange={(event) => {
               setProjectFilter(event.target.value);
-              setOpenManageId(null);
+              setManageVehicle(null);
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
@@ -456,7 +420,7 @@ export default function VehiclesPage() {
             value={statusFilter}
             onChange={(event) => {
               setStatusFilter(event.target.value);
-              setOpenManageId(null);
+              setManageVehicle(null);
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
@@ -529,33 +493,23 @@ export default function VehiclesPage() {
           {
             label: "Actions",
             render: (vehicle) => (
-              <div className="min-w-[220px]">
-                <div className="flex flex-wrap gap-2">
-                  <Link
-                    href={`/assets/vehicles/${vehicle.id}`}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                  >
-                    <Eye size={14} />
-                    View Asset
-                  </Link>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/vehicles/${vehicle.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  <Eye size={14} />
+                  View Asset
+                </Link>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setOpenManageId((current) =>
-                        current === vehicle.id ? null : vehicle.id,
-                      )
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
-                  >
-                    <Settings size={14} />
-                    Manage
-                  </button>
-                </div>
-
-                {openManageId === vehicle.id ? (
-                  <ManagePanel vehicle={vehicle} />
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setManageVehicle(vehicle)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
+                >
+                  <Settings size={14} />
+                  Manage
+                </button>
               </div>
             ),
           },
@@ -636,25 +590,79 @@ export default function VehiclesPage() {
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setOpenManageId((current) =>
-                      current === vehicle.id ? null : vehicle.id,
-                    )
-                  }
+                  onClick={() => setManageVehicle(vehicle)}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"
                 >
                   <Settings size={14} />
                   Manage
                 </button>
               </div>
-
-              {openManageId === vehicle.id ? (
-                <ManagePanel vehicle={vehicle} />
-              ) : null}
             </div>
           );
         }}
       />
+
+      {manageVehicle ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                  Manage Asset
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  {clean(manageVehicle.vehicle_id) || "Vehicle"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {clean(manageVehicle.vehicle_rego) || "No rego"} ·{" "}
+                  {getMakeModel(manageVehicle) || "No make/model"}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setManageVehicle(null)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3">
+              <Link
+                href={`/assets/vehicles/${manageVehicle.id}/edit`}
+                className="flex items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 hover:bg-white"
+              >
+                <Pencil size={20} className="mt-1 text-slate-700" />
+                <div>
+                  <p className="text-base font-black text-slate-950">
+                    Edit Details
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Use this for rego, allocation, ownership, documents and notes.
+                  </p>
+                </div>
+              </Link>
+
+              <Link
+                href={`/assets/vehicles/${manageVehicle.id}/update`}
+                className="flex items-start gap-4 rounded-2xl border border-orange-200 bg-orange-50 p-4 hover:bg-orange-100"
+              >
+                <Wrench size={20} className="mt-1 text-orange-700" />
+                <div>
+                  <p className="text-base font-black text-orange-800">
+                    Update Asset
+                  </p>
+                  <p className="mt-1 text-sm text-orange-700">
+                    Use this for services, modifications, spare keys and project
+                    transfers.
+                  </p>
+                </div>
+              </Link>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageShell>
   );
 }
