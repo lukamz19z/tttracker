@@ -8,6 +8,7 @@ import {
   Car,
   ClipboardCheck,
   FileText,
+  FileUp,
   KeyRound,
   Pencil,
   Save,
@@ -389,7 +390,7 @@ export default function VehicleDetailPage() {
   const [loading, setLoading] = useState(true);
   const [savingHistory, setSavingHistory] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-
+const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const loadVehicle = useCallback(async () => {
     setLoading(true);
     setErrorMessage("");
@@ -481,6 +482,7 @@ export default function VehicleDetailPage() {
     : [];
 
   function openEditRecord(record: ServiceHistory) {
+    setReplacementFile(null);
     setEditingRecord(record);
     setEditForm({
       record_type: optional(record.record_type),
@@ -505,80 +507,142 @@ export default function VehicleDetailPage() {
       next_inspection_due: dateInput(record.next_inspection_due),
     });
   }
-
-  async function saveHistoryRecord() {
-    if (!editingRecord || !editForm) return;
-
-    setSavingHistory(true);
-    setErrorMessage("");
-
-    const { error } = await supabase
-      .from("vehicle_service_history")
-      .update({
-        record_type: editForm.record_type.trim() || null,
-        service_date: editForm.service_date || null,
-        inspection_date: editForm.inspection_date || null,
-        modification_date: editForm.modification_date || null,
-        service_type: editForm.service_type.trim() || null,
-        inspection_type: editForm.inspection_type.trim() || null,
-        modification_type: editForm.modification_type.trim() || null,
-        modification_description:
-          editForm.modification_description.trim() || null,
-        supplier: editForm.supplier.trim() || null,
-        invoice_number: editForm.invoice_number.trim() || null,
-        invoice_cost: toNumber(editForm.invoice_cost),
-        work_completed: editForm.work_completed.trim() || null,
-        mechanic_recommendations:
-          editForm.mechanic_recommendations.trim() || null,
-        follow_up_actions: editForm.follow_up_actions.trim() || null,
-        invoice_notes: editForm.invoice_notes.trim() || null,
-        next_service_due: editForm.next_service_due || null,
-        next_inspection_due: editForm.next_inspection_due || null,
-      })
-      .eq("id", editingRecord.id);
-
-    if (error) {
-      setErrorMessage(error.message);
-      setSavingHistory(false);
-      return;
-    }
-
-    setEditingRecord(null);
-    setEditForm(null);
-    setSavingHistory(false);
-    await loadVehicle();
-    router.refresh();
+async function uploadReplacementAttachment(historyId: string) {
+  if (!replacementFile) {
+    return null;
   }
 
-  async function deleteHistoryRecord(record: ServiceHistory) {
-    const confirmed = window.confirm(
-      "Delete this history record? This should only be used for incorrect duplicate entries.",
-    );
+  const safeFileName = replacementFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filePath = `${vehicleId}/${historyId}/${Date.now()}-${safeFileName}`;
 
-    if (!confirmed) return;
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from("vehicle_service_documents")
+    .upload(filePath, replacementFile, {
+      cacheControl: "3600",
+      upsert: false,
+    });
 
-    setErrorMessage("");
+  if (uploadError) {
+    throw new Error(uploadError.message);
+  }
 
-    if (record.storage_path) {
+  const {
+    data: { publicUrl },
+  } = supabase.storage
+    .from("vehicle_service_documents")
+    .getPublicUrl(uploadData.path);
+
+  return {
+    document_name: replacementFile.name,
+    document_url: publicUrl,
+    storage_path: uploadData.path,
+  };
+}
+ async function saveHistoryRecord() {
+  if (!editingRecord || !editForm) return;
+
+  setSavingHistory(true);
+  setErrorMessage("");
+
+  let replacementAttachment: {
+    document_name: string;
+    document_url: string;
+    storage_path: string;
+  } | null = null;
+
+  try {
+    replacementAttachment = await uploadReplacementAttachment(editingRecord.id);
+
+    if (replacementAttachment && editingRecord.storage_path) {
       await supabase.storage
         .from("vehicle_service_documents")
-        .remove([record.storage_path]);
+        .remove([editingRecord.storage_path]);
     }
-
-    const { error } = await supabase
-      .from("vehicle_service_history")
-      .delete()
-      .eq("id", record.id);
-
-    if (error) {
-      setErrorMessage(error.message);
-      return;
-    }
-
-    await loadVehicle();
-    router.refresh();
+  } catch (uploadError) {
+    setErrorMessage(
+      uploadError instanceof Error
+        ? uploadError.message
+        : "Failed to upload replacement attachment.",
+    );
+    setSavingHistory(false);
+    return;
   }
 
+  const { error } = await supabase
+    .from("vehicle_service_history")
+    .update({
+      record_type: editForm.record_type.trim() || null,
+      service_date: editForm.service_date || null,
+      inspection_date: editForm.inspection_date || null,
+      modification_date: editForm.modification_date || null,
+      service_type: editForm.service_type.trim() || null,
+      inspection_type: editForm.inspection_type.trim() || null,
+      modification_type: editForm.modification_type.trim() || null,
+      modification_description:
+        editForm.modification_description.trim() || null,
+      supplier: editForm.supplier.trim() || null,
+      invoice_number: editForm.invoice_number.trim() || null,
+      invoice_cost: toNumber(editForm.invoice_cost),
+      work_completed: editForm.work_completed.trim() || null,
+      mechanic_recommendations:
+        editForm.mechanic_recommendations.trim() || null,
+      follow_up_actions: editForm.follow_up_actions.trim() || null,
+      invoice_notes: editForm.invoice_notes.trim() || null,
+      next_service_due: editForm.next_service_due || null,
+      next_inspection_due: editForm.next_inspection_due || null,
+
+      ...(replacementAttachment
+        ? {
+            document_name: replacementAttachment.document_name,
+            document_url: replacementAttachment.document_url,
+            storage_path: replacementAttachment.storage_path,
+          }
+        : {}),
+    })
+    .eq("id", editingRecord.id);
+
+  if (error) {
+    setErrorMessage(error.message);
+    setSavingHistory(false);
+    return;
+  }
+
+  setEditingRecord(null);
+  setEditForm(null);
+  setReplacementFile(null);
+  setSavingHistory(false);
+
+  await loadVehicle();
+  router.refresh();
+}
+async function deleteHistoryRecord(record: ServiceHistory) {
+  const confirmed = window.confirm(
+    "Delete this history record? This should only be used for incorrect duplicate entries.",
+  );
+
+  if (!confirmed) return;
+
+  setErrorMessage("");
+
+  if (record.storage_path) {
+    await supabase.storage
+      .from("vehicle_service_documents")
+      .remove([record.storage_path]);
+  }
+
+  const { error } = await supabase
+    .from("vehicle_service_history")
+    .delete()
+    .eq("id", record.id);
+
+  if (error) {
+    setErrorMessage(error.message);
+    return;
+  }
+
+  await loadVehicle();
+  router.refresh();
+}
   if (loading) {
     return (
       <PageShell>
@@ -943,15 +1007,19 @@ export default function VehicleDetailPage() {
 
                           <div className="mt-4 flex flex-wrap gap-2">
                             {record.document_url ? (
-                              <a
-                                href={record.document_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                              >
-                                Open Attachment
-                              </a>
-                            ) : null}
+  <a
+    href={record.document_url}
+    target="_blank"
+    rel="noreferrer"
+    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+  >
+    Open {record.document_name || "Attachment"}
+  </a>
+) : (
+  <span className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-400">
+    No attachment
+  </span>
+)}
 
                             <button
                               type="button"
