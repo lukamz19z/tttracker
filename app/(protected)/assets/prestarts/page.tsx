@@ -35,23 +35,23 @@ type VehicleAsset = {
   status: string | null;
 };
 
+type Crew = {
+  id: string;
+  crew_number: string;
+  crew_name: string | null;
+};
+
 type Employee = {
   id: string;
-  full_name: string | null;
-  name?: string | null;
-  active?: boolean | null;
+  full_name: string;
+  role: string | null;
+  crew_id: string | null;
+  active: boolean | null;
 };
 
 type ProjectOption = {
   id?: string;
   name: string | null;
-};
-
-type CrewOption = {
-  id?: string;
-  crew_name?: string | null;
-  crew_number?: string | null;
-  name?: string | null;
 };
 
 type VehiclePrestart = {
@@ -109,6 +109,13 @@ function checklistKey(label: string) {
   return label.toLowerCase().replaceAll(" ", "_").replaceAll("/", "_");
 }
 
+function defaultChecklist() {
+  return checklistItems.reduce<Record<string, string>>((acc, item) => {
+    acc[checklistKey(item)] = "yes";
+    return acc;
+  }, {});
+}
+
 function csvSafe(value: string | number | null | undefined) {
   const text = String(value ?? "");
   return `"${text.replace(/"/g, '""')}"`;
@@ -136,6 +143,7 @@ function getPrestartAssetLabel(prestart: VehiclePrestart) {
 
 function formatDate(value: string | null) {
   if (!value) return "No date";
+
   return new Date(value).toLocaleString("en-AU", {
     day: "2-digit",
     month: "short",
@@ -186,6 +194,10 @@ function severityToResult(severity: string) {
   return "Issue Raised";
 }
 
+function crewLabel(crew: Crew) {
+  return `${crew.crew_number}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`;
+}
+
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
   const classes =
     tone === "emerald"
@@ -207,6 +219,39 @@ function StatusPill({ label, tone }: { label: string; tone: Tone }) {
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {label}
     </span>
+  );
+}
+
+function ChecklistButton({
+  active,
+  children,
+  tone,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  tone: "yes" | "no" | "na";
+  onClick: () => void;
+}) {
+  const activeClasses =
+    tone === "yes"
+      ? "border-emerald-500 bg-emerald-600 text-white"
+      : tone === "no"
+        ? "border-rose-500 bg-rose-600 text-white"
+        : "border-slate-500 bg-slate-700 text-white";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+        active
+          ? activeClasses
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -264,7 +309,7 @@ export default function VehiclePrestartsPage() {
   const [prestarts, setPrestarts] = useState<VehiclePrestart[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [crews, setCrews] = useState<CrewOption[]>([]);
+  const [crews, setCrews] = useState<Crew[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -279,7 +324,15 @@ export default function VehiclePrestartsPage() {
   const [inspectorFilter, setInspectorFilter] = useState("All Inspectors");
 
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
-  const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId);
+  const [selectedProject, setSelectedProject] = useState("");
+  const [selectedCrew, setSelectedCrew] = useState("");
+  const [checklistValues, setChecklistValues] = useState<Record<string, string>>(
+    defaultChecklist,
+  );
+
+  const selectedVehicle = vehicles.find(
+    (vehicle) => vehicle.id === selectedVehicleId,
+  );
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -298,7 +351,7 @@ export default function VehiclePrestartsPage() {
 
     const employeesResult = await supabase
       .from("employees")
-      .select("id, full_name, active")
+      .select("id, full_name, role, crew_id, active")
       .order("full_name", { ascending: true });
 
     const projectsResult = await supabase
@@ -308,14 +361,14 @@ export default function VehiclePrestartsPage() {
 
     const crewsResult = await supabase
       .from("crews")
-      .select("id, crew_name, crew_number")
+      .select("id, crew_number, crew_name")
       .order("crew_number", { ascending: true });
 
     if (vehiclesResult.error) {
       console.error("Failed to load vehicles:", vehiclesResult.error.message);
       setVehicles([]);
     } else {
-      setVehicles(vehiclesResult.data ?? []);
+      setVehicles((vehiclesResult.data ?? []) as VehicleAsset[]);
     }
 
     if (prestartsResult.error) {
@@ -329,15 +382,23 @@ export default function VehiclePrestartsPage() {
       console.error("Failed to load employees:", employeesResult.error.message);
       setEmployees([]);
     } else {
-      setEmployees((employeesResult.data ?? []).filter((employee) => employee.active !== false));
+      setEmployees(
+        ((employeesResult.data ?? []) as Employee[]).filter(
+          (employee) => employee.active !== false,
+        ),
+      );
     }
 
-    if (!projectsResult.error) {
+    if (projectsResult.error) {
+      setProjects([]);
+    } else {
       setProjects(projectsResult.data ?? []);
     }
 
-    if (!crewsResult.error) {
-      setCrews(crewsResult.data ?? []);
+    if (crewsResult.error) {
+      setCrews([]);
+    } else {
+      setCrews((crewsResult.data ?? []) as Crew[]);
     }
 
     setLoading(false);
@@ -348,29 +409,71 @@ export default function VehiclePrestartsPage() {
   }, [loadData]);
 
   const projectOptions = useMemo(() => {
-    const fromVehicles = vehicles.map((vehicle) => clean(vehicle.project)).filter(Boolean);
-    const fromProjects = projects.map((project) => clean(project.name)).filter(Boolean);
+    const values = [
+      ...projects.map((project) => clean(project.name)),
+      ...vehicles.map((vehicle) => clean(vehicle.project)),
+      ...prestarts.map((prestart) => clean(prestart.project)),
+    ].filter(Boolean);
 
-    return ["All Projects", ...Array.from(new Set([...fromProjects, ...fromVehicles])).sort()];
-  }, [vehicles, projects]);
+    return ["All Projects", ...Array.from(new Set(values)).sort()];
+  }, [projects, vehicles, prestarts]);
 
   const crewOptions = useMemo(() => {
-    const fromVehicles = vehicles.map((vehicle) => clean(vehicle.crew)).filter(Boolean);
-    const fromCrews = crews
-      .map((crew) => clean(crew.crew_name) || clean(crew.crew_number) || clean(crew.name))
-      .filter(Boolean);
+    const crewLabels =
+      crews.length > 0
+        ? crews.map((crew) => crewLabel(crew))
+        : [
+            ...vehicles.map((vehicle) => clean(vehicle.crew)),
+            ...prestarts.map((prestart) => clean(prestart.crew)),
+          ];
 
-    return ["All Crews", ...Array.from(new Set([...fromCrews, ...fromVehicles])).sort()];
-  }, [vehicles, crews]);
+    return ["All Crews", ...Array.from(new Set(crewLabels.filter(Boolean))).sort()];
+  }, [crews, vehicles, prestarts]);
 
   const inspectorOptions = useMemo(() => {
     return [
       "All Inspectors",
       ...Array.from(
-        new Set(prestarts.map((prestart) => clean(prestart.inspected_by_name)).filter(Boolean)),
+        new Set(
+          [
+            ...employees.map((employee) => clean(employee.full_name)),
+            ...prestarts.map((prestart) => clean(prestart.inspected_by_name)),
+          ].filter(Boolean),
+        ),
       ).sort(),
     ];
-  }, [prestarts]);
+  }, [employees, prestarts]);
+
+  function matchCrewOption(vehicleCrew: string | null) {
+    const value = clean(vehicleCrew);
+
+    if (!value) return "";
+
+    const exact = crewOptions.find((option) => option === value);
+    if (exact) return exact;
+
+    const byNumber = crews.find((crew) => crew.crew_number === value);
+    if (byNumber) return crewLabel(byNumber);
+
+    return value;
+  }
+
+  function openForm() {
+    setSelectedVehicleId("");
+    setSelectedProject("");
+    setSelectedCrew("");
+    setChecklistValues(defaultChecklist());
+    setShowForm(true);
+  }
+
+  function handleVehicleChange(vehicleId: string) {
+    setSelectedVehicleId(vehicleId);
+
+    const vehicle = vehicles.find((item) => item.id === vehicleId);
+
+    setSelectedProject(clean(vehicle?.project));
+    setSelectedCrew(matchCrewOption(vehicle?.crew ?? null));
+  }
 
   const latestByVehicle = useMemo(() => {
     const map = new Map<string, VehiclePrestart>();
@@ -381,7 +484,9 @@ export default function VehiclePrestartsPage() {
 
       const existing = map.get(vehicleId);
       const currentTime = new Date(prestart.created_at ?? "").getTime();
-      const existingTime = existing ? new Date(existing.created_at ?? "").getTime() : 0;
+      const existingTime = existing
+        ? new Date(existing.created_at ?? "").getTime()
+        : 0;
 
       if (!existing || currentTime > existingTime) {
         map.set(vehicleId, prestart);
@@ -427,7 +532,8 @@ export default function VehiclePrestartsPage() {
   }, [prestarts]);
 
   const issuesRaised = useMemo(() => {
-    return prestarts.filter((prestart) => clean(prestart.severity) !== "none").length;
+    return prestarts.filter((prestart) => clean(prestart.severity) !== "none")
+      .length;
   }, [prestarts]);
 
   const filteredPrestarts = useMemo(() => {
@@ -451,18 +557,28 @@ export default function VehiclePrestartsPage() {
         searchable.includes(term) &&
         (severityFilter === "All Severities" ||
           severityLabel(prestart.severity) === severityFilter) &&
-        (projectFilter === "All Projects" || clean(prestart.project) === projectFilter) &&
+        (projectFilter === "All Projects" ||
+          clean(prestart.project) === projectFilter) &&
         (crewFilter === "All Crews" || clean(prestart.crew) === crewFilter) &&
         (inspectorFilter === "All Inspectors" ||
           clean(prestart.inspected_by_name) === inspectorFilter)
       );
     });
-  }, [prestarts, search, severityFilter, projectFilter, crewFilter, inspectorFilter]);
+  }, [
+    prestarts,
+    search,
+    severityFilter,
+    projectFilter,
+    crewFilter,
+    inspectorFilter,
+  ]);
 
   async function handleCreatePrestart(formData: FormData) {
     setSaving(true);
 
-    const vehicle = vehicles.find((item) => item.id === clean(formData.get("vehicle_asset_id") as string));
+    const vehicle = vehicles.find(
+      (item) => item.id === clean(formData.get("vehicle_asset_id") as string),
+    );
 
     if (!vehicle) {
       alert("Please select a vehicle.");
@@ -479,16 +595,7 @@ export default function VehiclePrestartsPage() {
       return;
     }
 
-    const checklist = checklistItems.reduce<Record<string, string>>((acc, item) => {
-      const key = checklistKey(item);
-      acc[key] = clean(formData.get(key) as string) || "na";
-      return acc;
-    }, {});
-
-    const assetLabel = [
-      clean(vehicle.vehicle_id) || "Vehicle",
-      getMakeModel(vehicle),
-    ]
+    const assetLabel = [clean(vehicle.vehicle_id) || "Vehicle", getMakeModel(vehicle)]
       .filter(Boolean)
       .join(" ");
 
@@ -497,10 +604,10 @@ export default function VehiclePrestartsPage() {
       asset_label: assetLabel,
       vehicle_rego: clean(vehicle.vehicle_rego),
       kilometres: Number(formData.get("kilometres") || 0),
-      project: clean(formData.get("project") as string) || clean(vehicle.project),
-      crew: clean(formData.get("crew") as string) || clean(vehicle.crew),
+      project: selectedProject || clean(vehicle.project),
+      crew: selectedCrew || matchCrewOption(vehicle.crew),
       inspected_by_name: clean(formData.get("inspected_by_name") as string),
-      checklist,
+      checklist: checklistValues,
       overall_condition: clean(formData.get("overall_condition") as string),
       comments,
       severity,
@@ -544,12 +651,18 @@ export default function VehiclePrestartsPage() {
       }
 
       if (fleetJobError) {
-        console.warn("Prestart saved, but Fleet Job was not created:", fleetJobError.message);
+        console.warn(
+          "Prestart saved, but Fleet Job was not created:",
+          fleetJobError.message,
+        );
       }
     }
 
     setShowForm(false);
     setSelectedVehicleId("");
+    setSelectedProject("");
+    setSelectedCrew("");
+    setChecklistValues(defaultChecklist());
     await loadData();
     setSaving(false);
   }
@@ -632,7 +745,7 @@ export default function VehiclePrestartsPage() {
 
             <button
               type="button"
-              onClick={() => setShowForm(true)}
+              onClick={openForm}
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-slate-800"
             >
               <Plus size={16} />
@@ -868,11 +981,6 @@ export default function VehiclePrestartsPage() {
                 ))}
               </select>
             </div>
-
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Minor, moderate, major and do-not-use issues are sent to Fleet
-              Jobs. No Issues prestarts are kept as records only.
-            </div>
           </div>
         ) : null}
       </section>
@@ -1027,24 +1135,13 @@ export default function VehiclePrestartsPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Link
-                  href={`/assets/prestarts/${prestart.id}`}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-                >
-                  <Eye size={14} />
-                  View
-                </Link>
-
-                {prestart.fleet_job_id ? (
-                  <Link
-                    href={`/assets/fleet-jobs/${prestart.fleet_job_id}`}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700"
-                  >
-                    Fleet Job
-                  </Link>
-                ) : null}
-              </div>
+              <Link
+                href={`/assets/prestarts/${prestart.id}`}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+              >
+                <Eye size={14} />
+                View
+              </Link>
             </div>
           )}
         />
@@ -1089,7 +1186,9 @@ export default function VehiclePrestartsPage() {
                       <select
                         name="vehicle_asset_id"
                         value={selectedVehicleId}
-                        onChange={(event) => setSelectedVehicleId(event.target.value)}
+                        onChange={(event) =>
+                          handleVehicleChange(event.target.value)
+                        }
                         required
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
@@ -1123,8 +1222,8 @@ export default function VehiclePrestartsPage() {
                       >
                         <option value="">Select employee</option>
                         {employees.map((employee) => (
-                          <option key={employee.id} value={clean(employee.full_name) || clean(employee.name)}>
-                            {clean(employee.full_name) || clean(employee.name)}
+                          <option key={employee.id} value={employee.full_name}>
+                            {employee.full_name}
                           </option>
                         ))}
                       </select>
@@ -1134,7 +1233,8 @@ export default function VehiclePrestartsPage() {
                       Project
                       <select
                         name="project"
-                        defaultValue={clean(selectedVehicle?.project)}
+                        value={selectedProject}
+                        onChange={(event) => setSelectedProject(event.target.value)}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
                         <option value="">No project selected</option>
@@ -1150,7 +1250,8 @@ export default function VehiclePrestartsPage() {
                       Crew
                       <select
                         name="crew"
-                        defaultValue={clean(selectedVehicle?.crew)}
+                        value={selectedCrew}
+                        onChange={(event) => setSelectedCrew(event.target.value)}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
                         <option value="">No crew selected</option>
@@ -1176,28 +1277,86 @@ export default function VehiclePrestartsPage() {
                       Vehicle Checklist
                     </h3>
                     <p className="mt-1 text-sm text-slate-600">
-                      Mark each item as Yes, No or N/A.
+                      Tap Yes, No or N/A for each item.
                     </p>
                   </div>
 
                   <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-                    {checklistItems.map((item) => (
-                      <label
-                        key={item}
-                        className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700"
-                      >
-                        {item}
-                        <select
-                          name={checklistKey(item)}
-                          defaultValue="yes"
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                    {checklistItems.map((item) => {
+                      const key = checklistKey(item);
+                      const value = checklistValues[key] || "yes";
+
+                      return (
+                        <div
+                          key={item}
+                          className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
                         >
-                          <option value="yes">Yes</option>
-                          <option value="no">No</option>
-                          <option value="na">N/A</option>
-                        </select>
-                      </label>
-                    ))}
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <p className="text-sm font-black text-slate-800">
+                              {item}
+                            </p>
+
+                            <StatusPill
+                              label={value.toUpperCase()}
+                              tone={
+                                value === "yes"
+                                  ? "emerald"
+                                  : value === "no"
+                                    ? "rose"
+                                    : "slate"
+                              }
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            <ChecklistButton
+                              active={value === "yes"}
+                              tone="yes"
+                              onClick={() =>
+                                setChecklistValues((current) => ({
+                                  ...current,
+                                  [key]: "yes",
+                                }))
+                              }
+                            >
+                              Yes
+                            </ChecklistButton>
+
+                            <ChecklistButton
+                              active={value === "no"}
+                              tone="no"
+                              onClick={() =>
+                                setChecklistValues((current) => ({
+                                  ...current,
+                                  [key]: "no",
+                                }))
+                              }
+                            >
+                              No
+                            </ChecklistButton>
+
+                            <ChecklistButton
+                              active={value === "na"}
+                              tone="na"
+                              onClick={() =>
+                                setChecklistValues((current) => ({
+                                  ...current,
+                                  [key]: "na",
+                                }))
+                              }
+                            >
+                              N/A
+                            </ChecklistButton>
+                          </div>
+
+                          <input
+                            type="hidden"
+                            name={key}
+                            value={checklistValues[key] || "yes"}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
 
@@ -1229,10 +1388,18 @@ export default function VehiclePrestartsPage() {
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
                         <option value="none">No Issues</option>
-                        <option value="minor">Minor - Low Priority Fleet Job</option>
-                        <option value="moderate">Moderate - Medium Priority Fleet Job</option>
-                        <option value="major">Major - High Priority Fleet Job</option>
-                        <option value="do_not_use">Do Not Use - Critical Fleet Job</option>
+                        <option value="minor">
+                          Minor - Low Priority Fleet Job
+                        </option>
+                        <option value="moderate">
+                          Moderate - Medium Priority Fleet Job
+                        </option>
+                        <option value="major">
+                          Major - High Priority Fleet Job
+                        </option>
+                        <option value="do_not_use">
+                          Do Not Use - Critical Fleet Job
+                        </option>
                       </select>
                     </label>
 
