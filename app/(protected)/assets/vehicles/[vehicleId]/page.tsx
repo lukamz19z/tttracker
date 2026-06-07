@@ -1197,17 +1197,120 @@ async function deleteHistoryRecord(record: ServiceHistory) {
               <TextField label="Next Inspection Due" type="date" value={editForm.next_inspection_due} onChange={(value) => setEditForm((current) => current ? { ...current, next_inspection_due: value } : current)} />
             </div>
 
-            <div className="mt-4 space-y-4">
-              <TextAreaField label="Modification Description" value={editForm.modification_description} onChange={(value) => setEditForm((current) => current ? { ...current, modification_description: value } : current)} />
-              <TextAreaField label="Work Completed" value={editForm.work_completed} onChange={(value) => setEditForm((current) => current ? { ...current, work_completed: value } : current)} />
+<div className="mt-4 space-y-4">
+  <TextAreaField
+    label="Modification Description"
+    value={editForm.modification_description}
+    onChange={(value) =>
+      setEditForm((current) =>
+        current ? { ...current, modification_description: value } : current,
+      )
+    }
+  />
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <TextAreaField label="Mechanic Recommendations" value={editForm.mechanic_recommendations} onChange={(value) => setEditForm((current) => current ? { ...current, mechanic_recommendations: value } : current)} />
-                <TextAreaField label="Follow Up Actions" value={editForm.follow_up_actions} onChange={(value) => setEditForm((current) => current ? { ...current, follow_up_actions: value } : current)} />
-              </div>
+  <TextAreaField
+    label="Work Completed"
+    value={editForm.work_completed}
+    onChange={(value) =>
+      setEditForm((current) =>
+        current ? { ...current, work_completed: value } : current,
+      )
+    }
+  />
 
-              <TextAreaField label="Invoice / Update Notes" value={editForm.invoice_notes} onChange={(value) => setEditForm((current) => current ? { ...current, invoice_notes: value } : current)} />
-            </div>
+  <div className="grid gap-4 md:grid-cols-2">
+    <TextAreaField
+      label="Mechanic Recommendations"
+      value={editForm.mechanic_recommendations}
+      onChange={(value) =>
+        setEditForm((current) =>
+          current
+            ? { ...current, mechanic_recommendations: value }
+            : current,
+        )
+      }
+    />
+
+    <TextAreaField
+      label="Follow Up Actions"
+      value={editForm.follow_up_actions}
+      onChange={(value) =>
+        setEditForm((current) =>
+          current ? { ...current, follow_up_actions: value } : current,
+        )
+      }
+    />
+  </div>
+
+  <TextAreaField
+    label="Invoice / Update Notes"
+    value={editForm.invoice_notes}
+    onChange={(value) =>
+      setEditForm((current) =>
+        current ? { ...current, invoice_notes: value } : current,
+      )
+    }
+  />
+
+  {/* Attachment Section */}
+  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+    <p className="text-sm font-black text-slate-950">
+      Service / Modification Attachment
+    </p>
+
+    <p className="mt-1 text-xs text-slate-500">
+      View the existing attachment or upload a replacement invoice,
+      service report, inspection report or receipt.
+    </p>
+
+    <div className="mt-4 space-y-3">
+      {editingRecord.document_url ? (
+        <a
+          href={editingRecord.document_url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+        >
+          <FileText size={14} />
+          View Current Attachment
+        </a>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-500">
+          No attachment currently saved for this record.
+        </div>
+      )}
+
+      <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-bold text-slate-800">
+            {replacementFile
+              ? replacementFile.name
+              : "No replacement file selected"}
+          </p>
+
+          <p className="text-xs text-slate-500">
+            Uploading a new file will replace the existing attachment.
+          </p>
+        </div>
+
+        <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-white">
+          <FileUp size={14} />
+          Upload Replacement
+
+          <input
+            type="file"
+            className="hidden"
+            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+            onChange={(event) => {
+              setReplacementFile(event.target.files?.[0] ?? null);
+              event.target.value = "";
+            }}
+          />
+        </span>
+      </label>
+    </div>
+  </div>
+</div>
 
             <div className="mt-5 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:justify-end">
               <button
