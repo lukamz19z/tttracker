@@ -4,6 +4,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   Car,
@@ -69,6 +70,7 @@ type VehiclePrestart = {
   severity: string | null;
   result: string | null;
   fleet_job_id: string | null;
+  prestart_date: string | null;
   created_at: string | null;
 };
 
@@ -153,6 +155,20 @@ function formatDate(value: string | null) {
   });
 }
 
+function formatShortDate(value: string | null) {
+  if (!value) return "-";
+
+  return new Date(value).toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function prestartDateValue(prestart: VehiclePrestart) {
+  return prestart.prestart_date || prestart.created_at;
+}
+
 function daysSince(value: string | null) {
   if (!value) return null;
 
@@ -229,7 +245,7 @@ function ChecklistButton({
   onClick,
 }: {
   active: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
   tone: "yes" | "no" | "na";
   onClick: () => void;
 }) {
@@ -343,7 +359,7 @@ function StatCard({
   value: number;
   detail: string;
   tone: Tone;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }) {
   const classes =
     tone === "emerald"
@@ -419,6 +435,7 @@ export default function VehiclePrestartsPage() {
     const prestartsResult = await supabase
       .from("vehicle_prestarts")
       .select("*")
+      .order("prestart_date", { ascending: false })
       .order("created_at", { ascending: false });
 
     const employeesResult = await supabase
@@ -553,9 +570,9 @@ export default function VehiclePrestartsPage() {
       if (!vehicleId) return;
 
       const existing = map.get(vehicleId);
-      const currentTime = new Date(prestart.created_at ?? "").getTime();
+      const currentTime = new Date(prestartDateValue(prestart) ?? "").getTime();
       const existingTime = existing
-        ? new Date(existing.created_at ?? "").getTime()
+        ? new Date(prestartDateValue(existing) ?? "").getTime()
         : 0;
 
       if (!existing || currentTime > existingTime) {
@@ -569,7 +586,7 @@ export default function VehiclePrestartsPage() {
   const overdue7Days = useMemo(() => {
     return vehicles.filter((vehicle) => {
       const latest = latestByVehicle.get(vehicle.id);
-      const days = latest ? daysSince(latest.created_at) : null;
+      const days = latest ? daysSince(prestartDateValue(latest)) : null;
       return days === null || days >= 7;
     });
   }, [vehicles, latestByVehicle]);
@@ -577,14 +594,14 @@ export default function VehiclePrestartsPage() {
   const overdue21Days = useMemo(() => {
     return vehicles.filter((vehicle) => {
       const latest = latestByVehicle.get(vehicle.id);
-      const days = latest ? daysSince(latest.created_at) : null;
+      const days = latest ? daysSince(prestartDateValue(latest)) : null;
       return days === null || days >= 21;
     });
   }, [vehicles, latestByVehicle]);
 
   const submittedThisWeek = useMemo(() => {
     return prestarts.filter((prestart) => {
-      const days = daysSince(prestart.created_at);
+      const days = daysSince(prestartDateValue(prestart));
       return days !== null && days <= 7;
     }).length;
   }, [prestarts]);
@@ -593,7 +610,7 @@ export default function VehiclePrestartsPage() {
     return new Set(
       prestarts
         .filter((prestart) => {
-          const days = daysSince(prestart.created_at);
+          const days = daysSince(prestartDateValue(prestart));
           return days !== null && days <= 7;
         })
         .map((prestart) => clean(prestart.vehicle_asset_id))
@@ -662,14 +679,47 @@ export default function VehiclePrestartsPage() {
       return;
     }
 
-    const severity = clean(formData.get("severity") as string) || "none";
+    const prestartDate = clean(formData.get("prestart_date") as string);
+    const selectedSeverity =
+      clean(formData.get("severity") as string) || "none";
     const comments = clean(formData.get("comments") as string);
 
-    if (severity !== "none" && !comments) {
-      alert("Please enter defect details/comments when raising an issue.");
+    if (!prestartDate) {
+      alert("Please select the prestart date.");
       setSaving(false);
       return;
     }
+
+    const failedItems = checklistItems.filter((item) => {
+      const key = checklistKey(item);
+      return checklistValues[key] === "no";
+    });
+
+    const hasFailedChecklist = failedItems.length > 0;
+
+    if ((selectedSeverity !== "none" || hasFailedChecklist) && !comments) {
+      alert(
+        hasFailedChecklist
+          ? `Please add comments for failed checklist item(s): ${failedItems.join(", ")}`
+          : "Please enter defect details/comments when raising an issue.",
+      );
+      setSaving(false);
+      return;
+    }
+
+    const severity =
+      hasFailedChecklist && selectedSeverity === "none"
+        ? "minor"
+        : selectedSeverity;
+
+    const fleetJobDescription = [
+      comments,
+      failedItems.length > 0
+        ? `Failed checklist item(s): ${failedItems.join(", ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const assetLabel = [
       clean(vehicle.vehicle_id) || "Vehicle",
@@ -682,6 +732,7 @@ export default function VehiclePrestartsPage() {
       vehicle_asset_id: vehicle.id,
       asset_label: assetLabel,
       vehicle_rego: clean(vehicle.vehicle_rego),
+      prestart_date: prestartDate,
       kilometres: Number(formData.get("kilometres") || 0),
       project: selectedProject || clean(vehicle.project),
       crew: selectedCrew || matchCrewOption(vehicle.crew),
@@ -715,7 +766,8 @@ export default function VehiclePrestartsPage() {
           vehicle_asset_id: vehicle.id,
           asset_label: assetLabel,
           title: `${severityLabel(severity)} issue - ${assetLabel}`,
-          description: comments || "Issue raised from vehicle prestart.",
+          description:
+            fleetJobDescription || "Issue raised from vehicle prestart.",
           priority: severityToPriority(severity),
           status: "Open",
         })
@@ -765,7 +817,7 @@ export default function VehiclePrestartsPage() {
     ];
 
     const rows = filteredPrestarts.map((prestart) => [
-      formatDate(prestart.created_at),
+      formatShortDate(prestartDateValue(prestart)),
       clean(prestart.asset_label),
       clean(prestart.vehicle_rego),
       clean(prestart.inspected_by_name),
@@ -896,7 +948,7 @@ export default function VehiclePrestartsPage() {
             ) : (
               overdue7Days.slice(0, 8).map((vehicle) => {
                 const latest = latestByVehicle.get(vehicle.id);
-                const days = latest ? daysSince(latest.created_at) : null;
+                const days = latest ? daysSince(prestartDateValue(latest)) : null;
                 const critical = days === null || days >= 21;
 
                 return (
@@ -959,7 +1011,7 @@ export default function VehiclePrestartsPage() {
                     </p>
                     <p className="mt-1 text-sm font-medium text-slate-600">
                       {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
-                      {formatDate(prestart.created_at)}
+                      {formatShortDate(prestartDateValue(prestart))}
                     </p>
                   </div>
 
@@ -1079,8 +1131,8 @@ export default function VehiclePrestartsPage() {
           getKey={(prestart) => prestart.id}
           columns={[
             {
-              label: "Date",
-              render: (prestart) => formatDate(prestart.created_at),
+              label: "Prestart Date",
+              render: (prestart) => formatShortDate(prestartDateValue(prestart)),
             },
             {
               label: "Vehicle",
@@ -1185,7 +1237,7 @@ export default function VehiclePrestartsPage() {
                     Submitted
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {formatDate(prestart.created_at)}
+                    {formatShortDate(prestartDateValue(prestart))}
                   </p>
                 </div>
 
@@ -1287,6 +1339,17 @@ export default function VehiclePrestartsPage() {
                         value={selectedVehicleId}
                       />
                     </div>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Prestart Date
+                      <input
+                        name="prestart_date"
+                        type="date"
+                        required
+                        defaultValue={new Date().toISOString().slice(0, 10)}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
 
                     <label className="grid gap-2 text-sm font-bold text-slate-700">
                       Kilometres

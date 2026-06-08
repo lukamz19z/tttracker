@@ -130,7 +130,7 @@ const emptyForm: UpdateForm = {
   last_service: "",
   next_service_due: "",
   next_service_km: "",
-  service_interval_km: "",
+  service_interval_km: "10000",
   next_inspection_due: "",
 
   service_date: "",
@@ -204,6 +204,7 @@ const trailerInspectionTypes = [
 ];
 
 const modificationTypes = [
+  "General",
   "Addition",
   "Removal",
   "Replacement",
@@ -246,6 +247,28 @@ function toNumber(value: string) {
   if (!cleaned) return null;
   const number = Number(cleaned);
   return Number.isFinite(number) ? number : null;
+}
+
+function addMonths(dateValue: string, months: number) {
+  if (!dateValue) return "";
+
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+
+  date.setMonth(date.getMonth() + months);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "N/A";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+
+  return date.toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function getTone(status: string | null | undefined): Tone {
@@ -446,9 +469,7 @@ function DocumentUploadField({
     <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <p className="text-sm font-bold text-slate-800">{label}</p>
-        <p className="text-xs text-slate-500">
-          {file ? file.name : helper}
-        </p>
+        <p className="text-xs text-slate-500">{file ? file.name : helper}</p>
       </div>
 
       <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
@@ -489,7 +510,9 @@ export default function UpdateVehiclePage() {
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
-  const [complianceFiles, setComplianceFiles] = useState<Record<ComplianceFileKey, File | null>>({
+  const [complianceFiles, setComplianceFiles] = useState<
+    Record<ComplianceFileKey, File | null>
+  >({
     rego: null,
     insurance: null,
   });
@@ -581,14 +604,20 @@ export default function UpdateVehiclePage() {
 
   const calculatedNextServiceKm = useMemo(() => {
     const currentKm = toNumber(form.odometer_km);
-    const intervalKm = toNumber(form.service_interval_km);
     const manualNextKm = toNumber(form.next_service_km);
+    const intervalKm = toNumber(form.service_interval_km) ?? 10000;
 
     if (manualNextKm !== null) return manualNextKm;
-    if (currentKm !== null && intervalKm !== null) return currentKm + intervalKm;
+    if (currentKm !== null) return currentKm + intervalKm;
 
     return null;
   }, [form.odometer_km, form.service_interval_km, form.next_service_km]);
+
+  const calculatedNextServiceDue = useMemo(() => {
+    if (form.next_service_due) return form.next_service_due;
+    if (form.service_date) return addMonths(form.service_date, 6);
+    return "";
+  }, [form.next_service_due, form.service_date]);
 
   const kmUntilNextServiceDisplay = useMemo(() => {
     const currentKm = toNumber(form.odometer_km);
@@ -649,7 +678,10 @@ export default function UpdateVehiclePage() {
     };
   }
 
-  async function uploadSupersedingVehicleDocument(documentType: string, file: File | null) {
+  async function uploadSupersedingVehicleDocument(
+    documentType: string,
+    file: File | null,
+  ) {
     if (!file) return;
 
     const { data: existingDocuments, error: existingError } = await supabase
@@ -719,14 +751,16 @@ export default function UpdateVehiclePage() {
 
   async function saveServiceOrModificationHistory() {
     const isModification = form.update_type === "Modification";
+    const intervalKmValue = toNumber(form.service_interval_km) ?? 10000;
     const nextServiceKmValue = isTrailer ? null : calculatedNextServiceKm;
+    const nextServiceDueValue = isTrailer ? null : calculatedNextServiceDue;
 
     const historyPayload = isModification
       ? {
           vehicle_asset_id: vehicleId,
           record_type: "Modification / Addition",
           modification_date: form.modification_date || null,
-          modification_type: form.modification_type || null,
+          modification_type: form.modification_type || "General",
           modification_description: form.modification_description.trim() || null,
           supplier: form.supplier.trim() || null,
           invoice_number: form.invoice_number.trim() || null,
@@ -743,6 +777,7 @@ export default function UpdateVehiclePage() {
           service_date: isTrailer ? null : form.service_date || null,
           inspection_date: isTrailer ? form.inspection_date || null : null,
           odometer_km: isTrailer ? null : toNumber(form.odometer_km),
+          service_interval_km: isTrailer ? null : intervalKmValue,
           next_service_km: nextServiceKmValue,
           service_type: isTrailer ? null : form.service_type || null,
           inspection_type: isTrailer ? form.inspection_type || null : null,
@@ -753,7 +788,7 @@ export default function UpdateVehiclePage() {
           mechanic_recommendations: form.mechanic_recommendations.trim() || null,
           follow_up_actions: form.follow_up_actions.trim() || null,
           invoice_notes: form.invoice_notes.trim() || null,
-          next_service_due: isTrailer ? null : form.next_service_due || null,
+          next_service_due: nextServiceDueValue,
           next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
           status_after_update: form.status_after_update || null,
           trailer_registration_checked: isTrailer ? form.trailer_registration_checked : false,
@@ -820,7 +855,8 @@ export default function UpdateVehiclePage() {
         last_service: isTrailer
           ? null
           : form.service_date || form.last_service || null,
-        next_service_due: isTrailer ? null : form.next_service_due || null,
+        next_service_due:
+          isTrailer ? null : calculatedNextServiceDue || form.next_service_due || null,
         next_service_km: isTrailer ? null : calculatedNextServiceKm,
         next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
 
@@ -923,8 +959,8 @@ export default function UpdateVehiclePage() {
             label={isTrailer ? "Next Inspection" : "Next Service"}
             value={
               isTrailer
-                ? display(vehicle?.next_inspection_due)
-                : display(vehicle?.next_service_due)
+                ? formatDate(vehicle?.next_inspection_due)
+                : formatDate(vehicle?.next_service_due)
             }
           />
         </div>
@@ -993,7 +1029,7 @@ export default function UpdateVehiclePage() {
                 <Field
                   label="Next Service Due"
                   type="date"
-                  value={form.next_service_due}
+                  value={calculatedNextServiceDue || form.next_service_due}
                   onChange={(value) => updateField("next_service_due", value)}
                 />
               </>
@@ -1082,7 +1118,7 @@ export default function UpdateVehiclePage() {
               <>
                 <Section
                   title="Trailer Inspection"
-                  description="Record the inspection details and checks completed."
+                  description="Record inspection details and checks completed."
                 >
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <Field
@@ -1126,9 +1162,7 @@ export default function UpdateVehiclePage() {
                     <SelectField
                       label="Asset Availability"
                       value={form.status_after_update}
-                      onChange={(value) =>
-                        updateField("status_after_update", value)
-                      }
+                      onChange={(value) => updateField("status_after_update", value)}
                       options={statusOptions}
                     />
                   </div>
@@ -1142,57 +1176,43 @@ export default function UpdateVehiclePage() {
                     <CheckField
                       label="Registration checked"
                       checked={form.trailer_registration_checked}
-                      onChange={(value) =>
-                        updateField("trailer_registration_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_registration_checked", value)}
                     />
 
                     <CheckField
                       label="Tyres / wheels checked"
                       checked={form.trailer_tyres_checked}
-                      onChange={(value) =>
-                        updateField("trailer_tyres_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_tyres_checked", value)}
                     />
 
                     <CheckField
                       label="Brakes checked"
                       checked={form.trailer_brakes_checked}
-                      onChange={(value) =>
-                        updateField("trailer_brakes_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_brakes_checked", value)}
                     />
 
                     <CheckField
                       label="Lights / electrical checked"
                       checked={form.trailer_lights_checked}
-                      onChange={(value) =>
-                        updateField("trailer_lights_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_lights_checked", value)}
                     />
 
                     <CheckField
                       label="Coupling checked"
                       checked={form.trailer_coupling_checked}
-                      onChange={(value) =>
-                        updateField("trailer_coupling_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_coupling_checked", value)}
                     />
 
                     <CheckField
                       label="Chains checked"
                       checked={form.trailer_chains_checked}
-                      onChange={(value) =>
-                        updateField("trailer_chains_checked", value)
-                      }
+                      onChange={(value) => updateField("trailer_chains_checked", value)}
                     />
 
                     <CheckField
                       label="Defects found"
                       checked={form.trailer_defects_found}
-                      onChange={(value) =>
-                        updateField("trailer_defects_found", value)
-                      }
+                      onChange={(value) => updateField("trailer_defects_found", value)}
                     />
                   </div>
 
@@ -1201,9 +1221,7 @@ export default function UpdateVehiclePage() {
                       <TextAreaField
                         label="Trailer Defect Notes"
                         value={form.trailer_defect_notes}
-                        onChange={(value) =>
-                          updateField("trailer_defect_notes", value)
-                        }
+                        onChange={(value) => updateField("trailer_defect_notes", value)}
                         placeholder="Describe defects found, repairs required or restrictions..."
                       />
                     </div>
@@ -1213,7 +1231,7 @@ export default function UpdateVehiclePage() {
             ) : (
               <Section
                 title="Vehicle Service"
-                description="Record service details from the invoice or service report."
+                description="Record service details. If no next service date or KM is manually entered, the system uses 6 months and 10,000km."
               >
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <Field
@@ -1233,11 +1251,11 @@ export default function UpdateVehiclePage() {
                   />
 
                   <Field
-                    label="Odometer KM"
+                    label="Service Odometer KM"
                     type="number"
                     value={form.odometer_km}
                     onChange={(value) => updateField("odometer_km", value)}
-                    placeholder="Current km"
+                    placeholder="Current km at service"
                   />
 
                   <Field
@@ -1245,7 +1263,7 @@ export default function UpdateVehiclePage() {
                     type="number"
                     value={form.service_interval_km}
                     onChange={(value) => updateField("service_interval_km", value)}
-                    placeholder="Optional, e.g. 10000"
+                    placeholder="Optional, defaults to 10000"
                   />
 
                   <Field
@@ -1253,12 +1271,23 @@ export default function UpdateVehiclePage() {
                     type="number"
                     value={form.next_service_km}
                     onChange={(value) => updateField("next_service_km", value)}
-                    placeholder="Optional manual override"
+                    placeholder={
+                      calculatedNextServiceKm
+                        ? `${calculatedNextServiceKm.toLocaleString()} calculated`
+                        : "Optional manual override"
+                    }
                   />
 
                   <Field
                     label="Calculated KM Remaining"
                     value={kmUntilNextServiceDisplay}
+                    onChange={() => undefined}
+                    disabled
+                  />
+
+                  <Field
+                    label="Calculated Next Service Date"
+                    value={calculatedNextServiceDue ? formatDate(calculatedNextServiceDue) : "N/A"}
                     onChange={() => undefined}
                     disabled
                   />
@@ -1288,9 +1317,7 @@ export default function UpdateVehiclePage() {
                   <SelectField
                     label="Asset Availability"
                     value={form.status_after_update}
-                    onChange={(value) =>
-                      updateField("status_after_update", value)
-                    }
+                    onChange={(value) => updateField("status_after_update", value)}
                     options={statusOptions}
                   />
                 </div>
@@ -1303,7 +1330,7 @@ export default function UpdateVehiclePage() {
           <>
             <Section
               title="Modification / Addition"
-              description="Use a broad modification type and describe exactly what was added, removed, replaced or repaired."
+              description="Use a broad modification type and use the description to explain exactly what was added, removed, replaced or repaired."
             >
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field
@@ -1347,9 +1374,7 @@ export default function UpdateVehiclePage() {
                 <SelectField
                   label="Asset Availability"
                   value={form.status_after_update}
-                  onChange={(value) =>
-                    updateField("status_after_update", value)
-                  }
+                  onChange={(value) => updateField("status_after_update", value)}
                   options={statusOptions}
                 />
               </div>
@@ -1358,9 +1383,7 @@ export default function UpdateVehiclePage() {
                 <TextAreaField
                   label="Modification Description"
                   value={form.modification_description}
-                  onChange={(value) =>
-                    updateField("modification_description", value)
-                  }
+                  onChange={(value) => updateField("modification_description", value)}
                   placeholder="Example: Added new fire extinguisher, removed broken wheel chock, replaced battery, installed UHF radio..."
                   required
                 />
@@ -1373,85 +1396,19 @@ export default function UpdateVehiclePage() {
                 description="Tick any equipment now fitted to this vehicle after the modification."
               >
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <CheckField
-                    label="eHub fitted"
-                    checked={form.ehub}
-                    onChange={(value) => updateField("ehub", value)}
-                  />
-
-                  <CheckField
-                    label="Dashcam fitted"
-                    checked={form.dashcam}
-                    onChange={(value) => updateField("dashcam", value)}
-                  />
-
-                  <CheckField
-                    label="Alert button fitted"
-                    checked={form.alert_button}
-                    onChange={(value) => updateField("alert_button", value)}
-                  />
-
-                  <CheckField
-                    label="UHF radio fitted"
-                    checked={form.uhf_radio}
-                    onChange={(value) => updateField("uhf_radio", value)}
-                  />
-
-                  <CheckField
-                    label="Reverse squawker fitted"
-                    checked={form.reverse_squawker}
-                    onChange={(value) => updateField("reverse_squawker", value)}
-                  />
-
-                  <CheckField
-                    label="Fire extinguisher"
-                    checked={form.fire_extinguisher}
-                    onChange={(value) => updateField("fire_extinguisher", value)}
-                  />
-
-                  <CheckField
-                    label="First aid kit"
-                    checked={form.first_aid_kit}
-                    onChange={(value) => updateField("first_aid_kit", value)}
-                  />
-
-                  <CheckField
-                    label="Snake bite kit"
-                    checked={form.snake_bite_kit}
-                    onChange={(value) => updateField("snake_bite_kit", value)}
-                  />
-
-                  <CheckField
-                    label="Wheel nut indicators"
-                    checked={form.wheel_nut_indicators}
-                    onChange={(value) =>
-                      updateField("wheel_nut_indicators", value)
-                    }
-                  />
-
-                  <CheckField
-                    label="Wheel chocks"
-                    checked={form.wheel_chocks}
-                    onChange={(value) => updateField("wheel_chocks", value)}
-                  />
-
-                  <CheckField
-                    label="Shovel"
-                    checked={form.shovel}
-                    onChange={(value) => updateField("shovel", value)}
-                  />
-
-                  <CheckField
-                    label="Knapsack"
-                    checked={form.knapsack}
-                    onChange={(value) => updateField("knapsack", value)}
-                  />
-
-                  <CheckField
-                    label="Fuel card issued"
-                    checked={form.fuel_card}
-                    onChange={(value) => updateField("fuel_card", value)}
-                  />
+                  <CheckField label="eHub fitted" checked={form.ehub} onChange={(value) => updateField("ehub", value)} />
+                  <CheckField label="Dashcam fitted" checked={form.dashcam} onChange={(value) => updateField("dashcam", value)} />
+                  <CheckField label="Alert button fitted" checked={form.alert_button} onChange={(value) => updateField("alert_button", value)} />
+                  <CheckField label="UHF radio fitted" checked={form.uhf_radio} onChange={(value) => updateField("uhf_radio", value)} />
+                  <CheckField label="Reverse squawker fitted" checked={form.reverse_squawker} onChange={(value) => updateField("reverse_squawker", value)} />
+                  <CheckField label="Fire extinguisher" checked={form.fire_extinguisher} onChange={(value) => updateField("fire_extinguisher", value)} />
+                  <CheckField label="First aid kit" checked={form.first_aid_kit} onChange={(value) => updateField("first_aid_kit", value)} />
+                  <CheckField label="Snake bite kit" checked={form.snake_bite_kit} onChange={(value) => updateField("snake_bite_kit", value)} />
+                  <CheckField label="Wheel nut indicators" checked={form.wheel_nut_indicators} onChange={(value) => updateField("wheel_nut_indicators", value)} />
+                  <CheckField label="Wheel chocks" checked={form.wheel_chocks} onChange={(value) => updateField("wheel_chocks", value)} />
+                  <CheckField label="Shovel" checked={form.shovel} onChange={(value) => updateField("shovel", value)} />
+                  <CheckField label="Knapsack" checked={form.knapsack} onChange={(value) => updateField("knapsack", value)} />
+                  <CheckField label="Fuel card issued" checked={form.fuel_card} onChange={(value) => updateField("fuel_card", value)} />
                 </div>
               </Section>
             )}
@@ -1483,9 +1440,7 @@ export default function UpdateVehiclePage() {
                 <TextAreaField
                   label="Mechanic Recommendations"
                   value={form.mechanic_recommendations}
-                  onChange={(value) =>
-                    updateField("mechanic_recommendations", value)
-                  }
+                  onChange={(value) => updateField("mechanic_recommendations", value)}
                   placeholder="Recommendations from mechanic or supplier..."
                 />
 
