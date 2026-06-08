@@ -7,18 +7,16 @@ const topNav = [
   { label: "Home", href: "/" },
   { label: "Projects", href: "/projects" },
   { label: "Assets", href: "/assets" },
-  { label: "Admin", href: "/admin" },
 ];
 
 const assetNav = [
   { label: "Dashboard", href: "/assets" },
-  { label: "Fleet Jobs", href: "/assets/fleet-jobs" },
+  { label: "Fleet Jobs", href: "/assets/maintenance" },
   { label: "Plant", href: "/assets/plant" },
   { label: "Vehicles", href: "/assets/vehicles" },
   { label: "Equipment", href: "/assets/equipment" },
   { label: "Prestarts", href: "/assets/prestarts" },
   { label: "Compliance", href: "/assets/compliance" },
-  { label: "Inspections", href: "/assets/inspections" },
 ];
 
 export default function AssetsLayout({
@@ -30,10 +28,14 @@ export default function AssetsLayout({
 
   return (
     <div className="min-h-screen bg-slate-100">
+
       {/* TOPBAR */}
+
       <header className="sticky top-0 z-50 border-b border-slate-200 bg-white">
         <div className="flex h-16 items-center justify-between px-6">
+
           <div className="flex items-center gap-10">
+
             <Link
               href="/"
               className="text-xl font-bold tracking-tight text-slate-900"
@@ -41,17 +43,19 @@ export default function AssetsLayout({
               TTTracker
             </Link>
 
-            <nav className="hidden items-center gap-2 md:flex">
+            <nav className="hidden md:flex items-center gap-2">
+
               {topNav.map((item) => {
                 const active =
                   pathname === item.href ||
-                  (item.href !== "/" && pathname.startsWith(item.href));
+                  (item.href !== "/" &&
+                    pathname.startsWith(item.href));
 
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`px-4 py-2 text-sm font-medium transition ${
+                  className={`px-4 py-2 text-sm font-medium transition ${
                       active
                         ? "bg-slate-900 text-white"
                         : "text-slate-600 hover:bg-slate-100"
@@ -72,14 +76,20 @@ export default function AssetsLayout({
               Settings
             </Link>
           </div>
+
         </div>
       </header>
 
       {/* CONTENT */}
+
       <div className="flex">
+
         {/* SIDEBAR */}
+
         <aside className="sticky top-16 hidden h-[calc(100vh-64px)] w-64 shrink-0 border-r border-slate-200 bg-white p-5 lg:block">
+
           <div>
+
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
               Asset Manager
             </p>
@@ -89,59 +99,43 @@ export default function AssetsLayout({
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
-              Plant, vehicles, equipment, prestarts, inspections and Fleet Jobs.
+              Plant, vehicles, equipment, prestarts and Fleet Jobs.
             </p>
+
           </div>
 
-          <nav className="mt-8 flex h-[calc(100vh-260px)] flex-col">
-            <div className="space-y-2">
-              {assetNav.slice(0, -1).map((item) => {
-                const active =
-                  pathname === item.href ||
-                  (item.href !== "/assets" && pathname.startsWith(item.href));
+          <nav className="mt-8 space-y-2">
 
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
-                      active
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
+            {assetNav.map((item) => {
+              const active =
+                pathname === item.href ||
+                (item.href !== "/assets" &&
+                  pathname.startsWith(item.href));
 
-            <div className="mt-auto border-t border-slate-200 pt-4">
-              {assetNav.slice(-1).map((item) => {
-                const active =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href);
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
-                      active
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
+                    active
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
           </nav>
+
         </aside>
 
         {/* PAGE CONTENT */}
-        <main className="min-w-0 flex-1">{children}</main>
+
+        <main className="min-w-0 flex-1">
+          {children}
+        </main>
+
       </div>
     </div>
   );
