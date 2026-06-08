@@ -411,11 +411,10 @@ export default function VehiclePrestartsPage() {
     setLoading(true);
 
     const vehiclesResult = await supabase
-      .from("vehicle_assets")
-      .select(
-        "id, vehicle_id, vehicle_rego, make, model, category, project, crew, status",
-      )
-      .order("vehicle_id", { ascending: true });
+.from("vehicle_assets")
+.select("id, vehicle_id, vehicle_rego, make, model, category, project, crew, status")
+.neq("category", "Trailer")
+.order("vehicle_id", { ascending: true });
 
     const prestartsResult = await supabase
       .from("vehicle_prestarts")
