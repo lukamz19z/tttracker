@@ -1,7 +1,9 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, FileUp, Save, Wrench } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
@@ -9,6 +11,7 @@ import { PageHeader, PageShell, StatusBadge } from "../../../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "slate";
 type UpdateType = "Service" | "Modification" | "Project Transfer";
+type ComplianceFileKey = "rego" | "insurance";
 
 type VehicleAsset = {
   id: string;
@@ -26,8 +29,6 @@ type VehicleAsset = {
   next_service_due: string | null;
   next_service_km: number | null;
   next_inspection_due: string | null;
-  spare_key_provided: boolean | null;
-  spare_key_location: string | null;
   ehub: boolean | null;
   dashcam: boolean | null;
   alert_button: boolean | null;
@@ -56,6 +57,11 @@ type ProjectOption = {
   name: string;
 };
 
+type VehicleDocument = {
+  id: string;
+  storage_path: string | null;
+};
+
 type UpdateForm = {
   update_type: UpdateType;
 
@@ -64,6 +70,7 @@ type UpdateForm = {
   last_service: string;
   next_service_due: string;
   next_service_km: string;
+  service_interval_km: string;
   next_inspection_due: string;
 
   service_date: string;
@@ -108,9 +115,6 @@ type UpdateForm = {
   shovel: boolean;
   knapsack: boolean;
 
-  spare_key_provided: boolean;
-  spare_key_location: string;
-
   new_project: string;
   new_crew: string;
   project_onboard_date: string;
@@ -126,6 +130,7 @@ const emptyForm: UpdateForm = {
   last_service: "",
   next_service_due: "",
   next_service_km: "",
+  service_interval_km: "",
   next_inspection_due: "",
 
   service_date: "",
@@ -170,9 +175,6 @@ const emptyForm: UpdateForm = {
   shovel: false,
   knapsack: false,
 
-  spare_key_provided: false,
-  spare_key_location: "",
-
   new_project: "",
   new_crew: "",
   project_onboard_date: "",
@@ -202,21 +204,15 @@ const trailerInspectionTypes = [
 ];
 
 const modificationTypes = [
-  "Added Fire Extinguisher",
-  "Added First Aid Kit",
-  "Added Snake Bite Kit",
-  "Added Wheel Chocks",
-  "Added Wheel Nut Indicators",
-  "Added UHF Radio",
-  "Added Reverse Squawker",
-  "Added Shovel",
-  "Added Knapsack",
-  "Added Spare Key",
-  "Removed Spare Key",
-  "Replaced Battery",
-  "Installed Dashcam",
-  "Installed eHub",
-  "Other Modification",
+  "Addition",
+  "Removal",
+  "Replacement",
+  "Repair",
+  "Upgrade",
+  "Compliance Item",
+  "Safety Equipment",
+  "Electrical / Technology",
+  "Other",
 ];
 
 const statusOptions = [
@@ -257,6 +253,7 @@ function getTone(status: string | null | undefined): Tone {
 
   if (value === "Available" || value === "Active") return "emerald";
   if (value === "In Use" || value === "On Hire") return "blue";
+
   if (
     value === "Off Hire" ||
     value === "Inactive" ||
@@ -434,6 +431,43 @@ function SummaryItem({
   );
 }
 
+function DocumentUploadField({
+  label,
+  helper,
+  file,
+  onChange,
+}: {
+  label: string;
+  helper: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-sm font-bold text-slate-800">{label}</p>
+        <p className="text-xs text-slate-500">
+          {file ? file.name : helper}
+        </p>
+      </div>
+
+      <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+        <FileUp size={14} />
+        Attach file
+        <input
+          type="file"
+          className="hidden"
+          accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+          onChange={(event) => {
+            onChange(event.target.files?.[0] ?? null);
+            event.target.value = "";
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
 export default function UpdateVehiclePage() {
   const router = useRouter();
   const params = useParams<{ vehicleId: string }>();
@@ -455,82 +489,79 @@ export default function UpdateVehiclePage() {
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [complianceFiles, setComplianceFiles] = useState<Record<ComplianceFileKey, File | null>>({
+    rego: null,
+    insurance: null,
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadPageData = useCallback(async () => {
+    setLoading(true);
 
-    async function loadPageData() {
-      setLoading(true);
+    const [vehicleResult, projectResult, crewResult] = await Promise.all([
+      supabase
+        .from("vehicle_assets")
+        .select("*")
+        .eq("id", vehicleId)
+        .single<VehicleAsset>(),
+      supabase.from("projects").select("id, name").order("name", { ascending: true }),
+      supabase
+        .from("crews")
+        .select("id, crew_number, crew_name, leading_hand, active")
+        .order("crew_number", { ascending: true }),
+    ]);
 
-      const [vehicleResult, projectResult, crewResult] = await Promise.all([
-        supabase.from("vehicle_assets").select("*").eq("id", vehicleId).single<VehicleAsset>(),
-        supabase.from("projects").select("id, name").order("name", { ascending: true }),
-        supabase
-          .from("crews")
-          .select("id, crew_number, crew_name, leading_hand, active")
-          .order("crew_number", { ascending: true }),
-      ]);
+    if (vehicleResult.error || !vehicleResult.data) {
+      setErrorMessage(vehicleResult.error?.message || "Vehicle could not be loaded.");
+      setVehicle(null);
+    } else {
+      const data = vehicleResult.data;
+      setVehicle(data);
 
-      if (cancelled) return;
+      setForm((current) => ({
+        ...current,
+        rego_expiry: dateInput(data.rego_expiry),
+        insurance_expiry: dateInput(data.insurance_expiry),
+        last_service: dateInput(data.last_service),
+        next_service_due: dateInput(data.next_service_due),
+        next_service_km:
+          data.next_service_km === null || data.next_service_km === undefined
+            ? ""
+            : String(data.next_service_km),
+        next_inspection_due: dateInput(data.next_inspection_due),
+        status_after_update: clean(data.status) || "Available",
 
-      if (vehicleResult.error || !vehicleResult.data) {
-        setErrorMessage(vehicleResult.error?.message || "Vehicle could not be loaded.");
-        setVehicle(null);
-      } else {
-        const data = vehicleResult.data;
-        setVehicle(data);
+        ehub: Boolean(data.ehub),
+        dashcam: Boolean(data.dashcam),
+        alert_button: Boolean(data.alert_button),
+        fuel_card: Boolean(data.fuel_card),
+        reverse_squawker: Boolean(data.reverse_squawker),
+        uhf_radio: Boolean(data.uhf_radio),
+        fire_extinguisher: Boolean(data.fire_extinguisher),
+        first_aid_kit: Boolean(data.first_aid_kit),
+        snake_bite_kit: Boolean(data.snake_bite_kit),
+        wheel_nut_indicators: Boolean(data.wheel_nut_indicators),
+        wheel_chocks: Boolean(data.wheel_chocks),
+        shovel: Boolean(data.shovel),
+        knapsack: Boolean(data.knapsack),
 
-        setForm((current) => ({
-          ...current,
-          rego_expiry: dateInput(data.rego_expiry),
-          insurance_expiry: dateInput(data.insurance_expiry),
-          last_service: dateInput(data.last_service),
-          next_service_due: dateInput(data.next_service_due),
-          next_service_km:
-            data.next_service_km === null || data.next_service_km === undefined
-              ? ""
-              : String(data.next_service_km),
-          next_inspection_due: dateInput(data.next_inspection_due),
-          status_after_update: clean(data.status) || "Available",
-
-          ehub: Boolean(data.ehub),
-          dashcam: Boolean(data.dashcam),
-          alert_button: Boolean(data.alert_button),
-          fuel_card: Boolean(data.fuel_card),
-          reverse_squawker: Boolean(data.reverse_squawker),
-          uhf_radio: Boolean(data.uhf_radio),
-          fire_extinguisher: Boolean(data.fire_extinguisher),
-          first_aid_kit: Boolean(data.first_aid_kit),
-          snake_bite_kit: Boolean(data.snake_bite_kit),
-          wheel_nut_indicators: Boolean(data.wheel_nut_indicators),
-          wheel_chocks: Boolean(data.wheel_chocks),
-          shovel: Boolean(data.shovel),
-          knapsack: Boolean(data.knapsack),
-
-          spare_key_provided: Boolean(data.spare_key_provided),
-          spare_key_location: clean(data.spare_key_location),
-
-          new_project: clean(data.project),
-          new_crew: clean(data.crew),
-        }));
-      }
-
-      setProjects(projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]));
-      setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
-      setLoading(false);
+        new_project: clean(data.project),
+        new_crew: clean(data.crew),
+      }));
     }
 
-    void loadPageData();
-
-    return () => {
-      cancelled = true;
-    };
+    setProjects(projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]));
+    setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
+    setLoading(false);
   }, [supabase, vehicleId]);
+
+  useEffect(() => {
+    void loadPageData();
+  }, [loadPageData]);
 
   const projectOptions = useMemo(() => {
     return projects.map((project) => clean(project.name)).filter(Boolean);
@@ -548,14 +579,24 @@ export default function UpdateVehiclePage() {
       .filter(Boolean);
   }, [crews]);
 
-  const kmUntilNextService = useMemo(() => {
+  const calculatedNextServiceKm = useMemo(() => {
     const currentKm = toNumber(form.odometer_km);
-    const nextKm = toNumber(form.next_service_km);
+    const intervalKm = toNumber(form.service_interval_km);
+    const manualNextKm = toNumber(form.next_service_km);
 
-    if (currentKm === null || nextKm === null) return "N/A";
+    if (manualNextKm !== null) return manualNextKm;
+    if (currentKm !== null && intervalKm !== null) return currentKm + intervalKm;
 
-    return `${(nextKm - currentKm).toLocaleString()} km`;
-  }, [form.odometer_km, form.next_service_km]);
+    return null;
+  }, [form.odometer_km, form.service_interval_km, form.next_service_km]);
+
+  const kmUntilNextServiceDisplay = useMemo(() => {
+    const currentKm = toNumber(form.odometer_km);
+
+    if (currentKm === null || calculatedNextServiceKm === null) return "N/A";
+
+    return `${(calculatedNextServiceKm - currentKm).toLocaleString()} km`;
+  }, [form.odometer_km, calculatedNextServiceKm]);
 
   function updateField<K extends keyof UpdateForm>(
     key: K,
@@ -564,6 +605,13 @@ export default function UpdateVehiclePage() {
     setForm((current) => ({
       ...current,
       [key]: value,
+    }));
+  }
+
+  function updateComplianceFile(key: ComplianceFileKey, file: File | null) {
+    setComplianceFiles((current) => ({
+      ...current,
+      [key]: file,
     }));
   }
 
@@ -601,8 +649,77 @@ export default function UpdateVehiclePage() {
     };
   }
 
+  async function uploadSupersedingVehicleDocument(documentType: string, file: File | null) {
+    if (!file) return;
+
+    const { data: existingDocuments, error: existingError } = await supabase
+      .from("vehicle_documents")
+      .select("id, storage_path")
+      .eq("vehicle_asset_id", vehicleId)
+      .eq("document_type", documentType)
+      .returns<VehicleDocument[]>();
+
+    if (existingError) throw new Error(existingError.message);
+
+    const existingPaths =
+      existingDocuments
+        ?.map((document) => document.storage_path)
+        .filter((path): path is string => Boolean(path)) ?? [];
+
+    if (existingPaths.length > 0) {
+      await supabase.storage.from("vehicle_documents").remove(existingPaths);
+    }
+
+    if (existingDocuments && existingDocuments.length > 0) {
+      const existingIds = existingDocuments.map((document) => document.id);
+
+      const { error: deleteError } = await supabase
+        .from("vehicle_documents")
+        .delete()
+        .in("id", existingIds);
+
+      if (deleteError) throw new Error(deleteError.message);
+    }
+
+    const safeDocumentType = documentType.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const filePath = `${vehicleId}/${safeDocumentType}/${Date.now()}-${safeFileName}`;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from("vehicle_documents")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadError) throw new Error(uploadError.message);
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("vehicle_documents").getPublicUrl(uploadData.path);
+
+    const { error: insertError } = await supabase.from("vehicle_documents").insert({
+      vehicle_asset_id: vehicleId,
+      document_type: documentType,
+      file_name: file.name,
+      file_url: publicUrl,
+      storage_path: uploadData.path,
+    });
+
+    if (insertError) throw new Error(insertError.message);
+  }
+
+  async function uploadComplianceDocuments() {
+    await uploadSupersedingVehicleDocument("Rego", complianceFiles.rego);
+
+    if (!isTrailer) {
+      await uploadSupersedingVehicleDocument("Insurance", complianceFiles.insurance);
+    }
+  }
+
   async function saveServiceOrModificationHistory() {
     const isModification = form.update_type === "Modification";
+    const nextServiceKmValue = isTrailer ? null : calculatedNextServiceKm;
 
     const historyPayload = isModification
       ? {
@@ -614,7 +731,7 @@ export default function UpdateVehiclePage() {
           supplier: form.supplier.trim() || null,
           invoice_number: form.invoice_number.trim() || null,
           invoice_cost: toNumber(form.invoice_cost),
-          work_completed: form.modification_description.trim() || form.work_completed.trim() || null,
+          work_completed: form.modification_description.trim() || null,
           mechanic_recommendations: form.mechanic_recommendations.trim() || null,
           follow_up_actions: form.follow_up_actions.trim() || null,
           invoice_notes: form.invoice_notes.trim() || null,
@@ -626,7 +743,7 @@ export default function UpdateVehiclePage() {
           service_date: isTrailer ? null : form.service_date || null,
           inspection_date: isTrailer ? form.inspection_date || null : null,
           odometer_km: isTrailer ? null : toNumber(form.odometer_km),
-          next_service_km: isTrailer ? null : toNumber(form.next_service_km),
+          next_service_km: nextServiceKmValue,
           service_type: isTrailer ? null : form.service_type || null,
           inspection_type: isTrailer ? form.inspection_type || null : null,
           supplier: form.supplier.trim() || null,
@@ -704,7 +821,7 @@ export default function UpdateVehiclePage() {
           ? null
           : form.service_date || form.last_service || null,
         next_service_due: isTrailer ? null : form.next_service_due || null,
-        next_service_km: isTrailer ? null : toNumber(form.next_service_km),
+        next_service_km: isTrailer ? null : calculatedNextServiceKm,
         next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
 
         project:
@@ -715,11 +832,6 @@ export default function UpdateVehiclePage() {
           form.update_type === "Project Transfer"
             ? form.new_crew.trim() || null
             : vehicle.crew,
-
-        spare_key_provided: form.spare_key_provided,
-        spare_key_location: form.spare_key_provided
-          ? form.spare_key_location.trim() || "Site Office"
-          : null,
 
         ehub: isTrailer ? false : form.ehub,
         dashcam: isTrailer ? false : form.dashcam,
@@ -743,6 +855,8 @@ export default function UpdateVehiclePage() {
 
       if (error) throw new Error(error.message);
 
+      await uploadComplianceDocuments();
+
       router.push("/assets/vehicles");
       router.refresh();
     } catch (error) {
@@ -758,7 +872,7 @@ export default function UpdateVehiclePage() {
       <PageHeader
         eyebrow={isTrailer ? "Trailer Update" : "Vehicle Update"}
         title={loading ? "Update Asset" : `Update ${display(vehicle?.vehicle_id)}`}
-        description="Update asset dates, record service history, modifications, spare key changes or project transfers."
+        description="Record services, modifications, compliance proof or project transfers."
         actions={
           <Link
             href="/assets/vehicles"
@@ -782,9 +896,7 @@ export default function UpdateVehiclePage() {
             <Wrench size={18} />
           </div>
           <div>
-            <h2 className="text-base font-bold text-slate-950">
-              Asset Summary
-            </h2>
+            <h2 className="text-base font-bold text-slate-950">Asset Summary</h2>
             <p className="text-sm text-slate-600">
               Current information before recording the update.
             </p>
@@ -808,8 +920,12 @@ export default function UpdateVehiclePage() {
             }
           />
           <SummaryItem
-            label="Spare Key"
-            value={form.spare_key_provided ? "Provided" : "Not Provided"}
+            label={isTrailer ? "Next Inspection" : "Next Service"}
+            value={
+              isTrailer
+                ? display(vehicle?.next_inspection_due)
+                : display(vehicle?.next_service_due)
+            }
           />
         </div>
       </section>
@@ -837,7 +953,7 @@ export default function UpdateVehiclePage() {
                     {type === "Service"
                       ? "Service, inspection and next due dates."
                       : type === "Modification"
-                        ? "Added equipment, spare keys or asset changes."
+                        ? "General changes, additions, removals and fitted equipment."
                         : "Project movement and crew allocation history."}
                   </p>
                 </button>
@@ -848,7 +964,7 @@ export default function UpdateVehiclePage() {
 
         <Section
           title="Current Expiry / Compliance Dates"
-          description="Update important dates directly from this page."
+          description="Update expiry dates and attach proof. New proof supersedes the existing document of the same type."
         >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Field
@@ -889,6 +1005,24 @@ export default function UpdateVehiclePage() {
                 type="date"
                 value={form.next_inspection_due}
                 onChange={(value) => updateField("next_inspection_due", value)}
+              />
+            )}
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <DocumentUploadField
+              label="Rego Proof"
+              helper="Attach updated rego certificate or proof"
+              file={complianceFiles.rego}
+              onChange={(file) => updateComplianceFile("rego", file)}
+            />
+
+            {!isTrailer && (
+              <DocumentUploadField
+                label="Insurance Proof"
+                helper="Attach updated insurance certificate or proof"
+                file={complianceFiles.insurance}
+                onChange={(file) => updateComplianceFile("insurance", file)}
               />
             )}
           </div>
@@ -1107,6 +1241,29 @@ export default function UpdateVehiclePage() {
                   />
 
                   <Field
+                    label="KM Until Next Service"
+                    type="number"
+                    value={form.service_interval_km}
+                    onChange={(value) => updateField("service_interval_km", value)}
+                    placeholder="Optional, e.g. 10000"
+                  />
+
+                  <Field
+                    label="Next Service KM"
+                    type="number"
+                    value={form.next_service_km}
+                    onChange={(value) => updateField("next_service_km", value)}
+                    placeholder="Optional manual override"
+                  />
+
+                  <Field
+                    label="Calculated KM Remaining"
+                    value={kmUntilNextServiceDisplay}
+                    onChange={() => undefined}
+                    disabled
+                  />
+
+                  <Field
                     label="Supplier / Mechanic"
                     value={form.supplier}
                     onChange={(value) => updateField("supplier", value)}
@@ -1128,21 +1285,6 @@ export default function UpdateVehiclePage() {
                     placeholder="0.00"
                   />
 
-                  <Field
-                    label="Next Service KM"
-                    type="number"
-                    value={form.next_service_km}
-                    onChange={(value) => updateField("next_service_km", value)}
-                    placeholder="Next service km"
-                  />
-
-                  <Field
-                    label="KM Until Next Service"
-                    value={kmUntilNextService}
-                    onChange={() => undefined}
-                    disabled
-                  />
-
                   <SelectField
                     label="Asset Availability"
                     value={form.status_after_update}
@@ -1161,7 +1303,7 @@ export default function UpdateVehiclePage() {
           <>
             <Section
               title="Modification / Addition"
-              description="Record equipment added, replacement parts, upgrades, spare key changes or asset changes."
+              description="Use a broad modification type and describe exactly what was added, removed, replaced or repaired."
             >
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field
@@ -1219,41 +1361,9 @@ export default function UpdateVehiclePage() {
                   onChange={(value) =>
                     updateField("modification_description", value)
                   }
-                  placeholder="Example: Added new fire extinguisher, replaced battery, installed UHF radio..."
+                  placeholder="Example: Added new fire extinguisher, removed broken wheel chock, replaced battery, installed UHF radio..."
                   required
                 />
-              </div>
-            </Section>
-
-            <Section
-              title="Spare Key"
-              description="Track if a spare key has been provided and where it is held."
-            >
-              <div className="space-y-4">
-                <CheckField
-                  label="Spare key provided"
-                  checked={form.spare_key_provided}
-                  onChange={(value) =>
-                    updateField("spare_key_provided", value)
-                  }
-                />
-
-                {form.spare_key_provided && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
-                    Spare key must be handed into the site office.
-                  </div>
-                )}
-
-                {form.spare_key_provided && (
-                  <Field
-                    label="Spare Key Location"
-                    value={form.spare_key_location}
-                    onChange={(value) =>
-                      updateField("spare_key_location", value)
-                    }
-                    placeholder="Site office, depot, project office..."
-                  />
-                )}
               </div>
             </Section>
 
@@ -1348,21 +1458,23 @@ export default function UpdateVehiclePage() {
           </>
         )}
 
+        {form.update_type === "Service" && (
+          <Section
+            title="Work Completed"
+            description="Summarise what was completed during the service or inspection."
+          >
+            <TextAreaField
+              label="Work Completed"
+              value={form.work_completed}
+              onChange={(value) => updateField("work_completed", value)}
+              placeholder="Summarise the work completed..."
+              required
+            />
+          </Section>
+        )}
+
         {form.update_type !== "Project Transfer" && (
           <>
-            <Section
-              title="Work Completed"
-              description="Summarise what was completed for this update."
-            >
-              <TextAreaField
-                label="Work Completed"
-                value={form.work_completed}
-                onChange={(value) => updateField("work_completed", value)}
-                placeholder="Summarise the work completed..."
-                required={form.update_type === "Service"}
-              />
-            </Section>
-
             <Section
               title="Recommendations / Follow Up"
               description="Capture recommendations, issues to monitor or follow-up actions."
@@ -1400,7 +1512,7 @@ export default function UpdateVehiclePage() {
 
             <Section
               title="Attach Invoice / Report"
-              description="Attach the invoice, service report, modification record or supporting photo."
+              description="Attach the invoice, service report, modification record or supporting photo. This goes into the service/update history only."
             >
               <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -1418,6 +1530,7 @@ export default function UpdateVehiclePage() {
                   <input
                     type="file"
                     className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
                     onChange={(event) => {
                       setInvoiceFile(event.target.files?.[0] ?? null);
                       event.target.value = "";
