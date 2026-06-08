@@ -18,7 +18,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseBrowser } from "@/lib/supabase";
 import { PageHeader, PageShell, RegisterList } from "../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "teal" | "slate";
@@ -244,14 +244,91 @@ function ChecklistButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+      className={`h-7 rounded-md border px-2 text-[11px] font-black leading-none transition ${
         active
           ? activeClasses
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
       }`}
     >
       {children}
     </button>
+  );
+}
+
+function SearchPicker<T>({
+  label,
+  placeholder,
+  value,
+  search,
+  setSearch,
+  items,
+  getKey,
+  getLabel,
+  onSelect,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  search: string;
+  setSearch: (value: string) => void;
+  items: T[];
+  getKey: (item: T) => string;
+  getLabel: (item: T) => string;
+  onSelect: (item: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const displayValue = open ? search : value || search;
+
+  const filteredItems = items
+    .filter((item) =>
+      getLabel(item).toLowerCase().includes(search.toLowerCase()),
+    )
+    .slice(0, 10);
+
+  return (
+    <div className="relative grid gap-2 text-sm font-bold text-slate-700">
+      {label}
+
+      <input
+        value={displayValue}
+        onFocus={() => {
+          setOpen(true);
+          setSearch(value);
+        }}
+        onChange={(event) => {
+          setOpen(true);
+          setSearch(event.target.value);
+        }}
+        placeholder={placeholder}
+        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+      />
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-[76px] z-40 max-h-72 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+          {filteredItems.length > 0 ? (
+            filteredItems.map((item) => (
+              <button
+                key={getKey(item)}
+                type="button"
+                onClick={() => {
+                  onSelect(item);
+                  setSearch(getLabel(item));
+                  setOpen(false);
+                }}
+                className="block w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                {getLabel(item)}
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-3 text-sm font-semibold text-slate-400">
+              No matches found.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -294,16 +371,7 @@ function StatCard({
 }
 
 export default function VehiclePrestartsPage() {
-  const supabase = useMemo(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error("Missing Supabase environment variables.");
-    }
-
-    return createClient(supabaseUrl, supabaseAnonKey);
-  }, []);
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
   const [prestarts, setPrestarts] = useState<VehiclePrestart[]>([]);
@@ -324,6 +392,11 @@ export default function VehiclePrestartsPage() {
   const [inspectorFilter, setInspectorFilter] = useState("All Inspectors");
 
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState("");
+
+  const [selectedEmployeeName, setSelectedEmployeeName] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
+
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedCrew, setSelectedCrew] = useState("");
   const [checklistValues, setChecklistValues] = useState<Record<string, string>>(
@@ -351,7 +424,7 @@ export default function VehiclePrestartsPage() {
 
     const employeesResult = await supabase
       .from("employees")
-      .select("id, full_name, role, crew_id, active")
+      .select("*")
       .order("full_name", { ascending: true });
 
     const projectsResult = await supabase
@@ -384,22 +457,14 @@ export default function VehiclePrestartsPage() {
     } else {
       setEmployees(
         ((employeesResult.data ?? []) as Employee[]).filter(
-          (employee) => employee.active !== false,
+          (employee) =>
+            employee.active !== false && clean(employee.full_name).length > 0,
         ),
       );
     }
 
-    if (projectsResult.error) {
-      setProjects([]);
-    } else {
-      setProjects(projectsResult.data ?? []);
-    }
-
-    if (crewsResult.error) {
-      setCrews([]);
-    } else {
-      setCrews((crewsResult.data ?? []) as Crew[]);
-    }
+    setProjects(projectsResult.error ? [] : (projectsResult.data ?? []));
+    setCrews(crewsResult.error ? [] : ((crewsResult.data ?? []) as Crew[]));
 
     setLoading(false);
   }, [supabase]);
@@ -427,7 +492,10 @@ export default function VehiclePrestartsPage() {
             ...prestarts.map((prestart) => clean(prestart.crew)),
           ];
 
-    return ["All Crews", ...Array.from(new Set(crewLabels.filter(Boolean))).sort()];
+    return [
+      "All Crews",
+      ...Array.from(new Set(crewLabels.filter(Boolean))).sort(),
+    ];
   }, [crews, vehicles, prestarts]);
 
   const inspectorOptions = useMemo(() => {
@@ -460,6 +528,9 @@ export default function VehiclePrestartsPage() {
 
   function openForm() {
     setSelectedVehicleId("");
+    setVehicleSearch("");
+    setSelectedEmployeeName("");
+    setEmployeeSearch("");
     setSelectedProject("");
     setSelectedCrew("");
     setChecklistValues(defaultChecklist());
@@ -586,6 +657,12 @@ export default function VehiclePrestartsPage() {
       return;
     }
 
+    if (!selectedEmployeeName) {
+      alert("Please select who inspected the vehicle.");
+      setSaving(false);
+      return;
+    }
+
     const severity = clean(formData.get("severity") as string) || "none";
     const comments = clean(formData.get("comments") as string);
 
@@ -595,7 +672,10 @@ export default function VehiclePrestartsPage() {
       return;
     }
 
-    const assetLabel = [clean(vehicle.vehicle_id) || "Vehicle", getMakeModel(vehicle)]
+    const assetLabel = [
+      clean(vehicle.vehicle_id) || "Vehicle",
+      getMakeModel(vehicle),
+    ]
       .filter(Boolean)
       .join(" ");
 
@@ -606,7 +686,7 @@ export default function VehiclePrestartsPage() {
       kilometres: Number(formData.get("kilometres") || 0),
       project: selectedProject || clean(vehicle.project),
       crew: selectedCrew || matchCrewOption(vehicle.crew),
-      inspected_by_name: clean(formData.get("inspected_by_name") as string),
+      inspected_by_name: selectedEmployeeName,
       checklist: checklistValues,
       overall_condition: clean(formData.get("overall_condition") as string),
       comments,
@@ -660,6 +740,9 @@ export default function VehiclePrestartsPage() {
 
     setShowForm(false);
     setSelectedVehicleId("");
+    setVehicleSearch("");
+    setSelectedEmployeeName("");
+    setEmployeeSearch("");
     setSelectedProject("");
     setSelectedCrew("");
     setChecklistValues(defaultChecklist());
@@ -1181,25 +1264,30 @@ export default function VehiclePrestartsPage() {
                   </h3>
 
                   <div className="mt-4 grid gap-4 md:grid-cols-4">
-                    <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
-                      Asset ID / Rego
-                      <select
+                    <div className="md:col-span-2">
+                      <SearchPicker
+                        label="Asset ID / Rego"
+                        placeholder="Start typing asset ID, rego, make or model..."
+                        value={
+                          selectedVehicle ? getVehicleLabel(selectedVehicle) : ""
+                        }
+                        search={vehicleSearch}
+                        setSearch={setVehicleSearch}
+                        items={vehicles}
+                        getKey={(vehicle) => vehicle.id}
+                        getLabel={getVehicleLabel}
+                        onSelect={(vehicle) => {
+                          handleVehicleChange(vehicle.id);
+                          setVehicleSearch(getVehicleLabel(vehicle));
+                        }}
+                      />
+
+                      <input
+                        type="hidden"
                         name="vehicle_asset_id"
                         value={selectedVehicleId}
-                        onChange={(event) =>
-                          handleVehicleChange(event.target.value)
-                        }
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                      >
-                        <option value="">Select vehicle</option>
-                        {vehicles.map((vehicle) => (
-                          <option key={vehicle.id} value={vehicle.id}>
-                            {getVehicleLabel(vehicle)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                      />
+                    </div>
 
                     <label className="grid gap-2 text-sm font-bold text-slate-700">
                       Kilometres
@@ -1213,28 +1301,37 @@ export default function VehiclePrestartsPage() {
                       />
                     </label>
 
-                    <label className="grid gap-2 text-sm font-bold text-slate-700">
-                      Inspected By
-                      <select
+                    <div>
+                      <SearchPicker
+                        label="Inspected By"
+                        placeholder="Start typing worker name..."
+                        value={selectedEmployeeName}
+                        search={employeeSearch}
+                        setSearch={setEmployeeSearch}
+                        items={employees}
+                        getKey={(employee) => employee.id}
+                        getLabel={(employee) => employee.full_name}
+                        onSelect={(employee) => {
+                          setSelectedEmployeeName(employee.full_name);
+                          setEmployeeSearch(employee.full_name);
+                        }}
+                      />
+
+                      <input
+                        type="hidden"
                         name="inspected_by_name"
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                      >
-                        <option value="">Select employee</option>
-                        {employees.map((employee) => (
-                          <option key={employee.id} value={employee.full_name}>
-                            {employee.full_name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        value={selectedEmployeeName}
+                      />
+                    </div>
 
                     <label className="grid gap-2 text-sm font-bold text-slate-700">
                       Project
                       <select
                         name="project"
                         value={selectedProject}
-                        onChange={(event) => setSelectedProject(event.target.value)}
+                        onChange={(event) =>
+                          setSelectedProject(event.target.value)
+                        }
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
                         <option value="">No project selected</option>
@@ -1277,11 +1374,11 @@ export default function VehiclePrestartsPage() {
                       Vehicle Checklist
                     </h3>
                     <p className="mt-1 text-sm text-slate-600">
-                      Tap Yes, No or N/A for each item.
+                      Tap Y, N or N/A for each item.
                     </p>
                   </div>
 
-                  <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3">
                     {checklistItems.map((item) => {
                       const key = checklistKey(item);
                       const value = checklistValues[key] || "yes";
@@ -1289,26 +1386,13 @@ export default function VehiclePrestartsPage() {
                       return (
                         <div
                           key={item}
-                          className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
+                          className="grid grid-cols-[1fr_auto] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
                         >
-                          <div className="mb-3 flex items-start justify-between gap-3">
-                            <p className="text-sm font-black text-slate-800">
-                              {item}
-                            </p>
+                          <p className="truncate text-xs font-black text-slate-800">
+                            {item}
+                          </p>
 
-                            <StatusPill
-                              label={value.toUpperCase()}
-                              tone={
-                                value === "yes"
-                                  ? "emerald"
-                                  : value === "no"
-                                    ? "rose"
-                                    : "slate"
-                              }
-                            />
-                          </div>
-
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="flex gap-1">
                             <ChecklistButton
                               active={value === "yes"}
                               tone="yes"
@@ -1319,7 +1403,7 @@ export default function VehiclePrestartsPage() {
                                 }))
                               }
                             >
-                              Yes
+                              Y
                             </ChecklistButton>
 
                             <ChecklistButton
@@ -1332,7 +1416,7 @@ export default function VehiclePrestartsPage() {
                                 }))
                               }
                             >
-                              No
+                              N
                             </ChecklistButton>
 
                             <ChecklistButton
