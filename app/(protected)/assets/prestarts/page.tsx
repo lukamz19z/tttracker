@@ -64,7 +64,7 @@ type VehiclePrestart = {
   project: string | null;
   crew: string | null;
   inspected_by_name: string | null;
-  checklist: Record<string, { answer: string; comment: string }> | null;
+  checklist: Record<string, { answer: string; severity: string; comment: string }> | null;
   overall_condition: string | null;
   comments: string | null;
   severity: string | null;
@@ -113,10 +113,11 @@ function checklistKey(label: string) {
 
 function defaultChecklist() {
   return checklistItems.reduce<
-    Record<string, { answer: string; comment: string }>
+    Record<string, { answer: string; severity: string; comment: string }>
   >((acc, item) => {
     acc[checklistKey(item)] = {
       answer: "yes",
+      severity: "minor",
       comment: "",
     };
     return acc;
@@ -207,6 +208,20 @@ function severityToPriority(severity: string) {
   if (severity === "major") return "High";
   if (severity === "do_not_use") return "Critical";
   return "Low";
+}
+
+function highestSeverity(severities: string[]) {
+  const rank: Record<string, number> = {
+    none: 0,
+    minor: 1,
+    moderate: 2,
+    major: 3,
+    do_not_use: 4,
+  };
+
+  return severities.reduce((highest, current) => {
+    return (rank[current] ?? 0) > (rank[highest] ?? 0) ? current : highest;
+  }, "none");
 }
 
 function severityToResult(severity: string) {
@@ -421,7 +436,7 @@ export default function VehiclePrestartsPage() {
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedCrew, setSelectedCrew] = useState("");
   const [checklistValues, setChecklistValues] = useState<
-    Record<string, { answer: string; comment: string }>
+    Record<string, { answer: string; severity: string; comment: string }>
   >(defaultChecklist);
 
   const selectedVehicle = vehicles.find(
@@ -685,8 +700,6 @@ export default function VehiclePrestartsPage() {
     }
 
     const prestartDate = clean(formData.get("prestart_date") as string);
-    const selectedSeverity =
-      clean(formData.get("severity") as string) || "none";
     const comments = clean(formData.get("comments") as string);
 
     if (!prestartDate) {
@@ -711,32 +724,41 @@ export default function VehiclePrestartsPage() {
       return;
     }
 
-    if (selectedSeverity !== "none" && !comments) {
-      alert("Please enter general comments when manually raising a severity.");
+    const failedItemsMissingSeverity = failedItems.filter((item) => {
+      const key = checklistKey(item);
+      return !checklistValues[key]?.severity;
+    });
+
+    if (failedItemsMissingSeverity.length > 0) {
+      alert(`Severity required for: ${failedItemsMissingSeverity.join(", ")}`);
       setSaving(false);
       return;
     }
 
-    const hasFailedChecklist = failedItems.length > 0;
-
-    const severity =
-      hasFailedChecklist && selectedSeverity === "none"
-        ? "minor"
-        : selectedSeverity;
-
-    const failedChecklistDetails = failedItems.map((item) => {
+    const failedSeverities = failedItems.map((item) => {
       const key = checklistKey(item);
-      return `${item}: ${checklistValues[key]?.comment?.trim() || "No comment provided"}`;
+      return checklistValues[key]?.severity || "minor";
     });
 
-    const fleetJobDescription = [
-      failedChecklistDetails.length > 0
-        ? `Failed checklist item(s):\n${failedChecklistDetails.join("\n")}`
-        : "",
-      comments ? `General comments:\n${comments}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const severity = failedItems.length > 0 ? highestSeverity(failedSeverities) : "none";
+
+    const failedChecklistDetails = failedItems.map((item) => {
+  const key = checklistKey(item);
+  const itemSeverity = checklistValues[key]?.severity || "minor";
+  const itemComment =
+    checklistValues[key]?.comment?.trim() || "No comment provided";
+
+  return `${item}\nSeverity: ${severityLabel(itemSeverity)}\nComment: ${itemComment}`;
+});
+
+const fleetJobDescription = [
+  failedChecklistDetails.length > 0
+    ? `Vehicle prestart defect(s):\n\n${failedChecklistDetails.join("\n\n")}`
+    : "",
+  comments ? `General comments:\n${comments}` : "",
+]
+  .filter(Boolean)
+  .join("\n\n");
 
     const assetLabel = [
       clean(vehicle.vehicle_id) || "Vehicle",
@@ -1461,6 +1483,7 @@ export default function VehiclePrestartsPage() {
                     {checklistItems.map((item) => {
                       const key = checklistKey(item);
                       const value = checklistValues[key]?.answer || "yes";
+                      const itemSeverity = checklistValues[key]?.severity || "minor";
                       const comment = checklistValues[key]?.comment || "";
 
                       return (
@@ -1487,9 +1510,11 @@ export default function VehiclePrestartsPage() {
                                     [key]: {
                                       ...(current[key] || {
                                         answer: "yes",
+                                        severity: "minor",
                                         comment: "",
                                       }),
                                       answer: "yes",
+                                      comment: "",
                                     },
                                   }))
                                 }
@@ -1506,9 +1531,11 @@ export default function VehiclePrestartsPage() {
                                     [key]: {
                                       ...(current[key] || {
                                         answer: "yes",
+                                        severity: "minor",
                                         comment: "",
                                       }),
                                       answer: "no",
+                                      severity: current[key]?.severity || "minor",
                                     },
                                   }))
                                 }
@@ -1525,9 +1552,11 @@ export default function VehiclePrestartsPage() {
                                     [key]: {
                                       ...(current[key] || {
                                         answer: "yes",
+                                        severity: "minor",
                                         comment: "",
                                       }),
                                       answer: "na",
+                                      comment: "",
                                     },
                                   }))
                                 }
@@ -1538,32 +1567,70 @@ export default function VehiclePrestartsPage() {
                           </div>
 
                           {value === "no" ? (
-                            <textarea
-                              value={comment}
-                              onChange={(event) =>
-                                setChecklistValues((current) => ({
-                                  ...current,
-                                  [key]: {
-                                    ...(current[key] || {
+                            <div className="mt-2 grid gap-2">
+                              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                                {[
+                                  ["minor", "Minor"],
+                                  ["moderate", "Moderate"],
+                                  ["major", "Major"],
+                                  ["do_not_use", "Do Not Use"],
+                                ].map(([severityValue, label]) => (
+                                  <button
+                                    key={severityValue}
+                                    type="button"
+                                    onClick={() =>
+                                      setChecklistValues((current) => ({
+                                        ...current,
+                                        [key]: {
+                                          ...(current[key] || {
+                                            answer: "no",
+                                            severity: "minor",
+                                            comment: "",
+                                          }),
+                                          answer: "no",
+                                          severity: severityValue,
+                                        },
+                                      }))
+                                    }
+                                    className={`rounded-md border px-2 py-1.5 text-[10px] font-black transition ${
+                                      itemSeverity === severityValue
+                                        ? severityTone(severityValue) === "rose"
+                                          ? "border-rose-500 bg-rose-600 text-white"
+                                          : severityTone(severityValue) === "amber"
+                                            ? "border-amber-500 bg-amber-500 text-white"
+                                            : "border-blue-500 bg-blue-600 text-white"
+                                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <textarea
+                                value={comment}
+                                onChange={(event) =>
+                                  setChecklistValues((current) => ({
+                                    ...current,
+                                    [key]: {
+                                      ...(current[key] || {
+                                        answer: "no",
+                                        severity: "minor",
+                                        comment: "",
+                                      }),
                                       answer: "no",
-                                      comment: "",
-                                    }),
-                                    answer: "no",
-                                    comment: event.target.value,
-                                  },
-                                }))
-                              }
-                              placeholder="Required: explain this defect..."
-                              rows={2}
-                              className="mt-2 w-full rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
-                            />
+                                      comment: event.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="Required: explain this defect..."
+                                rows={2}
+                                className="w-full rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
+                              />
+                            </div>
                           ) : null}
 
-                          <input
-                            type="hidden"
-                            name={key}
-                            value={value}
-                          />
+                          <input type="hidden" name={key} value={value} />
                         </div>
                       );
                     })}
@@ -1587,29 +1654,6 @@ export default function VehiclePrestartsPage() {
                         <option>Fair</option>
                         <option>Poor</option>
                         <option>Unsafe</option>
-                      </select>
-                    </label>
-
-                    <label className="grid gap-2 text-sm font-bold text-slate-700">
-                      Issue Severity
-                      <select
-                        name="severity"
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                      >
-                        <option value="none">No Issues</option>
-                        <option value="minor">
-                          Minor - Low Priority Fleet Job
-                        </option>
-                        <option value="moderate">
-                          Moderate - Medium Priority Fleet Job
-                        </option>
-                        <option value="major">
-                          Major - High Priority Fleet Job
-                        </option>
-                        <option value="do_not_use">
-                          Do Not Use - Critical Fleet Job
-                        </option>
                       </select>
                     </label>
 
