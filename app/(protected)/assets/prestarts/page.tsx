@@ -422,7 +422,12 @@ export default function VehiclePrestartsPage() {
   const selectedVehicle = vehicles.find(
     (vehicle) => vehicle.id === selectedVehicleId,
   );
+const failedChecklistItems = checklistItems.filter((item) => {
+  const key = checklistKey(item);
+  return checklistValues[key] === "no";
+});
 
+const hasFailedChecklist = failedChecklistItems.length > 0;
   const loadData = useCallback(async () => {
     setLoading(true);
 
@@ -1549,15 +1554,30 @@ export default function VehiclePrestartsPage() {
                       </select>
                     </label>
 
-                    <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
-                      Defect Description / General Comments
-                      <textarea
-                        name="comments"
-                        rows={5}
-                        placeholder="Describe defects, missing items, warning lights, damage, or general comments."
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                      />
-                    </label>
+<label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+  Defect Description / General Comments
+  {hasFailedChecklist ? (
+    <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-700">
+      Comment required. Failed item(s): {failedChecklistItems.join(", ")}
+    </div>
+  ) : null}
+
+  <textarea
+    name="comments"
+    rows={5}
+    required={hasFailedChecklist}
+    placeholder={
+      hasFailedChecklist
+        ? "Required: explain the failed checklist item(s)."
+        : "Describe defects, missing items, warning lights, damage, or general comments."
+    }
+    className={`rounded-xl border bg-white px-4 py-3 text-sm font-medium outline-none transition placeholder:text-slate-400 focus:ring-4 ${
+      hasFailedChecklist
+        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+        : "border-slate-200 focus:border-slate-400 focus:ring-slate-100"
+    }`}
+  />
+</label>
                   </div>
                 </section>
               </div>
