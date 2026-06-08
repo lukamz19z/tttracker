@@ -112,8 +112,13 @@ function checklistKey(label: string) {
 }
 
 function defaultChecklist() {
-  return checklistItems.reduce<Record<string, string>>((acc, item) => {
-    acc[checklistKey(item)] = "yes";
+  return checklistItems.reduce<
+    Record<string, { answer: string; comment: string }>
+  >((acc, item) => {
+    acc[checklistKey(item)] = {
+      answer: "yes",
+      comment: "",
+    };
     return acc;
   }, {});
 }
@@ -415,16 +420,16 @@ export default function VehiclePrestartsPage() {
 
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedCrew, setSelectedCrew] = useState("");
-  const [checklistValues, setChecklistValues] = useState<Record<string, string>>(
-    defaultChecklist,
-  );
+const [checklistValues, setChecklistValues] = useState<
+  Record<string, { answer: string; comment: string }>
+>(defaultChecklist);
 
   const selectedVehicle = vehicles.find(
     (vehicle) => vehicle.id === selectedVehicleId,
   );
 const failedChecklistItems = checklistItems.filter((item) => {
   const key = checklistKey(item);
-  return checklistValues[key] === "no";
+  return checklistValues[key]?.answer === "no";
 });
 
 const hasFailedChecklist = failedChecklistItems.length > 0;
@@ -695,11 +700,26 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
       return;
     }
 
-    const failedItems = checklistItems.filter((item) => {
-      const key = checklistKey(item);
-      return checklistValues[key] === "no";
-    });
+const failedItems = checklistItems.filter((item) => {
+  const key = checklistKey(item);
+  return checklistValues[key]?.answer === "no";
+});
+const failedItemsMissingComments = checklistItems.filter((item) => {
+  const key = checklistKey(item);
 
+  return (
+    checklistValues[key]?.answer === "no" &&
+    !checklistValues[key]?.comment?.trim()
+  );
+});
+
+if (failedItemsMissingComments.length > 0) {
+  alert(
+    `Comments required for: ${failedItemsMissingComments.join(", ")}`
+  );
+  setSaving(false);
+  return;
+}
     const hasFailedChecklist = failedItems.length > 0;
 
     if ((selectedSeverity !== "none" || hasFailedChecklist) && !comments) {
@@ -1448,7 +1468,8 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
                   <div className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3">
                     {checklistItems.map((item) => {
                       const key = checklistKey(item);
-                      const value = checklistValues[key] || "yes";
+                      const value = checklistValues[key]?.answer || "yes";
+const comment = checklistValues[key]?.comment || "";
 
                       return (
                         <div
@@ -1464,10 +1485,13 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
                               active={value === "yes"}
                               tone="yes"
                               onClick={() =>
-                                setChecklistValues((current) => ({
-                                  ...current,
-                                  [key]: "yes",
-                                }))
+setChecklistValues((current) => ({
+  ...current,
+  [key]: {
+    ...current[key],
+    answer: "yes",
+  },
+}))
                               }
                             >
                               Y
@@ -1477,10 +1501,13 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
                               active={value === "no"}
                               tone="no"
                               onClick={() =>
-                                setChecklistValues((current) => ({
-                                  ...current,
-                                  [key]: "no",
-                                }))
+setChecklistValues((current) => ({
+  ...current,
+  [key]: {
+    ...current[key],
+    answer: "no",
+  },
+}))
                               }
                             >
                               N
@@ -1490,21 +1517,24 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
                               active={value === "na"}
                               tone="na"
                               onClick={() =>
-                                setChecklistValues((current) => ({
-                                  ...current,
-                                  [key]: "na",
-                                }))
+setChecklistValues((current) => ({
+  ...current,
+  [key]: {
+    ...current[key],
+    answer: "na",
+  },
+}))
                               }
                             >
                               N/A
                             </ChecklistButton>
                           </div>
 
-                          <input
-                            type="hidden"
-                            name={key}
-                            value={checklistValues[key] || "yes"}
-                          />
+<input
+  type="hidden"
+  name={key}
+  value={checklistValues[key]?.answer || "yes"}
+/>
                         </div>
                       );
                     })}
