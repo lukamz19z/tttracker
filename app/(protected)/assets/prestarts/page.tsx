@@ -64,7 +64,7 @@ type VehiclePrestart = {
   project: string | null;
   crew: string | null;
   inspected_by_name: string | null;
-  checklist: Record<string, string> | null;
+  checklist: Record<string, { answer: string; comment: string }> | null;
   overall_condition: string | null;
   comments: string | null;
   severity: string | null;
@@ -420,19 +420,14 @@ export default function VehiclePrestartsPage() {
 
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedCrew, setSelectedCrew] = useState("");
-const [checklistValues, setChecklistValues] = useState<
-  Record<string, { answer: string; comment: string }>
->(defaultChecklist);
+  const [checklistValues, setChecklistValues] = useState<
+    Record<string, { answer: string; comment: string }>
+  >(defaultChecklist);
 
   const selectedVehicle = vehicles.find(
     (vehicle) => vehicle.id === selectedVehicleId,
   );
-const failedChecklistItems = checklistItems.filter((item) => {
-  const key = checklistKey(item);
-  return checklistValues[key]?.answer === "no";
-});
 
-const hasFailedChecklist = failedChecklistItems.length > 0;
   const loadData = useCallback(async () => {
     setLoading(true);
 
@@ -700,48 +695,45 @@ const hasFailedChecklist = failedChecklistItems.length > 0;
       return;
     }
 
-const failedItems = checklistItems.filter((item) => {
-  const key = checklistKey(item);
-  return checklistValues[key]?.answer === "no";
-});
-const failedItemsMissingComments = checklistItems.filter((item) => {
-  const key = checklistKey(item);
+    const failedItems = checklistItems.filter((item) => {
+      const key = checklistKey(item);
+      return checklistValues[key]?.answer === "no";
+    });
 
-  return (
-    checklistValues[key]?.answer === "no" &&
-    !checklistValues[key]?.comment?.trim()
-  );
-});
+    const failedItemsMissingComments = failedItems.filter((item) => {
+      const key = checklistKey(item);
+      return !checklistValues[key]?.comment?.trim();
+    });
 
-if (failedItemsMissingComments.length > 0) {
-  alert(
-    `Comments required for: ${failedItemsMissingComments.join(", ")}`
-  );
-  setSaving(false);
-  return;
-}
-    const hasFailedChecklist = failedItems.length > 0;
-
-    if ((selectedSeverity !== "none" || hasFailedChecklist) && !comments) {
-      alert(
-        hasFailedChecklist
-          ? `Please add comments for failed checklist item(s): ${failedItems.join(", ")}`
-          : "Please enter defect details/comments when raising an issue.",
-      );
+    if (failedItemsMissingComments.length > 0) {
+      alert(`Comments required for: ${failedItemsMissingComments.join(", ")}`);
       setSaving(false);
       return;
     }
+
+    if (selectedSeverity !== "none" && !comments) {
+      alert("Please enter general comments when manually raising a severity.");
+      setSaving(false);
+      return;
+    }
+
+    const hasFailedChecklist = failedItems.length > 0;
 
     const severity =
       hasFailedChecklist && selectedSeverity === "none"
         ? "minor"
         : selectedSeverity;
 
+    const failedChecklistDetails = failedItems.map((item) => {
+      const key = checklistKey(item);
+      return `${item}: ${checklistValues[key]?.comment?.trim() || "No comment provided"}`;
+    });
+
     const fleetJobDescription = [
-      comments,
-      failedItems.length > 0
-        ? `Failed checklist item(s): ${failedItems.join(", ")}`
+      failedChecklistDetails.length > 0
+        ? `Failed checklist item(s):\n${failedChecklistDetails.join("\n")}`
         : "",
+      comments ? `General comments:\n${comments}` : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -1469,72 +1461,109 @@ if (failedItemsMissingComments.length > 0) {
                     {checklistItems.map((item) => {
                       const key = checklistKey(item);
                       const value = checklistValues[key]?.answer || "yes";
-const comment = checklistValues[key]?.comment || "";
+                      const comment = checklistValues[key]?.comment || "";
 
                       return (
                         <div
                           key={item}
-                          className="grid grid-cols-[1fr_auto] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                          className={`rounded-xl border px-3 py-2 ${
+                            value === "no"
+                              ? "border-rose-200 bg-rose-50"
+                              : "border-slate-200 bg-slate-50"
+                          }`}
                         >
-                          <p className="truncate text-xs font-black text-slate-800">
-                            {item}
-                          </p>
+                          <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                            <p className="truncate text-xs font-black text-slate-800">
+                              {item}
+                            </p>
 
-                          <div className="flex gap-1">
-                            <ChecklistButton
-                              active={value === "yes"}
-                              tone="yes"
-                              onClick={() =>
-setChecklistValues((current) => ({
-  ...current,
-  [key]: {
-    ...current[key],
-    answer: "yes",
-  },
-}))
-                              }
-                            >
-                              Y
-                            </ChecklistButton>
+                            <div className="flex gap-1">
+                              <ChecklistButton
+                                active={value === "yes"}
+                                tone="yes"
+                                onClick={() =>
+                                  setChecklistValues((current) => ({
+                                    ...current,
+                                    [key]: {
+                                      ...(current[key] || {
+                                        answer: "yes",
+                                        comment: "",
+                                      }),
+                                      answer: "yes",
+                                    },
+                                  }))
+                                }
+                              >
+                                Y
+                              </ChecklistButton>
 
-                            <ChecklistButton
-                              active={value === "no"}
-                              tone="no"
-                              onClick={() =>
-setChecklistValues((current) => ({
-  ...current,
-  [key]: {
-    ...current[key],
-    answer: "no",
-  },
-}))
-                              }
-                            >
-                              N
-                            </ChecklistButton>
+                              <ChecklistButton
+                                active={value === "no"}
+                                tone="no"
+                                onClick={() =>
+                                  setChecklistValues((current) => ({
+                                    ...current,
+                                    [key]: {
+                                      ...(current[key] || {
+                                        answer: "yes",
+                                        comment: "",
+                                      }),
+                                      answer: "no",
+                                    },
+                                  }))
+                                }
+                              >
+                                N
+                              </ChecklistButton>
 
-                            <ChecklistButton
-                              active={value === "na"}
-                              tone="na"
-                              onClick={() =>
-setChecklistValues((current) => ({
-  ...current,
-  [key]: {
-    ...current[key],
-    answer: "na",
-  },
-}))
-                              }
-                            >
-                              N/A
-                            </ChecklistButton>
+                              <ChecklistButton
+                                active={value === "na"}
+                                tone="na"
+                                onClick={() =>
+                                  setChecklistValues((current) => ({
+                                    ...current,
+                                    [key]: {
+                                      ...(current[key] || {
+                                        answer: "yes",
+                                        comment: "",
+                                      }),
+                                      answer: "na",
+                                    },
+                                  }))
+                                }
+                              >
+                                N/A
+                              </ChecklistButton>
+                            </div>
                           </div>
 
-<input
-  type="hidden"
-  name={key}
-  value={checklistValues[key]?.answer || "yes"}
-/>
+                          {value === "no" ? (
+                            <textarea
+                              value={comment}
+                              onChange={(event) =>
+                                setChecklistValues((current) => ({
+                                  ...current,
+                                  [key]: {
+                                    ...(current[key] || {
+                                      answer: "no",
+                                      comment: "",
+                                    }),
+                                    answer: "no",
+                                    comment: event.target.value,
+                                  },
+                                }))
+                              }
+                              placeholder="Required: explain this defect..."
+                              rows={2}
+                              className="mt-2 w-full rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
+                            />
+                          ) : null}
+
+                          <input
+                            type="hidden"
+                            name={key}
+                            value={value}
+                          />
                         </div>
                       );
                     })}
@@ -1584,30 +1613,15 @@ setChecklistValues((current) => ({
                       </select>
                     </label>
 
-<label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
-  Defect Description / General Comments
-  {hasFailedChecklist ? (
-    <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-700">
-      Comment required. Failed item(s): {failedChecklistItems.join(", ")}
-    </div>
-  ) : null}
-
-  <textarea
-    name="comments"
-    rows={5}
-    required={hasFailedChecklist}
-    placeholder={
-      hasFailedChecklist
-        ? "Required: explain the failed checklist item(s)."
-        : "Describe defects, missing items, warning lights, damage, or general comments."
-    }
-    className={`rounded-xl border bg-white px-4 py-3 text-sm font-medium outline-none transition placeholder:text-slate-400 focus:ring-4 ${
-      hasFailedChecklist
-        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-        : "border-slate-200 focus:border-slate-400 focus:ring-slate-100"
-    }`}
-  />
-</label>
+                    <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                      Defect Description / General Comments
+                      <textarea
+                        name="comments"
+                        rows={5}
+                        placeholder="Describe defects, missing items, warning lights, damage, or general comments."
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
                   </div>
                 </section>
               </div>

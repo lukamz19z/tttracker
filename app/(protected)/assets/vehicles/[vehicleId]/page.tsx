@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ActionButton,
@@ -267,7 +267,9 @@ function findAddedDate(
     return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
   });
 
-  return formatDate(match?.modification_date || match?.created_at || fallbackDate);
+  return formatDate(
+    match?.modification_date || match?.created_at || fallbackDate,
+  );
 }
 
 function ImportantDateCard({
@@ -433,16 +435,22 @@ export default function VehicleDetailPage() {
   const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
   const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
-  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
-  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
-  const [editingRecord, setEditingRecord] = useState<ServiceHistory | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
+    null,
+  );
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(
+    null,
+  );
+  const [editingRecord, setEditingRecord] = useState<ServiceHistory | null>(
+    null,
+  );
   const [editForm, setEditForm] = useState<EditHistoryForm | null>(null);
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingHistory, setSavingHistory] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const loadVehicle = useCallback(async () => {
+  async function loadVehicle() {
     setLoading(true);
     setErrorMessage("");
 
@@ -487,26 +495,29 @@ export default function VehicleDetailPage() {
 
     if (vehicleResult.error || !vehicleResult.data) {
       setVehicle(null);
-      setErrorMessage(vehicleResult.error?.message || "Vehicle could not be loaded.");
+      setErrorMessage(
+        vehicleResult.error?.message || "Vehicle could not be loaded.",
+      );
     } else {
       setVehicle(vehicleResult.data);
     }
 
-    setDocuments(documentsResult.error ? [] : documentsResult.data ?? []);
+    setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
-      serviceHistoryResult.error ? [] : serviceHistoryResult.data ?? [],
+      serviceHistoryResult.error ? [] : (serviceHistoryResult.data ?? []),
     );
     setProjectHistory(
-      projectHistoryResult.error ? [] : projectHistoryResult.data ?? [],
+      projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
-    setPrestartHistory(prestartResult.error ? [] : prestartResult.data ?? []);
+    setPrestartHistory(prestartResult.error ? [] : (prestartResult.data ?? []));
 
     setLoading(false);
-  }, [supabase, vehicleId]);
+  }
 
   useEffect(() => {
     void loadVehicle();
-  }, [loadVehicle]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleId]);
 
   const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
 
@@ -655,7 +666,9 @@ export default function VehicleDetailPage() {
     } | null = null;
 
     try {
-      replacementAttachment = await uploadReplacementAttachment(editingRecord.id);
+      replacementAttachment = await uploadReplacementAttachment(
+        editingRecord.id,
+      );
 
       if (replacementAttachment && editingRecord.storage_path) {
         await supabase.storage
@@ -1234,14 +1247,17 @@ export default function VehicleDetailPage() {
                               {clean(record.project)}
                             </p>
                             <p className="mt-1 text-xs font-semibold text-slate-500">
-                              Onboarded: {formatDate(record.project_onboard_date)}
+                              Onboarded:{" "}
+                              {formatDate(record.project_onboard_date)}
                             </p>
                           </div>
 
                           <button
                             type="button"
                             onClick={() =>
-                              setExpandedProjectId(isExpanded ? null : record.id)
+                              setExpandedProjectId(
+                                isExpanded ? null : record.id,
+                              )
                             }
                             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                           >
@@ -1460,7 +1476,9 @@ export default function VehicleDetailPage() {
                 value={editForm.modification_date}
                 onChange={(value) =>
                   setEditForm((current) =>
-                    current ? { ...current, modification_date: value } : current,
+                    current
+                      ? { ...current, modification_date: value }
+                      : current,
                   )
                 }
               />
@@ -1490,7 +1508,9 @@ export default function VehicleDetailPage() {
                 value={editForm.modification_type}
                 onChange={(value) =>
                   setEditForm((current) =>
-                    current ? { ...current, modification_type: value } : current,
+                    current
+                      ? { ...current, modification_type: value }
+                      : current,
                   )
                 }
               />
@@ -1636,14 +1656,14 @@ export default function VehicleDetailPage() {
                       </p>
 
                       <p className="text-xs text-slate-500">
-                        Uploading a new file will replace the existing attachment.
+                        Uploading a new file will replace the existing
+                        attachment.
                       </p>
                     </div>
 
                     <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-white">
                       <FileUp size={14} />
                       Upload Replacement
-
                       <input
                         type="file"
                         className="hidden"
