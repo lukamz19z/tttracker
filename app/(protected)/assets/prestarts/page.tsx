@@ -101,6 +101,8 @@ const checklistItems = [
   "Spare wheel",
   "IVMS working",
   "UHF radio working",
+   "AC / Heater",
+    "instruments",
 ];
 
 function clean(value: string | number | null | undefined) {
