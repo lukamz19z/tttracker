@@ -122,13 +122,35 @@ type ProjectHistory = {
 
 type PrestartRecord = {
   id: string;
-  prestart_date?: string | null;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+  vehicle_rego: string | null;
+  kilometres: number | null;
+  project: string | null;
+  crew: string | null;
+  inspected_by_name: string | null;
+  overall_condition: string | null;
+  comments: string | null;
+  severity: string | null;
+  result: string | null;
+  fleet_job_id: string | null;
+  prestart_date: string | null;
   created_at: string | null;
-  driver_name?: string | null;
-  submitted_by?: string | null;
-  status?: string | null;
-  defects_found?: boolean | null;
-  notes?: string | null;
+};
+
+type FleetJob = {
+  id: string;
+  job_number: string | null;
+  title: string | null;
+  description: string | null;
+  priority: string | null;
+  status: string | null;
+  project: string | null;
+  crew: string | null;
+  reported_by: string | null;
+  assigned_to: string | null;
+  due_date: string | null;
+  created_at: string | null;
 };
 
 type EditHistoryForm = {
@@ -435,6 +457,7 @@ export default function VehicleDetailPage() {
   const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
   const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
+  const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
     null,
   );
@@ -460,6 +483,7 @@ export default function VehicleDetailPage() {
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
+      fleetJobsResult,
     ] = await Promise.all([
       supabase
         .from("vehicle_assets")
@@ -486,11 +510,22 @@ export default function VehicleDetailPage() {
         .returns<ProjectHistory[]>(),
       supabase
         .from("vehicle_prestarts")
-        .select("*")
+        .select(
+          "id, vehicle_asset_id, asset_label, vehicle_rego, kilometres, project, crew, inspected_by_name, overall_condition, comments, severity, result, fleet_job_id, prestart_date, created_at",
+        )
         .eq("vehicle_asset_id", vehicleId)
+        .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(3)
         .returns<PrestartRecord[]>(),
+      supabase
+        .from("fleet_jobs")
+        .select(
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+        )
+        .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<FleetJob[]>(),
     ]);
 
     if (vehicleResult.error || !vehicleResult.data) {
@@ -510,6 +545,16 @@ export default function VehicleDetailPage() {
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
     setPrestartHistory(prestartResult.error ? [] : (prestartResult.data ?? []));
+    setFleetJobs(
+      fleetJobsResult.error
+        ? []
+        : (fleetJobsResult.data ?? []).filter((job) => {
+            const status = clean(job.status).toLowerCase();
+            return !["closed", "complete", "completed", "resolved"].includes(
+              status,
+            );
+          }),
+    );
 
     setLoading(false);
   }
@@ -520,6 +565,74 @@ export default function VehicleDetailPage() {
   }, [vehicleId]);
 
   const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
+  const [today] = useState(() => new Date());
+
+  const latestPrestart = prestartHistory[0] ?? null;
+  const currentKm = latestPrestart?.kilometres ?? null;
+
+  const remainingKm =
+    currentKm !== null &&
+    vehicle?.next_service_km !== null &&
+    vehicle?.next_service_km !== undefined
+      ? vehicle.next_service_km - currentKm
+      : null;
+
+  const daysUntilService = vehicle?.next_service_due
+    ? Math.ceil(
+        (new Date(vehicle.next_service_due).getTime() - today.getTime()) /
+          (1000 * 60 * 60 * 24),
+      )
+    : null;
+
+  const hasServiceTrigger = Boolean(
+    vehicle?.next_service_due ||
+      (vehicle?.next_service_km !== null &&
+        vehicle?.next_service_km !== undefined),
+  );
+
+  const serviceOverdue =
+    hasServiceTrigger &&
+    ((remainingKm !== null && remainingKm <= 0) ||
+      (daysUntilService !== null && daysUntilService <= 0));
+
+  const serviceDueSoon =
+    hasServiceTrigger &&
+    !serviceOverdue &&
+    ((remainingKm !== null && remainingKm <= 1000) ||
+      (daysUntilService !== null && daysUntilService <= 30));
+
+  const serviceStatusLabel = !hasServiceTrigger
+    ? "Not Set"
+    : serviceOverdue
+      ? "Overdue"
+      : serviceDueSoon
+        ? "Due Soon"
+        : "Compliant";
+
+  const serviceStatusTone: Tone = !hasServiceTrigger
+    ? "slate"
+    : serviceOverdue
+      ? "rose"
+      : serviceDueSoon
+        ? "amber"
+        : "emerald";
+
+  const kmRemainingDisplay =
+    remainingKm !== null ? `${remainingKm.toLocaleString()} km` : "N/A";
+
+  const daysRemainingDisplay =
+    daysUntilService !== null
+      ? `${daysUntilService.toLocaleString()} days`
+      : "N/A";
+
+  const fleetJobTone = (job: FleetJob): Tone => {
+    const priority = clean(job.priority).toLowerCase();
+    const status = clean(job.status).toLowerCase();
+
+    if (priority === "urgent" || priority === "high") return "rose";
+    if (status.includes("progress") || status.includes("open")) return "amber";
+    return "blue";
+  };
 
   const vehicleTitle =
     vehicle && clean(vehicle.vehicle_id) !== "N/A"
@@ -1015,6 +1128,70 @@ export default function VehicleDetailPage() {
         {!isTrailer && (
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <SectionHeader
+              icon={<Wrench size={18} />}
+              title="Service Status"
+              description="Shows whichever service trigger is reached first: time or kilometres."
+            />
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <ImportantDateCard
+                label="Current KM"
+                value={
+                  currentKm !== null ? `${currentKm.toLocaleString()} km` : "N/A"
+                }
+                helper={
+                  latestPrestart
+                    ? `Latest prestart: ${formatDate(
+                        latestPrestart.prestart_date || latestPrestart.created_at,
+                      )}`
+                    : "No prestart KM recorded"
+                }
+              />
+
+              <ImportantDateCard
+                label="Next Service KM"
+                value={
+                  vehicle.next_service_km !== null &&
+                  vehicle.next_service_km !== undefined
+                    ? `${vehicle.next_service_km.toLocaleString()} km`
+                    : "N/A"
+                }
+                helper="KM trigger from last service"
+              />
+
+              <ImportantDateCard
+                label="KM Remaining"
+                value={kmRemainingDisplay}
+                helper="Based on latest prestart"
+              />
+
+              <ImportantDateCard
+                label="Date Trigger"
+                value={formatDate(vehicle.next_service_due)}
+                helper={`Time remaining: ${daysRemainingDisplay}`}
+              />
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Service Status
+                </p>
+                <div className="mt-3">
+                  <StatusBadge
+                    label={serviceStatusLabel}
+                    tone={serviceStatusTone}
+                  />
+                </div>
+                <p className="mt-2 text-xs font-medium text-slate-500">
+                  Triggered by KM or date, whichever comes first.
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {!isTrailer && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionHeader
               icon={<ShieldCheck size={18} />}
               title="Vehicle Setup & Compliance Equipment"
               description="Required onboard systems and safety equipment for LVs and HVs."
@@ -1351,7 +1528,7 @@ export default function VehicleDetailPage() {
               <SectionHeader
                 icon={<ClipboardCheck size={18} />}
                 title="Recent Prestarts"
-                description="Showing the 3 most recent prestarts only."
+                description="Showing the 3 most recent prestarts for this vehicle."
               />
 
               {prestartHistory.length > 0 ? (
@@ -1361,19 +1538,55 @@ export default function VehicleDetailPage() {
                       key={record.id}
                       className="rounded-xl border border-slate-200 bg-slate-50 p-4"
                     >
-                      <p className="text-sm font-bold text-slate-950">
-                        {formatDate(record.prestart_date || record.created_at)}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Completed by{" "}
-                        {clean(record.driver_name || record.submitted_by)}
-                      </p>
-                      <p className="mt-2 text-xs font-bold text-slate-600">
-                        Status: {clean(record.status)}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Defects: {yesNo(record.defects_found)}
-                      </p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {formatDate(record.prestart_date || record.created_at)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Inspected by {clean(record.inspected_by_name)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(record.result)}
+                          tone={
+                            clean(record.severity).toLowerCase() === "critical" ||
+                            clean(record.severity).toLowerCase() === "major"
+                              ? "rose"
+                              : clean(record.severity).toLowerCase() === "minor"
+                                ? "amber"
+                                : "emerald"
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">KM:</span>{" "}
+                          {record.kilometres !== null &&
+                          record.kilometres !== undefined
+                            ? `${record.kilometres.toLocaleString()} km`
+                            : "N/A"}
+                        </p>
+                        <p>
+                          <span className="font-bold">Severity:</span>{" "}
+                          {clean(record.severity)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Project:</span>{" "}
+                          {clean(record.project)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Crew:</span> {clean(record.crew)}
+                        </p>
+                      </div>
+
+                      {record.comments ? (
+                        <p className="mt-3 text-sm text-slate-600">
+                          {record.comments}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -1382,6 +1595,70 @@ export default function VehicleDetailPage() {
                   icon={<ClipboardCheck size={18} />}
                   title="No prestarts yet"
                   description="The 3 most recent prestarts will appear here once vehicle prestarts are added."
+                />
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title="Active Fleet Jobs"
+                description="Open maintenance, defect or fleet jobs linked to this vehicle."
+              />
+
+              {fleetJobs.length > 0 ? (
+                <div className="space-y-3">
+                  {fleetJobs.map((job) => (
+                    <div
+                      key={job.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {clean(job.job_number)} · {clean(job.title)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Created {formatDate(job.created_at)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(job.status)}
+                          tone={fleetJobTone(job)}
+                        />
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-700">
+                        {clean(job.description)}
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">Priority:</span>{" "}
+                          {clean(job.priority)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Due:</span>{" "}
+                          {formatDate(job.due_date)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Assigned:</span>{" "}
+                          {clean(job.assigned_to)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Reported By:</span>{" "}
+                          {clean(job.reported_by)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<Wrench size={18} />}
+                  title="No active fleet jobs"
+                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
                 />
               )}
             </section>

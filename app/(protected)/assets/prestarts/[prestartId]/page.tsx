@@ -63,8 +63,59 @@ type FleetJob = {
   created_at: string | null;
 };
 
+const checklistSections = [
+  {
+    title: "Vehicle Condition",
+    items: ["Tyres", "Doors", "Windows", "Mirrors", "Wipers"],
+  },
+  {
+    title: "Lights & Alarms",
+    items: [
+      "Park lights",
+      "Head lights",
+      "Reverse lights",
+      "Indicators",
+      "Brake lights",
+      "Beacon lights",
+      "Reverse alarm",
+      "Horn",
+    ],
+  },
+  {
+    title: "Driver Controls",
+    items: [
+      "Steering",
+      "Foot brake",
+      "Reverse camera",
+      "Seats and seat belts",
+      "AC / Heater",
+      "Instruments",
+    ],
+  },
+  {
+    title: "Safety Equipment",
+    items: ["Fire extinguisher", "First aid kit", "Wheel chocks"],
+  },
+  {
+    title: "Communications",
+    items: ["UHF radio working", "IVMS working"],
+  },
+  {
+    title: "Mechanical",
+    items: ["Battery", "Engine oil", "Coolant"],
+  },
+  {
+    title: "Transport Compliance",
+    items: ["Spare wheel"],
+  },
+];
+
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
+}
+
+function checklistKey(label: string) {
+  return label.toLowerCase().replaceAll(" ", "_").replaceAll("/", "_");
 }
 
 function formatDate(value: string | null) {
@@ -89,24 +140,19 @@ function formatDateTime(value: string | null) {
   });
 }
 
-function checklistLabel(key: string) {
-  return key
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function getChecklistAnswer(value: ChecklistAnswer) {
+function getChecklistAnswer(value: ChecklistAnswer | undefined) {
+  if (!value) return "na";
   if (typeof value === "string") return value;
   return value.answer || "na";
 }
 
-function getChecklistSeverity(value: ChecklistAnswer) {
-  if (typeof value === "string") return null;
+function getChecklistSeverity(value: ChecklistAnswer | undefined) {
+  if (!value || typeof value === "string") return null;
   return value.severity || null;
 }
 
-function getChecklistComment(value: ChecklistAnswer) {
-  if (typeof value === "string") return "";
+function getChecklistComment(value: ChecklistAnswer | undefined) {
+  if (!value || typeof value === "string") return "";
   return value.comment || "";
 }
 
@@ -127,16 +173,16 @@ function severityTone(severity: string | null): Tone {
   return "slate";
 }
 
-function answerTone(answer: string): Tone {
-  if (answer === "yes") return "emerald";
-  if (answer === "no") return "rose";
-  return "slate";
-}
-
 function answerLabel(answer: string) {
   if (answer === "yes") return "Y";
   if (answer === "no") return "N";
   return "N/A";
+}
+
+function answerTone(answer: string): Tone {
+  if (answer === "yes") return "emerald";
+  if (answer === "no") return "rose";
+  return "slate";
 }
 
 function priorityTone(priority: string | null): Tone {
@@ -144,6 +190,30 @@ function priorityTone(priority: string | null): Tone {
   if (priority === "Medium") return "amber";
   if (priority === "High" || priority === "Critical") return "rose";
   return "slate";
+}
+
+function getHighestSeverity(checklist: Record<string, ChecklistAnswer>) {
+  const severityRank: Record<string, number> = {
+    minor: 1,
+    moderate: 2,
+    major: 3,
+    do_not_use: 4,
+  };
+
+  let highest: string | null = null;
+
+  Object.values(checklist).forEach((value) => {
+    const answer = getChecklistAnswer(value);
+    const severity = getChecklistSeverity(value);
+
+    if (answer !== "no" || !severity) return;
+
+    if (!highest || severityRank[severity] > severityRank[highest]) {
+      highest = severity;
+    }
+  });
+
+  return highest;
 }
 
 export default function PrestartDetailPage() {
@@ -242,6 +312,8 @@ export default function PrestartDetailPage() {
     ([, value]) => getChecklistAnswer(value) === "no",
   );
 
+  const highestSeverity = getHighestSeverity(checklist);
+
   const vehicleTitle =
     clean(prestart.asset_label) ||
     [clean(vehicle?.vehicle_id), clean(vehicle?.make), clean(vehicle?.model)]
@@ -286,17 +358,19 @@ export default function PrestartDetailPage() {
               value: (
                 <StatusBadge
                   label={clean(prestart.result) || "Unknown"}
-                  tone={severityTone(prestart.severity)}
+                  tone={failedChecklistItems.length > 0 ? "rose" : "emerald"}
                 />
               ),
             },
             {
-              label: "Overall Severity",
-              value: (
+              label: "Highest Severity",
+              value: highestSeverity ? (
                 <StatusBadge
-                  label={severityLabel(prestart.severity)}
-                  tone={severityTone(prestart.severity)}
+                  label={severityLabel(highestSeverity)}
+                  tone={severityTone(highestSeverity)}
                 />
+              ) : (
+                <StatusBadge label="No Issues" tone="emerald" />
               ),
             },
             {
@@ -463,7 +537,9 @@ export default function PrestartDetailPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-slate-950">
-                        {checklistLabel(key)}
+                        {key
+                          .replaceAll("_", " ")
+                          .replace(/\b\w/g, (letter) => letter.toUpperCase())}
                       </p>
                       <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-rose-500">
                         Failed prestart item
@@ -487,44 +563,67 @@ export default function PrestartDetailPage() {
       ) : null}
 
       <section className="border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-bold text-slate-950">Vehicle Checklist</h2>
+        <h2 className="text-lg font-bold text-slate-950">
+          Vehicle Checklist
+        </h2>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {Object.entries(checklist).map(([key, value]) => {
-            const answer = getChecklistAnswer(value);
-            const itemSeverity = getChecklistSeverity(value);
-
-            return (
-              <div
-                key={key}
-                className={`border px-3 py-2 ${
-                  answer === "no"
-                    ? "border-rose-200 bg-rose-50"
-                    : "border-slate-200 bg-slate-50"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate text-sm font-semibold text-slate-800">
-                    {checklistLabel(key)}
-                  </span>
-
-                  <StatusBadge
-                    label={answerLabel(answer)}
-                    tone={answerTone(answer)}
-                  />
-                </div>
-
-                {answer === "no" ? (
-                  <div className="mt-2 flex justify-end">
-                    <StatusBadge
-                      label={severityLabel(itemSeverity)}
-                      tone={severityTone(itemSeverity)}
-                    />
-                  </div>
-                ) : null}
+        <div className="mt-4 space-y-6">
+          {checklistSections.map((section) => (
+            <div key={section.title}>
+              <div className="mb-3 border-b border-slate-200 pb-2">
+                <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
+                  {section.title}
+                </h3>
               </div>
-            );
-          })}
+
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {section.items.map((item) => {
+                  const key = checklistKey(item);
+                  const value = checklist[key];
+                  const answer = getChecklistAnswer(value);
+                  const itemSeverity = getChecklistSeverity(value);
+                  const itemComment = getChecklistComment(value);
+
+                  return (
+                    <div
+                      key={key}
+                      className={`border px-3 py-2 ${
+                        answer === "no"
+                          ? "border-rose-200 bg-rose-50"
+                          : "border-slate-200 bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-sm font-semibold text-slate-800">
+                          {item}
+                        </span>
+
+                        <StatusBadge
+                          label={answerLabel(answer)}
+                          tone={answerTone(answer)}
+                        />
+                      </div>
+
+                      {answer === "no" ? (
+                        <div className="mt-2 space-y-2">
+                          <div className="flex justify-end">
+                            <StatusBadge
+                              label={severityLabel(itemSeverity)}
+                              tone={severityTone(itemSeverity)}
+                            />
+                          </div>
+
+                          <p className="whitespace-pre-wrap text-xs leading-5 text-slate-700">
+                            {clean(itemComment) || "No comment recorded."}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
 
         {Object.keys(checklist).length === 0 ? (
