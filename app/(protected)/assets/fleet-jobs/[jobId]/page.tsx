@@ -1,10 +1,13 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
 import {
   ArrowLeft,
-  Building2,
+  AlertTriangle,
   Calendar,
   CheckCircle2,
   ClipboardList,
@@ -17,41 +20,44 @@ import {
   Wrench,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import {
-  ActionButton,
-  DetailGrid,
-  PageHeader,
-  PageShell,
-  StatusBadge,
-} from "../../components";
+import { DetailGrid, PageHeader, PageShell, StatusBadge } from "../../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
 
 type FleetJob = {
   id: string;
   job_number: string | null;
+
+  source_type: string | null;
+  source_id: string | null;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+
   asset_type: string | null;
   vehicle_id: string | null;
   plant_id: string | null;
   prestart_id: string | null;
-  source_type: string | null;
-  source_id: string | null;
-  source: string | null;
-  asset_label: string | null;
+
   title: string | null;
   description: string | null;
+  source: string | null;
   priority: string | null;
   status: string | null;
+
   project: string | null;
   crew: string | null;
+
   reported_by: string | null;
   assigned_to: string | null;
   vendor: string | null;
+
   reported_date: string | null;
   due_date: string | null;
   completed_date: string | null;
+
   cost: number | null;
   notes: string | null;
+
   created_at: string | null;
   updated_at: string | null;
 };
@@ -81,6 +87,20 @@ type PlantAsset = {
   asset_status: string | null;
 };
 
+type VehiclePrestart = {
+  id: string;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+  fleet_job_id: string | null;
+  severity: string | null;
+  failed_items: string[] | string | null;
+  created_at: string | null;
+  prestart_date?: string | null;
+  employee_name?: string | null;
+  operator_name?: string | null;
+  comments?: string | null;
+};
+
 const statuses = [
   "Open",
   "In Progress",
@@ -98,6 +118,7 @@ function clean(value: string | null | undefined) {
 
 function dateDisplay(value: string | null | undefined) {
   if (!value) return "N/A";
+
   return new Date(value).toLocaleDateString("en-AU", {
     day: "2-digit",
     month: "short",
@@ -105,15 +126,20 @@ function dateDisplay(value: string | null | undefined) {
   });
 }
 
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function moneyDisplay(value: number | null | undefined) {
   if (value === null || value === undefined) return "N/A";
+
   return new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency: "AUD",
   }).format(value);
 }
 
-function statusTone(status: string | null | undefined): Tone {
+function toneForStatus(status: string | null | undefined): Tone {
   if (status === "Completed" || status === "Closed") return "emerald";
   if (status === "In Progress" || status === "Booked") return "blue";
   if (status === "Waiting Parts") return "amber";
@@ -121,18 +147,46 @@ function statusTone(status: string | null | undefined): Tone {
   return "slate";
 }
 
-function priorityTone(priority: string | null | undefined): Tone {
+function toneForPriority(priority: string | null | undefined): Tone {
   if (priority === "Critical") return "rose";
   if (priority === "High") return "amber";
   if (priority === "Medium") return "blue";
   return "slate";
 }
 
-export default function FleetJobDetailPage({
-  params,
-}: {
-  params: { jobID: string };
-}) {
+function normaliseFailedItems(value: string[] | string | null | undefined) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value.filter(Boolean);
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+  } catch {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+export default function FleetJobDetailPage() {
+  const params = useParams();
+
+  const jobId = useMemo(() => {
+    const raw = Object.values(params)[0];
+
+    if (Array.isArray(raw)) {
+      return raw[0] || "";
+    }
+
+    return raw || "";
+  }, [params]);
+
   const supabase = useMemo(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -147,28 +201,40 @@ export default function FleetJobDetailPage({
   const [job, setJob] = useState<FleetJob | null>(null);
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
   const [plant, setPlant] = useState<PlantAsset | null>(null);
+  const [prestart, setPrestart] = useState<VehiclePrestart | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [status, setStatus] = useState("Open");
   const [priority, setPriority] = useState("Medium");
   const [vendor, setVendor] = useState("");
-  const [cost, setCost] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [completedDate, setCompletedDate] = useState("");
+  const [cost, setCost] = useState("");
   const [notes, setNotes] = useState("");
 
-  async function loadJob() {
+  const loadJob = useCallback(async () => {
+    if (!jobId) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
 
     const { data, error } = await supabase
       .from("fleet_jobs")
       .select("*")
-      .eq("id", params.jobID)
-      .single();
+      .eq("id", jobId)
+      .maybeSingle();
 
     if (error || !data) {
       console.error("Failed to load fleet job:", error?.message);
       setJob(null);
+      setVehicle(null);
+      setPlant(null);
+      setPrestart(null);
       setLoading(false);
       return;
     }
@@ -179,28 +245,39 @@ export default function FleetJobDetailPage({
     setStatus(loadedJob.status || "Open");
     setPriority(loadedJob.priority || "Medium");
     setVendor(loadedJob.vendor || "");
+    setAssignedTo(loadedJob.assigned_to || "");
+    setDueDate(loadedJob.due_date || "");
+    setCompletedDate(loadedJob.completed_date || "");
     setCost(
       loadedJob.cost !== null && loadedJob.cost !== undefined
         ? String(loadedJob.cost)
         : "",
     );
-    setCompletedDate(loadedJob.completed_date || "");
     setNotes(loadedJob.notes || "");
 
-    if (loadedJob.vehicle_id) {
-      const { data: vehicleData } = await supabase
+    const resolvedVehicleId = loadedJob.vehicle_id || loadedJob.vehicle_asset_id;
+    const resolvedPrestartId = loadedJob.prestart_id || loadedJob.source_id;
+
+    if (resolvedVehicleId) {
+      const { data: vehicleData, error: vehicleError } = await supabase
         .from("vehicle_assets")
         .select(
           "id, vehicle_id, vehicle_rego, make, model, category, project, crew, status",
         )
-        .eq("id", loadedJob.vehicle_id)
+        .eq("id", resolvedVehicleId)
         .maybeSingle();
 
+      if (vehicleError) {
+        console.error("Failed to load linked vehicle:", vehicleError.message);
+      }
+
       setVehicle((vehicleData as VehicleAsset) || null);
+    } else {
+      setVehicle(null);
     }
 
     if (loadedJob.plant_id) {
-      const { data: plantData } = await supabase
+      const { data: plantData, error: plantError } = await supabase
         .from("plant_assets")
         .select(
           "id, asset_id, make, model, plant_type, serial_number, rego, crew, project, asset_status",
@@ -208,30 +285,68 @@ export default function FleetJobDetailPage({
         .eq("id", loadedJob.plant_id)
         .maybeSingle();
 
+      if (plantError) {
+        console.error("Failed to load linked plant:", plantError.message);
+      }
+
       setPlant((plantData as PlantAsset) || null);
+    } else {
+      setPlant(null);
+    }
+
+    if (
+      resolvedPrestartId &&
+      (loadedJob.source === "Prestart" ||
+        clean(loadedJob.source_type).toLowerCase().includes("prestart"))
+    ) {
+      const { data: prestartData, error: prestartError } = await supabase
+        .from("vehicle_prestarts")
+        .select("*")
+        .eq("id", resolvedPrestartId)
+        .maybeSingle();
+
+      if (prestartError) {
+        console.error("Failed to load linked prestart:", prestartError.message);
+      }
+
+      setPrestart((prestartData as VehiclePrestart) || null);
+    } else {
+      setPrestart(null);
     }
 
     setLoading(false);
-  }
+  }, [jobId, supabase]);
 
   useEffect(() => {
     void loadJob();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.jobID]);
+  }, [loadJob]);
 
-  async function saveUpdates() {
+  async function saveUpdates(nextStatus?: string) {
     if (!job) return;
 
+    const finalStatus = nextStatus || status;
+    const isClosing = finalStatus === "Completed" || finalStatus === "Closed";
+
+    if (isClosing && !notes.trim()) {
+      alert("Close-out comments are required before completing or closing this job.");
+      return;
+    }
+
     setSaving(true);
+
+    const finalCompletedDate =
+      isClosing && !completedDate ? todayDate() : completedDate || null;
 
     const { error } = await supabase
       .from("fleet_jobs")
       .update({
-        status,
+        status: finalStatus,
         priority,
         vendor: vendor.trim() || null,
+        assigned_to: assignedTo.trim() || null,
+        due_date: dueDate || null,
+        completed_date: finalCompletedDate,
         cost: cost ? Number(cost) : null,
-        completed_date: completedDate || null,
         notes: notes.trim() || null,
         updated_at: new Date().toISOString(),
       })
@@ -247,7 +362,7 @@ export default function FleetJobDetailPage({
     setSaving(false);
   }
 
-  const assetType = job?.asset_type === "Plant" ? "Plant" : "Vehicle";
+  const assetType = job?.asset_type === "Plant" || job?.plant_id ? "Plant" : "Vehicle";
 
   const assetTitle =
     assetType === "Vehicle"
@@ -269,12 +384,22 @@ export default function FleetJobDetailPage({
         clean(job?.asset_label) ||
         "Plant not linked";
 
+  const resolvedVehicleId = job?.vehicle_id || job?.vehicle_asset_id || null;
+  const resolvedPrestartId = job?.prestart_id || job?.source_id || null;
+
   const assetHref =
-    assetType === "Vehicle" && job?.vehicle_id
-      ? `/assets/vehicles/${job.vehicle_id}`
+    assetType === "Vehicle" && resolvedVehicleId
+      ? `/assets/vehicles/${resolvedVehicleId}`
       : assetType === "Plant" && job?.plant_id
         ? `/assets/plant/${job.plant_id}`
         : "/assets";
+
+  const prestartHref = resolvedPrestartId
+    ? `/assets/prestarts/${resolvedPrestartId}`
+    : "/assets/prestarts";
+
+  const failedItems = normaliseFailedItems(prestart?.failed_items);
+  const isClosed = job?.status === "Completed" || job?.status === "Closed";
 
   if (loading) {
     return (
@@ -295,15 +420,15 @@ export default function FleetJobDetailPage({
         <PageHeader
           eyebrow="Fleet Job"
           title="Job Not Found"
-          description="This fleet job could not be found."
+          description={`No fleet job was found for route value: ${jobId || "missing id"}.`}
           actions={
-            <ActionButton
+            <Link
               href="/assets/fleet-jobs"
-              variant="secondary"
-              icon={<ArrowLeft size={16} />}
+              className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
+              <ArrowLeft size={16} />
               Back to Fleet Jobs
-            </ActionButton>
+            </Link>
           }
         />
       </PageShell>
@@ -318,21 +443,21 @@ export default function FleetJobDetailPage({
         description={`${job.job_number || "No job number"} · ${assetTitle}`}
         actions={
           <>
-            <ActionButton
+            <Link
               href="/assets/fleet-jobs"
-              variant="secondary"
-              icon={<ArrowLeft size={16} />}
+              className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
+              <ArrowLeft size={16} />
               Back
-            </ActionButton>
+            </Link>
 
-            <ActionButton
+            <Link
               href={assetHref}
-              variant="secondary"
-              icon={<ExternalLink size={16} />}
+              className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
+              <ExternalLink size={16} />
               View Asset
-            </ActionButton>
+            </Link>
           </>
         }
       />
@@ -342,14 +467,14 @@ export default function FleetJobDetailPage({
           label="Status"
           value={job.status || "Open"}
           icon={<ClipboardList size={20} />}
-          tone={statusTone(job.status)}
+          tone={toneForStatus(job.status)}
         />
 
         <SummaryCard
           label="Priority"
           value={job.priority || "Medium"}
           icon={<Wrench size={20} />}
-          tone={priorityTone(job.priority)}
+          tone={toneForPriority(job.priority)}
         />
 
         <SummaryCard
@@ -367,35 +492,42 @@ export default function FleetJobDetailPage({
         />
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[1.4fr_0.9fr]">
+      <section className="grid gap-5 lg:grid-cols-[1.35fr_0.9fr]">
         <div className="space-y-5">
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
                   Job Details
                 </h2>
                 <p className="text-sm text-slate-600">
-                  Maintenance, defect, service or compliance job information.
+                  Full job information, source details and linked asset context.
                 </p>
               </div>
 
-              <StatusBadge
-                label={job.status || "Open"}
-                tone={statusTone(job.status)}
-              />
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge label={job.status || "Open"} tone={toneForStatus(job.status)} />
+                <StatusBadge
+                  label={job.priority || "Medium"}
+                  tone={toneForPriority(job.priority)}
+                />
+              </div>
             </div>
 
             <DetailGrid
               items={[
                 { label: "Job Number", value: job.job_number || "N/A" },
                 { label: "Source", value: job.source || job.source_type || "N/A" },
+                { label: "Asset Type", value: assetType },
                 { label: "Reported", value: dateDisplay(job.reported_date) },
                 { label: "Created", value: dateDisplay(job.created_at) },
-                { label: "Project", value: job.project || "N/A" },
-                { label: "Crew", value: job.crew || "N/A" },
+                { label: "Updated", value: dateDisplay(job.updated_at) },
+                { label: "Project", value: job.project || vehicle?.project || plant?.project || "N/A" },
+                { label: "Crew", value: job.crew || vehicle?.crew || plant?.crew || "N/A" },
                 { label: "Reported By", value: job.reported_by || "N/A" },
                 { label: "Assigned To", value: job.assigned_to || "N/A" },
+                { label: "Vendor", value: job.vendor || "N/A" },
+                { label: "Completed", value: dateDisplay(job.completed_date) },
               ]}
             />
 
@@ -411,11 +543,7 @@ export default function FleetJobDetailPage({
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              {assetType === "Vehicle" ? (
-                <Truck size={20} className="text-slate-600" />
-              ) : (
-                <Building2 size={20} className="text-slate-600" />
-              )}
+              <Truck size={20} className="text-slate-600" />
               <div>
                 <h2 className="text-lg font-bold text-slate-950">
                   Linked Asset
@@ -427,7 +555,6 @@ export default function FleetJobDetailPage({
             {assetType === "Vehicle" ? (
               <DetailGrid
                 items={[
-                  { label: "Type", value: "Vehicle" },
                   { label: "Vehicle ID", value: vehicle?.vehicle_id || "N/A" },
                   { label: "Rego", value: vehicle?.vehicle_rego || "N/A" },
                   { label: "Category", value: vehicle?.category || "N/A" },
@@ -442,15 +569,16 @@ export default function FleetJobDetailPage({
                   { label: "Project", value: vehicle?.project || job.project || "N/A" },
                   { label: "Crew", value: vehicle?.crew || job.crew || "N/A" },
                   { label: "Status", value: vehicle?.status || "N/A" },
+                  { label: "Asset Label", value: job.asset_label || "N/A" },
                 ]}
               />
             ) : (
               <DetailGrid
                 items={[
-                  { label: "Type", value: "Plant" },
                   { label: "Asset ID", value: plant?.asset_id || "N/A" },
                   { label: "Rego", value: plant?.rego || "N/A" },
                   { label: "Plant Type", value: plant?.plant_type || "N/A" },
+                  { label: "Serial", value: plant?.serial_number || "N/A" },
                   {
                     label: "Make / Model",
                     value:
@@ -476,15 +604,89 @@ export default function FleetJobDetailPage({
               </Link>
             </div>
           </section>
+
+          <section className="border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-violet-700" />
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Linked Prestart
+                </h2>
+                <p className="text-sm text-slate-600">
+                  Prestart issue details linked to this fleet job.
+                </p>
+              </div>
+            </div>
+
+            {resolvedPrestartId ? (
+              <>
+                <DetailGrid
+                  items={[
+                    { label: "Prestart ID", value: resolvedPrestartId },
+                    { label: "Severity", value: prestart?.severity || "N/A" },
+                    {
+                      label: "Prestart Date",
+                      value: dateDisplay(prestart?.prestart_date || prestart?.created_at),
+                    },
+                    {
+                      label: "Operator",
+                      value:
+                        prestart?.employee_name ||
+                        prestart?.operator_name ||
+                        job.reported_by ||
+                        "N/A",
+                    },
+                  ]}
+                />
+
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Flagged Items
+                  </p>
+
+                  {failedItems.length > 0 ? (
+                    <ul className="mt-3 space-y-2">
+                      {failedItems.map((item) => (
+                        <li
+                          key={item}
+                          className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700"
+                        >
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      No failed item list was available, but this job is linked to a prestart.
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-5">
+                  <Link
+                    href={prestartHref}
+                    className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+                  >
+                    <ExternalLink size={16} />
+                    Open Prestart
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm leading-6 text-slate-600">
+                This job is not linked to a prestart.
+              </p>
+            )}
+          </section>
         </div>
 
         <aside className="space-y-5">
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">
-              Update Job
+              Action Job
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Quick update for status, priority, vendor, cost and close-out notes.
+              Update responsibility, dates, cost and status. Close-out comments are required before completing or closing.
             </p>
 
             <div className="mt-5 grid gap-4">
@@ -515,20 +717,31 @@ export default function FleetJobDetailPage({
               </label>
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Vendor / Mechanic
+                Assigned To
                 <input
-                  value={vendor}
-                  onChange={(event) => setVendor(event.target.value)}
+                  value={assignedTo}
+                  onChange={(event) => setAssignedTo(event.target.value)}
+                  placeholder="Employee, mechanic or responsible person"
                   className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                 />
               </label>
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Cost
+                Vendor / Mechanic
                 <input
-                  type="number"
-                  value={cost}
-                  onChange={(event) => setCost(event.target.value)}
+                  value={vendor}
+                  onChange={(event) => setVendor(event.target.value)}
+                  placeholder="Workshop, supplier or mechanic"
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Due Date
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(event) => setDueDate(event.target.value)}
                   className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                 />
               </label>
@@ -544,12 +757,24 @@ export default function FleetJobDetailPage({
               </label>
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Notes
+                Cost
+                <input
+                  type="number"
+                  value={cost}
+                  onChange={(event) => setCost(event.target.value)}
+                  placeholder="0.00"
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Close-out Comments / Action Notes
                 <textarea
                   value={notes}
                   onChange={(event) => setNotes(event.target.value)}
-                  rows={5}
-                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                  rows={7}
+                  placeholder="Required before closing. Example: Repaired by workshop, inspected by supervisor, asset returned to service."
+                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
                 />
               </label>
 
@@ -566,28 +791,81 @@ export default function FleetJobDetailPage({
                 )}
                 Save Updates
               </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatus("In Progress");
+                    void saveUpdates("In Progress");
+                  }}
+                  disabled={saving}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                >
+                  Start Job
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatus("Waiting Parts");
+                    void saveUpdates("Waiting Parts");
+                  }}
+                  disabled={saving}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  Waiting Parts
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCompletedDate(completedDate || todayDate());
+                    setStatus("Completed");
+                    void saveUpdates("Completed");
+                  }}
+                  disabled={saving || isClosed}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Complete
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatus("Open");
+                    setCompletedDate("");
+                    void saveUpdates("Open");
+                  }}
+                  disabled={saving}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Reopen
+                </button>
+              </div>
             </div>
           </section>
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <CheckCircle2 size={20} />
-              Close Out
+              Close Out Summary
             </h2>
 
             <div className="mt-4 space-y-3 text-sm">
+              <InfoRow label="Current Status" value={job.status || "Open"} />
               <InfoRow label="Completed Date" value={dateDisplay(job.completed_date)} />
               <InfoRow label="Vendor" value={job.vendor || "N/A"} />
               <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
-              <InfoRow label="Updated" value={dateDisplay(job.updated_at)} />
+              <InfoRow label="Last Updated" value={dateDisplay(job.updated_at)} />
             </div>
 
             <div className="mt-5 border-t border-slate-200 pt-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Notes
+                Close-out Comments
               </p>
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {job.notes || "No notes recorded."}
+                {job.notes || "No close-out comments recorded."}
               </p>
             </div>
           </section>
