@@ -7,7 +7,6 @@ import {
   Calendar,
   Car,
   ClipboardCheck,
-  ExternalLink,
   FileText,
   FileUp,
   KeyRound,
@@ -20,7 +19,6 @@ import {
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ActionButton,
@@ -511,11 +509,19 @@ export default function VehicleDetailPage() {
       .filter(Boolean)
       .join(",");
 
+    const fleetJobMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+
     const [
       documentsResult,
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
+      fleetJobsResult,
     ] = await Promise.all([
       supabase
         .from("vehicle_documents")
@@ -545,63 +551,15 @@ export default function VehicleDetailPage() {
         .order("created_at", { ascending: false })
         .limit(3)
         .returns<PrestartRecord[]>(),
+      supabase
+        .from("fleet_jobs")
+        .select(
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+        )
+        .or(fleetJobMatchFilters)
+        .order("created_at", { ascending: false })
+        .returns<FleetJob[]>(),
     ]);
-
-    const loadedPrestarts = prestartResult.error
-      ? []
-      : (prestartResult.data ?? []);
-
-    const linkedFleetJobIds = loadedPrestarts
-      .map((prestart) => prestart.fleet_job_id)
-      .filter((id): id is string => Boolean(id));
-
-    const linkedPrestartIds = loadedPrestarts
-      .map((prestart) => prestart.id)
-      .filter((id): id is string => Boolean(id));
-
-    const [vehicleFleetJobsResult, linkedFleetJobsResult, sourceFleetJobsResult] =
-      await Promise.all([
-        supabase
-          .from("fleet_jobs")
-          .select(
-            "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-          )
-          .eq("vehicle_asset_id", vehicleId)
-          .order("created_at", { ascending: false })
-          .returns<FleetJob[]>(),
-
-        linkedFleetJobIds.length > 0
-          ? supabase
-              .from("fleet_jobs")
-              .select(
-                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-              )
-              .in("id", linkedFleetJobIds)
-              .order("created_at", { ascending: false })
-              .returns<FleetJob[]>()
-          : Promise.resolve({ data: [], error: null }),
-
-        linkedPrestartIds.length > 0
-          ? supabase
-              .from("fleet_jobs")
-              .select(
-                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-              )
-              .in("source_id", linkedPrestartIds)
-              .order("created_at", { ascending: false })
-              .returns<FleetJob[]>()
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-
-    const allFleetJobs = [
-      ...(vehicleFleetJobsResult.data ?? []),
-      ...(linkedFleetJobsResult.data ?? []),
-      ...(sourceFleetJobsResult.data ?? []),
-    ];
-
-    const uniqueFleetJobs = Array.from(
-      new Map(allFleetJobs.map((job) => [job.id, job])).values(),
-    );
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
@@ -610,14 +568,16 @@ export default function VehicleDetailPage() {
     setProjectHistory(
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
-    setPrestartHistory(loadedPrestarts);
+    setPrestartHistory(prestartResult.error ? [] : (prestartResult.data ?? []));
     setFleetJobs(
-      uniqueFleetJobs.filter((job) => {
-        const status = clean(job.status).toLowerCase();
-        return !["closed", "complete", "completed", "resolved"].includes(
-          status,
-        );
-      }),
+      fleetJobsResult.error
+        ? []
+        : (fleetJobsResult.data ?? []).filter((job) => {
+            const status = clean(job.status).toLowerCase();
+            return !["closed", "complete", "completed", "resolved"].includes(
+              status,
+            );
+          }),
     );
 
     setLoading(false);
@@ -772,6 +732,19 @@ export default function VehicleDetailPage() {
         },
       ]
     : [];
+
+  const openFleetJobCount = fleetJobs.length;
+  const recentPrestartCount = prestartHistory.length;
+  const historyRecordCount = isTrailer ? inspectionRecords.length : serviceRecords.length;
+  const serviceSummaryValue = isTrailer
+    ? formatDate(vehicle?.next_inspection_due)
+    : serviceStatusLabel;
+
+  const serviceSummaryHelper = isTrailer
+    ? "Next inspection due"
+    : remainingKm !== null
+      ? `${kmRemainingDisplay} remaining`
+      : `Time remaining: ${daysRemainingDisplay}`;
 
   function openEditRecord(record: ServiceHistory) {
     setReplacementFile(null);
@@ -1106,32 +1079,24 @@ export default function VehicleDetailPage() {
         eyebrow="Vehicle Record"
         title={vehicleTitle}
         description="A clean asset profile showing key dates, current setup, documents and recent history."
-actions={
-  <>
-    <ActionButton
-      href="/assets/vehicles"
-      variant="secondary"
-      icon={<ArrowLeft size={16} />}
-    >
-      Back
-    </ActionButton>
+        actions={
+          <>
+            <ActionButton
+              href="/assets/vehicles"
+              variant="secondary"
+              icon={<ArrowLeft size={16} />}
+            >
+              Back
+            </ActionButton>
 
-    <ActionButton
-      href={`/assets/vehicles/${vehicleId}/edit`}
-      variant="secondary"
-      icon={<Pencil size={16} />}
-    >
-      Edit Details
-    </ActionButton>
-
-    <ActionButton
-      href={`/assets/vehicles/${vehicleId}/update`}
-      icon={<Wrench size={16} />}
-    >
-      Update Asset
-    </ActionButton>
-  </>
-}
+            <ActionButton
+              href={`/assets/vehicles/${vehicleId}/edit`}
+              icon={<Pencil size={16} />}
+            >
+              Edit
+            </ActionButton>
+          </>
+        }
       />
 
       {errorMessage ? (
@@ -1139,6 +1104,48 @@ actions={
           {errorMessage}
         </div>
       ) : null}
+
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <ImportantDateCard
+          label="Open Fleet Jobs"
+          value={openFleetJobCount.toString()}
+          helper={openFleetJobCount > 0 ? "Action required" : "No active jobs"}
+        />
+
+        <ImportantDateCard
+          label="Recent Prestarts"
+          value={recentPrestartCount.toString()}
+          helper={
+            latestPrestart
+              ? `Latest: ${formatDate(latestPrestart.prestart_date || latestPrestart.created_at)}`
+              : "No recent prestarts"
+          }
+        />
+
+        <ImportantDateCard
+          label={isTrailer ? "Inspection Records" : "Service Records"}
+          value={historyRecordCount.toString()}
+          helper={isTrailer ? "Inspection history" : "Service history"}
+        />
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            {isTrailer ? "Inspection Status" : "Service Status"}
+          </p>
+          <div className="mt-2">
+            {isTrailer ? (
+              <p className="text-xl font-black text-slate-950">
+                {serviceSummaryValue}
+              </p>
+            ) : (
+              <StatusBadge label={serviceStatusLabel} tone={serviceStatusTone} />
+            )}
+          </div>
+          <p className="mt-1 text-xs font-medium text-slate-500">
+            {serviceSummaryHelper}
+          </p>
+        </div>
+      </section>
 
       <section className="space-y-5">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1560,38 +1567,64 @@ actions={
           <div className="space-y-5">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
-                icon={<FileText size={18} />}
-                title="Documents"
-                description="Risk assessment, rego, insurance, project documents, pictures and other non-service files."
+                icon={<Wrench size={18} />}
+                title="Active Fleet Jobs"
+                description="Open maintenance, defect or fleet jobs linked to this vehicle."
               />
 
-              {registerDocuments.length > 0 ? (
+              {fleetJobs.length > 0 ? (
                 <div className="space-y-3">
-                  {registerDocuments.map((document) => (
-                    <a
-                      key={document.id}
-                      href={document.file_url ?? "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block rounded-xl border border-slate-200 bg-slate-50 p-3 hover:bg-white"
+                  {fleetJobs.map((job) => (
+                    <div
+                      key={job.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
                     >
-                      <p className="text-sm font-bold text-slate-900">
-                        {clean(document.document_type)}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {clean(job.job_number)} · {clean(job.title)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Created {formatDate(job.created_at)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(job.status)}
+                          tone={fleetJobTone(job)}
+                        />
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-700">
+                        {clean(job.description)}
                       </p>
-                      <p className="mt-1 text-xs text-slate-600">
-                        {clean(document.file_name)}
-                      </p>
-                      <p className="mt-2 text-xs text-slate-400">
-                        Uploaded {formatDate(document.created_at)}
-                      </p>
-                    </a>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">Priority:</span>{" "}
+                          {clean(job.priority)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Due:</span>{" "}
+                          {formatDate(job.due_date)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Assigned:</span>{" "}
+                          {clean(job.assigned_to)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Reported By:</span>{" "}
+                          {clean(job.reported_by)}
+                        </p>
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : (
                 <EmptyCard
-                  icon={<FileText size={18} />}
-                  title="No documents uploaded"
-                  description="Non-service documents will appear here once attached."
+                  icon={<Wrench size={18} />}
+                  title="No active fleet jobs"
+                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
                 />
               )}
             </section>
@@ -1606,10 +1639,9 @@ actions={
               {prestartHistory.length > 0 ? (
                 <div className="space-y-3">
                   {prestartHistory.map((record) => (
-                    <Link
+                    <div
                       key={record.id}
-                      href={`/assets/prestarts/${record.id}`}
-                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1660,12 +1692,7 @@ actions={
                           {record.comments}
                         </p>
                       ) : null}
-
-                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
-                        Open Prestart
-                        <ExternalLink size={13} />
-                      </div>
-                    </Link>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -1679,70 +1706,38 @@ actions={
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
-                icon={<Wrench size={18} />}
-                title="Active Fleet Jobs"
-                description="Open maintenance, defect or fleet jobs linked to this vehicle."
+                icon={<FileText size={18} />}
+                title="Documents"
+                description="Risk assessment, rego, insurance, project documents, pictures and other non-service files."
               />
 
-              {fleetJobs.length > 0 ? (
+              {registerDocuments.length > 0 ? (
                 <div className="space-y-3">
-                  {fleetJobs.map((job) => (
-                    <Link
-                      key={job.id}
-                      href={`/assets/fleet-jobs/${job.id}`}
-                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
+                  {registerDocuments.map((document) => (
+                    <a
+                      key={document.id}
+                      href={document.file_url ?? "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-3 hover:bg-white"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-950">
-                            {clean(job.job_number)} · {clean(job.title)}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Created {formatDate(job.created_at)}
-                          </p>
-                        </div>
-
-                        <StatusBadge
-                          label={clean(job.status)}
-                          tone={fleetJobTone(job)}
-                        />
-                      </div>
-
-                      <p className="mt-3 text-sm text-slate-700">
-                        {clean(job.description)}
+                      <p className="text-sm font-bold text-slate-900">
+                        {clean(document.document_type)}
                       </p>
-
-                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                        <p>
-                          <span className="font-bold">Priority:</span>{" "}
-                          {clean(job.priority)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Due:</span>{" "}
-                          {formatDate(job.due_date)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Assigned:</span>{" "}
-                          {clean(job.assigned_to)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Reported By:</span>{" "}
-                          {clean(job.reported_by)}
-                        </p>
-                      </div>
-
-                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
-                        Open Fleet Job
-                        <ExternalLink size={13} />
-                      </div>
-                    </Link>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {clean(document.file_name)}
+                      </p>
+                      <p className="mt-2 text-xs text-slate-400">
+                        Uploaded {formatDate(document.created_at)}
+                      </p>
+                    </a>
                   ))}
                 </div>
               ) : (
                 <EmptyCard
-                  icon={<Wrench size={18} />}
-                  title="No active fleet jobs"
-                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
+                  icon={<FileText size={18} />}
+                  title="No documents uploaded"
+                  description="Non-service documents will appear here once attached."
                 />
               )}
             </section>
