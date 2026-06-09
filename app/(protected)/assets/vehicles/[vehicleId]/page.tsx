@@ -547,38 +547,33 @@ export default function VehicleDetailPage() {
         .returns<PrestartRecord[]>(),
     ]);
 
-    const loadedPrestarts = prestartResult.error
-      ? []
-      : (prestartResult.data ?? []);
+const loadedPrestarts = prestartResult.error
+  ? []
+  : (prestartResult.data ?? []);
 
-    const linkedFleetJobIds = loadedPrestarts
-      .map((prestart) => prestart.fleet_job_id)
-      .filter((id): id is string => Boolean(id));
+const linkedFleetJobIds = loadedPrestarts
+  .map((prestart) => prestart.fleet_job_id)
+  .filter((id): id is string => Boolean(id));
 
-    const linkedPrestartIds = loadedPrestarts
-      .map((prestart) => prestart.id)
-      .filter(Boolean);
+const linkedPrestartIds = loadedPrestarts
+  .map((prestart) => prestart.id)
+  .filter((id): id is string => Boolean(id));
 
-    const fleetJobMatchFilters = [
-      `vehicle_asset_id.eq.${vehicleId}`,
-      `vehicle_id.eq.${vehicleId}`,
-      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
-      ...linkedFleetJobIds.map((id) => `id.eq.${id}`),
-      ...linkedPrestartIds.map((id) => `prestart_id.eq.${id}`),
-    ]
-      .filter(Boolean)
-      .join(",");
+const fleetJobMatchFilters = [
+  `vehicle_asset_id.eq.${vehicleId}`,
+  `vehicle_id.eq.${vehicleId}`,
+  ...linkedFleetJobIds.map((id) => `id.eq.${id}`),
+  ...linkedPrestartIds.map((id) => `prestart_id.eq.${id}`),
+].join(",");
 
-    const fleetJobsResult = fleetJobMatchFilters
-      ? await supabase
-          .from("fleet_jobs")
-          .select(
-            "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-          )
-          .or(fleetJobMatchFilters)
-          .order("created_at", { ascending: false })
-          .returns<FleetJob[]>()
-      : { data: [], error: null };
+const fleetJobsResult = await supabase
+  .from("fleet_jobs")
+  .select(
+    "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+  )
+  .or(fleetJobMatchFilters)
+  .order("created_at", { ascending: false })
+  .returns<FleetJob[]>();
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
