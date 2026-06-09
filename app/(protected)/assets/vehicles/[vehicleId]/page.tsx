@@ -7,6 +7,7 @@ import {
   Calendar,
   Car,
   ClipboardCheck,
+  ExternalLink,
   FileText,
   FileUp,
   KeyRound,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ActionButton,
@@ -477,19 +479,44 @@ export default function VehicleDetailPage() {
     setLoading(true);
     setErrorMessage("");
 
+    const vehicleResult = await supabase
+      .from("vehicle_assets")
+      .select("*")
+      .eq("id", vehicleId)
+      .single<VehicleAsset>();
+
+    if (vehicleResult.error || !vehicleResult.data) {
+      setVehicle(null);
+      setDocuments([]);
+      setServiceHistory([]);
+      setProjectHistory([]);
+      setPrestartHistory([]);
+      setFleetJobs([]);
+      setErrorMessage(
+        vehicleResult.error?.message || "Vehicle could not be loaded.",
+      );
+      setLoading(false);
+      return;
+    }
+
+    const vehicleData = vehicleResult.data;
+    setVehicle(vehicleData);
+
+    const prestartMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      vehicleData.vehicle_rego
+        ? `vehicle_rego.eq.${vehicleData.vehicle_rego}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+
     const [
-      vehicleResult,
       documentsResult,
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
-      fleetJobsResult,
     ] = await Promise.all([
-      supabase
-        .from("vehicle_assets")
-        .select("*")
-        .eq("id", vehicleId)
-        .single<VehicleAsset>(),
       supabase
         .from("vehicle_documents")
         .select("*")
@@ -513,11 +540,30 @@ export default function VehicleDetailPage() {
         .select(
           "id, vehicle_asset_id, asset_label, vehicle_rego, kilometres, project, crew, inspected_by_name, overall_condition, comments, severity, result, fleet_job_id, prestart_date, created_at",
         )
-        .eq("vehicle_asset_id", vehicleId)
+        .or(prestartMatchFilters)
         .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(3)
         .returns<PrestartRecord[]>(),
+    ]);
+
+    const loadedPrestarts = prestartResult.error
+      ? []
+      : (prestartResult.data ?? []);
+
+    const linkedFleetJobIds = loadedPrestarts
+      .map((prestart) => prestart.fleet_job_id)
+      .filter((id): id is string => Boolean(id));
+
+    const linkedPrestartIds = loadedPrestarts
+      .map((prestart) => prestart.id)
+      .filter((id): id is string => Boolean(id));
+
+    const [
+      vehicleFleetJobsResult,
+      linkedFleetJobsResult,
+      sourceFleetJobsResult,
+    ] = await Promise.all([
       supabase
         .from("fleet_jobs")
         .select(
@@ -526,16 +572,39 @@ export default function VehicleDetailPage() {
         .eq("vehicle_asset_id", vehicleId)
         .order("created_at", { ascending: false })
         .returns<FleetJob[]>(),
+
+      linkedFleetJobIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("id", linkedFleetJobIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
+
+      linkedPrestartIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("source_id", linkedPrestartIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
     ]);
 
-    if (vehicleResult.error || !vehicleResult.data) {
-      setVehicle(null);
-      setErrorMessage(
-        vehicleResult.error?.message || "Vehicle could not be loaded.",
-      );
-    } else {
-      setVehicle(vehicleResult.data);
-    }
+    const allFleetJobs = [
+      ...(vehicleFleetJobsResult.data ?? []),
+      ...(linkedFleetJobsResult.data ?? []),
+      ...(sourceFleetJobsResult.data ?? []),
+    ];
+
+    const uniqueFleetJobs = Array.from(
+      new Map(allFleetJobs.map((job) => [job.id, job])).values(),
+    );
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
@@ -544,16 +613,14 @@ export default function VehicleDetailPage() {
     setProjectHistory(
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
-    setPrestartHistory(prestartResult.error ? [] : (prestartResult.data ?? []));
+    setPrestartHistory(loadedPrestarts);
     setFleetJobs(
-      fleetJobsResult.error
-        ? []
-        : (fleetJobsResult.data ?? []).filter((job) => {
-            const status = clean(job.status).toLowerCase();
-            return !["closed", "complete", "completed", "resolved"].includes(
-              status,
-            );
-          }),
+      uniqueFleetJobs.filter((job) => {
+        const status = clean(job.status).toLowerCase();
+        return !["closed", "complete", "completed", "resolved"].includes(
+          status,
+        );
+      }),
     );
 
     setLoading(false);
@@ -586,8 +653,8 @@ export default function VehicleDetailPage() {
 
   const hasServiceTrigger = Boolean(
     vehicle?.next_service_due ||
-      (vehicle?.next_service_km !== null &&
-        vehicle?.next_service_km !== undefined),
+    (vehicle?.next_service_km !== null &&
+      vehicle?.next_service_km !== undefined),
   );
 
   const serviceOverdue =
@@ -692,6 +759,12 @@ export default function VehicleDetailPage() {
     ? [
         { label: "Project", value: clean(vehicle.project) },
         { label: "Crew", value: clean(vehicle.crew) },
+        {
+          label: "Spare Key",
+          value: vehicle.spare_key_provided
+            ? `Yes - ${clean(vehicle.spare_key_location)}`
+            : yesNo(vehicle.spare_key_provided),
+        },
         { label: "Owner", value: clean(vehicle.owner) },
         { label: "Hired?", value: yesNo(vehicle.hired) },
         {
@@ -1110,32 +1183,6 @@ export default function VehicleDetailPage() {
             />
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <ImportantDateCard
-              label="Open Fleet Jobs"
-              value={String(fleetJobs.length)}
-              helper="Current open actions"
-            />
-
-            <ImportantDateCard
-              label="Recent Prestarts"
-              value={String(prestartHistory.length)}
-              helper="Latest submitted checks"
-            />
-
-            <ImportantDateCard
-              label={isTrailer ? "Inspection Records" : "Service Records"}
-              value={String(isTrailer ? inspectionRecords.length : serviceRecords.length)}
-              helper={isTrailer ? "Inspection history" : "Maintenance history"}
-            />
-
-            <ImportantDateCard
-              label="Project Records"
-              value={String(projectHistory.length)}
-              helper="Allocation history"
-            />
-          </div>
-
           <div className="mt-5 grid gap-4 xl:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <h3 className="mb-4 text-sm font-black uppercase tracking-wide text-slate-500">
@@ -1153,6 +1200,40 @@ export default function VehicleDetailPage() {
           </div>
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <SectionHeader
+            icon={<ClipboardCheck size={18} />}
+            title="Asset Health Summary"
+            description="Quick indicators for open actions, recent checks and asset history."
+          />
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <ImportantDateCard
+              label="Open Fleet Jobs"
+              value={String(fleetJobs.length)}
+              helper="Current open actions"
+            />
+
+            <ImportantDateCard
+              label="Recent Prestarts"
+              value={String(prestartHistory.length)}
+              helper="Latest submitted checks"
+            />
+
+            <ImportantDateCard
+              label="Service Records"
+              value={String(serviceRecords.length)}
+              helper="Maintenance history"
+            />
+
+            <ImportantDateCard
+              label="Project Records"
+              value={String(projectHistory.length)}
+              helper="Allocation history"
+            />
+          </div>
+        </section>
+
         {!isTrailer && (
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <SectionHeader
@@ -1165,12 +1246,15 @@ export default function VehicleDetailPage() {
               <ImportantDateCard
                 label="Current KM"
                 value={
-                  currentKm !== null ? `${currentKm.toLocaleString()} km` : "N/A"
+                  currentKm !== null
+                    ? `${currentKm.toLocaleString()} km`
+                    : "N/A"
                 }
                 helper={
                   latestPrestart
                     ? `Latest prestart: ${formatDate(
-                        latestPrestart.prestart_date || latestPrestart.created_at,
+                        latestPrestart.prestart_date ||
+                          latestPrestart.created_at,
                       )}`
                     : "No prestart KM recorded"
                 }
@@ -1380,143 +1464,6 @@ export default function VehicleDetailPage() {
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
                 icon={<Wrench size={18} />}
-                title={isTrailer ? "Inspection History" : "Service History"}
-                description="Service and inspection records. Service attachments live here, not in documents."
-              />
-
-              {(isTrailer ? inspectionRecords : serviceRecords).length > 0 ? (
-                <div className="space-y-3">
-                  {(isTrailer ? inspectionRecords : serviceRecords).map(
-                    (record) => (
-                      <HistoryCard key={record.id} record={record} />
-                    ),
-                  )}
-                </div>
-              ) : (
-                <EmptyCard
-                  icon={<Wrench size={18} />}
-                  title={isTrailer ? "No inspections yet" : "No services yet"}
-                  description={
-                    isTrailer
-                      ? "Trailer inspection records will appear here."
-                      : "Vehicle service records will appear here."
-                  }
-                />
-              )}
-            </section>
-
-            {!isTrailer && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <SectionHeader
-                  icon={<ShieldCheck size={18} />}
-                  title="Modification / Addition History"
-                  description="Equipment added, replacements, upgrades and other asset changes."
-                />
-
-                {modificationRecords.length > 0 ? (
-                  <div className="space-y-3">
-                    {modificationRecords.map((record) => (
-                      <HistoryCard key={record.id} record={record} />
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyCard
-                    icon={<ShieldCheck size={18} />}
-                    title="No modifications yet"
-                    description="Added equipment, spare keys and replacement items will appear here."
-                  />
-                )}
-              </section>
-            )}
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <SectionHeader
-                icon={<Car size={18} />}
-                title="Project History"
-                description="Project onboarding, offboarding and movement history."
-              />
-
-              {projectHistory.length > 0 ? (
-                <div className="space-y-3">
-                  {projectHistory.map((record) => {
-                    const isExpanded = expandedProjectId === record.id;
-
-                    return (
-                      <div
-                        key={record.id}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-bold text-slate-950">
-                              {clean(record.project)}
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              Onboarded:{" "}
-                              {formatDate(record.project_onboard_date)}
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedProjectId(
-                                isExpanded ? null : record.id,
-                              )
-                            }
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                          >
-                            {isExpanded ? "Hide Details" : "View Details"}
-                          </button>
-                        </div>
-
-                        {isExpanded ? (
-                          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <p>
-                                <span className="font-bold">Project:</span>{" "}
-                                {clean(record.project)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Crew:</span>{" "}
-                                {clean(record.crew)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Onboarded:</span>{" "}
-                                {formatDate(record.project_onboard_date)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Offboarded:</span>{" "}
-                                {record.project_offboard_date
-                                  ? formatDate(record.project_offboard_date)
-                                  : "Current / Not recorded"}
-                              </p>
-                            </div>
-
-                            <p className="mt-4">
-                              <span className="font-bold">Notes:</span>{" "}
-                              {clean(record.notes)}
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <EmptyCard
-                  icon={<Car size={18} />}
-                  title="No project history yet"
-                  description="Project transfer and onboarding history will appear here once recorded."
-                />
-              )}
-            </section>
-          </div>
-
-          <div className="space-y-5">
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <SectionHeader
-                icon={<Wrench size={18} />}
                 title="Active Fleet Jobs"
                 description="Open maintenance, defect or fleet jobs linked to this vehicle."
               />
@@ -1524,9 +1471,10 @@ export default function VehicleDetailPage() {
               {fleetJobs.length > 0 ? (
                 <div className="space-y-3">
                   {fleetJobs.map((job) => (
-                    <div
+                    <Link
                       key={job.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      href={`/assets/fleet-jobs/${job.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1566,7 +1514,12 @@ export default function VehicleDetailPage() {
                           {clean(job.reported_by)}
                         </p>
                       </div>
-                    </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
+                        Open Fleet Job
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
                   ))}
                 </div>
               ) : (
@@ -1588,14 +1541,17 @@ export default function VehicleDetailPage() {
               {prestartHistory.length > 0 ? (
                 <div className="space-y-3">
                   {prestartHistory.map((record) => (
-                    <div
+                    <Link
                       key={record.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      href={`/assets/prestarts/${record.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-bold text-slate-950">
-                            {formatDate(record.prestart_date || record.created_at)}
+                            {formatDate(
+                              record.prestart_date || record.created_at,
+                            )}
                           </p>
                           <p className="mt-1 text-xs text-slate-500">
                             Inspected by {clean(record.inspected_by_name)}
@@ -1605,7 +1561,8 @@ export default function VehicleDetailPage() {
                         <StatusBadge
                           label={clean(record.result)}
                           tone={
-                            clean(record.severity).toLowerCase() === "critical" ||
+                            clean(record.severity).toLowerCase() ===
+                              "critical" ||
                             clean(record.severity).toLowerCase() === "major"
                               ? "rose"
                               : clean(record.severity).toLowerCase() === "minor"
@@ -1632,7 +1589,8 @@ export default function VehicleDetailPage() {
                           {clean(record.project)}
                         </p>
                         <p>
-                          <span className="font-bold">Crew:</span> {clean(record.crew)}
+                          <span className="font-bold">Crew:</span>{" "}
+                          {clean(record.crew)}
                         </p>
                       </div>
 
@@ -1641,7 +1599,12 @@ export default function VehicleDetailPage() {
                           {record.comments}
                         </p>
                       ) : null}
-                    </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
+                        Open Prestart
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
                   ))}
                 </div>
               ) : (
