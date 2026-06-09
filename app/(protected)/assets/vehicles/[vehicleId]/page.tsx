@@ -7,6 +7,7 @@ import {
   Calendar,
   Car,
   ClipboardCheck,
+  ExternalLink,
   FileText,
   FileUp,
   KeyRound,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ActionButton,
@@ -509,19 +511,11 @@ export default function VehicleDetailPage() {
       .filter(Boolean)
       .join(",");
 
-    const fleetJobMatchFilters = [
-      `vehicle_asset_id.eq.${vehicleId}`,
-      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
-    ]
-      .filter(Boolean)
-      .join(",");
-
     const [
       documentsResult,
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
-      fleetJobsResult,
     ] = await Promise.all([
       supabase
         .from("vehicle_documents")
@@ -551,15 +545,40 @@ export default function VehicleDetailPage() {
         .order("created_at", { ascending: false })
         .limit(3)
         .returns<PrestartRecord[]>(),
-      supabase
-        .from("fleet_jobs")
-        .select(
-          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-        )
-        .or(fleetJobMatchFilters)
-        .order("created_at", { ascending: false })
-        .returns<FleetJob[]>(),
     ]);
+
+    const loadedPrestarts = prestartResult.error
+      ? []
+      : (prestartResult.data ?? []);
+
+    const linkedFleetJobIds = loadedPrestarts
+      .map((prestart) => prestart.fleet_job_id)
+      .filter((id): id is string => Boolean(id));
+
+    const linkedPrestartIds = loadedPrestarts
+      .map((prestart) => prestart.id)
+      .filter(Boolean);
+
+    const fleetJobMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      `vehicle_id.eq.${vehicleId}`,
+      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
+      ...linkedFleetJobIds.map((id) => `id.eq.${id}`),
+      ...linkedPrestartIds.map((id) => `prestart_id.eq.${id}`),
+    ]
+      .filter(Boolean)
+      .join(",");
+
+    const fleetJobsResult = fleetJobMatchFilters
+      ? await supabase
+          .from("fleet_jobs")
+          .select(
+            "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+          )
+          .or(fleetJobMatchFilters)
+          .order("created_at", { ascending: false })
+          .returns<FleetJob[]>()
+      : { data: [], error: null };
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
@@ -568,7 +587,7 @@ export default function VehicleDetailPage() {
     setProjectHistory(
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
-    setPrestartHistory(prestartResult.error ? [] : (prestartResult.data ?? []));
+    setPrestartHistory(loadedPrestarts);
     setFleetJobs(
       fleetJobsResult.error
         ? []
@@ -1558,9 +1577,10 @@ export default function VehicleDetailPage() {
               {prestartHistory.length > 0 ? (
                 <div className="space-y-3">
                   {prestartHistory.map((record) => (
-                    <div
+                    <Link
                       key={record.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      href={`/assets/prestarts/${record.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1611,7 +1631,12 @@ export default function VehicleDetailPage() {
                           {record.comments}
                         </p>
                       ) : null}
-                    </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
+                        Open Prestart
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
                   ))}
                 </div>
               ) : (
@@ -1633,9 +1658,10 @@ export default function VehicleDetailPage() {
               {fleetJobs.length > 0 ? (
                 <div className="space-y-3">
                   {fleetJobs.map((job) => (
-                    <div
+                    <Link
                       key={job.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      href={`/assets/fleet-jobs/${job.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -1675,7 +1701,12 @@ export default function VehicleDetailPage() {
                           {clean(job.reported_by)}
                         </p>
                       </div>
-                    </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
+                        Open Fleet Job
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
                   ))}
                 </div>
               ) : (
