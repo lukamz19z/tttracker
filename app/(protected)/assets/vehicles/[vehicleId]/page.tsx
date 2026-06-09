@@ -477,52 +477,19 @@ export default function VehicleDetailPage() {
     setLoading(true);
     setErrorMessage("");
 
-    const vehicleResult = await supabase
-      .from("vehicle_assets")
-      .select("*")
-      .eq("id", vehicleId)
-      .single<VehicleAsset>();
-
-    if (vehicleResult.error || !vehicleResult.data) {
-      setVehicle(null);
-      setDocuments([]);
-      setServiceHistory([]);
-      setProjectHistory([]);
-      setPrestartHistory([]);
-      setFleetJobs([]);
-      setErrorMessage(
-        vehicleResult.error?.message || "Vehicle could not be loaded.",
-      );
-      setLoading(false);
-      return;
-    }
-
-    const vehicleData = vehicleResult.data;
-    setVehicle(vehicleData);
-
-    const prestartMatchFilters = [
-      `vehicle_asset_id.eq.${vehicleId}`,
-      vehicleData.vehicle_rego
-        ? `vehicle_rego.eq.${vehicleData.vehicle_rego}`
-        : null,
-    ]
-      .filter(Boolean)
-      .join(",");
-
-    const fleetJobMatchFilters = [
-      `vehicle_asset_id.eq.${vehicleId}`,
-      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
-    ]
-      .filter(Boolean)
-      .join(",");
-
     const [
+      vehicleResult,
       documentsResult,
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
       fleetJobsResult,
     ] = await Promise.all([
+      supabase
+        .from("vehicle_assets")
+        .select("*")
+        .eq("id", vehicleId)
+        .single<VehicleAsset>(),
       supabase
         .from("vehicle_documents")
         .select("*")
@@ -546,7 +513,7 @@ export default function VehicleDetailPage() {
         .select(
           "id, vehicle_asset_id, asset_label, vehicle_rego, kilometres, project, crew, inspected_by_name, overall_condition, comments, severity, result, fleet_job_id, prestart_date, created_at",
         )
-        .or(prestartMatchFilters)
+        .eq("vehicle_asset_id", vehicleId)
         .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(3)
@@ -556,10 +523,19 @@ export default function VehicleDetailPage() {
         .select(
           "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
         )
-        .or(fleetJobMatchFilters)
+        .eq("vehicle_asset_id", vehicleId)
         .order("created_at", { ascending: false })
         .returns<FleetJob[]>(),
     ]);
+
+    if (vehicleResult.error || !vehicleResult.data) {
+      setVehicle(null);
+      setErrorMessage(
+        vehicleResult.error?.message || "Vehicle could not be loaded.",
+      );
+    } else {
+      setVehicle(vehicleResult.data);
+    }
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
@@ -716,12 +692,6 @@ export default function VehicleDetailPage() {
     ? [
         { label: "Project", value: clean(vehicle.project) },
         { label: "Crew", value: clean(vehicle.crew) },
-        {
-          label: "Spare Key",
-          value: vehicle.spare_key_provided
-            ? `Yes - ${clean(vehicle.spare_key_location)}`
-            : yesNo(vehicle.spare_key_provided),
-        },
         { label: "Owner", value: clean(vehicle.owner) },
         { label: "Hired?", value: yesNo(vehicle.hired) },
         {
@@ -732,19 +702,6 @@ export default function VehicleDetailPage() {
         },
       ]
     : [];
-
-  const openFleetJobCount = fleetJobs.length;
-  const recentPrestartCount = prestartHistory.length;
-  const historyRecordCount = isTrailer ? inspectionRecords.length : serviceRecords.length;
-  const serviceSummaryValue = isTrailer
-    ? formatDate(vehicle?.next_inspection_due)
-    : serviceStatusLabel;
-
-  const serviceSummaryHelper = isTrailer
-    ? "Next inspection due"
-    : remainingKm !== null
-      ? `${kmRemainingDisplay} remaining`
-      : `Time remaining: ${daysRemainingDisplay}`;
 
   function openEditRecord(record: ServiceHistory) {
     setReplacementFile(null);
@@ -1091,9 +1048,17 @@ export default function VehicleDetailPage() {
 
             <ActionButton
               href={`/assets/vehicles/${vehicleId}/edit`}
+              variant="secondary"
               icon={<Pencil size={16} />}
             >
-              Edit
+              Edit Details
+            </ActionButton>
+
+            <ActionButton
+              href={`/assets/vehicles/${vehicleId}/update`}
+              icon={<Wrench size={16} />}
+            >
+              Update Asset
             </ActionButton>
           </>
         }
@@ -1104,48 +1069,6 @@ export default function VehicleDetailPage() {
           {errorMessage}
         </div>
       ) : null}
-
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <ImportantDateCard
-          label="Open Fleet Jobs"
-          value={openFleetJobCount.toString()}
-          helper={openFleetJobCount > 0 ? "Action required" : "No active jobs"}
-        />
-
-        <ImportantDateCard
-          label="Recent Prestarts"
-          value={recentPrestartCount.toString()}
-          helper={
-            latestPrestart
-              ? `Latest: ${formatDate(latestPrestart.prestart_date || latestPrestart.created_at)}`
-              : "No recent prestarts"
-          }
-        />
-
-        <ImportantDateCard
-          label={isTrailer ? "Inspection Records" : "Service Records"}
-          value={historyRecordCount.toString()}
-          helper={isTrailer ? "Inspection history" : "Service history"}
-        />
-
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-            {isTrailer ? "Inspection Status" : "Service Status"}
-          </p>
-          <div className="mt-2">
-            {isTrailer ? (
-              <p className="text-xl font-black text-slate-950">
-                {serviceSummaryValue}
-              </p>
-            ) : (
-              <StatusBadge label={serviceStatusLabel} tone={serviceStatusTone} />
-            )}
-          </div>
-          <p className="mt-1 text-xs font-medium text-slate-500">
-            {serviceSummaryHelper}
-          </p>
-        </div>
-      </section>
 
       <section className="space-y-5">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1187,6 +1110,32 @@ export default function VehicleDetailPage() {
             />
           </div>
 
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <ImportantDateCard
+              label="Open Fleet Jobs"
+              value={String(fleetJobs.length)}
+              helper="Current open actions"
+            />
+
+            <ImportantDateCard
+              label="Recent Prestarts"
+              value={String(prestartHistory.length)}
+              helper="Latest submitted checks"
+            />
+
+            <ImportantDateCard
+              label={isTrailer ? "Inspection Records" : "Service Records"}
+              value={String(isTrailer ? inspectionRecords.length : serviceRecords.length)}
+              helper={isTrailer ? "Inspection history" : "Maintenance history"}
+            />
+
+            <ImportantDateCard
+              label="Project Records"
+              value={String(projectHistory.length)}
+              helper="Allocation history"
+            />
+          </div>
+
           <div className="mt-5 grid gap-4 xl:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <h3 className="mb-4 text-sm font-black uppercase tracking-wide text-slate-500">
@@ -1197,7 +1146,7 @@ export default function VehicleDetailPage() {
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <h3 className="mb-4 text-sm font-black uppercase tracking-wide text-slate-500">
-                Allocation / Keys / Ownership
+                Allocation / Ownership
               </h3>
               <DetailGrid items={allocationItems} />
             </div>
