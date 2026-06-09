@@ -547,33 +547,61 @@ export default function VehicleDetailPage() {
         .returns<PrestartRecord[]>(),
     ]);
 
-const loadedPrestarts = prestartResult.error
-  ? []
-  : (prestartResult.data ?? []);
+    const loadedPrestarts = prestartResult.error
+      ? []
+      : (prestartResult.data ?? []);
 
-const linkedFleetJobIds = loadedPrestarts
-  .map((prestart) => prestart.fleet_job_id)
-  .filter((id): id is string => Boolean(id));
+    const linkedFleetJobIds = loadedPrestarts
+      .map((prestart) => prestart.fleet_job_id)
+      .filter((id): id is string => Boolean(id));
 
-const linkedPrestartIds = loadedPrestarts
-  .map((prestart) => prestart.id)
-  .filter((id): id is string => Boolean(id));
+    const linkedPrestartIds = loadedPrestarts
+      .map((prestart) => prestart.id)
+      .filter((id): id is string => Boolean(id));
 
-const fleetJobMatchFilters = [
-  `vehicle_asset_id.eq.${vehicleId}`,
-  `vehicle_id.eq.${vehicleId}`,
-  ...linkedFleetJobIds.map((id) => `id.eq.${id}`),
-  ...linkedPrestartIds.map((id) => `prestart_id.eq.${id}`),
-].join(",");
+    const [vehicleFleetJobsResult, linkedFleetJobsResult, sourceFleetJobsResult] =
+      await Promise.all([
+        supabase
+          .from("fleet_jobs")
+          .select(
+            "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+          )
+          .eq("vehicle_asset_id", vehicleId)
+          .order("created_at", { ascending: false })
+          .returns<FleetJob[]>(),
 
-const fleetJobsResult = await supabase
-  .from("fleet_jobs")
-  .select(
-    "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-  )
-  .or(fleetJobMatchFilters)
-  .order("created_at", { ascending: false })
-  .returns<FleetJob[]>();
+        linkedFleetJobIds.length > 0
+          ? supabase
+              .from("fleet_jobs")
+              .select(
+                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+              )
+              .in("id", linkedFleetJobIds)
+              .order("created_at", { ascending: false })
+              .returns<FleetJob[]>()
+          : Promise.resolve({ data: [], error: null }),
+
+        linkedPrestartIds.length > 0
+          ? supabase
+              .from("fleet_jobs")
+              .select(
+                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+              )
+              .in("source_id", linkedPrestartIds)
+              .order("created_at", { ascending: false })
+              .returns<FleetJob[]>()
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+    const allFleetJobs = [
+      ...(vehicleFleetJobsResult.data ?? []),
+      ...(linkedFleetJobsResult.data ?? []),
+      ...(sourceFleetJobsResult.data ?? []),
+    ];
+
+    const uniqueFleetJobs = Array.from(
+      new Map(allFleetJobs.map((job) => [job.id, job])).values(),
+    );
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
@@ -584,14 +612,12 @@ const fleetJobsResult = await supabase
     );
     setPrestartHistory(loadedPrestarts);
     setFleetJobs(
-      fleetJobsResult.error
-        ? []
-        : (fleetJobsResult.data ?? []).filter((job) => {
-            const status = clean(job.status).toLowerCase();
-            return !["closed", "complete", "completed", "resolved"].includes(
-              status,
-            );
-          }),
+      uniqueFleetJobs.filter((job) => {
+        const status = clean(job.status).toLowerCase();
+        return !["closed", "complete", "completed", "resolved"].includes(
+          status,
+        );
+      }),
     );
 
     setLoading(false);
