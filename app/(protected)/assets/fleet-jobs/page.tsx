@@ -216,8 +216,13 @@ function toFleetJobPriority(value: string | null): FleetJobPriority {
     : "Medium";
 }
 
-function toFleetJobSource(value: string | null, sourceType?: string | null): FleetJobSource {
-  if (sources.includes(value as FleetJobSource)) return value as FleetJobSource;
+function toFleetJobSource(
+  value: string | null,
+  sourceType?: string | null,
+): FleetJobSource {
+  if (sources.includes(value as FleetJobSource)) {
+    return value as FleetJobSource;
+  }
 
   const sourceText = clean(sourceType).toLowerCase();
 
@@ -349,17 +354,26 @@ export default function FleetJobsPage() {
         .order("asset_id", { ascending: true }),
     ]);
 
-    setJobs(jobsResult.error ? [] : ((jobsResult.data ?? []) as FleetJob[]));
-    setVehicles(
-      vehiclesResult.error ? [] : ((vehiclesResult.data ?? []) as VehicleAsset[]),
-    );
-    setPlantAssets(
-      plantResult.error ? [] : ((plantResult.data ?? []) as PlantAsset[]),
-    );
+    if (jobsResult.error) {
+      console.error("Failed to load fleet jobs:", jobsResult.error.message);
+      setJobs([]);
+    } else {
+      setJobs((jobsResult.data ?? []) as FleetJob[]);
+    }
 
-    if (jobsResult.error) console.error(jobsResult.error.message);
-    if (vehiclesResult.error) console.error(vehiclesResult.error.message);
-    if (plantResult.error) console.error(plantResult.error.message);
+    if (vehiclesResult.error) {
+      console.error("Failed to load vehicles:", vehiclesResult.error.message);
+      setVehicles([]);
+    } else {
+      setVehicles((vehiclesResult.data ?? []) as VehicleAsset[]);
+    }
+
+    if (plantResult.error) {
+      console.error("Failed to load plant:", plantResult.error.message);
+      setPlantAssets([]);
+    } else {
+      setPlantAssets((plantResult.data ?? []) as PlantAsset[]);
+    }
 
     setLoading(false);
   }, [supabase]);
@@ -507,10 +521,13 @@ export default function FleetJobsPage() {
 
     const overdue = active.filter((job) => {
       if (!job.due_date) return false;
+
       const due = new Date(job.due_date);
       const today = new Date();
+
       due.setHours(0, 0, 0, 0);
       today.setHours(0, 0, 0, 0);
+
       return due < today;
     });
 
@@ -588,6 +605,7 @@ export default function FleetJobsPage() {
 
     const selectedVehicle =
       form.asset_type === "Vehicle" ? vehicleMap.get(form.vehicle_id) : null;
+
     const selectedPlant =
       form.asset_type === "Plant" ? plantMap.get(form.plant_id) : null;
 
@@ -637,6 +655,7 @@ export default function FleetJobsPage() {
         selectedVehicle?.project ||
         selectedPlant?.project ||
         null,
+
       crew:
         form.crew.trim() || selectedVehicle?.crew || selectedPlant?.crew || null,
 
@@ -851,6 +870,7 @@ export default function FleetJobsPage() {
                   label={job.calculated_source}
                   tone={job.isPrestartLinked ? "violet" : "slate"}
                 />
+
                 {job.isPrestartLinked ? (
                   <p className="text-xs font-semibold text-violet-700">
                     Linked prestart

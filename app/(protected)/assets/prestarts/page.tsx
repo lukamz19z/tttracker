@@ -74,37 +74,80 @@ type VehiclePrestart = {
   created_at: string | null;
 };
 
-const checklistItems = [
-  "Tyres",
-  "Park lights",
-  "Head lights",
-  "Reverse lights",
-  "Reverse alarm",
-  "Beacon lights",
-  "Indicators",
-  "Brake lights",
-  "Interior lights",
-  "Steering",
-  "Foot brake",
-  "Doors",
-  "Windows",
-  "Mirrors",
-  "Reverse camera",
-  "Seats and seat belts",
-  "Wipers",
-  "Horn",
-  "Battery",
-  "Engine fluids",
-  "Fire extinguisher",
-  "First aid kit",
-  "Wheel chocks",
-  "Spare wheel",
-  "IVMS working",
-  "UHF radio working",
-   "AC / Heater",
-    "instruments",
-];
+const checklistSections = [
+  {
+    title: "Vehicle Condition",
+    items: [
+      "Tyres",
+      "Doors",
+      "Windows",
+      "Mirrors",
+      "Wipers",
+    ],
+  },
 
+  {
+    title: "Lights & Alarms",
+    items: [
+      "Park lights",
+      "Head lights",
+      "Reverse lights",
+      "Indicators",
+      "Brake lights",
+      "Beacon lights",
+      "Reverse alarm",
+      "Horn",
+    ],
+  },
+
+  {
+    title: "Driver Controls",
+    items: [
+      "Steering",
+      "Foot brake",
+      "Reverse camera",
+      "Seats and seat belts",
+      "AC / Heater",
+      "Instruments",
+    ],
+  },
+
+  {
+    title: "Safety Equipment",
+    items: [
+      "Fire extinguisher",
+      "First aid kit",
+      "Wheel chocks",
+    ],
+  },
+
+  {
+    title: "Communications",
+    items: [
+      "UHF radio working",
+      "IVMS working",
+    ],
+  },
+
+  {
+    title: "Mechanical",
+    items: [
+      "Battery",
+      "Engine oil",
+      "Coolant",
+    ],
+  },
+
+  {
+    title: "Transport Compliance",
+    items: [
+      "Spare wheel",
+    ],
+  },
+];
+const checklistItems = checklistSections.flatMap(
+  (section) => section.items,
+);
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
 }
@@ -1520,14 +1563,25 @@ if (newPrestart && severity !== "none") {
                     </p>
                   </div>
 
-                  <div className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3">
-                    {checklistItems.map((item) => {
-                      const key = checklistKey(item);
-                      const value = checklistValues[key]?.answer || "yes";
-                      const itemSeverity = checklistValues[key]?.severity || "minor";
-                      const comment = checklistValues[key]?.comment || "";
+<div className="grid gap-5 p-4">
+  {checklistSections.map((section) => (
+    <div key={section.title}>
+      <div className="mb-3 border-b border-slate-200 pb-2">
+        <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
+          {section.title}
+        </h3>
+      </div>
 
-                      return (
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {section.items.map((item) => {
+          const key = checklistKey(item);
+          const value = checklistValues[key]?.answer || "yes";
+          const itemSeverity =
+            checklistValues[key]?.severity || "minor";
+          const comment =
+            checklistValues[key]?.comment || "";
+
+          return (
                         <div
                           key={item}
                           className={`rounded-xl border px-3 py-2 ${
@@ -1676,6 +1730,9 @@ if (newPrestart && severity !== "none") {
                       );
                     })}
                   </div>
+                </div>
+              ))}
+            </div>
                 </section>
 
                 <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
