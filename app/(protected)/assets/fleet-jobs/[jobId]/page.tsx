@@ -93,7 +93,12 @@ type VehiclePrestart = {
   asset_label: string | null;
   fleet_job_id: string | null;
   severity: string | null;
-  failed_items: string[] | string | null;
+  failed_items?: unknown;
+  flagged_items?: unknown;
+  defects?: unknown;
+  issues?: unknown;
+  checklist_values?: unknown;
+  checklist?: unknown;
   created_at: string | null;
   prestart_date?: string | null;
   employee_name?: string | null;
@@ -154,21 +159,87 @@ function toneForPriority(priority: string | null | undefined): Tone {
   return "slate";
 }
 
-function normaliseFailedItems(value: string[] | string | null | undefined) {
+function normaliseFailedItems(value: unknown): string[] {
   if (!value) return [];
 
   if (Array.isArray(value)) {
-    return value.filter(Boolean);
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
   }
 
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed)) return parsed.filter(Boolean);
-  } catch {
-    return value
-      .split(",")
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => {
+        if (typeof item === "string") {
+          const lowered = item.toLowerCase();
+          return lowered !== "yes" && lowered !== "na" && lowered !== "n/a";
+        }
+
+        if (typeof item === "object" && item !== null) {
+          const record = item as Record<string, unknown>;
+          const answer = String(
+            record.answer || record.value || record.status || "",
+          ).toLowerCase();
+
+          return (
+            answer === "no" ||
+            answer === "fail" ||
+            answer === "failed" ||
+            answer === "defect"
+          );
+        }
+
+        return false;
+      })
+      .map(([key, item]) => {
+        if (typeof item === "object" && item !== null) {
+          const record = item as Record<string, unknown>;
+          const comment = record.comment ? ` - ${String(record.comment)}` : "";
+          return `${key}${comment}`;
+        }
+
+        return key;
+      });
+  }
+
+  if (typeof value === "string") {
+    try {
+      return normaliseFailedItems(JSON.parse(value));
+    } catch {
+      return value
+        .split(/\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function getPrestartFlaggedItems(
+  prestart: VehiclePrestart | null,
+  job: FleetJob,
+) {
+  const fromPrestart = [
+    ...normaliseFailedItems(prestart?.failed_items),
+    ...normaliseFailedItems(prestart?.flagged_items),
+    ...normaliseFailedItems(prestart?.defects),
+    ...normaliseFailedItems(prestart?.issues),
+    ...normaliseFailedItems(prestart?.checklist_values),
+    ...normaliseFailedItems(prestart?.checklist),
+  ];
+
+  if (fromPrestart.length > 0) {
+    return Array.from(new Set(fromPrestart));
+  }
+
+  const description = clean(job.description);
+
+  if (description) {
+    return description
+      .split(/\n|•/)
       .map((item) => item.trim())
-      .filter(Boolean);
+      .filter((item) => item.length > 3)
+      .slice(0, 12);
   }
 
   return [];
@@ -324,13 +395,13 @@ export default function FleetJobDetailPage() {
   async function saveUpdates(nextStatus?: string) {
     if (!job) return;
 
-    const finalStatus = nextStatus || status;
-    const isClosing = finalStatus === "Completed" || finalStatus === "Closed";
-
-    if (isClosing && !notes.trim()) {
-      alert("Close-out comments are required before completing or closing this job.");
+    if (!notes.trim()) {
+      alert("Action notes / close-out comments are required before updating this job.");
       return;
     }
+
+    const finalStatus = nextStatus || status;
+    const isClosing = finalStatus === "Completed" || finalStatus === "Closed";
 
     setSaving(true);
 
@@ -347,7 +418,7 @@ export default function FleetJobDetailPage() {
         due_date: dueDate || null,
         completed_date: finalCompletedDate,
         cost: cost ? Number(cost) : null,
-        notes: notes.trim() || null,
+        notes: notes.trim(),
         updated_at: new Date().toISOString(),
       })
       .eq("id", job.id);
@@ -398,13 +469,13 @@ export default function FleetJobDetailPage() {
     ? `/assets/prestarts/${resolvedPrestartId}`
     : "/assets/prestarts";
 
-  const failedItems = normaliseFailedItems(prestart?.failed_items);
+  const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
   const isClosed = job?.status === "Completed" || job?.status === "Closed";
 
   if (loading) {
     return (
       <PageShell>
-        <div className="flex min-h-[400px] items-center justify-center border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="flex min-h-100 items-center justify-center border border-slate-200 bg-white p-8 shadow-sm">
           <div className="flex items-center gap-3 text-sm font-semibold text-slate-600">
             <Loader2 className="h-5 w-5 animate-spin" />
             Loading fleet job...
@@ -657,7 +728,7 @@ export default function FleetJobDetailPage() {
                     </ul>
                   ) : (
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      No failed item list was available, but this job is linked to a prestart.
+                      No checklist item list was found, but this job is linked to a prestart.
                     </p>
                   )}
                 </div>
@@ -682,11 +753,10 @@ export default function FleetJobDetailPage() {
 
         <aside className="space-y-5">
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">
-              Action Job
-            </h2>
+            <h2 className="text-lg font-bold text-slate-950">Action Job</h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Update responsibility, dates, cost and status. Close-out comments are required before completing or closing.
+              Update responsibility, dates, cost and status. Action notes /
+              close-out comments are required before any update.
             </p>
 
             <div className="mt-5 grid gap-4">
@@ -768,12 +838,12 @@ export default function FleetJobDetailPage() {
               </label>
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Close-out Comments / Action Notes
+                Action Notes / Close-out Comments
                 <textarea
                   value={notes}
                   onChange={(event) => setNotes(event.target.value)}
                   rows={7}
-                  placeholder="Required before closing. Example: Repaired by workshop, inspected by supervisor, asset returned to service."
+                  placeholder="Required before any update. Example: Repaired by workshop, inspected by supervisor, asset returned to service."
                   className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
                 />
               </label>
@@ -862,10 +932,10 @@ export default function FleetJobDetailPage() {
 
             <div className="mt-5 border-t border-slate-200 pt-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Close-out Comments
+                Action Notes / Close-out Comments
               </p>
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {job.notes || "No close-out comments recorded."}
+                {job.notes || "No action notes or close-out comments recorded."}
               </p>
             </div>
           </section>
