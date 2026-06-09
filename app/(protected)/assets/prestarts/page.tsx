@@ -796,37 +796,76 @@ const fleetJobDescription = [
       return;
     }
 
-    if (newPrestart && severity !== "none") {
-      const { data: fleetJob, error: fleetJobError } = await supabase
-        .from("fleet_jobs")
-        .insert({
-          source_type: "vehicle_prestart",
-          source_id: newPrestart.id,
-          vehicle_asset_id: vehicle.id,
-          asset_label: assetLabel,
-          title: `${severityLabel(severity)} issue - ${assetLabel}`,
-          description:
-            fleetJobDescription || "Issue raised from vehicle prestart.",
-          priority: severityToPriority(severity),
-          status: "Open",
-        })
-        .select("id")
-        .single();
+if (newPrestart && severity !== "none") {
+  const jobNumber = `FJ-${Date.now().toString().slice(-6)}`;
 
-      if (!fleetJobError && fleetJob?.id) {
-        await supabase
-          .from("vehicle_prestarts")
-          .update({ fleet_job_id: fleetJob.id })
-          .eq("id", newPrestart.id);
-      }
+  const selectedPriority = severityToPriority(severity);
 
-      if (fleetJobError) {
-        console.warn(
-          "Prestart saved, but Fleet Job was not created:",
-          fleetJobError.message,
-        );
-      }
-    }
+  const jobTitle =
+    failedItems.length === 1
+      ? `${severityLabel(severity)} issue - ${failedItems[0]} - ${assetLabel}`
+      : `${severityLabel(severity)} prestart issues - ${assetLabel}`;
+
+  const { data: fleetJob, error: fleetJobError } = await supabase
+    .from("fleet_jobs")
+    .insert({
+      job_number: jobNumber,
+
+      // New linked structure
+      asset_type: "Vehicle",
+      vehicle_id: vehicle.id,
+      plant_id: null,
+      prestart_id: newPrestart.id,
+
+      // Keep old CodeX/current compatibility fields
+      source_type: "vehicle_prestart",
+      source_id: newPrestart.id,
+      vehicle_asset_id: vehicle.id,
+      asset_label: assetLabel,
+
+      // Main job details
+      source: "Prestart",
+      title: jobTitle,
+      description:
+        fleetJobDescription || "Issue raised from vehicle prestart.",
+      priority: selectedPriority,
+      status: "Open",
+
+      // Asset/project context
+      project: selectedProject || clean(vehicle.project) || null,
+      crew: selectedCrew || matchCrewOption(vehicle.crew) || null,
+
+      // People/context
+      reported_by: selectedEmployeeName || null,
+      assigned_to: null,
+      vendor: null,
+
+      // Dates
+      reported_date: prestartDate,
+      due_date: null,
+      completed_date: null,
+
+      // Close-out
+      cost: null,
+      notes: `Created automatically from vehicle prestart on ${prestartDate}.`,
+    })
+    .select("id")
+    .single();
+
+  if (!fleetJobError && fleetJob?.id) {
+    await supabase
+      .from("vehicle_prestarts")
+      .update({ fleet_job_id: fleetJob.id })
+      .eq("id", newPrestart.id);
+  }
+
+  if (fleetJobError) {
+    console.warn(
+      "Prestart saved, but Fleet Job was not created:",
+      fleetJobError.message,
+    );
+  }
+}
 
     setShowForm(false);
     setSelectedVehicleId("");

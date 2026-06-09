@@ -19,7 +19,7 @@ import {
 import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell, RegisterList } from "../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue" | "teal" | "slate";
+type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
 
 type FleetJobStatus =
   | "Open"
@@ -36,26 +36,39 @@ type AssetType = "Vehicle" | "Plant";
 type FleetJob = {
   id: string;
   job_number: string | null;
+
+  source_type: string | null;
+  source_id: string | null;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+
   asset_type: string | null;
   vehicle_id: string | null;
   plant_id: string | null;
   prestart_id: string | null;
+
   title: string | null;
   description: string | null;
   source: string | null;
   priority: string | null;
   status: string | null;
+
   project: string | null;
   crew: string | null;
+
   reported_by: string | null;
   assigned_to: string | null;
   vendor: string | null;
+
   reported_date: string | null;
   due_date: string | null;
   completed_date: string | null;
+
   cost: number | null;
   notes: string | null;
+
   created_at: string | null;
+  updated_at: string | null;
 };
 
 type VehicleAsset = {
@@ -88,10 +101,13 @@ type EnhancedFleetJob = FleetJob & {
   calculated_priority: FleetJobPriority;
   calculated_source: FleetJobSource;
   calculated_asset_type: AssetType;
-  asset_label: string;
+  resolved_vehicle_id: string | null;
+  resolved_prestart_id: string | null;
+  display_asset_label: string;
   asset_detail: string;
   tone: Tone;
   priorityTone: Tone;
+  isPrestartLinked: boolean;
 };
 
 type JobForm = {
@@ -200,22 +216,30 @@ function toFleetJobPriority(value: string | null): FleetJobPriority {
     : "Medium";
 }
 
-function toFleetJobSource(value: string | null): FleetJobSource {
-  return sources.includes(value as FleetJobSource)
-    ? (value as FleetJobSource)
-    : "Manual";
+function toFleetJobSource(value: string | null, sourceType?: string | null): FleetJobSource {
+  if (sources.includes(value as FleetJobSource)) return value as FleetJobSource;
+
+  const sourceText = clean(sourceType).toLowerCase();
+
+  if (sourceText.includes("prestart")) return "Prestart";
+  if (sourceText.includes("service")) return "Service";
+  if (sourceText.includes("defect")) return "Defect";
+  if (sourceText.includes("compliance")) return "Compliance";
+
+  return "Manual";
 }
 
-function toAssetType(value: string | null): AssetType {
-  return value === "Plant" ? "Plant" : "Vehicle";
+function toAssetType(value: string | null, plantId?: string | null): AssetType {
+  if (value === "Plant" || plantId) return "Plant";
+  return "Vehicle";
 }
 
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
   const classes =
     tone === "emerald"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : tone === "teal"
-        ? "border-teal-200 bg-teal-50 text-teal-700"
+      : tone === "violet"
+        ? "border-violet-200 bg-violet-50 text-violet-700"
         : tone === "rose"
           ? "border-rose-200 bg-rose-50 text-rose-700"
           : tone === "amber"
@@ -254,7 +278,9 @@ function StatCard({
         ? "border-amber-200 bg-amber-50 text-amber-800"
         : tone === "rose"
           ? "border-rose-200 bg-rose-50 text-rose-800"
-          : "border-blue-200 bg-blue-50 text-blue-800";
+          : tone === "violet"
+            ? "border-violet-200 bg-violet-50 text-violet-800"
+            : "border-blue-200 bg-blue-50 text-blue-800";
 
   return (
     <div className={`rounded-2xl border p-4 shadow-sm ${classes}`}>
@@ -323,26 +349,17 @@ export default function FleetJobsPage() {
         .order("asset_id", { ascending: true }),
     ]);
 
-    if (jobsResult.error) {
-      console.error("Failed to load fleet jobs:", jobsResult.error.message);
-      setJobs([]);
-    } else {
-      setJobs((jobsResult.data ?? []) as FleetJob[]);
-    }
+    setJobs(jobsResult.error ? [] : ((jobsResult.data ?? []) as FleetJob[]));
+    setVehicles(
+      vehiclesResult.error ? [] : ((vehiclesResult.data ?? []) as VehicleAsset[]),
+    );
+    setPlantAssets(
+      plantResult.error ? [] : ((plantResult.data ?? []) as PlantAsset[]),
+    );
 
-    if (vehiclesResult.error) {
-      console.error("Failed to load vehicles:", vehiclesResult.error.message);
-      setVehicles([]);
-    } else {
-      setVehicles((vehiclesResult.data ?? []) as VehicleAsset[]);
-    }
-
-    if (plantResult.error) {
-      console.error("Failed to load plant:", plantResult.error.message);
-      setPlantAssets([]);
-    } else {
-      setPlantAssets((plantResult.data ?? []) as PlantAsset[]);
-    }
+    if (jobsResult.error) console.error(jobsResult.error.message);
+    if (vehiclesResult.error) console.error(vehiclesResult.error.message);
+    if (plantResult.error) console.error(plantResult.error.message);
 
     setLoading(false);
   }, [supabase]);
@@ -361,15 +378,21 @@ export default function FleetJobsPage() {
 
   const enhancedJobs = useMemo<EnhancedFleetJob[]>(() => {
     return jobs.map((job) => {
-      const calculated_asset_type = toAssetType(job.asset_type);
+      const resolved_vehicle_id = job.vehicle_id || job.vehicle_asset_id || null;
+      const resolved_prestart_id = job.prestart_id || job.source_id || null;
+
+      const calculated_asset_type = toAssetType(job.asset_type, job.plant_id);
       const calculated_status = toFleetJobStatus(job.status);
       const calculated_priority = toFleetJobPriority(job.priority);
-      const calculated_source = toFleetJobSource(job.source);
+      const calculated_source = toFleetJobSource(job.source, job.source_type);
 
-      const vehicle = job.vehicle_id ? vehicleMap.get(job.vehicle_id) : null;
+      const vehicle = resolved_vehicle_id
+        ? vehicleMap.get(resolved_vehicle_id)
+        : null;
+
       const plant = job.plant_id ? plantMap.get(job.plant_id) : null;
 
-      const asset_label =
+      const display_asset_label =
         calculated_asset_type === "Vehicle"
           ? [
               vehicle?.vehicle_id,
@@ -379,7 +402,9 @@ export default function FleetJobsPage() {
             ]
               .map(clean)
               .filter(Boolean)
-              .join(" · ") || "Vehicle not linked"
+              .join(" · ") ||
+            clean(job.asset_label) ||
+            "Vehicle not linked"
           : [
               plant?.asset_id,
               plant?.rego,
@@ -389,7 +414,9 @@ export default function FleetJobsPage() {
             ]
               .map(clean)
               .filter(Boolean)
-              .join(" · ") || "Plant not linked";
+              .join(" · ") ||
+            clean(job.asset_label) ||
+            "Plant not linked";
 
       const asset_detail =
         calculated_asset_type === "Vehicle"
@@ -402,16 +429,24 @@ export default function FleetJobsPage() {
               .filter(Boolean)
               .join(" · ") || "No allocation";
 
+      const isPrestartLinked =
+        calculated_source === "Prestart" ||
+        clean(job.source_type).toLowerCase().includes("prestart") ||
+        Boolean(job.prestart_id);
+
       return {
         ...job,
         calculated_status,
         calculated_priority,
         calculated_source,
         calculated_asset_type,
-        asset_label,
+        resolved_vehicle_id,
+        resolved_prestart_id,
+        display_asset_label,
         asset_detail,
         tone: getStatusTone(calculated_status),
         priorityTone: getPriorityTone(calculated_priority),
+        isPrestartLinked,
       };
     });
   }, [jobs, vehicleMap, plantMap]);
@@ -424,7 +459,7 @@ export default function FleetJobsPage() {
         job.job_number,
         job.title,
         job.description,
-        job.asset_label,
+        job.display_asset_label,
         job.asset_detail,
         job.calculated_asset_type,
         job.calculated_source,
@@ -436,6 +471,8 @@ export default function FleetJobsPage() {
         job.reported_by,
         job.assigned_to,
         job.notes,
+        job.source_type,
+        job.asset_label,
       ]
         .join(" ")
         .toLowerCase();
@@ -481,6 +518,7 @@ export default function FleetJobsPage() {
       total: enhancedJobs.length,
       active: active.length,
       overdue: overdue.length,
+      prestarts: enhancedJobs.filter((job) => job.isPrestartLinked).length,
       completed: enhancedJobs.filter(
         (job) =>
           job.calculated_status === "Completed" ||
@@ -505,13 +543,14 @@ export default function FleetJobsPage() {
       "Completed Date",
       "Vendor",
       "Cost",
+      "Prestart ID",
     ];
 
     const rows = filteredJobs.map((job) => [
       clean(job.job_number),
       clean(job.title),
       job.calculated_asset_type,
-      job.asset_label,
+      job.display_asset_label,
       job.calculated_source,
       job.calculated_priority,
       job.calculated_status,
@@ -522,6 +561,7 @@ export default function FleetJobsPage() {
       clean(job.completed_date),
       clean(job.vendor),
       job.cost ?? "",
+      clean(job.resolved_prestart_id),
     ]);
 
     const csv = [
@@ -551,17 +591,47 @@ export default function FleetJobsPage() {
     const selectedPlant =
       form.asset_type === "Plant" ? plantMap.get(form.plant_id) : null;
 
+    const assetLabel =
+      form.asset_type === "Vehicle"
+        ? [
+            selectedVehicle?.vehicle_id,
+            selectedVehicle?.vehicle_rego,
+            selectedVehicle?.make,
+            selectedVehicle?.model,
+          ]
+            .map(clean)
+            .filter(Boolean)
+            .join(" · ")
+        : [
+            selectedPlant?.asset_id,
+            selectedPlant?.rego,
+            selectedPlant?.make,
+            selectedPlant?.model,
+          ]
+            .map(clean)
+            .filter(Boolean)
+            .join(" · ");
+
     const payload = {
       job_number: `FJ-${Date.now().toString().slice(-6)}`,
+
+      source_type: form.source.toLowerCase(),
+      source_id: null,
+      vehicle_asset_id:
+        form.asset_type === "Vehicle" ? form.vehicle_id || null : null,
+      asset_label: assetLabel || null,
+
       asset_type: form.asset_type,
       vehicle_id: form.asset_type === "Vehicle" ? form.vehicle_id || null : null,
       plant_id: form.asset_type === "Plant" ? form.plant_id || null : null,
       prestart_id: null,
+
       title: form.title.trim(),
       description: form.description.trim() || null,
       source: form.source,
       priority: form.priority,
       status: form.status,
+
       project:
         form.project.trim() ||
         selectedVehicle?.project ||
@@ -569,12 +639,15 @@ export default function FleetJobsPage() {
         null,
       crew:
         form.crew.trim() || selectedVehicle?.crew || selectedPlant?.crew || null,
+
       reported_by: form.reported_by.trim() || null,
       assigned_to: form.assigned_to.trim() || null,
       vendor: form.vendor.trim() || null,
+
       reported_date: form.reported_date || null,
       due_date: form.due_date || null,
       completed_date: form.completed_date || null,
+
       cost: form.cost ? Number(form.cost) : null,
       notes: form.notes.trim() || null,
     };
@@ -632,7 +705,7 @@ export default function FleetJobsPage() {
         }
       />
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           label="Total Jobs"
           value={stats.total}
@@ -658,6 +731,14 @@ export default function FleetJobsPage() {
         />
 
         <StatCard
+          label="From Prestarts"
+          value={stats.prestarts}
+          detail="Auto-linked issues"
+          tone="violet"
+          icon={<Settings size={22} />}
+        />
+
+        <StatCard
           label="Closed"
           value={stats.completed}
           detail="Completed or closed"
@@ -671,7 +752,7 @@ export default function FleetJobsPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search job, asset, rego, plant ID..."
+            placeholder="Search job, asset, rego, plant ID, prestart..."
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100 md:col-span-2"
           />
 
@@ -720,9 +801,8 @@ export default function FleetJobsPage() {
             ))}
           </select>
 
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Later, failed prestart items can auto-create jobs with source set to{" "}
-            <span className="font-bold">Prestart</span>.
+          <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700">
+            Failed prestart issues now appear here as linked Fleet Jobs.
           </div>
         </div>
       </section>
@@ -755,11 +835,27 @@ export default function FleetJobsPage() {
             render: (job) => (
               <div>
                 <p className="font-semibold text-slate-950">
-                  {job.asset_label}
+                  {job.display_asset_label}
                 </p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
                   {job.calculated_asset_type} · {job.asset_detail}
                 </p>
+              </div>
+            ),
+          },
+          {
+            label: "Source",
+            render: (job) => (
+              <div className="space-y-1">
+                <StatusPill
+                  label={job.calculated_source}
+                  tone={job.isPrestartLinked ? "violet" : "slate"}
+                />
+                {job.isPrestartLinked ? (
+                  <p className="text-xs font-semibold text-violet-700">
+                    Linked prestart
+                  </p>
+                ) : null}
               </div>
             ),
           },
@@ -786,7 +882,7 @@ export default function FleetJobsPage() {
                   {dateDisplay(job.due_date)}
                 </p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
-                  Source: {job.calculated_source}
+                  Reported: {dateDisplay(job.reported_date)}
                 </p>
               </div>
             ),
@@ -805,8 +901,9 @@ export default function FleetJobsPage() {
 
                 <Link
                   href={
-                    job.calculated_asset_type === "Vehicle" && job.vehicle_id
-                      ? `/assets/vehicles/${job.vehicle_id}`
+                    job.calculated_asset_type === "Vehicle" &&
+                    job.resolved_vehicle_id
+                      ? `/assets/vehicles/${job.resolved_vehicle_id}`
                       : job.plant_id
                         ? `/assets/plant/${job.plant_id}`
                         : "/assets"
@@ -841,8 +938,18 @@ export default function FleetJobsPage() {
                   Asset
                 </p>
                 <p className="font-semibold text-slate-800">
-                  {job.asset_label}
+                  {job.display_asset_label}
                 </p>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold uppercase text-slate-400">
+                  Source
+                </p>
+                <StatusPill
+                  label={job.calculated_source}
+                  tone={job.isPrestartLinked ? "violet" : "slate"}
+                />
               </div>
 
               <div>
@@ -861,15 +968,6 @@ export default function FleetJobsPage() {
                 </p>
                 <p className="font-semibold text-slate-800">
                   {dateDisplay(job.due_date)}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs font-bold uppercase text-slate-400">
-                  Source
-                </p>
-                <p className="font-semibold text-slate-800">
-                  {job.calculated_source}
                 </p>
               </div>
             </div>
@@ -1079,57 +1177,6 @@ export default function FleetJobsPage() {
                 />
               </label>
 
-              <label className="grid gap-1.5">
-                <span className="text-sm font-bold text-slate-700">
-                  Project
-                </span>
-                <input
-                  value={form.project}
-                  onChange={(event) =>
-                    setForm({ ...form, project: event.target.value })
-                  }
-                  placeholder="Auto uses asset project if blank"
-                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
-                />
-              </label>
-
-              <label className="grid gap-1.5">
-                <span className="text-sm font-bold text-slate-700">Crew</span>
-                <input
-                  value={form.crew}
-                  onChange={(event) =>
-                    setForm({ ...form, crew: event.target.value })
-                  }
-                  placeholder="Auto uses asset crew if blank"
-                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
-                />
-              </label>
-
-              <label className="grid gap-1.5">
-                <span className="text-sm font-bold text-slate-700">
-                  Vendor / Mechanic
-                </span>
-                <input
-                  value={form.vendor}
-                  onChange={(event) =>
-                    setForm({ ...form, vendor: event.target.value })
-                  }
-                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
-                />
-              </label>
-
-              <label className="grid gap-1.5">
-                <span className="text-sm font-bold text-slate-700">Cost</span>
-                <input
-                  type="number"
-                  value={form.cost}
-                  onChange={(event) =>
-                    setForm({ ...form, cost: event.target.value })
-                  }
-                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
-                />
-              </label>
-
               <label className="grid gap-1.5 md:col-span-2">
                 <span className="text-sm font-bold text-slate-700">
                   Description
@@ -1140,18 +1187,6 @@ export default function FleetJobsPage() {
                     setForm({ ...form, description: event.target.value })
                   }
                   rows={4}
-                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
-                />
-              </label>
-
-              <label className="grid gap-1.5 md:col-span-2">
-                <span className="text-sm font-bold text-slate-700">Notes</span>
-                <textarea
-                  value={form.notes}
-                  onChange={(event) =>
-                    setForm({ ...form, notes: event.target.value })
-                  }
-                  rows={3}
                   className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
                 />
               </label>

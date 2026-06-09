@@ -5,12 +5,26 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Briefcase, Car, Pencil } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { DetailGrid, PageHeader, PageShell, StatusBadge } from "../../components";
+import {
+  DetailGrid,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+} from "../../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
 
+type ChecklistAnswer =
+  | string
+  | {
+      answer?: string;
+      severity?: string;
+      comment?: string;
+    };
+
 type VehiclePrestart = {
   id: string;
+  prestart_date: string | null;
   vehicle_asset_id: string | null;
   asset_label: string | null;
   vehicle_rego: string | null;
@@ -18,7 +32,7 @@ type VehiclePrestart = {
   project: string | null;
   crew: string | null;
   inspected_by_name: string | null;
-  checklist: Record<string, string> | null;
+  checklist: Record<string, ChecklistAnswer> | null;
   overall_condition: string | null;
   comments: string | null;
   severity: string | null;
@@ -56,6 +70,16 @@ function clean(value: string | number | null | undefined) {
 function formatDate(value: string | null) {
   if (!value) return "-";
 
+  return new Date(value).toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "-";
+
   return new Date(value).toLocaleString("en-AU", {
     day: "2-digit",
     month: "short",
@@ -69,6 +93,21 @@ function checklistLabel(key: string) {
   return key
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getChecklistAnswer(value: ChecklistAnswer) {
+  if (typeof value === "string") return value;
+  return value.answer || "na";
+}
+
+function getChecklistSeverity(value: ChecklistAnswer) {
+  if (typeof value === "string") return null;
+  return value.severity || null;
+}
+
+function getChecklistComment(value: ChecklistAnswer) {
+  if (typeof value === "string") return "";
+  return value.comment || "";
 }
 
 function severityLabel(severity: string | null) {
@@ -198,6 +237,11 @@ export default function PrestartDetailPage() {
   }
 
   const checklist = prestart.checklist ?? {};
+
+  const failedChecklistItems = Object.entries(checklist).filter(
+    ([, value]) => getChecklistAnswer(value) === "no",
+  );
+
   const vehicleTitle =
     clean(prestart.asset_label) ||
     [clean(vehicle?.vehicle_id), clean(vehicle?.make), clean(vehicle?.model)]
@@ -210,9 +254,9 @@ export default function PrestartDetailPage() {
       <PageHeader
         eyebrow="Vehicle Prestart"
         title={vehicleTitle}
-        description={`Submitted by ${clean(prestart.inspected_by_name) || "Unknown"} on ${formatDate(
-          prestart.created_at,
-        )}`}
+        description={`Inspected by ${
+          clean(prestart.inspected_by_name) || "Unknown"
+        } on ${formatDate(prestart.prestart_date || prestart.created_at)}`}
         actions={
           <>
             <Link
@@ -247,7 +291,7 @@ export default function PrestartDetailPage() {
               ),
             },
             {
-              label: "Severity",
+              label: "Overall Severity",
               value: (
                 <StatusBadge
                   label={severityLabel(prestart.severity)}
@@ -255,12 +299,38 @@ export default function PrestartDetailPage() {
                 />
               ),
             },
-            { label: "Inspected By", value: clean(prestart.inspected_by_name) || "-" },
-            { label: "Submitted", value: formatDate(prestart.created_at) },
-            { label: "Kilometres", value: clean(prestart.kilometres) || "-" },
-            { label: "Project", value: clean(prestart.project) || "-" },
-            { label: "Crew", value: clean(prestart.crew) || "-" },
-            { label: "Condition", value: clean(prestart.overall_condition) || "-" },
+            {
+              label: "Prestart Date",
+              value: formatDate(prestart.prestart_date || prestart.created_at),
+            },
+            {
+              label: "Submitted",
+              value: formatDateTime(prestart.created_at),
+            },
+            {
+              label: "Inspected By",
+              value: clean(prestart.inspected_by_name) || "-",
+            },
+            {
+              label: "Kilometres",
+              value: clean(prestart.kilometres) || "-",
+            },
+            {
+              label: "Project",
+              value: clean(prestart.project) || "-",
+            },
+            {
+              label: "Crew",
+              value: clean(prestart.crew) || "-",
+            },
+            {
+              label: "Condition",
+              value: clean(prestart.overall_condition) || "-",
+            },
+            {
+              label: "Failed Items",
+              value: String(failedChecklistItems.length),
+            },
           ]}
         />
       </section>
@@ -269,20 +339,52 @@ export default function PrestartDetailPage() {
         <div className="border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-2">
             <Car size={18} className="text-slate-500" />
-            <h2 className="text-lg font-bold text-slate-950">Vehicle Details</h2>
+            <h2 className="text-lg font-bold text-slate-950">
+              Vehicle Details
+            </h2>
           </div>
 
           <div className="mt-4">
             <DetailGrid
               items={[
-                { label: "Asset ID", value: clean(vehicle?.vehicle_id) || clean(prestart.asset_label) || "-" },
-                { label: "Rego", value: clean(vehicle?.vehicle_rego) || clean(prestart.vehicle_rego) || "-" },
-                { label: "Make", value: clean(vehicle?.make) || "-" },
-                { label: "Model", value: clean(vehicle?.model) || "-" },
-                { label: "Category", value: clean(vehicle?.category) || "-" },
-                { label: "Status", value: clean(vehicle?.status) || "-" },
-                { label: "Asset Project", value: clean(vehicle?.project) || "-" },
-                { label: "Asset Crew", value: clean(vehicle?.crew) || "-" },
+                {
+                  label: "Asset ID",
+                  value:
+                    clean(vehicle?.vehicle_id) ||
+                    clean(prestart.asset_label) ||
+                    "-",
+                },
+                {
+                  label: "Rego",
+                  value:
+                    clean(vehicle?.vehicle_rego) ||
+                    clean(prestart.vehicle_rego) ||
+                    "-",
+                },
+                {
+                  label: "Make",
+                  value: clean(vehicle?.make) || "-",
+                },
+                {
+                  label: "Model",
+                  value: clean(vehicle?.model) || "-",
+                },
+                {
+                  label: "Category",
+                  value: clean(vehicle?.category) || "-",
+                },
+                {
+                  label: "Status",
+                  value: clean(vehicle?.status) || "-",
+                },
+                {
+                  label: "Asset Project",
+                  value: clean(vehicle?.project) || "-",
+                },
+                {
+                  label: "Asset Crew",
+                  value: clean(vehicle?.crew) || "-",
+                },
               ]}
             />
           </div>
@@ -291,25 +393,36 @@ export default function PrestartDetailPage() {
         <div className="border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-2">
             <Briefcase size={18} className="text-slate-500" />
-            <h2 className="text-lg font-bold text-slate-950">Linked Fleet Job</h2>
+            <h2 className="text-lg font-bold text-slate-950">
+              Linked Fleet Job
+            </h2>
           </div>
 
           {prestart.fleet_job_id ? (
             <div className="mt-4 space-y-4">
               <DetailGrid
                 items={[
-                  { label: "Title", value: clean(fleetJob?.title) || "Fleet Job Created" },
+                  {
+                    label: "Title",
+                    value: clean(fleetJob?.title) || "Fleet Job Created",
+                  },
                   {
                     label: "Priority",
                     value: (
                       <StatusBadge
-                        label={clean(fleetJob?.priority) || "Open"}
+                        label={clean(fleetJob?.priority) || "-"}
                         tone={priorityTone(fleetJob?.priority ?? null)}
                       />
                     ),
                   },
-                  { label: "Status", value: clean(fleetJob?.status) || "Open" },
-                  { label: "Created", value: formatDate(fleetJob?.created_at ?? null) },
+                  {
+                    label: "Status",
+                    value: clean(fleetJob?.status) || "Open",
+                  },
+                  {
+                    label: "Created",
+                    value: formatDateTime(fleetJob?.created_at ?? null),
+                  },
                 ]}
               />
 
@@ -328,25 +441,90 @@ export default function PrestartDetailPage() {
         </div>
       </section>
 
+      {failedChecklistItems.length > 0 ? (
+        <section className="border border-rose-200 bg-rose-50 p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-rose-950">
+            Failed Checklist Items
+          </h2>
+          <p className="mt-1 text-sm text-rose-700">
+            These items were marked N and should be tracked through Fleet Jobs.
+          </p>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {failedChecklistItems.map(([key, value]) => {
+              const itemSeverity = getChecklistSeverity(value) || "minor";
+              const itemComment = getChecklistComment(value);
+
+              return (
+                <div
+                  key={key}
+                  className="border border-rose-200 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">
+                        {checklistLabel(key)}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-rose-500">
+                        Failed prestart item
+                      </p>
+                    </div>
+
+                    <StatusBadge
+                      label={severityLabel(itemSeverity)}
+                      tone={severityTone(itemSeverity)}
+                    />
+                  </div>
+
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                    {clean(itemComment) || "No comment recorded."}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <section className="border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">Vehicle Checklist</h2>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {Object.entries(checklist).map(([key, answer]) => (
-            <div
-              key={key}
-              className="flex items-center justify-between gap-3 border border-slate-200 bg-slate-50 px-3 py-2"
-            >
-              <span className="truncate text-sm font-semibold text-slate-800">
-                {checklistLabel(key)}
-              </span>
+          {Object.entries(checklist).map(([key, value]) => {
+            const answer = getChecklistAnswer(value);
+            const itemSeverity = getChecklistSeverity(value);
 
-              <StatusBadge
-                label={answerLabel(answer)}
-                tone={answerTone(answer)}
-              />
-            </div>
-          ))}
+            return (
+              <div
+                key={key}
+                className={`border px-3 py-2 ${
+                  answer === "no"
+                    ? "border-rose-200 bg-rose-50"
+                    : "border-slate-200 bg-slate-50"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate text-sm font-semibold text-slate-800">
+                    {checklistLabel(key)}
+                  </span>
+
+                  <StatusBadge
+                    label={answerLabel(answer)}
+                    tone={answerTone(answer)}
+                  />
+                </div>
+
+                {answer === "no" ? (
+                  <div className="mt-2 flex justify-end">
+                    <StatusBadge
+                      label={severityLabel(itemSeverity)}
+                      tone={severityTone(itemSeverity)}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
 
         {Object.keys(checklist).length === 0 ? (
@@ -358,11 +536,11 @@ export default function PrestartDetailPage() {
 
       <section className="border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">
-          Defects / General Comments
+          General Comments
         </h2>
 
         <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-          {clean(prestart.comments) || "No comments provided."}
+          {clean(prestart.comments) || "No general comments provided."}
         </p>
       </section>
     </PageShell>
