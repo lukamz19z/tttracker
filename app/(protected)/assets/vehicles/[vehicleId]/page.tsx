@@ -477,19 +477,52 @@ export default function VehicleDetailPage() {
     setLoading(true);
     setErrorMessage("");
 
+    const vehicleResult = await supabase
+      .from("vehicle_assets")
+      .select("*")
+      .eq("id", vehicleId)
+      .single<VehicleAsset>();
+
+    if (vehicleResult.error || !vehicleResult.data) {
+      setVehicle(null);
+      setDocuments([]);
+      setServiceHistory([]);
+      setProjectHistory([]);
+      setPrestartHistory([]);
+      setFleetJobs([]);
+      setErrorMessage(
+        vehicleResult.error?.message || "Vehicle could not be loaded.",
+      );
+      setLoading(false);
+      return;
+    }
+
+    const vehicleData = vehicleResult.data;
+    setVehicle(vehicleData);
+
+    const prestartMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      vehicleData.vehicle_rego
+        ? `vehicle_rego.eq.${vehicleData.vehicle_rego}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+
+    const fleetJobMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      vehicleData.vehicle_id ? `vehicle_id.eq.${vehicleData.vehicle_id}` : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+
     const [
-      vehicleResult,
       documentsResult,
       serviceHistoryResult,
       projectHistoryResult,
       prestartResult,
       fleetJobsResult,
     ] = await Promise.all([
-      supabase
-        .from("vehicle_assets")
-        .select("*")
-        .eq("id", vehicleId)
-        .single<VehicleAsset>(),
       supabase
         .from("vehicle_documents")
         .select("*")
@@ -513,7 +546,7 @@ export default function VehicleDetailPage() {
         .select(
           "id, vehicle_asset_id, asset_label, vehicle_rego, kilometres, project, crew, inspected_by_name, overall_condition, comments, severity, result, fleet_job_id, prestart_date, created_at",
         )
-        .eq("vehicle_asset_id", vehicleId)
+        .or(prestartMatchFilters)
         .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(3)
@@ -523,19 +556,10 @@ export default function VehicleDetailPage() {
         .select(
           "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
         )
-        .eq("vehicle_asset_id", vehicleId)
+        .or(fleetJobMatchFilters)
         .order("created_at", { ascending: false })
         .returns<FleetJob[]>(),
     ]);
-
-    if (vehicleResult.error || !vehicleResult.data) {
-      setVehicle(null);
-      setErrorMessage(
-        vehicleResult.error?.message || "Vehicle could not be loaded.",
-      );
-    } else {
-      setVehicle(vehicleResult.data);
-    }
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
