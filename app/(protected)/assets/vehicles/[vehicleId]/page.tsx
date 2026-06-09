@@ -1106,24 +1106,32 @@ export default function VehicleDetailPage() {
         eyebrow="Vehicle Record"
         title={vehicleTitle}
         description="A clean asset profile showing key dates, current setup, documents and recent history."
-        actions={
-          <>
-            <ActionButton
-              href="/assets/vehicles"
-              variant="secondary"
-              icon={<ArrowLeft size={16} />}
-            >
-              Back
-            </ActionButton>
+actions={
+  <>
+    <ActionButton
+      href="/assets/vehicles"
+      variant="secondary"
+      icon={<ArrowLeft size={16} />}
+    >
+      Back
+    </ActionButton>
 
-            <ActionButton
-              href={`/assets/vehicles/${vehicleId}/edit`}
-              icon={<Pencil size={16} />}
-            >
-              Edit
-            </ActionButton>
-          </>
-        }
+    <ActionButton
+      href={`/assets/vehicles/${vehicleId}/edit`}
+      variant="secondary"
+      icon={<Pencil size={16} />}
+    >
+      Edit Details
+    </ActionButton>
+
+    <ActionButton
+      href={`/assets/vehicles/${vehicleId}/update`}
+      icon={<Wrench size={16} />}
+    >
+      Update Asset
+    </ActionButton>
+  </>
+}
       />
 
       {errorMessage ? (
