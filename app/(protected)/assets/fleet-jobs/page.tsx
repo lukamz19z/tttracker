@@ -631,7 +631,7 @@ export default function FleetJobsPage() {
             .join(" · ");
 
     const payload = {
-      job_number: `FJ-${Date.now().toString().slice(-6)}`,
+      job_number: null,
 
       source_type: form.source.toLowerCase(),
       source_id: null,

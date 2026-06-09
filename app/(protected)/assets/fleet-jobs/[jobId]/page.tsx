@@ -691,24 +691,27 @@ export default function FleetJobDetailPage() {
 
             {resolvedPrestartId ? (
               <>
-                <DetailGrid
-                  items={[
-                    { label: "Prestart ID", value: resolvedPrestartId },
-                    { label: "Severity", value: prestart?.severity || "N/A" },
-                    {
-                      label: "Prestart Date",
-                      value: dateDisplay(prestart?.prestart_date || prestart?.created_at),
-                    },
-                    {
-                      label: "Operator",
-                      value:
-                        prestart?.employee_name ||
-                        prestart?.operator_name ||
-                        job.reported_by ||
-                        "N/A",
-                    },
-                  ]}
-                />
+<DetailGrid
+  items={[
+    { label: "Severity", value: prestart?.severity || "N/A" },
+    {
+      label: "Prestart Date",
+      value: dateDisplay(prestart?.prestart_date || prestart?.created_at),
+    },
+    {
+      label: "Operator",
+      value:
+        prestart?.employee_name ||
+        prestart?.operator_name ||
+        job.reported_by ||
+        "N/A",
+    },
+    {
+      label: "Asset",
+      value: prestart?.asset_label || job.asset_label || assetTitle,
+    },
+  ]}
+/>
 
                 <div className="mt-5 border-t border-slate-200 pt-5">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
