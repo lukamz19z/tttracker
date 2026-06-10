@@ -1979,6 +1979,31 @@ export default function VehicleDetailPage() {
                 }
               />
 
+              {!isTrailer &&
+              [
+                editForm.record_type,
+                editForm.service_type,
+                editingRecord.record_type,
+                editingRecord.service_type,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase()
+                .includes("service") ? (
+                <TextField
+                  label="Service Interval KM"
+                  type="number"
+                  value={editForm.service_interval_km}
+                  onChange={(value) =>
+                    setEditForm((current) =>
+                      current
+                        ? { ...current, service_interval_km: value }
+                        : current,
+                    )
+                  }
+                />
+              ) : null}
+
               <TextField
                 label="Inspection Type"
                 value={editForm.inspection_type}
@@ -2105,31 +2130,6 @@ export default function VehicleDetailPage() {
                   )
                 }
               />
-
-              {!isTrailer &&
-              [
-                editForm.record_type,
-                editForm.service_type,
-                editingRecord.record_type,
-                editingRecord.service_type,
-              ]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase()
-                .includes("service") ? (
-                <TextField
-                  label="Service Interval KM"
-                  type="number"
-                  value={editForm.service_interval_km}
-                  onChange={(value) =>
-                    setEditForm((current) =>
-                      current
-                        ? { ...current, service_interval_km: value }
-                        : current,
-                    )
-                  }
-                />
-              ) : null}
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-black text-slate-950">
