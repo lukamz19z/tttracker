@@ -4,6 +4,7 @@ import {
   FileText,
   Plus,
   ShieldCheck,
+  Truck,
   Wrench,
 } from "lucide-react";
 import {
@@ -15,31 +16,40 @@ import {
   StatusBadge,
 } from "./components";
 
+type Tone = "blue" | "amber" | "emerald" | "rose" | "slate" | "violet";
+
 type ActionItem = {
   asset: string;
   detail: string;
   status: string;
-  tone: "blue" | "amber" | "emerald" | "rose" | "slate" | "violet";
+  tone: Tone;
 };
 
-const urgentJobs: ActionItem[] = [
+type ReminderItem = {
+  label: string;
+  value: string;
+  detail: string;
+  tone: Tone;
+};
+
+const fleetJobs: ActionItem[] = [
   {
     asset: "MC003 Grove GMK5220",
-    detail: "CraneSafe due soon and hydraulic inspection note to review.",
+    detail: "CraneSafe due soon and hydraulic inspection note requires review.",
     status: "High",
-    tone: "rose" as const,
+    tone: "rose",
   },
   {
     asset: "HV002 Isuzu FZM",
     detail: "Insurance expired in register. Confirm renewal before allocation.",
     status: "Review",
-    tone: "amber" as const,
+    tone: "amber",
   },
   {
     asset: "LV002 Toyota Hilux",
     detail: "Rego due this month. Fleet manager action required.",
     status: "Due Soon",
-    tone: "amber" as const,
+    tone: "amber",
   },
 ];
 
@@ -48,41 +58,72 @@ const prestartFlags: ActionItem[] = [
     asset: "LV004 Hilux",
     detail: "Morning prestart flagged tyre wear and damaged beacon.",
     status: "New",
-    tone: "blue" as const,
+    tone: "blue",
   },
   {
     asset: "TH003 Merlo",
     detail: "Operator reported intermittent warning light.",
     status: "Triage",
-    tone: "violet" as const,
+    tone: "violet",
   },
 ];
 
-const reminders = [
-  { label: "Rego", value: "3", detail: "vehicles or trailers due soon" },
-  { label: "Insurance", value: "2", detail: "records needing review" },
-  { label: "Service", value: "4", detail: "assets due or overdue" },
-  { label: "CraneSafe", value: "2", detail: "major plant reminders" },
+const complianceReminders: ReminderItem[] = [
+  {
+    label: "Rego",
+    value: "3",
+    detail: "vehicles or trailers due soon",
+    tone: "amber",
+  },
+  {
+    label: "Insurance",
+    value: "2",
+    detail: "records needing review",
+    tone: "rose",
+  },
+  {
+    label: "Service",
+    value: "4",
+    detail: "assets due or overdue",
+    tone: "blue",
+  },
+  {
+    label: "CraneSafe",
+    value: "2",
+    detail: "major plant reminders",
+    tone: "violet",
+  },
 ];
 
 function ActionPanel({
   title,
+  description,
   items,
 }: {
   title: string;
+  description: string;
   items: ActionItem[];
 }) {
   return (
     <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-bold tracking-tight text-slate-950">
-          {title}
-        </h2>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-slate-950">
+            {title}
+          </h2>
+          <p className="mt-1 text-sm leading-5 text-slate-600">
+            {description}
+          </p>
+        </div>
         <StatusBadge label={String(items.length)} />
       </div>
+
       <div className="mt-4 space-y-3">
         {items.map((item) => (
-          <div key={item.asset} className="border border-slate-200 bg-slate-50 p-4">
+          <div
+            key={`${item.asset}-${item.status}`}
+            className="border border-slate-200 bg-slate-50 p-4"
+          >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-semibold text-slate-950">{item.asset}</p>
@@ -132,8 +173,17 @@ export default function AssetsDashboardPage() {
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <ActionPanel title="Fleet Jobs Needing Attention" items={urgentJobs} />
-        <ActionPanel title="Prestart Flags" items={prestartFlags} />
+        <ActionPanel
+          title="Fleet Jobs Needing Attention"
+          description="Open jobs, close-out items and asset issues still requiring fleet manager action."
+          items={fleetJobs}
+        />
+
+        <ActionPanel
+          title="Prestart Flags"
+          description="Failed or questionable prestart items that may need a Fleet Job raised."
+          items={prestartFlags}
+        />
       </section>
 
       <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -143,28 +193,34 @@ export default function AssetsDashboardPage() {
             Information Flow
           </h2>
         </div>
+
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           {[
             {
-              title: "Field Entry",
-              detail: "Operators submit prestarts, issues and photos from site.",
+              title: "Prestart Submitted",
+              detail: "Operator records fit-for-work, checklist answers, comments and photos.",
             },
             {
-              title: "Fleet Manager",
-              detail: "Fleet Jobs, service reminders and asset status stay visible.",
+              title: "Fleet Job Raised",
+              detail: "Issues become trackable jobs for maintenance, defects or fleet manager review.",
             },
             {
-              title: "Client View",
-              detail: "Approved records can feed a client-facing page without exposing internal notes.",
+              title: "Progress Updates",
+              detail: "Regular job updates show what is happening without closing the job too early.",
             },
             {
-              title: "SharePoint",
-              detail: "Certificates, manuals and reports can be linked or synced to document folders.",
+              title: "Asset Updated",
+              detail: "Completed service, modification or repair details are recorded against the asset.",
             },
           ].map((item) => (
-            <div key={item.title} className="border border-slate-200 bg-slate-50 p-4">
+            <div
+              key={item.title}
+              className="border border-slate-200 bg-slate-50 p-4"
+            >
               <p className="font-bold text-slate-950">{item.title}</p>
-              <p className="mt-2 text-sm leading-6 text-slate-600">{item.detail}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {item.detail}
+              </p>
             </div>
           ))}
         </div>
@@ -178,11 +234,22 @@ export default function AssetsDashboardPage() {
               Compliance Reminders
             </h2>
           </div>
+
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {reminders.map((item) => (
-              <div key={item.label} className="border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-slate-600">{item.label}</p>
-                <p className="mt-2 text-2xl font-bold text-slate-950">{item.value}</p>
+            {complianceReminders.map((item) => (
+              <div
+                key={item.label}
+                className="border border-slate-200 bg-slate-50 p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-600">
+                    {item.label}
+                  </p>
+                  <StatusBadge label="Watch" tone={item.tone} />
+                </div>
+                <p className="mt-2 text-2xl font-bold text-slate-950">
+                  {item.value}
+                </p>
                 <p className="mt-1 text-sm text-slate-600">{item.detail}</p>
               </div>
             ))}
@@ -196,6 +263,7 @@ export default function AssetsDashboardPage() {
               Quick Actions
             </h2>
           </div>
+
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <ActionButton href="/assets/plant/new" variant="secondary" icon={<Plus size={16} />}>
               Add Plant
@@ -210,6 +278,7 @@ export default function AssetsDashboardPage() {
               Log Fleet Job
             </ActionButton>
           </div>
+
           <div className="mt-5 border border-slate-200 bg-slate-50 p-4">
             <DetailGrid
               items={[
@@ -220,6 +289,26 @@ export default function AssetsDashboardPage() {
               ]}
             />
           </div>
+        </div>
+      </section>
+
+      <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex items-center gap-2">
+          <Truck size={18} className="text-slate-500" />
+          <h2 className="text-lg font-bold tracking-tight text-slate-950">
+            Asset Register Overview
+          </h2>
+        </div>
+
+        <div className="mt-4">
+          <DetailGrid
+            items={[
+              { label: "Plant", value: "Major plant, hired plant and support plant" },
+              { label: "Vehicles", value: "LVs, HVs and trailers" },
+              { label: "Equipment", value: "Tools, lifting gear and site equipment" },
+              { label: "Inactive Assets", value: "No longer hired, retired or superseded" },
+            ]}
+          />
         </div>
       </section>
     </PageShell>

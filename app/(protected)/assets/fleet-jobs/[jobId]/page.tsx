@@ -98,6 +98,15 @@ type VehiclePrestart = {
   comments?: string | null;
 };
 
+type FleetJobUpdate = {
+  id: string;
+  fleet_job_id: string;
+  update_type: string;
+  status: string | null;
+  comment: string;
+  created_at: string | null;
+};
+
 const statuses = [
   "Open",
   "In Progress",
@@ -120,6 +129,18 @@ function dateDisplay(value: string | null | undefined) {
     day: "2-digit",
     month: "short",
     year: "numeric",
+  });
+}
+
+function dateTimeDisplay(value: string | null | undefined) {
+  if (!value) return "N/A";
+
+  return new Date(value).toLocaleString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -284,6 +305,7 @@ export default function FleetJobDetailPage() {
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
   const [plant, setPlant] = useState<PlantAsset | null>(null);
   const [prestart, setPrestart] = useState<VehiclePrestart | null>(null);
+  const [updates, setUpdates] = useState<FleetJobUpdate[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -318,6 +340,7 @@ export default function FleetJobDetailPage() {
       setVehicle(null);
       setPlant(null);
       setPrestart(null);
+      setUpdates([]);
       setLoading(false);
       return;
     }
@@ -341,6 +364,19 @@ export default function FleetJobDetailPage() {
 
     const resolvedVehicleId = loadedJob.vehicle_id || loadedJob.vehicle_asset_id;
     const resolvedPrestartId = loadedJob.prestart_id || loadedJob.source_id;
+
+    const { data: updatesData, error: updatesError } = await supabase
+      .from("fleet_job_updates")
+      .select("*")
+      .eq("fleet_job_id", loadedJob.id)
+      .order("created_at", { ascending: false });
+
+    if (updatesError) {
+      console.error("Failed to load fleet job updates:", updatesError.message);
+      setUpdates([]);
+    } else {
+      setUpdates((updatesData ?? []) as FleetJobUpdate[]);
+    }
 
     if (resolvedVehicleId) {
       const { data: vehicleData, error: vehicleError } = await supabase
@@ -464,6 +500,11 @@ export default function FleetJobDetailPage() {
       return;
     }
 
+    if (!isClosing && !progressUpdate.trim() && finalStatus === job.status) {
+      alert("Add a progress update or change the job status before saving.");
+      return;
+    }
+
     setSaving(true);
 
     const finalCompletedDate =
@@ -473,14 +514,43 @@ export default function FleetJobDetailPage() {
 
     if (progressUpdate.trim()) {
       finalNotes = appendJobNote(finalNotes, "Progress Update", progressUpdate);
+
+      const { error: progressError } = await supabase
+        .from("fleet_job_updates")
+        .insert({
+          fleet_job_id: job.id,
+          update_type: "Progress",
+          status: finalStatus,
+          comment: progressUpdate.trim(),
+        });
+
+      if (progressError) {
+        console.error("Failed to save progress update:", progressError.message);
+        alert(progressError.message);
+        setSaving(false);
+        return;
+      }
     }
 
     if (isClosing && closeOutComments.trim()) {
-      finalNotes = appendJobNote(
-        finalNotes,
-        "Close Out",
-        `${closeOutComments.trim()}\n\nAsset update record: ${assetTitle} update page.`,
-      );
+      const closeOutComment = `${closeOutComments.trim()}\n\nAsset update record: ${assetTitle} update page.`;
+      finalNotes = appendJobNote(finalNotes, "Close Out", closeOutComment);
+
+      const { error: closeOutError } = await supabase
+        .from("fleet_job_updates")
+        .insert({
+          fleet_job_id: job.id,
+          update_type: "Close Out",
+          status: finalStatus,
+          comment: closeOutComment,
+        });
+
+      if (closeOutError) {
+        console.error("Failed to save close-out update:", closeOutError.message);
+        alert(closeOutError.message);
+        setSaving(false);
+        return;
+      }
     }
 
     const { error } = await supabase
@@ -1010,9 +1080,47 @@ export default function FleetJobDetailPage() {
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Progress / Close-out History
               </p>
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {job.notes || "No progress or close-out comments recorded."}
-              </p>
+
+              {updates.length > 0 ? (
+                <div className="mt-3 space-y-3">
+                  {updates.map((update) => (
+                    <div
+                      key={update.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {update.update_type}
+                          </p>
+
+                          {update.status ? (
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                              Status: {update.status}
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <p className="text-right text-xs font-semibold text-slate-500">
+                          {dateTimeDisplay(update.created_at)}
+                        </p>
+                      </div>
+
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                        {update.comment}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : job.notes ? (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {job.notes}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  No progress or close-out comments recorded.
+                </p>
+              )}
             </div>
           </section>
         </aside>
