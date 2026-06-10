@@ -676,83 +676,163 @@ export default function FleetJobDetailPage() {
             </div>
           </section>
 
-          <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <AlertTriangle size={20} className="text-violet-700" />
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">
-                  Linked Prestart
-                </h2>
-                <p className="text-sm text-slate-600">
-                  Prestart issue details linked to this fleet job.
-                </p>
-              </div>
-            </div>
-
-            {resolvedPrestartId ? (
-              <>
-<DetailGrid
-  items={[
-    { label: "Severity", value: prestart?.severity || "N/A" },
-    {
-      label: "Prestart Date",
-      value: dateDisplay(prestart?.prestart_date || prestart?.created_at),
-    },
-    {
-      label: "Operator",
-      value:
-        prestart?.employee_name ||
-        prestart?.operator_name ||
-        job.reported_by ||
-        "N/A",
-    },
-    {
-      label: "Asset",
-      value: prestart?.asset_label || job.asset_label || assetTitle,
-    },
-  ]}
-/>
-
-                <div className="mt-5 border-t border-slate-200 pt-5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Flagged Items
-                  </p>
-
-                  {failedItems.length > 0 ? (
-                    <ul className="mt-3 space-y-2">
-                      {failedItems.map((item) => (
-                        <li
-                          key={item}
-                          className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700"
-                        >
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-sm leading-6 text-slate-600">
-                      No checklist item list was found, but this job is linked to a prestart.
-                    </p>
-                  )}
-                </div>
-
-                <div className="mt-5">
-                  <Link
-                    href={prestartHref}
-                    className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
-                  >
-                    <ExternalLink size={16} />
-                    Open Prestart
-                  </Link>
-                </div>
-              </>
-            ) : (
-              <p className="text-sm leading-6 text-slate-600">
-                This job is not linked to a prestart.
-              </p>
-            )}
-          </section>
+        <section className="overflow-hidden border border-violet-100 bg-white shadow-sm">
+  <div className="border-b border-violet-100 bg-violet-50 px-5 py-4">
+    <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start gap-3">
+        <div className="rounded-xl bg-white p-2 text-violet-700 shadow-sm">
+          <AlertTriangle size={20} />
         </div>
+
+        <div>
+          <h2 className="text-lg font-bold text-slate-950">
+            Linked Prestart Issue
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            This fleet job was automatically raised from a failed prestart item.
+          </p>
+        </div>
+      </div>
+
+      <StatusBadge
+        label={prestart?.severity ? prestart.severity.toUpperCase() : "PRESTART"}
+        tone={prestart?.severity === "major" ? "rose" : "amber"}
+      />
+    </div>
+  </div>
+
+  {resolvedPrestartId ? (
+    <div className="p-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+            Date
+          </p>
+          <p className="mt-1 text-sm font-bold text-slate-950">
+            {dateDisplay(prestart?.prestart_date || prestart?.created_at)}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+            Operator
+          </p>
+          <p className="mt-1 text-sm font-bold text-slate-950">
+            {prestart?.employee_name ||
+              prestart?.operator_name ||
+              job.reported_by ||
+              "N/A"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+            Asset
+          </p>
+          <p className="mt-1 text-sm font-bold text-slate-950">
+            {prestart?.asset_label || job.asset_label || assetTitle}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+            Fleet Job Source
+          </p>
+          <p className="mt-1 text-sm font-bold text-slate-950">
+            Prestart
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-rose-500">
+              Flagged Items
+            </p>
+            <p className="mt-1 text-sm text-rose-700">
+              Items marked as failed or requiring attention during the prestart.
+            </p>
+          </div>
+
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-rose-700 shadow-sm">
+            {failedItems.length} issue{failedItems.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {failedItems.length > 0 ? (
+          <div className="mt-4 grid gap-3">
+            {failedItems.map((item, index) => {
+              const [rawLabel, ...commentParts] = item.split(" - ");
+              const label = rawLabel
+                .replaceAll("_", " ")
+                .replace(/\b\w/g, (char) => char.toUpperCase());
+              const comment = commentParts.join(" - ");
+
+              return (
+                <div
+                  key={`${item}-${index}`}
+                  className="rounded-xl border border-rose-100 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xs font-black text-rose-700">
+                      {index + 1}
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-black text-slate-950">
+                        {label}
+                      </p>
+
+                      {comment ? (
+                        <p className="mt-1 text-sm font-semibold text-rose-700">
+                          {comment}
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-sm text-slate-500">
+                          No additional comment provided.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+            No checklist item list was found, but this job is linked to a prestart.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        <Link
+          href={prestartHref}
+          className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+        >
+          <ExternalLink size={16} />
+          Open Prestart
+        </Link>
+
+        <Link
+          href={assetHref}
+          className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <Truck size={16} />
+          Open Asset
+        </Link>
+      </div>
+    </div>
+  ) : (
+    <div className="p-5">
+      <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+        This job is not linked to a prestart.
+      </p>
+    </div>
+  )}
+</section>
+  </div>
 
         <aside className="space-y-5">
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
