@@ -460,6 +460,7 @@ export default function VehicleDetailPage() {
   const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
   const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
+  const [showVehicleSetup, setShowVehicleSetup] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
     null,
   );
@@ -559,39 +560,42 @@ export default function VehicleDetailPage() {
       .map((prestart) => prestart.id)
       .filter((id): id is string => Boolean(id));
 
-    const [vehicleFleetJobsResult, linkedFleetJobsResult, sourceFleetJobsResult] =
-      await Promise.all([
-        supabase
-          .from("fleet_jobs")
-          .select(
-            "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-          )
-          .eq("vehicle_asset_id", vehicleId)
-          .order("created_at", { ascending: false })
-          .returns<FleetJob[]>(),
+    const [
+      vehicleFleetJobsResult,
+      linkedFleetJobsResult,
+      sourceFleetJobsResult,
+    ] = await Promise.all([
+      supabase
+        .from("fleet_jobs")
+        .select(
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+        )
+        .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<FleetJob[]>(),
 
-        linkedFleetJobIds.length > 0
-          ? supabase
-              .from("fleet_jobs")
-              .select(
-                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-              )
-              .in("id", linkedFleetJobIds)
-              .order("created_at", { ascending: false })
-              .returns<FleetJob[]>()
-          : Promise.resolve({ data: [], error: null }),
+      linkedFleetJobIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("id", linkedFleetJobIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
 
-        linkedPrestartIds.length > 0
-          ? supabase
-              .from("fleet_jobs")
-              .select(
-                "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
-              )
-              .in("source_id", linkedPrestartIds)
-              .order("created_at", { ascending: false })
-              .returns<FleetJob[]>()
-          : Promise.resolve({ data: [], error: null }),
-      ]);
+      linkedPrestartIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("source_id", linkedPrestartIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
     const allFleetJobs = [
       ...(vehicleFleetJobsResult.data ?? []),
@@ -650,8 +654,8 @@ export default function VehicleDetailPage() {
 
   const hasServiceTrigger = Boolean(
     vehicle?.next_service_due ||
-      (vehicle?.next_service_km !== null &&
-        vehicle?.next_service_km !== undefined),
+    (vehicle?.next_service_km !== null &&
+      vehicle?.next_service_km !== undefined),
   );
 
   const serviceOverdue =
@@ -1198,224 +1202,261 @@ export default function VehicleDetailPage() {
         </section>
 
         {!isTrailer && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <SectionHeader
-              icon={<Wrench size={18} />}
-              title="Service Status"
-              description="Shows whichever service trigger is reached first: time or kilometres."
-            />
-
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <ImportantDateCard
-                label="Current KM"
-                value={
-                  currentKm !== null ? `${currentKm.toLocaleString()} km` : "N/A"
-                }
-                helper={
-                  latestPrestart
-                    ? `Latest prestart: ${formatDate(
-                        latestPrestart.prestart_date || latestPrestart.created_at,
-                      )}`
-                    : "No prestart KM recorded"
-                }
+          <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title="Service Status"
+                description="Whichever service trigger is reached first: time or kilometres."
               />
 
-              <ImportantDateCard
-                label="Next Service KM"
-                value={
-                  vehicle.next_service_km !== null &&
-                  vehicle.next_service_km !== undefined
-                    ? `${vehicle.next_service_km.toLocaleString()} km`
-                    : "N/A"
-                }
-                helper="KM trigger from last service"
-              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ImportantDateCard
+                  label="Current KM"
+                  value={
+                    currentKm !== null
+                      ? `${currentKm.toLocaleString()} km`
+                      : "N/A"
+                  }
+                  helper={
+                    latestPrestart
+                      ? `Latest prestart: ${formatDate(
+                          latestPrestart.prestart_date ||
+                            latestPrestart.created_at,
+                        )}`
+                      : "No prestart KM recorded"
+                  }
+                />
 
-              <ImportantDateCard
-                label="KM Remaining"
-                value={kmRemainingDisplay}
-                helper="Based on latest prestart"
-              />
+                <ImportantDateCard
+                  label="Next Service KM"
+                  value={
+                    vehicle.next_service_km !== null &&
+                    vehicle.next_service_km !== undefined
+                      ? `${vehicle.next_service_km.toLocaleString()} km`
+                      : "N/A"
+                  }
+                  helper="KM trigger from last service"
+                />
 
-              <ImportantDateCard
-                label="Date Trigger"
-                value={formatDate(vehicle.next_service_due)}
-                helper={`Time remaining: ${daysRemainingDisplay}`}
-              />
+                <ImportantDateCard
+                  label="KM Remaining"
+                  value={kmRemainingDisplay}
+                  helper="Based on latest prestart"
+                />
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Service Status
-                </p>
-                <div className="mt-3">
-                  <StatusBadge
-                    label={serviceStatusLabel}
-                    tone={serviceStatusTone}
-                  />
-                </div>
-                <p className="mt-2 text-xs font-medium text-slate-500">
-                  Triggered by KM or date, whichever comes first.
-                </p>
-              </div>
-            </div>
-          </section>
-        )}
+                <ImportantDateCard
+                  label="Date Trigger"
+                  value={formatDate(vehicle.next_service_due)}
+                  helper={`Time remaining: ${daysRemainingDisplay}`}
+                />
 
-        {!isTrailer && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <SectionHeader
-              icon={<ShieldCheck size={18} />}
-              title="Vehicle Setup & Compliance Equipment"
-              description="Required onboard systems and safety equipment for LVs and HVs."
-            />
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:col-span-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Service Status
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        Triggered by KM or date, whichever comes first.
+                      </p>
+                    </div>
 
-            <div className="space-y-5">
-              <div>
-                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Electronic Systems
-                </p>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-                  <SetupItem
-                    label="eHub"
-                    value={vehicle.ehub}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["ehub"],
-                      vehicle.company_onboard_date,
-                      vehicle.ehub,
-                    )}
-                  />
-                  <SetupItem
-                    label="Dashcam"
-                    value={vehicle.dashcam}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["dashcam"],
-                      vehicle.company_onboard_date,
-                      vehicle.dashcam,
-                    )}
-                  />
-                  <SetupItem
-                    label="Alert Button"
-                    value={vehicle.alert_button}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["alert button"],
-                      vehicle.company_onboard_date,
-                      vehicle.alert_button,
-                    )}
-                  />
-                  <SetupItem
-                    label="UHF Radio"
-                    value={vehicle.uhf_radio}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["uhf"],
-                      vehicle.company_onboard_date,
-                      vehicle.uhf_radio,
-                    )}
-                  />
-                  <SetupItem
-                    label="Reverse Squawker"
-                    value={vehicle.reverse_squawker}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["reverse squawker"],
-                      vehicle.company_onboard_date,
-                      vehicle.reverse_squawker,
-                    )}
-                  />
+                    <StatusBadge
+                      label={serviceStatusLabel}
+                      tone={serviceStatusTone}
+                    />
+                  </div>
                 </div>
               </div>
+            </section>
 
-              <div>
-                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Safety Equipment
-                </p>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <SetupItem
-                    label="Fire Extinguisher"
-                    value={vehicle.fire_extinguisher}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["fire extinguisher"],
-                      vehicle.company_onboard_date,
-                      vehicle.fire_extinguisher,
-                    )}
-                  />
-                  <SetupItem
-                    label="First Aid Kit"
-                    value={vehicle.first_aid_kit}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["first aid"],
-                      vehicle.company_onboard_date,
-                      vehicle.first_aid_kit,
-                    )}
-                  />
-                  <SetupItem
-                    label="Snake Bite Kit"
-                    value={vehicle.snake_bite_kit}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["snake bite"],
-                      vehicle.company_onboard_date,
-                      vehicle.snake_bite_kit,
-                    )}
-                  />
-                  <SetupItem
-                    label="Wheel Nut Indicators"
-                    value={vehicle.wheel_nut_indicators}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["wheel nut"],
-                      vehicle.company_onboard_date,
-                      vehicle.wheel_nut_indicators,
-                    )}
-                  />
-                  <SetupItem
-                    label="Wheel Chocks"
-                    value={vehicle.wheel_chocks}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["wheel chocks"],
-                      vehicle.company_onboard_date,
-                      vehicle.wheel_chocks,
-                    )}
-                  />
-                  <SetupItem
-                    label="Shovel"
-                    value={vehicle.shovel}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["shovel"],
-                      vehicle.company_onboard_date,
-                      vehicle.shovel,
-                    )}
-                  />
-                  <SetupItem
-                    label="Knapsack"
-                    value={vehicle.knapsack}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["knapsack"],
-                      vehicle.company_onboard_date,
-                      vehicle.knapsack,
-                    )}
-                  />
-                  <SetupItem
-                    label="Fuel Card"
-                    value={vehicle.fuel_card}
-                    addedDate={findAddedDate(
-                      serviceHistory,
-                      ["fuel card"],
-                      vehicle.company_onboard_date,
-                      vehicle.fuel_card,
-                    )}
-                  />
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setShowVehicleSetup((current) => !current)}
+                className="flex w-full items-start justify-between gap-4 text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                    <ShieldCheck size={18} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">
+                      Vehicle Setup & Compliance Equipment
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      Required onboard systems and safety equipment for LVs and
+                      HVs.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            </div>
+
+                <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
+                  {showVehicleSetup ? "Hide" : "Show"}
+                </span>
+              </button>
+
+              {showVehicleSetup ? (
+                <div className="space-y-5">
+                  <div>
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Electronic Systems
+                    </p>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <SetupItem
+                        label="eHub"
+                        value={vehicle.ehub}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["ehub"],
+                          vehicle.company_onboard_date,
+                          vehicle.ehub,
+                        )}
+                      />
+                      <SetupItem
+                        label="Dashcam"
+                        value={vehicle.dashcam}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["dashcam"],
+                          vehicle.company_onboard_date,
+                          vehicle.dashcam,
+                        )}
+                      />
+                      <SetupItem
+                        label="Alert Button"
+                        value={vehicle.alert_button}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["alert button"],
+                          vehicle.company_onboard_date,
+                          vehicle.alert_button,
+                        )}
+                      />
+                      <SetupItem
+                        label="UHF Radio"
+                        value={vehicle.uhf_radio}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["uhf"],
+                          vehicle.company_onboard_date,
+                          vehicle.uhf_radio,
+                        )}
+                      />
+                      <SetupItem
+                        label="Reverse Squawker"
+                        value={vehicle.reverse_squawker}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["reverse squawker"],
+                          vehicle.company_onboard_date,
+                          vehicle.reverse_squawker,
+                        )}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Safety Equipment
+                    </p>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <SetupItem
+                        label="Fire Extinguisher"
+                        value={vehicle.fire_extinguisher}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["fire extinguisher"],
+                          vehicle.company_onboard_date,
+                          vehicle.fire_extinguisher,
+                        )}
+                      />
+                      <SetupItem
+                        label="First Aid Kit"
+                        value={vehicle.first_aid_kit}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["first aid"],
+                          vehicle.company_onboard_date,
+                          vehicle.first_aid_kit,
+                        )}
+                      />
+                      <SetupItem
+                        label="Snake Bite Kit"
+                        value={vehicle.snake_bite_kit}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["snake bite"],
+                          vehicle.company_onboard_date,
+                          vehicle.snake_bite_kit,
+                        )}
+                      />
+                      <SetupItem
+                        label="Wheel Nut Indicators"
+                        value={vehicle.wheel_nut_indicators}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["wheel nut"],
+                          vehicle.company_onboard_date,
+                          vehicle.wheel_nut_indicators,
+                        )}
+                      />
+                      <SetupItem
+                        label="Wheel Chocks"
+                        value={vehicle.wheel_chocks}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["wheel chocks"],
+                          vehicle.company_onboard_date,
+                          vehicle.wheel_chocks,
+                        )}
+                      />
+                      <SetupItem
+                        label="Shovel"
+                        value={vehicle.shovel}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["shovel"],
+                          vehicle.company_onboard_date,
+                          vehicle.shovel,
+                        )}
+                      />
+                      <SetupItem
+                        label="Knapsack"
+                        value={vehicle.knapsack}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["knapsack"],
+                          vehicle.company_onboard_date,
+                          vehicle.knapsack,
+                        )}
+                      />
+                      <SetupItem
+                        label="Fuel Card"
+                        value={vehicle.fuel_card}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["fuel card"],
+                          vehicle.company_onboard_date,
+                          vehicle.fuel_card,
+                        )}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  <p className="font-bold text-slate-800">
+                    Equipment checklist collapsed
+                  </p>
+                  <p className="mt-1">
+                    Click Show to review fitted and missing setup items without
+                    pushing the history sections down the page.
+                  </p>
+                </div>
+              )}
+            </section>
           </section>
         )}
 
@@ -1646,7 +1687,9 @@ export default function VehicleDetailPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-bold text-slate-950">
-                            {formatDate(record.prestart_date || record.created_at)}
+                            {formatDate(
+                              record.prestart_date || record.created_at,
+                            )}
                           </p>
                           <p className="mt-1 text-xs text-slate-500">
                             Inspected by {clean(record.inspected_by_name)}
@@ -1656,7 +1699,8 @@ export default function VehicleDetailPage() {
                         <StatusBadge
                           label={clean(record.result)}
                           tone={
-                            clean(record.severity).toLowerCase() === "critical" ||
+                            clean(record.severity).toLowerCase() ===
+                              "critical" ||
                             clean(record.severity).toLowerCase() === "major"
                               ? "rose"
                               : clean(record.severity).toLowerCase() === "minor"
@@ -1683,7 +1727,8 @@ export default function VehicleDetailPage() {
                           {clean(record.project)}
                         </p>
                         <p>
-                          <span className="font-bold">Crew:</span> {clean(record.crew)}
+                          <span className="font-bold">Crew:</span>{" "}
+                          {clean(record.crew)}
                         </p>
                       </div>
 
