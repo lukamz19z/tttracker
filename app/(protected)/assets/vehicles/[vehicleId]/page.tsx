@@ -1066,10 +1066,7 @@ export default function VehicleDetailPage() {
                 <span className="font-bold">Next Service:</span>{" "}
                 {formatDate(record.next_service_due)}
               </p>
-              <p>
-                <span className="font-bold">Next Inspection:</span>{" "}
-                {formatDate(record.next_inspection_due)}
-              </p>
+              
             </div>
 
             <div className="mt-4 space-y-3 text-sm text-slate-700">
