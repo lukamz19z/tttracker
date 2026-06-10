@@ -2,6 +2,10 @@
 
 "use client";
 
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 import {
   ArrowLeft,
   Calendar,
@@ -9,19 +13,12 @@ import {
   ClipboardCheck,
   ExternalLink,
   FileText,
-  FileUp,
   KeyRound,
   Pencil,
-  Save,
   ShieldCheck,
-  Trash2,
+  Truck,
   Wrench,
-  X,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
 import {
   ActionButton,
   DetailGrid,
@@ -30,7 +27,7 @@ import {
   StatusBadge,
 } from "../../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue" | "slate";
+type Tone = "emerald" | "amber" | "rose" | "blue" | "slate" | "violet";
 
 type VehicleAsset = {
   id: string;
@@ -57,9 +54,6 @@ type VehicleAsset = {
   hired: boolean | null;
   hired_from: string | null;
   hire_term: string | null;
-  off_hire_date: string | null;
-  superseded_by: string | null;
-  inactive_reason: string | null;
   spare_key_provided: boolean | null;
   spare_key_location: string | null;
   ehub: boolean | null;
@@ -118,6 +112,27 @@ type ServiceHistory = {
   created_at: string | null;
 };
 
+type AssetHistory = {
+  id: string;
+  asset_type: string | null;
+  vehicle_id: string | null;
+  plant_id: string | null;
+  fleet_job_id: string | null;
+  history_type: "Repair" | "Modification" | "Service" | string | null;
+  history_date: string | null;
+  title: string | null;
+  description: string | null;
+  vendor: string | null;
+  cost: number | null;
+  odometer_km: number | null;
+  engine_hours: number | null;
+  next_service_due_date: string | null;
+  next_service_due_km: number | null;
+  next_service_due_hours: number | null;
+  document_url: string | null;
+  created_at: string | null;
+};
+
 type ProjectHistory = {
   id: string;
   project: string | null;
@@ -161,33 +176,8 @@ type FleetJob = {
   created_at: string | null;
 };
 
-type EditHistoryForm = {
-  service_interval_km: string;
-  record_type: string;
-  service_date: string;
-  inspection_date: string;
-  modification_date: string;
-  service_type: string;
-  inspection_type: string;
-  modification_type: string;
-  modification_description: string;
-  supplier: string;
-  invoice_number: string;
-  invoice_cost: string;
-  work_completed: string;
-  mechanic_recommendations: string;
-  follow_up_actions: string;
-  invoice_notes: string;
-  next_service_due: string;
-  next_inspection_due: string;
-};
-
 function clean(value: string | null | undefined) {
   return value?.trim() || "N/A";
-}
-
-function optional(value: string | null | undefined) {
-  return value?.trim() || "";
 }
 
 function yesNo(value: boolean | null | undefined) {
@@ -196,13 +186,8 @@ function yesNo(value: boolean | null | undefined) {
   return "N/A";
 }
 
-function dateInput(value: string | null | undefined) {
-  return value ? value.slice(0, 10) : "";
-}
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "N/A";
-
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "N/A";
 
@@ -220,14 +205,6 @@ function formatMoney(value: number | null | undefined) {
     style: "currency",
     currency: "AUD",
   });
-}
-
-function toNumber(value: string) {
-  const cleaned = value.trim();
-  if (!cleaned) return null;
-
-  const number = Number(cleaned);
-  return Number.isFinite(number) ? number : null;
 }
 
 function getTone(status: string | null | undefined): Tone {
@@ -249,6 +226,29 @@ function getTone(status: string | null | undefined): Tone {
   return "amber";
 }
 
+function fleetJobTone(job: FleetJob): Tone {
+  const priority = clean(job.priority).toLowerCase();
+  const status = clean(job.status).toLowerCase();
+
+  if (priority === "critical" || priority === "urgent" || priority === "high") {
+    return "rose";
+  }
+
+  if (status.includes("progress") || status.includes("open")) return "amber";
+
+  return "blue";
+}
+
+function historyTone(type: string | null | undefined): Tone {
+  const value = clean(type).toLowerCase();
+
+  if (value.includes("service")) return "blue";
+  if (value.includes("repair")) return "rose";
+  if (value.includes("modification")) return "violet";
+
+  return "slate";
+}
+
 function makeModel(vehicle: VehicleAsset | null) {
   if (!vehicle) return "Vehicle Detail";
 
@@ -258,7 +258,7 @@ function makeModel(vehicle: VehicleAsset | null) {
     .join(" ");
 }
 
-function historyTitle(record: ServiceHistory) {
+function serviceHistoryTitle(record: ServiceHistory) {
   return clean(
     record.modification_type ||
       record.service_type ||
@@ -267,7 +267,7 @@ function historyTitle(record: ServiceHistory) {
   );
 }
 
-function historyDate(record: ServiceHistory) {
+function serviceHistoryDate(record: ServiceHistory) {
   return formatDate(
     record.modification_date ||
       record.service_date ||
@@ -278,13 +278,14 @@ function historyDate(record: ServiceHistory) {
 
 function findAddedDate(
   serviceHistory: ServiceHistory[],
+  assetHistory: AssetHistory[],
   keywords: string[],
   fallbackDate: string | null | undefined,
   fitted: boolean | null | undefined,
 ) {
   if (!fitted) return "Not fitted";
 
-  const match = serviceHistory.find((record) => {
+  const serviceMatch = serviceHistory.find((record) => {
     const text = [
       record.modification_type,
       record.modification_description,
@@ -298,8 +299,21 @@ function findAddedDate(
     return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
   });
 
+  const assetMatch = assetHistory.find((record) => {
+    const text = [record.history_type, record.title, record.description]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+  });
+
   return formatDate(
-    match?.modification_date || match?.created_at || fallbackDate,
+    serviceMatch?.modification_date ||
+      serviceMatch?.created_at ||
+      assetMatch?.history_date ||
+      assetMatch?.created_at ||
+      fallbackDate,
   );
 }
 
@@ -375,56 +389,6 @@ function SetupItem({
   );
 }
 
-function TextField({
-  label,
-  value,
-  onChange,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-}) {
-  return (
-    <label className="space-y-1">
-      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {label}
-      </span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-      />
-    </label>
-  );
-}
-
-function TextAreaField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="space-y-1">
-      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {label}
-      </span>
-      <textarea
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        rows={4}
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-      />
-    </label>
-  );
-}
-
 function SectionHeader({
   icon,
   title,
@@ -446,7 +410,6 @@ function SectionHeader({
 }
 
 export default function VehicleDetailPage() {
-  const router = useRouter();
   const params = useParams<{ vehicleId: string }>();
   const vehicleId = params.vehicleId;
 
@@ -464,25 +427,21 @@ export default function VehicleDetailPage() {
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
   const [documents, setDocuments] = useState<VehicleDocument[]>([]);
   const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
+  const [assetHistory, setAssetHistory] = useState<AssetHistory[]>([]);
   const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
   const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
   const [showVehicleSetup, setShowVehicleSetup] = useState(false);
-  const [serviceIntervalInput, setServiceIntervalInput] = useState("10000");
-  const [savingServiceInterval, setSavingServiceInterval] = useState(false);
-  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
-    null,
-  );
+  const [expandedLegacyHistoryId, setExpandedLegacyHistoryId] = useState<
+    string | null
+  >(null);
+  const [expandedAssetHistoryId, setExpandedAssetHistoryId] = useState<
+    string | null
+  >(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(
     null,
   );
-  const [editingRecord, setEditingRecord] = useState<ServiceHistory | null>(
-    null,
-  );
-  const [editForm, setEditForm] = useState<EditHistoryForm | null>(null);
-  const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
-  const [savingHistory, setSavingHistory] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   async function loadVehicle() {
@@ -499,6 +458,7 @@ export default function VehicleDetailPage() {
       setVehicle(null);
       setDocuments([]);
       setServiceHistory([]);
+      setAssetHistory([]);
       setProjectHistory([]);
       setPrestartHistory([]);
       setFleetJobs([]);
@@ -511,7 +471,6 @@ export default function VehicleDetailPage() {
 
     const vehicleData = vehicleResult.data;
     setVehicle(vehicleData);
-    setServiceIntervalInput(String(vehicleData.service_interval_km ?? 10000));
 
     const prestartMatchFilters = [
       `vehicle_asset_id.eq.${vehicleId}`,
@@ -525,6 +484,7 @@ export default function VehicleDetailPage() {
     const [
       documentsResult,
       serviceHistoryResult,
+      assetHistoryResult,
       projectHistoryResult,
       prestartResult,
     ] = await Promise.all([
@@ -534,18 +494,29 @@ export default function VehicleDetailPage() {
         .eq("vehicle_asset_id", vehicleId)
         .order("created_at", { ascending: false })
         .returns<VehicleDocument[]>(),
+
       supabase
         .from("vehicle_service_history")
         .select("*")
         .eq("vehicle_asset_id", vehicleId)
         .order("created_at", { ascending: false })
         .returns<ServiceHistory[]>(),
+
+      supabase
+        .from("asset_history")
+        .select("*")
+        .eq("vehicle_id", vehicleId)
+        .order("history_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .returns<AssetHistory[]>(),
+
       supabase
         .from("vehicle_project_history")
         .select("*")
         .eq("vehicle_asset_id", vehicleId)
         .order("project_onboard_date", { ascending: false })
         .returns<ProjectHistory[]>(),
+
       supabase
         .from("vehicle_prestarts")
         .select(
@@ -571,6 +542,7 @@ export default function VehicleDetailPage() {
       .filter((id): id is string => Boolean(id));
 
     const [
+      vehicleAssetFleetJobsResult,
       vehicleFleetJobsResult,
       linkedFleetJobsResult,
       sourceFleetJobsResult,
@@ -581,6 +553,15 @@ export default function VehicleDetailPage() {
           "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
         )
         .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<FleetJob[]>(),
+
+      supabase
+        .from("fleet_jobs")
+        .select(
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+        )
+        .eq("vehicle_id", vehicleId)
         .order("created_at", { ascending: false })
         .returns<FleetJob[]>(),
 
@@ -608,6 +589,7 @@ export default function VehicleDetailPage() {
     ]);
 
     const allFleetJobs = [
+      ...(vehicleAssetFleetJobsResult.data ?? []),
       ...(vehicleFleetJobsResult.data ?? []),
       ...(linkedFleetJobsResult.data ?? []),
       ...(sourceFleetJobsResult.data ?? []),
@@ -620,6 +602,9 @@ export default function VehicleDetailPage() {
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
       serviceHistoryResult.error ? [] : (serviceHistoryResult.data ?? []),
+    );
+    setAssetHistory(
+      assetHistoryResult.error ? [] : (assetHistoryResult.data ?? []),
     );
     setProjectHistory(
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
@@ -649,6 +634,44 @@ export default function VehicleDetailPage() {
   const currentKm = latestPrestart?.kilometres ?? null;
   const serviceIntervalKm = vehicle?.service_interval_km ?? 10000;
 
+  const serviceRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return type.includes("service") || Boolean(record.service_date);
+  });
+
+  const inspectionRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return type.includes("inspection") || Boolean(record.inspection_date);
+  });
+
+  const legacyModificationRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return (
+      type.includes("modification") ||
+      type.includes("addition") ||
+      Boolean(record.modification_date)
+    );
+  });
+
+  const assetServiceRecords = assetHistory.filter(
+    (record) => clean(record.history_type).toLowerCase() === "service",
+  );
+
+  const assetRepairRecords = assetHistory.filter(
+    (record) => clean(record.history_type).toLowerCase() === "repair",
+  );
+
+  const assetModificationRecords = assetHistory.filter(
+    (record) => clean(record.history_type).toLowerCase() === "modification",
+  );
+
+  const latestServiceRecord = serviceRecords[0] ?? assetServiceRecords[0] ?? null;
+
+const latestServiceKm: number | null =
+  latestServiceRecord && "odometer_km" in latestServiceRecord
+    ? latestServiceRecord.odometer_km ?? null
+    : null;
+
   const remainingKm =
     currentKm !== null &&
     vehicle?.next_service_km !== null &&
@@ -665,8 +688,8 @@ export default function VehicleDetailPage() {
 
   const hasServiceTrigger = Boolean(
     vehicle?.next_service_due ||
-    (vehicle?.next_service_km !== null &&
-      vehicle?.next_service_km !== undefined),
+      (vehicle?.next_service_km !== null &&
+        vehicle?.next_service_km !== undefined),
   );
 
   const serviceOverdue =
@@ -704,14 +727,10 @@ export default function VehicleDetailPage() {
       ? `${daysUntilService.toLocaleString()} days`
       : "N/A";
 
-  const fleetJobTone = (job: FleetJob): Tone => {
-    const priority = clean(job.priority).toLowerCase();
-    const status = clean(job.status).toLowerCase();
-
-    if (priority === "urgent" || priority === "high") return "rose";
-    if (status.includes("progress") || status.includes("open")) return "amber";
-    return "blue";
-  };
+  const registerDocuments = documents.filter((document) => {
+    const type = clean(document.document_type).toLowerCase();
+    return !type.includes("service");
+  });
 
   const vehicleTitle =
     vehicle && clean(vehicle.vehicle_id) !== "N/A"
@@ -721,42 +740,6 @@ export default function VehicleDetailPage() {
       : vehicle
         ? makeModel(vehicle) || clean(vehicle.vehicle_rego)
         : "Vehicle Detail";
-
-  const serviceRecords = serviceHistory.filter((record) => {
-    const type = clean(record.record_type).toLowerCase();
-    return type.includes("service") || Boolean(record.service_date);
-  });
-
-  const latestServiceRecord = serviceRecords[0] ?? null;
-  const latestServiceKm = latestServiceRecord
-    ? (latestServiceRecord.odometer_km ??
-      latestServiceRecord.service_km ??
-      latestServiceRecord.kilometres ??
-      latestServiceRecord.km_at_service ??
-      (latestServiceRecord.next_service_km !== null &&
-      latestServiceRecord.next_service_km !== undefined
-        ? latestServiceRecord.next_service_km - serviceIntervalKm
-        : null))
-    : null;
-
-  const inspectionRecords = serviceHistory.filter((record) => {
-    const type = clean(record.record_type).toLowerCase();
-    return type.includes("inspection") || Boolean(record.inspection_date);
-  });
-
-  const modificationRecords = serviceHistory.filter((record) => {
-    const type = clean(record.record_type).toLowerCase();
-    return (
-      type.includes("modification") ||
-      type.includes("addition") ||
-      Boolean(record.modification_date)
-    );
-  });
-
-  const registerDocuments = documents.filter((document) => {
-    const type = clean(document.document_type).toLowerCase();
-    return !type.includes("service");
-  });
 
   const basicDetailItems = vehicle
     ? [
@@ -800,284 +783,26 @@ export default function VehicleDetailPage() {
       ]
     : [];
 
-  const editingTypeText = editingRecord
-    ? [
-        editForm?.record_type,
-        editForm?.service_type,
-        editForm?.inspection_type,
-        editForm?.modification_type,
-        editingRecord.record_type,
-        editingRecord.service_type,
-        editingRecord.inspection_type,
-        editingRecord.modification_type,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-    : "";
-
-  const editingIsServiceRecord = Boolean(
-    editForm &&
-      !isTrailer &&
-      (editingTypeText.includes("service") || Boolean(editForm.service_date)),
-  );
-
-  const editingIsInspectionRecord = Boolean(
-    editForm &&
-      (isTrailer ||
-        editingTypeText.includes("inspection") ||
-        Boolean(editForm.inspection_date)),
-  );
-
-  const editingIsModificationRecord = Boolean(
-    editForm &&
-      !editingIsServiceRecord &&
-      !editingIsInspectionRecord &&
-      (editingTypeText.includes("modification") ||
-        editingTypeText.includes("addition") ||
-        Boolean(editForm.modification_date)),
-  );
-
-
-  async function saveServiceInterval() {
-    if (!vehicle || isTrailer) return;
-
-    const newInterval = toNumber(serviceIntervalInput);
-
-    if (!newInterval || newInterval <= 0) {
-      setErrorMessage("Service interval must be a positive kilometre value.");
-      return;
-    }
-
-    setSavingServiceInterval(true);
-    setErrorMessage("");
-
-    const currentInterval = vehicle.service_interval_km ?? 10000;
-    const fallbackBaseKm =
-      vehicle.next_service_km !== null && vehicle.next_service_km !== undefined
-        ? vehicle.next_service_km - currentInterval
-        : null;
-
-    const baseServiceKm =
-      latestServiceKm ?? fallbackBaseKm ?? currentKm ?? null;
-
-    const nextServiceKm =
-      baseServiceKm !== null ? baseServiceKm + newInterval : null;
-
-    const { error } = await supabase
-      .from("vehicle_assets")
-      .update({
-        service_interval_km: newInterval,
-        next_service_km: nextServiceKm,
-      })
-      .eq("id", vehicleId);
-
-    if (error) {
-      setErrorMessage(error.message);
-      setSavingServiceInterval(false);
-      return;
-    }
-
-    setVehicle((current) =>
-      current
-        ? {
-            ...current,
-            service_interval_km: newInterval,
-            next_service_km: nextServiceKm,
-          }
-        : current,
-    );
-
-    setSavingServiceInterval(false);
-    router.refresh();
-  }
-
-  function openEditRecord(record: ServiceHistory) {
-    setReplacementFile(null);
-    setEditingRecord(record);
-    setEditForm({
-      record_type: optional(record.record_type),
-      service_date: dateInput(record.service_date),
-      inspection_date: dateInput(record.inspection_date),
-      modification_date: dateInput(record.modification_date),
-      service_type: optional(record.service_type),
-      inspection_type: optional(record.inspection_type),
-      modification_type: optional(record.modification_type),
-      modification_description: optional(record.modification_description),
-      supplier: optional(record.supplier),
-      invoice_number: optional(record.invoice_number),
-      invoice_cost:
-        record.invoice_cost === null || record.invoice_cost === undefined
-          ? ""
-          : String(record.invoice_cost),
-      work_completed: optional(record.work_completed),
-      mechanic_recommendations: optional(record.mechanic_recommendations),
-      follow_up_actions: optional(record.follow_up_actions),
-      invoice_notes: optional(record.invoice_notes),
-      service_interval_km:
-  vehicle?.service_interval_km === null ||
-  vehicle?.service_interval_km === undefined
-    ? "10000"
-    : String(vehicle.service_interval_km),
-      next_service_due: dateInput(record.next_service_due),
-      next_inspection_due: dateInput(record.next_inspection_due),
-    });
-  }
-
-  async function uploadReplacementAttachment(historyId: string) {
-    if (!replacementFile) {
-      return null;
-    }
-
-    const safeFileName = replacementFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const filePath = `${vehicleId}/${historyId}/${Date.now()}-${safeFileName}`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("vehicle_service_documents")
-      .upload(filePath, replacementFile, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-
-    if (uploadError) throw new Error(uploadError.message);
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage
-      .from("vehicle_service_documents")
-      .getPublicUrl(uploadData.path);
-
-    return {
-      document_name: replacementFile.name,
-      document_url: publicUrl,
-      storage_path: uploadData.path,
-    };
-  }
-
-  async function saveHistoryRecord() {
-    if (!editingRecord || !editForm) return;
-
-    setSavingHistory(true);
-    setErrorMessage("");
-
-    let replacementAttachment: {
-      document_name: string;
-      document_url: string;
-      storage_path: string;
-    } | null = null;
-
-    try {
-      replacementAttachment = await uploadReplacementAttachment(
-        editingRecord.id,
-      );
-
-      if (replacementAttachment && editingRecord.storage_path) {
-        await supabase.storage
-          .from("vehicle_service_documents")
-          .remove([editingRecord.storage_path]);
-      }
-    } catch (uploadError) {
-      setErrorMessage(
-        uploadError instanceof Error
-          ? uploadError.message
-          : "Failed to upload replacement attachment.",
-      );
-      setSavingHistory(false);
-      return;
-    }
-
-    const { error } = await supabase
-      .from("vehicle_service_history")
-      .update({
-        record_type: editForm.record_type.trim() || null,
-        service_date: editForm.service_date || null,
-        inspection_date: editForm.inspection_date || null,
-        modification_date: editForm.modification_date || null,
-        service_type: editForm.service_type.trim() || null,
-        inspection_type: editForm.inspection_type.trim() || null,
-        modification_type: editForm.modification_type.trim() || null,
-        modification_description:
-          editForm.modification_description.trim() || null,
-        supplier: editForm.supplier.trim() || null,
-        invoice_number: editForm.invoice_number.trim() || null,
-        invoice_cost: toNumber(editForm.invoice_cost),
-        work_completed: editForm.work_completed.trim() || null,
-        mechanic_recommendations:
-          editForm.mechanic_recommendations.trim() || null,
-        follow_up_actions: editForm.follow_up_actions.trim() || null,
-        invoice_notes: editForm.invoice_notes.trim() || null,
-        next_service_due: editForm.next_service_due || null,
-        next_inspection_due: editForm.next_inspection_due || null,
-        ...(replacementAttachment
-          ? {
-              document_name: replacementAttachment.document_name,
-              document_url: replacementAttachment.document_url,
-              storage_path: replacementAttachment.storage_path,
-            }
-          : {}),
-      })
-      .eq("id", editingRecord.id);
-
-    if (error) {
-      setErrorMessage(error.message);
-      setSavingHistory(false);
-      return;
-    }
-
-    setEditingRecord(null);
-    setEditForm(null);
-    setReplacementFile(null);
-    setSavingHistory(false);
-
-    await loadVehicle();
-    router.refresh();
-  }
-
-  async function deleteHistoryRecord(record: ServiceHistory) {
-    const confirmed = window.confirm(
-      "Delete this history record? This should only be used for incorrect duplicate entries.",
-    );
-
-    if (!confirmed) return;
-
-    setErrorMessage("");
-
-    if (record.storage_path) {
-      await supabase.storage
-        .from("vehicle_service_documents")
-        .remove([record.storage_path]);
-    }
-
-    const { error } = await supabase
-      .from("vehicle_service_history")
-      .delete()
-      .eq("id", record.id);
-
-    if (error) {
-      setErrorMessage(error.message);
-      return;
-    }
-
-    await loadVehicle();
-    router.refresh();
-  }
-
-  function HistoryCard({ record }: { record: ServiceHistory }) {
-    const isExpanded = expandedHistoryId === record.id;
+  function LegacyHistoryCard({ record }: { record: ServiceHistory }) {
+    const isExpanded = expandedLegacyHistoryId === record.id;
 
     return (
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-bold text-slate-950">
-              {historyTitle(record)}
+              {serviceHistoryTitle(record)}
             </p>
-            <p className="mt-1 text-xs text-slate-500">{historyDate(record)}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {serviceHistoryDate(record)}
+            </p>
           </div>
 
           <button
             type="button"
-            onClick={() => setExpandedHistoryId(isExpanded ? null : record.id)}
+            onClick={() =>
+              setExpandedLegacyHistoryId(isExpanded ? null : record.id)
+            }
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
           >
             {isExpanded ? "Hide Details" : "View Details"}
@@ -1136,39 +861,132 @@ export default function VehicleDetailPage() {
               </p>
             </div>
 
+            {record.document_url ? (
+              <a
+                href={record.document_url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              >
+                <ExternalLink size={13} />
+                Open {record.document_name || "Attachment"}
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function AssetHistoryCard({ record }: { record: AssetHistory }) {
+    const isExpanded = expandedAssetHistoryId === record.id;
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-bold text-slate-950">
+                {clean(record.title)}
+              </p>
+              <StatusBadge
+                label={clean(record.history_type)}
+                tone={historyTone(record.history_type)}
+              />
+            </div>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {formatDate(record.history_date || record.created_at)}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedAssetHistoryId(isExpanded ? null : record.id)
+            }
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+          >
+            {isExpanded ? "Hide Details" : "View Details"}
+          </button>
+        </div>
+
+        <p className="mt-3 line-clamp-2 text-sm text-slate-700">
+          {clean(record.description)}
+        </p>
+
+        {isExpanded ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="grid gap-3 text-sm sm:grid-cols-2">
+              <p>
+                <span className="font-bold">Type:</span>{" "}
+                {clean(record.history_type)}
+              </p>
+              <p>
+                <span className="font-bold">Date:</span>{" "}
+                {formatDate(record.history_date)}
+              </p>
+              <p>
+                <span className="font-bold">Vendor:</span>{" "}
+                {clean(record.vendor)}
+              </p>
+              <p>
+                <span className="font-bold">Cost:</span>{" "}
+                {formatMoney(record.cost)}
+              </p>
+              <p>
+                <span className="font-bold">Odometer:</span>{" "}
+                {record.odometer_km !== null && record.odometer_km !== undefined
+                  ? `${record.odometer_km.toLocaleString()} km`
+                  : "N/A"}
+              </p>
+              <p>
+                <span className="font-bold">Hours:</span>{" "}
+                {record.engine_hours !== null &&
+                record.engine_hours !== undefined
+                  ? `${record.engine_hours.toLocaleString()} hrs`
+                  : "N/A"}
+              </p>
+              <p>
+                <span className="font-bold">Next Service Date:</span>{" "}
+                {formatDate(record.next_service_due_date)}
+              </p>
+              <p>
+                <span className="font-bold">Next Service KM:</span>{" "}
+                {record.next_service_due_km !== null &&
+                record.next_service_due_km !== undefined
+                  ? `${record.next_service_due_km.toLocaleString()} km`
+                  : "N/A"}
+              </p>
+            </div>
+
+            <p className="mt-4 text-sm text-slate-700">
+              <span className="font-bold">Description:</span>{" "}
+              {clean(record.description)}
+            </p>
+
             <div className="mt-4 flex flex-wrap gap-2">
+              {record.fleet_job_id ? (
+                <Link
+                  href={`/assets/fleet-jobs/${record.fleet_job_id}`}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <ExternalLink size={13} />
+                  Open Fleet Job
+                </Link>
+              ) : null}
+
               {record.document_url ? (
                 <a
                   href={record.document_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 >
-                  Open {record.document_name || "Attachment"}
+                  <ExternalLink size={13} />
+                  Open Attachment
                 </a>
-              ) : (
-                <span className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-400">
-                  No attachment
-                </span>
-              )}
-
-              <button
-                type="button"
-                onClick={() => openEditRecord(record)}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-              >
-                <Pencil size={13} />
-                Edit Record
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void deleteHistoryRecord(record)}
-                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
-              >
-                <Trash2 size={13} />
-                Delete Record
-              </button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -1229,7 +1047,7 @@ export default function VehicleDetailPage() {
       <PageHeader
         eyebrow="Vehicle Record"
         title={vehicleTitle}
-        description="A clean asset profile showing key dates, current setup, documents and recent history."
+        description="A clean asset profile showing key dates, current setup, documents, fleet jobs and asset history."
         actions={
           <>
             <ActionButton
@@ -1348,8 +1166,6 @@ export default function VehicleDetailPage() {
                   }
                 />
 
-            
-
                 <ImportantDateCard
                   label="Next Service KM"
                   value={
@@ -1407,6 +1223,7 @@ export default function VehicleDetailPage() {
                   <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
                     <ShieldCheck size={18} />
                   </div>
+
                   <div>
                     <h2 className="text-lg font-bold text-slate-950">
                       Vehicle Setup & Compliance Equipment
@@ -1424,17 +1241,19 @@ export default function VehicleDetailPage() {
               </button>
 
               {showVehicleSetup ? (
-                <div className="space-y-5">
+                <div className="mt-5 space-y-5">
                   <div>
                     <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
                       Electronic Systems
                     </p>
+
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                       <SetupItem
                         label="eHub"
                         value={vehicle.ehub}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["ehub"],
                           vehicle.company_onboard_date,
                           vehicle.ehub,
@@ -1445,6 +1264,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.dashcam}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["dashcam"],
                           vehicle.company_onboard_date,
                           vehicle.dashcam,
@@ -1455,6 +1275,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.alert_button}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["alert button"],
                           vehicle.company_onboard_date,
                           vehicle.alert_button,
@@ -1465,6 +1286,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.uhf_radio}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["uhf"],
                           vehicle.company_onboard_date,
                           vehicle.uhf_radio,
@@ -1475,6 +1297,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.reverse_squawker}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["reverse squawker"],
                           vehicle.company_onboard_date,
                           vehicle.reverse_squawker,
@@ -1487,12 +1310,14 @@ export default function VehicleDetailPage() {
                     <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
                       Safety Equipment
                     </p>
+
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       <SetupItem
                         label="Fire Extinguisher"
                         value={vehicle.fire_extinguisher}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["fire extinguisher"],
                           vehicle.company_onboard_date,
                           vehicle.fire_extinguisher,
@@ -1503,6 +1328,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.first_aid_kit}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["first aid"],
                           vehicle.company_onboard_date,
                           vehicle.first_aid_kit,
@@ -1513,6 +1339,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.snake_bite_kit}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["snake bite"],
                           vehicle.company_onboard_date,
                           vehicle.snake_bite_kit,
@@ -1523,6 +1350,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.wheel_nut_indicators}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["wheel nut"],
                           vehicle.company_onboard_date,
                           vehicle.wheel_nut_indicators,
@@ -1533,6 +1361,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.wheel_chocks}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["wheel chocks"],
                           vehicle.company_onboard_date,
                           vehicle.wheel_chocks,
@@ -1543,6 +1372,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.shovel}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["shovel"],
                           vehicle.company_onboard_date,
                           vehicle.shovel,
@@ -1553,6 +1383,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.knapsack}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["knapsack"],
                           vehicle.company_onboard_date,
                           vehicle.knapsack,
@@ -1563,6 +1394,7 @@ export default function VehicleDetailPage() {
                         value={vehicle.fuel_card}
                         addedDate={findAddedDate(
                           serviceHistory,
+                          assetHistory,
                           ["fuel card"],
                           vehicle.company_onboard_date,
                           vehicle.fuel_card,
@@ -1587,142 +1419,170 @@ export default function VehicleDetailPage() {
         )}
 
         <section className="space-y-5">
-          <div className="space-y-5">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionHeader
+              icon={<Wrench size={18} />}
+              title={isTrailer ? "Inspection History" : "Service History"}
+              description="Legacy service records and Fleet Job close-out service records."
+            />
+
+            {(isTrailer ? inspectionRecords : serviceRecords).length > 0 ||
+            assetServiceRecords.length > 0 ? (
+              <div className="space-y-3">
+                {(isTrailer ? inspectionRecords : serviceRecords).map(
+                  (record) => (
+                    <LegacyHistoryCard key={record.id} record={record} />
+                  ),
+                )}
+
+                {assetServiceRecords.map((record) => (
+                  <AssetHistoryCard key={record.id} record={record} />
+                ))}
+              </div>
+            ) : (
+              <EmptyCard
+                icon={<Wrench size={18} />}
+                title={isTrailer ? "No inspections yet" : "No services yet"}
+                description={
+                  isTrailer
+                    ? "Trailer inspection records will appear here."
+                    : "Vehicle service records will appear here."
+                }
+              />
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionHeader
+              icon={<Truck size={18} />}
+              title="Repair History"
+              description="Repairs recorded from Fleet Job close-outs."
+            />
+
+            {assetRepairRecords.length > 0 ? (
+              <div className="space-y-3">
+                {assetRepairRecords.map((record) => (
+                  <AssetHistoryCard key={record.id} record={record} />
+                ))}
+              </div>
+            ) : (
+              <EmptyCard
+                icon={<Truck size={18} />}
+                title="No repairs yet"
+                description="Repairs closed out from Fleet Jobs will appear here."
+              />
+            )}
+          </section>
+
+          {!isTrailer && (
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
-                icon={<Wrench size={18} />}
-                title={isTrailer ? "Inspection History" : "Service History"}
-                description="Service and inspection records. Service attachments live here, not in documents."
+                icon={<ShieldCheck size={18} />}
+                title="Modification / Addition History"
+                description="Equipment added, replacements, upgrades and Fleet Job modification close-outs."
               />
 
-              {(isTrailer ? inspectionRecords : serviceRecords).length > 0 ? (
+              {legacyModificationRecords.length > 0 ||
+              assetModificationRecords.length > 0 ? (
                 <div className="space-y-3">
-                  {(isTrailer ? inspectionRecords : serviceRecords).map(
-                    (record) => (
-                      <HistoryCard key={record.id} record={record} />
-                    ),
-                  )}
+                  {legacyModificationRecords.map((record) => (
+                    <LegacyHistoryCard key={record.id} record={record} />
+                  ))}
+
+                  {assetModificationRecords.map((record) => (
+                    <AssetHistoryCard key={record.id} record={record} />
+                  ))}
                 </div>
               ) : (
                 <EmptyCard
-                  icon={<Wrench size={18} />}
-                  title={isTrailer ? "No inspections yet" : "No services yet"}
-                  description={
-                    isTrailer
-                      ? "Trailer inspection records will appear here."
-                      : "Vehicle service records will appear here."
-                  }
+                  icon={<ShieldCheck size={18} />}
+                  title="No modifications yet"
+                  description="Added equipment, spare keys and replacement items will appear here."
                 />
               )}
             </section>
+          )}
 
-            {!isTrailer && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <SectionHeader
-                  icon={<ShieldCheck size={18} />}
-                  title="Modification / Addition History"
-                  description="Equipment added, replacements, upgrades and other asset changes."
-                />
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <SectionHeader
+              icon={<Car size={18} />}
+              title="Project History"
+              description="Project onboarding, offboarding and movement history."
+            />
 
-                {modificationRecords.length > 0 ? (
-                  <div className="space-y-3">
-                    {modificationRecords.map((record) => (
-                      <HistoryCard key={record.id} record={record} />
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyCard
-                    icon={<ShieldCheck size={18} />}
-                    title="No modifications yet"
-                    description="Added equipment, spare keys and replacement items will appear here."
-                  />
-                )}
-              </section>
-            )}
+            {projectHistory.length > 0 ? (
+              <div className="space-y-3">
+                {projectHistory.map((record) => {
+                  const isExpanded = expandedProjectId === record.id;
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <SectionHeader
-                icon={<Car size={18} />}
-                title="Project History"
-                description="Project onboarding, offboarding and movement history."
-              />
-
-              {projectHistory.length > 0 ? (
-                <div className="space-y-3">
-                  {projectHistory.map((record) => {
-                    const isExpanded = expandedProjectId === record.id;
-
-                    return (
-                      <div
-                        key={record.id}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-bold text-slate-950">
-                              {clean(record.project)}
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              Onboarded:{" "}
-                              {formatDate(record.project_onboard_date)}
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedProjectId(
-                                isExpanded ? null : record.id,
-                              )
-                            }
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                          >
-                            {isExpanded ? "Hide Details" : "View Details"}
-                          </button>
+                  return (
+                    <div
+                      key={record.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {clean(record.project)}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">
+                            Onboarded:{" "}
+                            {formatDate(record.project_onboard_date)}
+                          </p>
                         </div>
 
-                        {isExpanded ? (
-                          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <p>
-                                <span className="font-bold">Project:</span>{" "}
-                                {clean(record.project)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Crew:</span>{" "}
-                                {clean(record.crew)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Onboarded:</span>{" "}
-                                {formatDate(record.project_onboard_date)}
-                              </p>
-                              <p>
-                                <span className="font-bold">Offboarded:</span>{" "}
-                                {record.project_offboard_date
-                                  ? formatDate(record.project_offboard_date)
-                                  : "Current / Not recorded"}
-                              </p>
-                            </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedProjectId(isExpanded ? null : record.id)
+                          }
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                        >
+                          {isExpanded ? "Hide Details" : "View Details"}
+                        </button>
+                      </div>
 
-                            <p className="mt-4">
-                              <span className="font-bold">Notes:</span>{" "}
-                              {clean(record.notes)}
+                      {isExpanded ? (
+                        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <p>
+                              <span className="font-bold">Project:</span>{" "}
+                              {clean(record.project)}
+                            </p>
+                            <p>
+                              <span className="font-bold">Crew:</span>{" "}
+                              {clean(record.crew)}
+                            </p>
+                            <p>
+                              <span className="font-bold">Onboarded:</span>{" "}
+                              {formatDate(record.project_onboard_date)}
+                            </p>
+                            <p>
+                              <span className="font-bold">Offboarded:</span>{" "}
+                              {record.project_offboard_date
+                                ? formatDate(record.project_offboard_date)
+                                : "Current / Not recorded"}
                             </p>
                           </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <EmptyCard
-                  icon={<Car size={18} />}
-                  title="No project history yet"
-                  description="Project transfer and onboarding history will appear here once recorded."
-                />
-              )}
-            </section>
-          </div>
+
+                          <p className="mt-4">
+                            <span className="font-bold">Notes:</span>{" "}
+                            {clean(record.notes)}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyCard
+                icon={<Car size={18} />}
+                title="No project history yet"
+                description="Project transfer and onboarding history will appear here once recorded."
+              />
+            )}
+          </section>
 
           <div className="grid gap-5 xl:grid-cols-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1932,392 +1792,6 @@ export default function VehicleDetailPage() {
           </div>
         </section>
       </section>
-
-      {editingRecord && editForm ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                  Edit History Record
-                </p>
-                <h2 className="mt-1 text-2xl font-black text-slate-950">
-                  {historyTitle(editingRecord)}
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingRecord(null);
-                  setEditForm(null);
-                  setReplacementFile(null);
-                }}
-                className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <TextField
-                label="Record Type"
-                value={editForm.record_type}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, record_type: value } : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Supplier / Mechanic"
-                value={editForm.supplier}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, supplier: value } : current,
-                  )
-                }
-              />
-
-              {editingIsServiceRecord ? (
-                <>
-                  <TextField
-                    label="Service Date"
-                    type="date"
-                    value={editForm.service_date}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current ? { ...current, service_date: value } : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Service Type"
-                    value={editForm.service_type}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current ? { ...current, service_type: value } : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Service Interval KM"
-                    type="number"
-                    value={editForm.service_interval_km}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, service_interval_km: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Number"
-                    value={editForm.invoice_number}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, invoice_number: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Cost"
-                    type="number"
-                    value={editForm.invoice_cost}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current ? { ...current, invoice_cost: value } : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Next Service Due"
-                    type="date"
-                    value={editForm.next_service_due}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, next_service_due: value }
-                          : current,
-                      )
-                    }
-                  />
-                </>
-              ) : null}
-
-              {editingIsInspectionRecord && !editingIsServiceRecord ? (
-                <>
-                  <TextField
-                    label="Inspection Date"
-                    type="date"
-                    value={editForm.inspection_date}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, inspection_date: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Inspection Type"
-                    value={editForm.inspection_type}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, inspection_type: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Number"
-                    value={editForm.invoice_number}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, invoice_number: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Cost"
-                    type="number"
-                    value={editForm.invoice_cost}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current ? { ...current, invoice_cost: value } : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Next Inspection Due"
-                    type="date"
-                    value={editForm.next_inspection_due}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, next_inspection_due: value }
-                          : current,
-                      )
-                    }
-                  />
-                </>
-              ) : null}
-
-              {editingIsModificationRecord ? (
-                <>
-                  <TextField
-                    label="Modification Date"
-                    type="date"
-                    value={editForm.modification_date}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, modification_date: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Modification Type"
-                    value={editForm.modification_type}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, modification_type: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Number"
-                    value={editForm.invoice_number}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current
-                          ? { ...current, invoice_number: value }
-                          : current,
-                      )
-                    }
-                  />
-
-                  <TextField
-                    label="Invoice Cost"
-                    type="number"
-                    value={editForm.invoice_cost}
-                    onChange={(value) =>
-                      setEditForm((current) =>
-                        current ? { ...current, invoice_cost: value } : current,
-                      )
-                    }
-                  />
-                </>
-              ) : null}
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {editingIsModificationRecord ? (
-                <TextAreaField
-                  label="Modification Description"
-                  value={editForm.modification_description}
-                  onChange={(value) =>
-                    setEditForm((current) =>
-                      current
-                        ? { ...current, modification_description: value }
-                        : current,
-                    )
-                  }
-                />
-              ) : null}
-
-              <TextAreaField
-                label="Work Completed"
-                value={editForm.work_completed}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, work_completed: value } : current,
-                  )
-                }
-              />
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <TextAreaField
-                  label="Mechanic Recommendations"
-                  value={editForm.mechanic_recommendations}
-                  onChange={(value) =>
-                    setEditForm((current) =>
-                      current
-                        ? { ...current, mechanic_recommendations: value }
-                        : current,
-                    )
-                  }
-                />
-
-                <TextAreaField
-                  label="Follow Up Actions"
-                  value={editForm.follow_up_actions}
-                  onChange={(value) =>
-                    setEditForm((current) =>
-                      current
-                        ? { ...current, follow_up_actions: value }
-                        : current,
-                    )
-                  }
-                />
-              </div>
-
-              <TextAreaField
-                label="Invoice / Update Notes"
-                value={editForm.invoice_notes}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, invoice_notes: value } : current,
-                  )
-                }
-              />
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-black text-slate-950">
-                  Attachment
-                </p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  View the existing attachment or upload a replacement invoice,
-                  service report, inspection report, receipt or photo.
-                </p>
-
-                <div className="mt-4 space-y-3">
-                  {editingRecord.document_url ? (
-                    <a
-                      href={editingRecord.document_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                    >
-                      <FileText size={14} />
-                      View Current Attachment
-                    </a>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-500">
-                      No attachment currently saved for this record.
-                    </div>
-                  )}
-
-                  <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">
-                        {replacementFile
-                          ? replacementFile.name
-                          : "No replacement file selected"}
-                      </p>
-
-                      <p className="text-xs text-slate-500">
-                        Uploading a new file will replace the existing
-                        attachment.
-                      </p>
-                    </div>
-
-                    <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-white">
-                      <FileUp size={14} />
-                      Upload Replacement
-                      <input
-                        type="file"
-                        className="hidden"
-                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                        onChange={(event) => {
-                          setReplacementFile(event.target.files?.[0] ?? null);
-                          event.target.value = "";
-                        }}
-                      />
-                    </span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingRecord(null);
-                  setEditForm(null);
-                  setReplacementFile(null);
-                }}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                disabled={savingHistory}
-                onClick={() => void saveHistoryRecord()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
-              >
-                <Save size={16} />
-                {savingHistory ? "Saving..." : "Save Record"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </PageShell>
   );
 }
