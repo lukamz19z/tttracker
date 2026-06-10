@@ -18,11 +18,13 @@ import {
   Settings,
   Truck,
   Wrench,
+  X,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { DetailGrid, PageHeader, PageShell, StatusBadge } from "../../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
+type AssetHistoryType = "Repair" | "Modification" | "Service";
 
 type FleetJob = {
   id: string;
@@ -107,6 +109,21 @@ type FleetJobUpdate = {
   created_at: string | null;
 };
 
+type CloseOutForm = {
+  history_type: AssetHistoryType;
+  history_date: string;
+  title: string;
+  description: string;
+  vendor: string;
+  cost: string;
+  odometer_km: string;
+  engine_hours: string;
+  next_service_due_date: string;
+  next_service_due_km: string;
+  next_service_due_hours: string;
+  close_out_comments: string;
+};
+
 const statuses = [
   "Open",
   "In Progress",
@@ -165,6 +182,12 @@ function moneyDisplay(value: number | null | undefined) {
     style: "currency",
     currency: "AUD",
   }).format(value);
+}
+
+function numberOrNull(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function toneForStatus(status: string | null | undefined): Tone {
@@ -318,7 +341,22 @@ export default function FleetJobDetailPage() {
   const [completedDate, setCompletedDate] = useState("");
   const [cost, setCost] = useState("");
   const [progressUpdate, setProgressUpdate] = useState("");
-  const [closeOutComments, setCloseOutComments] = useState("");
+
+  const [showCloseOutModal, setShowCloseOutModal] = useState(false);
+  const [closeOutForm, setCloseOutForm] = useState<CloseOutForm>({
+    history_type: "Repair",
+    history_date: todayDate(),
+    title: "",
+    description: "",
+    vendor: "",
+    cost: "",
+    odometer_km: "",
+    engine_hours: "",
+    next_service_due_date: "",
+    next_service_due_km: "",
+    next_service_due_hours: "",
+    close_out_comments: "",
+  });
 
   const loadJob = useCallback(async () => {
     if (!jobId) {
@@ -360,7 +398,6 @@ export default function FleetJobDetailPage() {
         : "",
     );
     setProgressUpdate("");
-    setCloseOutComments("");
 
     const resolvedVehicleId = loadedJob.vehicle_id || loadedJob.vehicle_asset_id;
     const resolvedPrestartId = loadedJob.prestart_id || loadedJob.source_id;
@@ -434,6 +471,19 @@ export default function FleetJobDetailPage() {
       setPrestart(null);
     }
 
+    setCloseOutForm((current) => ({
+      ...current,
+      history_date: loadedJob.completed_date || todayDate(),
+      title: loadedJob.title || "",
+      description: loadedJob.description || "",
+      vendor: loadedJob.vendor || "",
+      cost:
+        loadedJob.cost !== null && loadedJob.cost !== undefined
+          ? String(loadedJob.cost)
+          : "",
+      close_out_comments: "",
+    }));
+
     setLoading(false);
   }, [jobId, supabase]);
 
@@ -487,28 +537,17 @@ export default function FleetJobDetailPage() {
   const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
   const isClosed = job?.status === "Completed" || job?.status === "Closed";
 
-  async function saveUpdates(nextStatus?: string) {
+  async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
 
     const finalStatus = nextStatus || status;
-    const isClosing = finalStatus === "Completed" || finalStatus === "Closed";
 
-    if (isClosing && !closeOutComments.trim()) {
-      alert(
-        "Close-out comments are required before completing or closing this job. Add what happened and where the asset update was recorded.",
-      );
-      return;
-    }
-
-    if (!isClosing && !progressUpdate.trim() && finalStatus === job.status) {
+    if (!progressUpdate.trim() && finalStatus === job.status) {
       alert("Add a progress update or change the job status before saving.");
       return;
     }
 
     setSaving(true);
-
-    const finalCompletedDate =
-      isClosing && !completedDate ? todayDate() : completedDate || null;
 
     let finalNotes = job.notes || null;
 
@@ -532,27 +571,6 @@ export default function FleetJobDetailPage() {
       }
     }
 
-    if (isClosing && closeOutComments.trim()) {
-      const closeOutComment = `${closeOutComments.trim()}\n\nAsset update record: ${assetTitle} update page.`;
-      finalNotes = appendJobNote(finalNotes, "Close Out", closeOutComment);
-
-      const { error: closeOutError } = await supabase
-        .from("fleet_job_updates")
-        .insert({
-          fleet_job_id: job.id,
-          update_type: "Close Out",
-          status: finalStatus,
-          comment: closeOutComment,
-        });
-
-      if (closeOutError) {
-        console.error("Failed to save close-out update:", closeOutError.message);
-        alert(closeOutError.message);
-        setSaving(false);
-        return;
-      }
-    }
-
     const { error } = await supabase
       .from("fleet_jobs")
       .update({
@@ -561,7 +579,6 @@ export default function FleetJobDetailPage() {
         vendor: vendor.trim() || null,
         assigned_to: assignedTo.trim() || null,
         due_date: dueDate || null,
-        completed_date: finalCompletedDate,
         cost: cost ? Number(cost) : null,
         notes: finalNotes,
         updated_at: new Date().toISOString(),
@@ -575,6 +592,126 @@ export default function FleetJobDetailPage() {
       await loadJob();
     }
 
+    setSaving(false);
+  }
+
+  async function completeAndRecordAssetHistory() {
+    if (!job) return;
+
+    if (!closeOutForm.history_type) {
+      alert("Select whether this was a repair, modification or service.");
+      return;
+    }
+
+    if (!closeOutForm.history_date) {
+      alert("Completed date is required.");
+      return;
+    }
+
+    if (!closeOutForm.title.trim()) {
+      alert("Asset history title is required.");
+      return;
+    }
+
+    if (!closeOutForm.description.trim()) {
+      alert("Asset history description is required.");
+      return;
+    }
+
+    if (!closeOutForm.close_out_comments.trim()) {
+      alert("Close-out comments are required before completing or closing this job.");
+      return;
+    }
+
+    setSaving(true);
+
+    const closeOutComment = `${closeOutForm.close_out_comments.trim()}
+
+Asset history recorded as: ${closeOutForm.history_type}
+Asset update record: ${assetTitle}`;
+
+    const finalNotes = appendJobNote(job.notes || null, "Close Out", closeOutComment);
+
+    const { error: historyError } = await supabase.from("asset_history").insert({
+      asset_type: assetType,
+      vehicle_id: assetType === "Vehicle" ? resolvedVehicleId : null,
+      plant_id: assetType === "Plant" ? job.plant_id : null,
+      fleet_job_id: job.id,
+
+      history_type: closeOutForm.history_type,
+      history_date: closeOutForm.history_date,
+
+      title: closeOutForm.title.trim(),
+      description: closeOutForm.description.trim(),
+      vendor: closeOutForm.vendor.trim() || null,
+      cost: numberOrNull(closeOutForm.cost),
+
+      odometer_km: numberOrNull(closeOutForm.odometer_km),
+      engine_hours: numberOrNull(closeOutForm.engine_hours),
+
+      next_service_due_date:
+        closeOutForm.history_type === "Service" && closeOutForm.next_service_due_date
+          ? closeOutForm.next_service_due_date
+          : null,
+      next_service_due_km:
+        closeOutForm.history_type === "Service"
+          ? numberOrNull(closeOutForm.next_service_due_km)
+          : null,
+      next_service_due_hours:
+        closeOutForm.history_type === "Service"
+          ? numberOrNull(closeOutForm.next_service_due_hours)
+          : null,
+
+      document_url: null,
+    });
+
+    if (historyError) {
+      console.error("Failed to save asset history:", historyError.message);
+      alert(historyError.message);
+      setSaving(false);
+      return;
+    }
+
+    const { error: closeOutUpdateError } = await supabase
+      .from("fleet_job_updates")
+      .insert({
+        fleet_job_id: job.id,
+        update_type: "Close Out",
+        status: "Completed",
+        comment: closeOutComment,
+      });
+
+    if (closeOutUpdateError) {
+      console.error("Failed to save close-out update:", closeOutUpdateError.message);
+      alert(closeOutUpdateError.message);
+      setSaving(false);
+      return;
+    }
+
+    const { error: jobError } = await supabase
+      .from("fleet_jobs")
+      .update({
+        status: "Completed",
+        priority,
+        vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
+        assigned_to: assignedTo.trim() || null,
+        due_date: dueDate || null,
+        completed_date: closeOutForm.history_date,
+        cost: numberOrNull(closeOutForm.cost),
+        notes: finalNotes,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+
+    if (jobError) {
+      console.error("Failed to close fleet job:", jobError.message);
+      alert(jobError.message);
+      setSaving(false);
+      return;
+    }
+
+    setShowCloseOutModal(false);
+    await loadJob();
     setSaving(false);
   }
 
@@ -648,10 +785,30 @@ export default function FleetJobDetailPage() {
       />
 
       <section className="grid gap-4 md:grid-cols-4">
-        <SummaryCard label="Status" value={job.status || "Open"} icon={<ClipboardList size={20} />} tone={toneForStatus(job.status)} />
-        <SummaryCard label="Priority" value={job.priority || "Medium"} icon={<Wrench size={20} />} tone={toneForPriority(job.priority)} />
-        <SummaryCard label="Due Date" value={dateDisplay(job.due_date)} icon={<Calendar size={20} />} tone="blue" />
-        <SummaryCard label="Cost" value={moneyDisplay(job.cost)} icon={<DollarSign size={20} />} tone="slate" />
+        <SummaryCard
+          label="Status"
+          value={job.status || "Open"}
+          icon={<ClipboardList size={20} />}
+          tone={toneForStatus(job.status)}
+        />
+        <SummaryCard
+          label="Priority"
+          value={job.priority || "Medium"}
+          icon={<Wrench size={20} />}
+          tone={toneForPriority(job.priority)}
+        />
+        <SummaryCard
+          label="Due Date"
+          value={dateDisplay(job.due_date)}
+          icon={<Calendar size={20} />}
+          tone="blue"
+        />
+        <SummaryCard
+          label="Cost"
+          value={moneyDisplay(job.cost)}
+          icon={<DollarSign size={20} />}
+          tone="slate"
+        />
       </section>
 
       <section className="grid gap-5 lg:grid-cols-[1.35fr_0.9fr]">
@@ -715,7 +872,11 @@ export default function FleetJobDetailPage() {
                   { label: "Category", value: vehicle?.category || "N/A" },
                   {
                     label: "Make / Model",
-                    value: [vehicle?.make, vehicle?.model].map(clean).filter(Boolean).join(" ") || "N/A",
+                    value:
+                      [vehicle?.make, vehicle?.model]
+                        .map(clean)
+                        .filter(Boolean)
+                        .join(" ") || "N/A",
                   },
                   { label: "Project", value: vehicle?.project || job.project || "N/A" },
                   { label: "Crew", value: vehicle?.crew || job.crew || "N/A" },
@@ -732,7 +893,11 @@ export default function FleetJobDetailPage() {
                   { label: "Serial", value: plant?.serial_number || "N/A" },
                   {
                     label: "Make / Model",
-                    value: [plant?.make, plant?.model].map(clean).filter(Boolean).join(" ") || "N/A",
+                    value:
+                      [plant?.make, plant?.model]
+                        .map(clean)
+                        .filter(Boolean)
+                        .join(" ") || "N/A",
                   },
                   { label: "Project", value: plant?.project || job.project || "N/A" },
                   { label: "Crew", value: plant?.crew || job.crew || "N/A" },
@@ -887,15 +1052,11 @@ export default function FleetJobDetailPage() {
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">Action Job</h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Track progress here. Record actual modifications, service details or repairs on the asset update page.
+              Track progress here. Complete the job using the close-out modal so the asset history is updated.
             </p>
 
             <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-              Fleet Jobs are for notification and progress tracking. Use{" "}
-              <Link href={assetUpdateHref} className="font-black underline">
-                Record Asset Update
-              </Link>{" "}
-              to document what was actually changed, repaired, serviced or modified.
+              Fleet Jobs are for notification and progress tracking. Closing this job will create a repair, modification or service record against the asset.
             </div>
 
             <div className="mt-5 grid gap-4">
@@ -906,9 +1067,11 @@ export default function FleetJobDetailPage() {
                   onChange={(event) => setStatus(event.target.value)}
                   className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                 >
-                  {statuses.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
+                  {statuses
+                    .filter((item) => item !== "Completed" && item !== "Closed")
+                    .map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
                 </select>
               </label>
 
@@ -956,17 +1119,7 @@ export default function FleetJobDetailPage() {
               </label>
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Completed Date
-                <input
-                  type="date"
-                  value={completedDate}
-                  onChange={(event) => setCompletedDate(event.target.value)}
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Cost
+                Cost Estimate / Cost
                 <input
                   type="number"
                   value={cost}
@@ -982,25 +1135,14 @@ export default function FleetJobDetailPage() {
                   value={progressUpdate}
                   onChange={(event) => setProgressUpdate(event.target.value)}
                   rows={4}
-                  placeholder="Optional. Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
-                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Close-out Comments
-                <textarea
-                  value={closeOutComments}
-                  onChange={(event) => setCloseOutComments(event.target.value)}
-                  rows={5}
-                  placeholder="Required only when completing/closing. Include what happened and where the asset update was recorded."
+                  placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
                   className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
                 />
               </label>
 
               <button
                 type="button"
-                onClick={() => void saveUpdates()}
+                onClick={() => void saveProgressUpdate()}
                 disabled={saving}
                 className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -1011,10 +1153,7 @@ export default function FleetJobDetailPage() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setStatus("In Progress");
-                    void saveUpdates("In Progress");
-                  }}
+                  onClick={() => void saveProgressUpdate("In Progress")}
                   disabled={saving}
                   className="inline-flex min-h-10 items-center justify-center gap-2 border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                 >
@@ -1023,49 +1162,30 @@ export default function FleetJobDetailPage() {
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setStatus("Waiting Parts");
-                    void saveUpdates("Waiting Parts");
-                  }}
+                  onClick={() => void saveProgressUpdate("Waiting Parts")}
                   disabled={saving}
                   className="inline-flex min-h-10 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
                 >
                   Waiting Parts
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCompletedDate(completedDate || todayDate());
-                    setStatus("Completed");
-                    void saveUpdates("Completed");
-                  }}
-                  disabled={saving || isClosed}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Complete
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStatus("Open");
-                    setCompletedDate("");
-                    void saveUpdates("Open");
-                  }}
-                  disabled={saving}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Reopen
-                </button>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCloseOutModal(true)}
+                disabled={saving || isClosed}
+                className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <CheckCircle2 size={16} />
+                Complete / Close Out Job
+              </button>
             </div>
           </section>
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <CheckCircle2 size={20} />
-              Job Notes / Close Out
+              Job Updates
             </h2>
 
             <div className="mt-4 space-y-3 text-sm">
@@ -1125,6 +1245,244 @@ export default function FleetJobDetailPage() {
           </section>
         </aside>
       </section>
+
+      {showCloseOutModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                  Close Out Fleet Job
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  Record Asset History
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  This will close the fleet job and create a repair, modification or service record against {assetTitle}.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCloseOutModal(false)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                What was completed?
+                <select
+                  value={closeOutForm.history_type}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      history_type: event.target.value as AssetHistoryType,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                >
+                  <option>Repair</option>
+                  <option>Modification</option>
+                  <option>Service</option>
+                </select>
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Completed Date
+                <input
+                  type="date"
+                  value={closeOutForm.history_date}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      history_date: event.target.value,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                Asset History Title
+                <input
+                  value={closeOutForm.title}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                  placeholder="Example: Replaced damaged tyre / Completed 10,000 km service / Installed UHF"
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                What was done?
+                <textarea
+                  value={closeOutForm.description}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                  placeholder="Detailed repair, service or modification notes to show in the asset history."
+                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Vendor / Mechanic
+                <input
+                  value={closeOutForm.vendor}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      vendor: event.target.value,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Cost
+                <input
+                  type="number"
+                  value={closeOutForm.cost}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      cost: event.target.value,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Odometer KM
+                <input
+                  type="number"
+                  value={closeOutForm.odometer_km}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      odometer_km: event.target.value,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Engine / Plant Hours
+                <input
+                  type="number"
+                  value={closeOutForm.engine_hours}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      engine_hours: event.target.value,
+                    }))
+                  }
+                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+
+              {closeOutForm.history_type === "Service" ? (
+                <>
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Next Service Due Date
+                    <input
+                      type="date"
+                      value={closeOutForm.next_service_due_date}
+                      onChange={(event) =>
+                        setCloseOutForm((current) => ({
+                          ...current,
+                          next_service_due_date: event.target.value,
+                        }))
+                      }
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Next Service Due KM
+                    <input
+                      type="number"
+                      value={closeOutForm.next_service_due_km}
+                      onChange={(event) =>
+                        setCloseOutForm((current) => ({
+                          ...current,
+                          next_service_due_km: event.target.value,
+                        }))
+                      }
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Next Service Due Hours
+                    <input
+                      type="number"
+                      value={closeOutForm.next_service_due_hours}
+                      onChange={(event) =>
+                        setCloseOutForm((current) => ({
+                          ...current,
+                          next_service_due_hours: event.target.value,
+                        }))
+                      }
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                Close-out Comments
+                <textarea
+                  value={closeOutForm.close_out_comments}
+                  onChange={(event) =>
+                    setCloseOutForm((current) => ({
+                      ...current,
+                      close_out_comments: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                  placeholder="Required. Summarise what happened, who confirmed it, and any follow-up notes."
+                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                />
+              </label>
+            </div>
+
+            <div className="sticky bottom-0 flex justify-end gap-3 border-t border-slate-200 bg-white p-5">
+              <button
+                type="button"
+                onClick={() => setShowCloseOutModal(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void completeAndRecordAssetHistory()}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                Complete Job & Save Asset History
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageShell>
   );
 }
