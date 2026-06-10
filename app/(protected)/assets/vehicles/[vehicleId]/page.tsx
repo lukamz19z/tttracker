@@ -1,3 +1,5 @@
+
+
 "use client";
 
 import {
@@ -160,6 +162,7 @@ type FleetJob = {
 };
 
 type EditHistoryForm = {
+  service_interval_km: string;
   record_type: string;
   service_date: string;
   inspection_date: string;
@@ -175,7 +178,6 @@ type EditHistoryForm = {
   mechanic_recommendations: string;
   follow_up_actions: string;
   invoice_notes: string;
-  service_interval_km: string;
   next_service_due: string;
   next_inspection_due: string;
 };
@@ -466,6 +468,8 @@ export default function VehicleDetailPage() {
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
   const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
   const [showVehicleSetup, setShowVehicleSetup] = useState(false);
+  const [serviceIntervalInput, setServiceIntervalInput] = useState("10000");
+  const [savingServiceInterval, setSavingServiceInterval] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
     null,
   );
@@ -507,6 +511,7 @@ export default function VehicleDetailPage() {
 
     const vehicleData = vehicleResult.data;
     setVehicle(vehicleData);
+    setServiceIntervalInput(String(vehicleData.service_interval_km ?? 10000));
 
     const prestartMatchFilters = [
       `vehicle_asset_id.eq.${vehicleId}`,
@@ -795,6 +800,97 @@ export default function VehicleDetailPage() {
       ]
     : [];
 
+  const editingTypeText = editingRecord
+    ? [
+        editForm?.record_type,
+        editForm?.service_type,
+        editForm?.inspection_type,
+        editForm?.modification_type,
+        editingRecord.record_type,
+        editingRecord.service_type,
+        editingRecord.inspection_type,
+        editingRecord.modification_type,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+    : "";
+
+  const editingIsServiceRecord = Boolean(
+    editForm &&
+      !isTrailer &&
+      (editingTypeText.includes("service") || Boolean(editForm.service_date)),
+  );
+
+  const editingIsInspectionRecord = Boolean(
+    editForm &&
+      (isTrailer ||
+        editingTypeText.includes("inspection") ||
+        Boolean(editForm.inspection_date)),
+  );
+
+  const editingIsModificationRecord = Boolean(
+    editForm &&
+      !editingIsServiceRecord &&
+      !editingIsInspectionRecord &&
+      (editingTypeText.includes("modification") ||
+        editingTypeText.includes("addition") ||
+        Boolean(editForm.modification_date)),
+  );
+
+
+  async function saveServiceInterval() {
+    if (!vehicle || isTrailer) return;
+
+    const newInterval = toNumber(serviceIntervalInput);
+
+    if (!newInterval || newInterval <= 0) {
+      setErrorMessage("Service interval must be a positive kilometre value.");
+      return;
+    }
+
+    setSavingServiceInterval(true);
+    setErrorMessage("");
+
+    const currentInterval = vehicle.service_interval_km ?? 10000;
+    const fallbackBaseKm =
+      vehicle.next_service_km !== null && vehicle.next_service_km !== undefined
+        ? vehicle.next_service_km - currentInterval
+        : null;
+
+    const baseServiceKm =
+      latestServiceKm ?? fallbackBaseKm ?? currentKm ?? null;
+
+    const nextServiceKm =
+      baseServiceKm !== null ? baseServiceKm + newInterval : null;
+
+    const { error } = await supabase
+      .from("vehicle_assets")
+      .update({
+        service_interval_km: newInterval,
+        next_service_km: nextServiceKm,
+      })
+      .eq("id", vehicleId);
+
+    if (error) {
+      setErrorMessage(error.message);
+      setSavingServiceInterval(false);
+      return;
+    }
+
+    setVehicle((current) =>
+      current
+        ? {
+            ...current,
+            service_interval_km: newInterval,
+            next_service_km: nextServiceKm,
+          }
+        : current,
+    );
+
+    setSavingServiceInterval(false);
+    router.refresh();
+  }
 
   function openEditRecord(record: ServiceHistory) {
     setReplacementFile(null);
@@ -819,10 +915,10 @@ export default function VehicleDetailPage() {
       follow_up_actions: optional(record.follow_up_actions),
       invoice_notes: optional(record.invoice_notes),
       service_interval_km:
-        vehicle?.service_interval_km === null ||
-        vehicle?.service_interval_km === undefined
-          ? "10000"
-          : String(vehicle.service_interval_km),
+  vehicle?.service_interval_km === null ||
+  vehicle?.service_interval_km === undefined
+    ? "10000"
+    : String(vehicle.service_interval_km),
       next_service_due: dateInput(record.next_service_due),
       next_inspection_due: dateInput(record.next_inspection_due),
     });
@@ -928,57 +1024,6 @@ export default function VehicleDetailPage() {
       return;
     }
 
-    const editedRecordType = [
-      editForm.record_type,
-      editForm.service_type,
-      editingRecord.record_type,
-      editingRecord.service_type,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-
-    const isServiceRecord =
-      editedRecordType.includes("service") || Boolean(editForm.service_date);
-
-    if (!isTrailer && isServiceRecord) {
-      const newInterval = toNumber(editForm.service_interval_km) ?? 10000;
-      const currentInterval = vehicle?.service_interval_km ?? 10000;
-      const fallbackBaseKm =
-        vehicle?.next_service_km !== null &&
-        vehicle?.next_service_km !== undefined
-          ? vehicle.next_service_km - currentInterval
-          : null;
-
-      const editedServiceBaseKm =
-        editingRecord.odometer_km ??
-        editingRecord.service_km ??
-        editingRecord.kilometres ??
-        editingRecord.km_at_service ??
-        fallbackBaseKm ??
-        currentKm ??
-        null;
-
-      const nextServiceKm =
-        editedServiceBaseKm !== null ? editedServiceBaseKm + newInterval : null;
-
-      const { error: vehicleUpdateError } = await supabase
-        .from("vehicle_assets")
-        .update({
-          service_interval_km: newInterval,
-          last_service: editForm.service_date || vehicle?.last_service || null,
-          next_service_due: editForm.next_service_due || vehicle?.next_service_due || null,
-          next_service_km: nextServiceKm,
-        })
-        .eq("id", vehicleId);
-
-      if (vehicleUpdateError) {
-        setErrorMessage(vehicleUpdateError.message);
-        setSavingHistory(false);
-        return;
-      }
-    }
-
     setEditingRecord(null);
     setEditForm(null);
     setReplacementFile(null);
@@ -1066,7 +1111,10 @@ export default function VehicleDetailPage() {
                 <span className="font-bold">Next Service:</span>{" "}
                 {formatDate(record.next_service_due)}
               </p>
-              
+              <p>
+                <span className="font-bold">Next Inspection:</span>{" "}
+                {formatDate(record.next_inspection_due)}
+              </p>
             </div>
 
             <div className="mt-4 space-y-3 text-sm text-slate-700">
@@ -1300,6 +1348,33 @@ export default function VehicleDetailPage() {
                   }
                 />
 
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Service Interval
+                  </p>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="number"
+                      min="1"
+                      value={serviceIntervalInput}
+                      onChange={(event) =>
+                        setServiceIntervalInput(event.target.value)
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-950 outline-none focus:border-slate-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={savingServiceInterval}
+                      onClick={() => void saveServiceInterval()}
+                      className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {savingServiceInterval ? "Saving" : "Save"}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs font-medium text-slate-500">
+                    Asset-specific interval, e.g. 10,000 km or 15,000 km.
+                  </p>
+                </div>
 
                 <ImportantDateCard
                   label="Next Service KM"
@@ -1931,156 +2006,212 @@ export default function VehicleDetailPage() {
                 }
               />
 
-              <TextField
-                label="Service Date"
-                type="date"
-                value={editForm.service_date}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, service_date: value } : current,
-                  )
-                }
-              />
+              {editingIsServiceRecord ? (
+                <>
+                  <TextField
+                    label="Service Date"
+                    type="date"
+                    value={editForm.service_date}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current ? { ...current, service_date: value } : current,
+                      )
+                    }
+                  />
 
-              <TextField
-                label="Inspection Date"
-                type="date"
-                value={editForm.inspection_date}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, inspection_date: value } : current,
-                  )
-                }
-              />
+                  <TextField
+                    label="Service Type"
+                    value={editForm.service_type}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current ? { ...current, service_type: value } : current,
+                      )
+                    }
+                  />
 
-              <TextField
-                label="Modification Date"
-                type="date"
-                value={editForm.modification_date}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current
-                      ? { ...current, modification_date: value }
-                      : current,
-                  )
-                }
-              />
+                  <TextField
+                    label="Service Interval KM"
+                    type="number"
+                    value={editForm.service_interval_km}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, service_interval_km: value }
+                          : current,
+                      )
+                    }
+                  />
 
-              <TextField
-                label="Service Type"
-                value={editForm.service_type}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, service_type: value } : current,
-                  )
-                }
-              />
+                  <TextField
+                    label="Invoice Number"
+                    value={editForm.invoice_number}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, invoice_number: value }
+                          : current,
+                      )
+                    }
+                  />
 
-              {!isTrailer &&
-              [
-                editForm.record_type,
-                editForm.service_type,
-                editingRecord.record_type,
-                editingRecord.service_type,
-              ]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase()
-                .includes("service") ? (
-                <TextField
-                  label="Service Interval KM"
-                  type="number"
-                  value={editForm.service_interval_km}
+                  <TextField
+                    label="Invoice Cost"
+                    type="number"
+                    value={editForm.invoice_cost}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current ? { ...current, invoice_cost: value } : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Next Service Due"
+                    type="date"
+                    value={editForm.next_service_due}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, next_service_due: value }
+                          : current,
+                      )
+                    }
+                  />
+                </>
+              ) : null}
+
+              {editingIsInspectionRecord && !editingIsServiceRecord ? (
+                <>
+                  <TextField
+                    label="Inspection Date"
+                    type="date"
+                    value={editForm.inspection_date}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, inspection_date: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Inspection Type"
+                    value={editForm.inspection_type}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, inspection_type: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Invoice Number"
+                    value={editForm.invoice_number}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, invoice_number: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Invoice Cost"
+                    type="number"
+                    value={editForm.invoice_cost}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current ? { ...current, invoice_cost: value } : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Next Inspection Due"
+                    type="date"
+                    value={editForm.next_inspection_due}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, next_inspection_due: value }
+                          : current,
+                      )
+                    }
+                  />
+                </>
+              ) : null}
+
+              {editingIsModificationRecord ? (
+                <>
+                  <TextField
+                    label="Modification Date"
+                    type="date"
+                    value={editForm.modification_date}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, modification_date: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Modification Type"
+                    value={editForm.modification_type}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, modification_type: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Invoice Number"
+                    value={editForm.invoice_number}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current
+                          ? { ...current, invoice_number: value }
+                          : current,
+                      )
+                    }
+                  />
+
+                  <TextField
+                    label="Invoice Cost"
+                    type="number"
+                    value={editForm.invoice_cost}
+                    onChange={(value) =>
+                      setEditForm((current) =>
+                        current ? { ...current, invoice_cost: value } : current,
+                      )
+                    }
+                  />
+                </>
+              ) : null}
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {editingIsModificationRecord ? (
+                <TextAreaField
+                  label="Modification Description"
+                  value={editForm.modification_description}
                   onChange={(value) =>
                     setEditForm((current) =>
                       current
-                        ? { ...current, service_interval_km: value }
+                        ? { ...current, modification_description: value }
                         : current,
                     )
                   }
                 />
               ) : null}
-
-              <TextField
-                label="Inspection Type"
-                value={editForm.inspection_type}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, inspection_type: value } : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Modification Type"
-                value={editForm.modification_type}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current
-                      ? { ...current, modification_type: value }
-                      : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Invoice Number"
-                value={editForm.invoice_number}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, invoice_number: value } : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Invoice Cost"
-                type="number"
-                value={editForm.invoice_cost}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, invoice_cost: value } : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Next Service Due"
-                type="date"
-                value={editForm.next_service_due}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current ? { ...current, next_service_due: value } : current,
-                  )
-                }
-              />
-
-              <TextField
-                label="Next Inspection Due"
-                type="date"
-                value={editForm.next_inspection_due}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current
-                      ? { ...current, next_inspection_due: value }
-                      : current,
-                  )
-                }
-              />
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <TextAreaField
-                label="Modification Description"
-                value={editForm.modification_description}
-                onChange={(value) =>
-                  setEditForm((current) =>
-                    current
-                      ? { ...current, modification_description: value }
-                      : current,
-                  )
-                }
-              />
 
               <TextAreaField
                 label="Work Completed"
@@ -2130,12 +2261,12 @@ export default function VehicleDetailPage() {
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-black text-slate-950">
-                  Service / Modification Attachment
+                  Attachment
                 </p>
 
                 <p className="mt-1 text-xs text-slate-500">
                   View the existing attachment or upload a replacement invoice,
-                  service report, inspection report or receipt.
+                  service report, inspection report, receipt or photo.
                 </p>
 
                 <div className="mt-4 space-y-3">
