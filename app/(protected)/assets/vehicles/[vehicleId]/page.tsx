@@ -296,17 +296,44 @@ function findAddedDate(
   );
 }
 
+function expiryTone(value: string | null | undefined): Tone {
+  if (!value) return "slate";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "slate";
+
+  const today = new Date();
+  const days = Math.ceil(
+    (date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
+  if (days < 0) return "rose";
+  if (days <= 30) return "amber";
+  return "emerald";
+}
+
 function ImportantDateCard({
   label,
   value,
   helper,
+  tone = "slate",
 }: {
   label: string;
   value: string;
   helper: string;
+  tone?: Tone;
 }) {
+  const toneClass =
+    tone === "rose"
+      ? "border-rose-200 bg-rose-50"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50"
+        : tone === "emerald"
+          ? "border-emerald-200 bg-emerald-50"
+          : "border-slate-200 bg-slate-50";
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+    <div className={`rounded-2xl border p-4 shadow-sm ${toneClass}`}>
       <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
         {label}
       </p>
@@ -1157,6 +1184,7 @@ export default function VehicleDetailPage() {
               label="Rego Expiry"
               value={formatDate(vehicle.rego_expiry)}
               helper="Registration renewal"
+              tone={expiryTone(vehicle.rego_expiry)}
             />
 
             {!isTrailer && (
@@ -1164,6 +1192,7 @@ export default function VehicleDetailPage() {
                 label="Insurance Expiry"
                 value={formatDate(vehicle.insurance_expiry)}
                 helper="Insurance renewal"
+                tone={expiryTone(vehicle.insurance_expiry)}
               />
             )}
 
@@ -1175,6 +1204,7 @@ export default function VehicleDetailPage() {
                   : formatDate(vehicle.last_service)
               }
               helper={isTrailer ? "Inspection due" : "Most recent service"}
+              tone={isTrailer ? expiryTone(vehicle.next_inspection_due) : "slate"}
             />
 
             <ImportantDateCard
@@ -1461,6 +1491,164 @@ export default function VehicleDetailPage() {
         )}
 
         <section className="space-y-5">
+          <div className="grid gap-5 xl:grid-cols-2">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title="Active Fleet Jobs"
+                description="Open maintenance, defect or fleet jobs linked to this vehicle."
+              />
+
+              {fleetJobs.length > 0 ? (
+                <div className="space-y-3">
+                  {fleetJobs.map((job) => (
+                    <Link
+                      key={job.id}
+                      href={`/assets/fleet-jobs/${job.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {clean(job.job_number)} · {clean(job.title)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Created {formatDate(job.created_at)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(job.status)}
+                          tone={fleetJobTone(job)}
+                        />
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-700">
+                        {clean(job.description)}
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">Priority:</span>{" "}
+                          {clean(job.priority)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Due:</span>{" "}
+                          {formatDate(job.due_date)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Assigned:</span>{" "}
+                          {clean(job.assigned_to)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Reported By:</span>{" "}
+                          {clean(job.reported_by)}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
+                        Open Fleet Job
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<Wrench size={18} />}
+                  title="No active fleet jobs"
+                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
+                />
+              )}
+            </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<ClipboardCheck size={18} />}
+                title="Recent Prestarts"
+                description="Showing the 3 most recent prestarts for this vehicle."
+              />
+
+              {prestartHistory.length > 0 ? (
+                <div className="space-y-3">
+                  {prestartHistory.map((record) => (
+                    <Link
+                      key={record.id}
+                      href={`/assets/prestarts/${record.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {formatDate(
+                              record.prestart_date || record.created_at,
+                            )}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Inspected by {clean(record.inspected_by_name)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(record.result)}
+                          tone={
+                            clean(record.severity).toLowerCase() ===
+                              "critical" ||
+                            clean(record.severity).toLowerCase() === "major"
+                              ? "rose"
+                              : clean(record.severity).toLowerCase() === "minor"
+                                ? "amber"
+                                : "emerald"
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">KM:</span>{" "}
+                          {record.kilometres !== null &&
+                          record.kilometres !== undefined
+                            ? `${record.kilometres.toLocaleString()} km`
+                            : "N/A"}
+                        </p>
+                        <p>
+                          <span className="font-bold">Severity:</span>{" "}
+                          {clean(record.severity)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Project:</span>{" "}
+                          {clean(record.project)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Crew:</span>{" "}
+                          {clean(record.crew)}
+                        </p>
+                      </div>
+
+                      {record.comments ? (
+                        <p className="mt-3 text-sm text-slate-600">
+                          {record.comments}
+                        </p>
+                      ) : null}
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
+                        Open Prestart
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<ClipboardCheck size={18} />}
+                  title="No prestarts yet"
+                  description="The 3 most recent prestarts will appear here once vehicle prestarts are added."
+                />
+              )}
+            </section>
+
+          </div>
+
           <div className="space-y-5">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
@@ -1599,162 +1787,7 @@ export default function VehicleDetailPage() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-2">
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <SectionHeader
-                icon={<Wrench size={18} />}
-                title="Active Fleet Jobs"
-                description="Open maintenance, defect or fleet jobs linked to this vehicle."
-              />
-
-              {fleetJobs.length > 0 ? (
-                <div className="space-y-3">
-                  {fleetJobs.map((job) => (
-                    <Link
-                      key={job.id}
-                      href={`/assets/fleet-jobs/${job.id}`}
-                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-950">
-                            {clean(job.job_number)} · {clean(job.title)}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Created {formatDate(job.created_at)}
-                          </p>
-                        </div>
-
-                        <StatusBadge
-                          label={clean(job.status)}
-                          tone={fleetJobTone(job)}
-                        />
-                      </div>
-
-                      <p className="mt-3 text-sm text-slate-700">
-                        {clean(job.description)}
-                      </p>
-
-                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                        <p>
-                          <span className="font-bold">Priority:</span>{" "}
-                          {clean(job.priority)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Due:</span>{" "}
-                          {formatDate(job.due_date)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Assigned:</span>{" "}
-                          {clean(job.assigned_to)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Reported By:</span>{" "}
-                          {clean(job.reported_by)}
-                        </p>
-                      </div>
-
-                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
-                        Open Fleet Job
-                        <ExternalLink size={13} />
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <EmptyCard
-                  icon={<Wrench size={18} />}
-                  title="No active fleet jobs"
-                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
-                />
-              )}
-            </section>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <SectionHeader
-                icon={<ClipboardCheck size={18} />}
-                title="Recent Prestarts"
-                description="Showing the 3 most recent prestarts for this vehicle."
-              />
-
-              {prestartHistory.length > 0 ? (
-                <div className="space-y-3">
-                  {prestartHistory.map((record) => (
-                    <Link
-                      key={record.id}
-                      href={`/assets/prestarts/${record.id}`}
-                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-950">
-                            {formatDate(
-                              record.prestart_date || record.created_at,
-                            )}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Inspected by {clean(record.inspected_by_name)}
-                          </p>
-                        </div>
-
-                        <StatusBadge
-                          label={clean(record.result)}
-                          tone={
-                            clean(record.severity).toLowerCase() ===
-                              "critical" ||
-                            clean(record.severity).toLowerCase() === "major"
-                              ? "rose"
-                              : clean(record.severity).toLowerCase() === "minor"
-                                ? "amber"
-                                : "emerald"
-                          }
-                        />
-                      </div>
-
-                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                        <p>
-                          <span className="font-bold">KM:</span>{" "}
-                          {record.kilometres !== null &&
-                          record.kilometres !== undefined
-                            ? `${record.kilometres.toLocaleString()} km`
-                            : "N/A"}
-                        </p>
-                        <p>
-                          <span className="font-bold">Severity:</span>{" "}
-                          {clean(record.severity)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Project:</span>{" "}
-                          {clean(record.project)}
-                        </p>
-                        <p>
-                          <span className="font-bold">Crew:</span>{" "}
-                          {clean(record.crew)}
-                        </p>
-                      </div>
-
-                      {record.comments ? (
-                        <p className="mt-3 text-sm text-slate-600">
-                          {record.comments}
-                        </p>
-                      ) : null}
-
-                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
-                        Open Prestart
-                        <ExternalLink size={13} />
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <EmptyCard
-                  icon={<ClipboardCheck size={18} />}
-                  title="No prestarts yet"
-                  description="The 3 most recent prestarts will appear here once vehicle prestarts are added."
-                />
-              )}
-            </section>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
                 icon={<FileText size={18} />}
                 title="Documents"
