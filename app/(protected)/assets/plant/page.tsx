@@ -4,33 +4,21 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Papa from "papaparse";
 import {
   Download,
   Eye,
-  FileUp,
   Pencil,
   Plus,
   RefreshCw,
-  Save,
   Settings,
   ShieldCheck,
   Truck,
   Wrench,
-  X,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PageHeader, PageShell, RegisterList } from "../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "teal" | "slate";
-type PlantType = "Crane" | "Telehandler" | "Other" | "";
-type AssetStatus =
-  | "Available"
-  | "In Use"
-  | "Off Hire"
-  | "Superseded"
-  | "Inactive"
-  | "";
 
 type PlantAsset = {
   id: string;
@@ -54,128 +42,23 @@ type PlantAsset = {
   notes: string | null;
 };
 
-type PlantForm = Omit<PlantAsset, "id">;
-
-type EnhancedPlantAsset = PlantAsset & {
-  calculatedStatus: string;
+type EnhancedPlant = PlantAsset & {
+  calculated_status: string;
   tone: Tone;
-};
-
-type CrewOption = {
-  id: string;
-  crew_number: string | null;
-  crew_name: string | null;
-  leading_hand: string | null;
-  active: boolean | null;
-};
-
-type ProjectOption = {
-  id: string;
-  name: string;
-};
-
-type PendingDocument = {
-  documentType: string;
-  file: File;
-};
-
-const plantTypeOptions: PlantType[] = ["Crane", "Telehandler", "Other"];
-
-const assetStatusOptions: AssetStatus[] = [
-  "Available",
-  "In Use",
-  "Off Hire",
-  "Superseded",
-  "Inactive",
-];
-
-const baseDocumentTypes = [
-  "Risk Assessment",
-  "Service History",
-  "Insurance Document",
-];
-
-const emptyAsset: PlantForm = {
-  asset_id: "",
-  make: "",
-  model: "",
-  plant_type: "",
-  serial_number: "",
-  rego: "",
-  crew: "",
-  project: "",
-  cranesafe_expiry: "",
-  insurance_expiry: "",
-  hired: false,
-  hired_from: "",
-  hire_term: "",
-  asset_status: "Available",
-  off_hire_date: "",
-  superseded_by: "",
-  inactive_reason: "",
-  notes: "",
 };
 
 function clean(value: string | null | undefined) {
   return value?.trim() ?? "";
 }
 
-function isAssetCrane(asset: PlantAsset) {
-  return clean(asset.plant_type).toLowerCase() === "crane";
-}
-
-function isAssetTelehandler(asset: PlantAsset) {
-  return clean(asset.plant_type).toLowerCase() === "telehandler";
-}
-
-function isFormCrane(form: PlantForm) {
-  return clean(form.plant_type).toLowerCase() === "crane";
-}
-
-function isFormTelehandler(form: PlantForm) {
-  return clean(form.plant_type).toLowerCase() === "telehandler";
-}
-
 function getMakeModel(asset: PlantAsset) {
   return [asset.make, asset.model].map(clean).filter(Boolean).join(" ");
 }
 
-function getDocumentTypesForPlantType(plantType: string | null | undefined) {
-  const type = clean(plantType).toLowerCase();
-
-  if (type === "crane") {
-    return [
-      ...baseDocumentTypes,
-      "Registration Document",
-      "CraneSafe Certificate",
-      "Load Charts",
-      "Operator Manual",
-      "Other Documents",
-    ];
-  }
-
-  if (type === "telehandler") {
-    return [
-      ...baseDocumentTypes,
-      "Prestart / Inspection Document",
-      "Load Charts",
-      "Operator Manual",
-      "Other Documents",
-    ];
-  }
-
-  return [...baseDocumentTypes, "Manual", "Other Documents"];
-}
-
-function getAssetStatus(asset: PlantAsset) {
+function getCalculatedStatus(asset: PlantAsset) {
   const manualStatus = clean(asset.asset_status);
 
-  if (manualStatus === "Off Hire") return "Off Hire";
-  if (manualStatus === "Superseded") return "Superseded";
-  if (manualStatus === "Inactive") return "Inactive";
-  if (manualStatus === "In Use") return "In Use";
-  if (manualStatus === "Available") return "Available";
-
+  if (manualStatus) return manualStatus;
   if (asset.hired && clean(asset.off_hire_date)) return "Off Hire";
   if (clean(asset.superseded_by)) return "Superseded";
   if (clean(asset.crew) || clean(asset.project)) return "In Use";
@@ -198,6 +81,11 @@ function getTone(status: string): Tone {
   }
 
   return "amber";
+}
+
+function csvSafe(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
@@ -274,29 +162,15 @@ export default function PlantPage() {
     return createClient(supabaseUrl, supabaseAnonKey);
   }, []);
 
-  const [assets, setAssets] = useState<PlantAsset[]>([]);
-  const [crews, setCrews] = useState<CrewOption[]>([]);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>(
-    [],
-  );
-
+  const [plantAssets, setPlantAssets] = useState<PlantAsset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All Plant Types");
   const [projectFilter, setProjectFilter] = useState("All Projects");
   const [statusFilter, setStatusFilter] = useState("All Statuses");
+  const [manageAsset, setManageAsset] = useState<EnhancedPlant | null>(null);
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<PlantForm>(emptyAsset);
-  const [manageAsset, setManageAsset] = useState<EnhancedPlantAsset | null>(
-    null,
-  );
-
-  const loadAssets = useCallback(async () => {
+  const loadPlantAssets = useCallback(async () => {
     setLoading(true);
 
     const { data, error } = await supabase
@@ -306,97 +180,78 @@ export default function PlantPage() {
 
     if (error) {
       console.error("Failed to load plant assets:", error.message);
-      setAssets([]);
+      setPlantAssets([]);
     } else {
-      setAssets((data ?? []) as PlantAsset[]);
+      setPlantAssets((data ?? []) as PlantAsset[]);
     }
 
     setLoading(false);
   }, [supabase]);
 
-  const loadSupportingData = useCallback(async () => {
-    const [crewResult, projectResult] = await Promise.all([
-      supabase
-        .from("crews")
-        .select("id, crew_number, crew_name, leading_hand, active")
-        .order("crew_number", { ascending: true }),
-      supabase.from("projects").select("id, name").order("name", {
-        ascending: true,
-      }),
-    ]);
-
-    setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
-    setProjects(
-      projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]),
-    );
-  }, [supabase]);
-
   useEffect(() => {
-    void loadAssets();
-    void loadSupportingData();
-  }, [loadAssets, loadSupportingData]);
+    void loadPlantAssets();
+  }, [loadPlantAssets]);
 
-  const enhancedAssets = useMemo<EnhancedPlantAsset[]>(() => {
-    return assets.map((asset) => {
-      const calculatedStatus = getAssetStatus(asset);
+  const enhancedPlant = useMemo<EnhancedPlant[]>(() => {
+    return plantAssets.map((asset) => {
+      const calculated_status = getCalculatedStatus(asset);
 
       return {
         ...asset,
-        calculatedStatus,
-        tone: getTone(calculatedStatus),
+        calculated_status,
+        tone: getTone(calculated_status),
       };
     });
-  }, [assets]);
+  }, [plantAssets]);
 
-  const plantTypes = useMemo(() => {
+  const typeOptions = useMemo(() => {
     return [
       "All Plant Types",
-      ...Array.from(new Set(enhancedAssets.map((asset) => clean(asset.plant_type))))
+      ...Array.from(new Set(enhancedPlant.map((asset) => clean(asset.plant_type))))
         .filter(Boolean)
         .sort(),
     ];
-  }, [enhancedAssets]);
+  }, [enhancedPlant]);
 
   const projectOptions = useMemo(() => {
     return [
       "All Projects",
-      ...Array.from(new Set(enhancedAssets.map((asset) => clean(asset.project))))
+      ...Array.from(new Set(enhancedPlant.map((asset) => clean(asset.project))))
         .filter(Boolean)
         .sort(),
     ];
-  }, [enhancedAssets]);
+  }, [enhancedPlant]);
 
   const statusOptions = useMemo(() => {
     return [
       "All Statuses",
       ...Array.from(
-        new Set(enhancedAssets.map((asset) => clean(asset.calculatedStatus))),
+        new Set(enhancedPlant.map((asset) => clean(asset.calculated_status))),
       )
         .filter(Boolean)
         .sort(),
     ];
-  }, [enhancedAssets]);
+  }, [enhancedPlant]);
 
-  const filteredAssets = useMemo(() => {
+  const filteredPlant = useMemo(() => {
     const term = search.trim().toLowerCase();
 
-    return enhancedAssets.filter((asset) => {
+    return enhancedPlant.filter((asset) => {
       const makeModel = getMakeModel(asset);
 
       const searchable = [
         asset.asset_id,
+        asset.rego,
         asset.make,
         asset.model,
         makeModel,
         asset.plant_type,
         asset.serial_number,
-        asset.rego,
-        asset.crew,
         asset.project,
+        asset.crew,
         asset.hired_from,
         asset.hire_term,
-        asset.asset_status,
-        asset.calculatedStatus,
+        asset.calculated_status,
         asset.inactive_reason,
         asset.notes,
       ]
@@ -410,197 +265,87 @@ export default function PlantPage() {
         (projectFilter === "All Projects" ||
           clean(asset.project) === projectFilter) &&
         (statusFilter === "All Statuses" ||
-          asset.calculatedStatus === statusFilter)
+          asset.calculated_status === statusFilter)
       );
     });
-  }, [enhancedAssets, search, typeFilter, projectFilter, statusFilter]);
+  }, [enhancedPlant, search, typeFilter, projectFilter, statusFilter]);
 
   const stats = useMemo(() => {
     return {
-      total: enhancedAssets.length,
-      cranes: enhancedAssets.filter(
+      total: enhancedPlant.length,
+      cranes: enhancedPlant.filter(
         (asset) => clean(asset.plant_type) === "Crane",
       ).length,
-      telehandlers: enhancedAssets.filter(
+      telehandlers: enhancedPlant.filter(
         (asset) => clean(asset.plant_type) === "Telehandler",
       ).length,
-      inUse: enhancedAssets.filter(
-        (asset) => asset.calculatedStatus === "In Use",
+      inUse: enhancedPlant.filter(
+        (asset) => asset.calculated_status === "In Use",
       ).length,
     };
-  }, [enhancedAssets]);
+  }, [enhancedPlant]);
 
-  function openNewForm() {
-    setEditingId(null);
-    setForm(emptyAsset);
-    setPendingDocuments([]);
-    setManageAsset(null);
-    setFormOpen(true);
-  }
+  function exportFilteredPlant() {
+    const headers = [
+      "Asset ID",
+      "Type",
+      "Make",
+      "Model",
+      "Serial Number",
+      "Rego",
+      "Project",
+      "Crew",
+      "Status",
+      "Hired",
+      "Hired From",
+      "Hire Term",
+      "CraneSafe Expiry",
+      "Insurance Expiry",
+      "Off Hire Date",
+      "Superseded By",
+      "Inactive Reason",
+      "Notes",
+    ];
 
-  async function uploadPlantDocument(
-    assetId: string,
-    documentType: string,
-    file: File,
-  ) {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const folder = documentType.replace(/\s+/g, "_").toLowerCase();
-    const uniqueName = crypto.randomUUID();
-    const path = `${assetId}/${folder}/${uniqueName}-${safeName}`;
+    const rows = filteredPlant.map((asset) => [
+      clean(asset.asset_id),
+      clean(asset.plant_type),
+      clean(asset.make),
+      clean(asset.model),
+      clean(asset.serial_number),
+      clean(asset.rego),
+      clean(asset.project),
+      clean(asset.crew),
+      clean(asset.calculated_status),
+      asset.hired ? "Yes" : "No",
+      clean(asset.hired_from),
+      clean(asset.hire_term),
+      clean(asset.cranesafe_expiry),
+      clean(asset.insurance_expiry),
+      clean(asset.off_hire_date),
+      clean(asset.superseded_by),
+      clean(asset.inactive_reason),
+      clean(asset.notes),
+    ]);
 
-    const upload = await supabase.storage.from("plant_docs").upload(path, file, {
-      upsert: false,
+    const csv = [
+      headers.map(csvSafe).join(","),
+      ...rows.map((row) => row.map(csvSafe).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
     });
 
-    if (upload.error) throw new Error(upload.error.message);
-
-    const { data } = supabase.storage.from("plant_docs").getPublicUrl(path);
-
-    const insert = await supabase.from("plant_asset_documents").insert({
-      plant_asset_id: assetId,
-      document_type: documentType,
-      file_name: file.name,
-      file_url: data.publicUrl,
-    });
-
-    if (insert.error) throw new Error(insert.error.message);
-  }
-
-  async function saveAsset() {
-    if (!clean(form.asset_id)) {
-      alert("Asset ID is required.");
-      return;
-    }
-
-    if (!clean(form.plant_type)) {
-      alert("Plant type is required.");
-      return;
-    }
-
-    setSaving(true);
-
-    const assetStatus = clean(form.asset_status) || "Available";
-
-    const payload = {
-      ...form,
-      asset_id: clean(form.asset_id),
-      make: clean(form.make),
-      model: clean(form.model),
-      plant_type: clean(form.plant_type),
-      serial_number: clean(form.serial_number),
-      rego: isFormTelehandler(form) ? "" : clean(form.rego),
-      crew: clean(form.crew),
-      project: clean(form.project),
-      cranesafe_expiry: isFormCrane(form)
-        ? clean(form.cranesafe_expiry) || null
-        : null,
-      insurance_expiry: clean(form.insurance_expiry) || null,
-      hired: Boolean(form.hired),
-      hired_from: form.hired ? clean(form.hired_from) : "",
-      hire_term: form.hired ? clean(form.hire_term) : "",
-      asset_status: assetStatus,
-      off_hire_date:
-        assetStatus === "Off Hire" ? clean(form.off_hire_date) || null : null,
-      superseded_by:
-        assetStatus === "Superseded" ? clean(form.superseded_by) || null : null,
-      inactive_reason:
-        assetStatus === "Inactive" ||
-        assetStatus === "Superseded" ||
-        assetStatus === "Off Hire"
-          ? clean(form.inactive_reason)
-          : "",
-      notes: clean(form.notes),
-      updated_at: new Date().toISOString(),
-    };
-
-    const result = editingId
-      ? await supabase
-          .from("plant_assets")
-          .update(payload)
-          .eq("id", editingId)
-          .select("id")
-          .single()
-      : await supabase
-          .from("plant_assets")
-          .upsert(payload, { onConflict: "asset_id" })
-          .select("id")
-          .single();
-
-    if (result.error) {
-      alert(result.error.message);
-      setSaving(false);
-      return;
-    }
-
-    const savedAssetId = result.data?.id;
-
-    if (savedAssetId && pendingDocuments.length > 0) {
-      try {
-        for (const document of pendingDocuments) {
-          await uploadPlantDocument(
-            savedAssetId,
-            document.documentType,
-            document.file,
-          );
-        }
-      } catch (error) {
-        alert(error instanceof Error ? error.message : "Document upload failed.");
-        setSaving(false);
-        return;
-      }
-    }
-
-    setFormOpen(false);
-    setPendingDocuments([]);
-    await loadAssets();
-    setSaving(false);
-  }
-
-  function exportCsv() {
-    const rows = filteredAssets.map((asset) => ({
-      "Asset ID": clean(asset.asset_id),
-      Make: clean(asset.make),
-      Model: clean(asset.model),
-      Type: clean(asset.plant_type),
-      Serial: clean(asset.serial_number),
-      Rego: isAssetTelehandler(asset) ? "N/A" : clean(asset.rego),
-      Crew: clean(asset.crew),
-      Project: clean(asset.project),
-      Status: asset.calculatedStatus,
-      "Off Hire Date": clean(asset.off_hire_date),
-      "Superseded By": clean(asset.superseded_by),
-      "Inactive Reason": clean(asset.inactive_reason),
-      "CraneSafe Expiry": isAssetCrane(asset)
-        ? clean(asset.cranesafe_expiry)
-        : "N/A",
-      "Insurance Expiry": clean(asset.insurance_expiry),
-      Hired: asset.hired ? "Yes" : "No",
-      "Hired From": clean(asset.hired_from),
-      "Hire Term": clean(asset.hire_term),
-      Notes: clean(asset.notes),
-    }));
-
-    const csv = Papa.unparse(rows);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
     const date = new Date().toISOString().slice(0, 10);
 
-    const link = document.createElement("a");
     link.href = url;
     link.download = `plant-register-${date}.csv`;
     link.click();
 
     URL.revokeObjectURL(url);
-  }
-
-  function addPendingDocument(documentType: string, file: File) {
-    setPendingDocuments((previous) => [...previous, { documentType, file }]);
-  }
-
-  function removePendingDocument(index: number) {
-    setPendingDocuments((previous) =>
-      previous.filter((_, itemIndex) => itemIndex !== index),
-    );
   }
 
   return (
@@ -613,7 +358,7 @@ export default function PlantPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => void loadAssets()}
+              onClick={() => void loadPlantAssets()}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
             >
               <RefreshCw size={16} />
@@ -622,22 +367,21 @@ export default function PlantPage() {
 
             <button
               type="button"
-              onClick={exportCsv}
-              disabled={filteredAssets.length === 0}
+              onClick={exportFilteredPlant}
+              disabled={filteredPlant.length === 0}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download size={16} />
               Export CSV
             </button>
 
-            <button
-              type="button"
-              onClick={openNewForm}
+            <Link
+              href="/assets/plant/new"
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-slate-800"
             >
               <Plus size={16} />
               Add Plant
-            </button>
+            </Link>
           </div>
         }
       />
@@ -684,7 +428,7 @@ export default function PlantPage() {
               setSearch(event.target.value);
               setManageAsset(null);
             }}
-            placeholder="Search asset ID, make, model, serial..."
+            placeholder="Search asset ID, rego, make, model..."
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           />
 
@@ -696,8 +440,8 @@ export default function PlantPage() {
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
-            {plantTypes.map((type) => (
-              <option key={type}>{type}</option>
+            {typeOptions.map((option) => (
+              <option key={option}>{option}</option>
             ))}
           </select>
 
@@ -709,8 +453,8 @@ export default function PlantPage() {
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
-            {projectOptions.map((project) => (
-              <option key={project}>{project}</option>
+            {projectOptions.map((option) => (
+              <option key={option}>{option}</option>
             ))}
           </select>
 
@@ -722,14 +466,14 @@ export default function PlantPage() {
             }}
             className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
           >
-            {statusOptions.map((status) => (
-              <option key={status}>{status}</option>
+            {statusOptions.map((option) => (
+              <option key={option}>{option}</option>
             ))}
           </select>
         </div>
 
         <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          Export CSV will export the plant items currently shown after search and
+          Export CSV will export the plant assets currently shown after search and
           filters.
         </div>
       </section>
@@ -738,10 +482,10 @@ export default function PlantPage() {
         title="Plant Register"
         description={
           loading
-            ? "Loading plant register..."
-            : `${filteredAssets.length} of ${enhancedAssets.length} plant items shown`
+            ? "Loading plant..."
+            : `${filteredPlant.length} of ${enhancedPlant.length} plant assets shown`
         }
-        items={filteredAssets}
+        items={filteredPlant}
         getKey={(asset) => asset.id}
         columns={[
           {
@@ -782,7 +526,10 @@ export default function PlantPage() {
           {
             label: "Status",
             render: (asset) => (
-              <StatusPill label={asset.calculatedStatus} tone={asset.tone} />
+              <StatusPill
+                label={asset.calculated_status}
+                tone={asset.tone}
+              />
             ),
           },
           {
@@ -830,7 +577,10 @@ export default function PlantPage() {
                   </div>
                 </div>
 
-                <StatusPill label={asset.calculatedStatus} tone={asset.tone} />
+                <StatusPill
+                  label={asset.calculated_status}
+                  tone={asset.tone}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-sm">
@@ -848,9 +598,7 @@ export default function PlantPage() {
                     Rego
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {isAssetTelehandler(asset)
-                      ? "N/A"
-                      : clean(asset.rego) || "No rego"}
+                    {clean(asset.rego) || "No rego"}
                   </p>
                 </div>
 
@@ -933,7 +681,7 @@ export default function PlantPage() {
                     Edit Details
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Use this for asset details, allocation, hire status,
+                    Use this for basic plant details, allocation, hire status,
                     documents and notes.
                   </p>
                 </div>
@@ -949,8 +697,8 @@ export default function PlantPage() {
                     Update Asset
                   </p>
                   <p className="mt-1 text-sm text-orange-700">
-                    Use this for services, inspections, repairs, modifications
-                    and project transfers.
+                    Use this for services, repairs, modifications, inspections
+                    and close-out updates.
                   </p>
                 </div>
               </Link>
@@ -965,8 +713,8 @@ export default function PlantPage() {
                     Compliance
                   </p>
                   <p className="mt-1 text-sm text-blue-700">
-                    Review plant compliance records, risk assessments,
-                    CraneSafe and insurance details.
+                    Review risk assessments, CraneSafe, insurance and other
+                    plant compliance items.
                   </p>
                 </div>
               </Link>
@@ -974,438 +722,6 @@ export default function PlantPage() {
           </div>
         </div>
       ) : null}
-
-      {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="mb-5 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                  {editingId ? "Update Plant" : "Add Plant"}
-                </p>
-                <h2 className="mt-1 text-2xl font-black text-slate-950">
-                  Plant Asset Details
-                </h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Add the basic plant details here. Full servicing and history
-                  can be handled from the asset update page.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setFormOpen(false)}
-                className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-3">
-              {[
-                ["Asset ID", "asset_id"],
-                ["Make", "make"],
-                ["Model", "model"],
-                ["Serial Number", "serial_number"],
-                ...(isFormTelehandler(form) ? [] : [["Rego", "rego"]]),
-              ].map(([label, key]) => (
-                <label key={key} className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">{label}</span>
-                  <input
-                    value={String(form[key as keyof PlantForm] ?? "")}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        [key]: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  />
-                </label>
-              ))}
-
-              <label className="space-y-1 text-sm">
-                <span className="font-bold text-slate-600">Type</span>
-                <select
-                  value={clean(form.plant_type)}
-                  onChange={(event) => {
-                    const nextType = event.target.value;
-
-                    setForm((previous) => ({
-                      ...previous,
-                      plant_type: nextType,
-                      rego: nextType === "Telehandler" ? "" : previous.rego,
-                      cranesafe_expiry:
-                        nextType === "Crane" ? previous.cranesafe_expiry : "",
-                    }));
-                  }}
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  <option value="">Select type</option>
-                  {plantTypeOptions.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-1 text-sm">
-                <span className="font-bold text-slate-600">Status</span>
-                <select
-                  value={clean(form.asset_status) || "Available"}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      asset_status: event.target.value,
-                      off_hire_date:
-                        event.target.value === "Off Hire"
-                          ? previous.off_hire_date
-                          : "",
-                      superseded_by:
-                        event.target.value === "Superseded"
-                          ? previous.superseded_by
-                          : "",
-                      inactive_reason:
-                        event.target.value === "Inactive" ||
-                        event.target.value === "Superseded" ||
-                        event.target.value === "Off Hire"
-                          ? previous.inactive_reason
-                          : "",
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  {assetStatusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {clean(form.asset_status) === "Off Hire" && (
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">
-                    Off Hire Date
-                  </span>
-                  <input
-                    type="date"
-                    value={clean(form.off_hire_date)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        off_hire_date: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  />
-                </label>
-              )}
-
-              {clean(form.asset_status) === "Superseded" && (
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">
-                    Superseded By
-                  </span>
-                  <select
-                    value={clean(form.superseded_by)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        superseded_by: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  >
-                    <option value="">Select replacement asset</option>
-                    {assets
-                      .filter((asset) => asset.id !== editingId)
-                      .map((asset) => (
-                        <option key={asset.id} value={asset.id}>
-                          {clean(asset.asset_id)}{" "}
-                          {getMakeModel(asset) || clean(asset.plant_type)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              )}
-
-              {(clean(form.asset_status) === "Inactive" ||
-                clean(form.asset_status) === "Superseded" ||
-                clean(form.asset_status) === "Off Hire") && (
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">
-                    Reason / Notes
-                  </span>
-                  <input
-                    value={clean(form.inactive_reason)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        inactive_reason: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  />
-                </label>
-              )}
-
-              <label className="space-y-1 text-sm">
-                <span className="font-bold text-slate-600">Crew</span>
-                <select
-                  value={clean(form.crew)}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      crew: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  <option value="">Unassigned</option>
-                  {crews.map((crew) => {
-                    const crewNumber = clean(crew.crew_number);
-                    const crewName = clean(crew.crew_name);
-                    const leadingHand = clean(crew.leading_hand);
-
-                    const label = [
-                      crewNumber || "Unnamed Crew",
-                      crewName,
-                      leadingHand ? `LH: ${leadingHand}` : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" - ");
-
-                    return (
-                      <option key={crew.id} value={crewNumber || label}>
-                        {label}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
-
-              <label className="space-y-1 text-sm">
-                <span className="font-bold text-slate-600">Project</span>
-                <select
-                  value={clean(form.project)}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      project: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                >
-                  <option value="">No project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.name}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {isFormCrane(form) && (
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">
-                    CraneSafe Expiry
-                  </span>
-                  <input
-                    type="date"
-                    value={clean(form.cranesafe_expiry)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        cranesafe_expiry: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  />
-                </label>
-              )}
-
-              <label className="space-y-1 text-sm">
-                <span className="font-bold text-slate-600">
-                  Insurance Expiry
-                </span>
-                <input
-                  type="date"
-                  value={clean(form.insurance_expiry)}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      insurance_expiry: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                />
-              </label>
-            </div>
-
-            <label className="mt-4 flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
-              <input
-                type="checkbox"
-                checked={Boolean(form.hired)}
-                onChange={(event) =>
-                  setForm((previous) => ({
-                    ...previous,
-                    hired: event.target.checked,
-                    hired_from: event.target.checked ? previous.hired_from : "",
-                    hire_term: event.target.checked ? previous.hire_term : "",
-                    asset_status:
-                      !event.target.checked && previous.asset_status === "Off Hire"
-                        ? "Available"
-                        : previous.asset_status,
-                  }))
-                }
-              />
-              Hired plant
-            </label>
-
-            {form.hired && (
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">Hired From</span>
-                  <input
-                    value={clean(form.hired_from)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        hired_from: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  />
-                </label>
-
-                <label className="space-y-1 text-sm">
-                  <span className="font-bold text-slate-600">Hire Term</span>
-                  <select
-                    value={clean(form.hire_term)}
-                    onChange={(event) =>
-                      setForm((previous) => ({
-                        ...previous,
-                        hire_term: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                  >
-                    <option value="">Select term</option>
-                    <option value="Weekly">Weekly</option>
-                    <option value="Monthly">Monthly</option>
-                    <option value="Quarterly">Quarterly</option>
-                    <option value="Project Duration">Project Duration</option>
-                    <option value="As Required">As Required</option>
-                  </select>
-                </label>
-              </div>
-            )}
-
-            <label className="mt-3 block space-y-1 text-sm">
-              <span className="font-bold text-slate-600">Notes</span>
-              <textarea
-                value={clean(form.notes)}
-                onChange={(event) =>
-                  setForm((previous) => ({
-                    ...previous,
-                    notes: event.target.value,
-                  }))
-                }
-                rows={4}
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-              />
-            </label>
-
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <h3 className="text-sm font-black text-slate-950">
-                Initial Documentation
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Add service, insurance, manuals, load charts and plant-specific
-                documents before saving.
-              </p>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-                {getDocumentTypesForPlantType(form.plant_type).map((type) => (
-                  <label
-                    key={type}
-                    className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm hover:bg-slate-50"
-                  >
-                    <FileUp size={18} className="mb-2 text-slate-500" />
-                    <span className="font-bold text-slate-700">{type}</span>
-                    <span className="mt-1 text-xs text-slate-400">
-                      PDF, image or document
-                    </span>
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-
-                        if (file) {
-                          addPendingDocument(type, file);
-                        }
-
-                        event.target.value = "";
-                      }}
-                    />
-                  </label>
-                ))}
-              </div>
-
-              {pendingDocuments.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  {pendingDocuments.map((document, index) => (
-                    <div
-                      key={`${document.documentType}-${document.file.name}-${index}`}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                    >
-                      <div>
-                        <p className="font-bold text-slate-700">
-                          {document.documentType}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {document.file.name}
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => removePendingDocument(index)}
-                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-50"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setFormOpen(false)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void saveAsset()}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Save size={16} />
-                {saving ? "Saving..." : "Save Asset"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </PageShell>
   );
 }
