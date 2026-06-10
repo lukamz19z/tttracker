@@ -613,11 +613,15 @@ export default function UpdateVehiclePage() {
     return null;
   }, [form.odometer_km, form.service_interval_km, form.next_service_km]);
 
-  const calculatedNextServiceDue = useMemo(() => {
-    if (form.next_service_due) return form.next_service_due;
-    if (form.service_date) return addMonths(form.service_date, 6);
-    return "";
-  }, [form.next_service_due, form.service_date]);
+const calculatedNextServiceDue = useMemo(() => {
+  if (form.update_type === "Service" && form.service_date) {
+    return addMonths(form.service_date, 6);
+  }
+
+  if (form.next_service_due) return form.next_service_due;
+
+  return "";
+}, [form.update_type, form.service_date, form.next_service_due]);
 
   const kmUntilNextServiceDisplay = useMemo(() => {
     const currentKm = toNumber(form.odometer_km);
