@@ -2,16 +2,35 @@
 
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, FileUp, Save, Wrench } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  Calendar,
+  Car,
+  ClipboardCheck,
+  ExternalLink,
+  FileText,
+  FileUp,
+  KeyRound,
+  Pencil,
+  Save,
+  ShieldCheck,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import { PageHeader, PageShell, StatusBadge } from "../../../components";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import {
+  ActionButton,
+  DetailGrid,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+} from "../../../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "slate";
-type UpdateType = "Service" | "Modification" | "Project Transfer";
-type ComplianceFileKey = "rego" | "insurance";
 
 type VehicleAsset = {
   id: string;
@@ -23,12 +42,26 @@ type VehicleAsset = {
   project: string | null;
   crew: string | null;
   status: string | null;
+  year: string | null;
+  style: string | null;
+  owner: string | null;
+  vin_number: string | null;
+  company_onboard_date: string | null;
   last_service: string | null;
   rego_expiry: string | null;
   insurance_expiry: string | null;
   next_service_due: string | null;
   next_service_km: number | null;
+  service_interval_km: number | null;
   next_inspection_due: string | null;
+  hired: boolean | null;
+  hired_from: string | null;
+  hire_term: string | null;
+  off_hire_date: string | null;
+  superseded_by: string | null;
+  inactive_reason: string | null;
+  spare_key_provided: boolean | null;
+  spare_key_location: string | null;
   ehub: boolean | null;
   dashcam: boolean | null;
   alert_button: boolean | null;
@@ -42,47 +75,101 @@ type VehicleAsset = {
   wheel_chocks: boolean | null;
   shovel: boolean | null;
   knapsack: boolean | null;
-};
-
-type CrewOption = {
-  id: string;
-  crew_number: string | null;
-  crew_name: string | null;
-  leading_hand: string | null;
-  active: boolean | null;
-};
-
-type ProjectOption = {
-  id: string;
-  name: string;
+  notes: string | null;
+  created_at: string | null;
 };
 
 type VehicleDocument = {
   id: string;
+  document_type: string | null;
+  file_name: string | null;
+  file_url: string | null;
   storage_path: string | null;
+  created_at: string | null;
 };
 
-type UpdateForm = {
-  update_type: UpdateType;
+type ServiceHistory = {
+  id: string;
+  record_type: string | null;
+  service_date: string | null;
+  inspection_date: string | null;
+  modification_date: string | null;
+  service_type: string | null;
+  inspection_type: string | null;
+  modification_type: string | null;
+  modification_description: string | null;
+  supplier: string | null;
+  invoice_number: string | null;
+  invoice_cost: number | null;
+  work_completed: string | null;
+  mechanic_recommendations: string | null;
+  follow_up_actions: string | null;
+  invoice_notes: string | null;
+  service_km?: number | null;
+  odometer_km?: number | null;
+  kilometres?: number | null;
+  km_at_service?: number | null;
+  next_service_due: string | null;
+  next_service_km?: number | null;
+  next_inspection_due: string | null;
+  document_url: string | null;
+  document_name: string | null;
+  storage_path: string | null;
+  created_at: string | null;
+};
 
-  rego_expiry: string;
-  insurance_expiry: string;
-  last_service: string;
-  next_service_due: string;
-  next_service_km: string;
-  service_interval_km: string;
-  next_inspection_due: string;
+type ProjectHistory = {
+  id: string;
+  project: string | null;
+  crew: string | null;
+  project_onboard_date: string | null;
+  project_offboard_date: string | null;
+  notes: string | null;
+  created_at: string | null;
+};
 
+type PrestartRecord = {
+  id: string;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+  vehicle_rego: string | null;
+  kilometres: number | null;
+  project: string | null;
+  crew: string | null;
+  inspected_by_name: string | null;
+  overall_condition: string | null;
+  comments: string | null;
+  severity: string | null;
+  result: string | null;
+  fleet_job_id: string | null;
+  prestart_date: string | null;
+  created_at: string | null;
+};
+
+type FleetJob = {
+  id: string;
+  job_number: string | null;
+  title: string | null;
+  description: string | null;
+  priority: string | null;
+  status: string | null;
+  project: string | null;
+  crew: string | null;
+  reported_by: string | null;
+  assigned_to: string | null;
+  due_date: string | null;
+  created_at: string | null;
+};
+
+type EditHistoryForm = {
+  record_type: string;
   service_date: string;
   inspection_date: string;
-  odometer_km: string;
+  modification_date: string;
   service_type: string;
   inspection_type: string;
-
-  modification_date: string;
   modification_type: string;
   modification_description: string;
-
   supplier: string;
   invoice_number: string;
   invoice_cost: string;
@@ -90,177 +177,31 @@ type UpdateForm = {
   mechanic_recommendations: string;
   follow_up_actions: string;
   invoice_notes: string;
-  status_after_update: string;
-
-  trailer_registration_checked: boolean;
-  trailer_tyres_checked: boolean;
-  trailer_brakes_checked: boolean;
-  trailer_lights_checked: boolean;
-  trailer_coupling_checked: boolean;
-  trailer_chains_checked: boolean;
-  trailer_defects_found: boolean;
-  trailer_defect_notes: string;
-
-  ehub: boolean;
-  dashcam: boolean;
-  alert_button: boolean;
-  fuel_card: boolean;
-  reverse_squawker: boolean;
-  uhf_radio: boolean;
-  fire_extinguisher: boolean;
-  first_aid_kit: boolean;
-  snake_bite_kit: boolean;
-  wheel_nut_indicators: boolean;
-  wheel_chocks: boolean;
-  shovel: boolean;
-  knapsack: boolean;
-
-  new_project: string;
-  new_crew: string;
-  project_onboard_date: string;
-  project_offboard_date: string;
-  project_transfer_notes: string;
+  next_service_due: string;
+  next_inspection_due: string;
 };
-
-const emptyForm: UpdateForm = {
-  update_type: "Service",
-
-  rego_expiry: "",
-  insurance_expiry: "",
-  last_service: "",
-  next_service_due: "",
-  next_service_km: "",
-  service_interval_km: "10000",
-  next_inspection_due: "",
-
-  service_date: "",
-  inspection_date: "",
-  odometer_km: "",
-  service_type: "",
-  inspection_type: "",
-
-  modification_date: "",
-  modification_type: "",
-  modification_description: "",
-
-  supplier: "",
-  invoice_number: "",
-  invoice_cost: "",
-  work_completed: "",
-  mechanic_recommendations: "",
-  follow_up_actions: "",
-  invoice_notes: "",
-  status_after_update: "Available",
-
-  trailer_registration_checked: false,
-  trailer_tyres_checked: false,
-  trailer_brakes_checked: false,
-  trailer_lights_checked: false,
-  trailer_coupling_checked: false,
-  trailer_chains_checked: false,
-  trailer_defects_found: false,
-  trailer_defect_notes: "",
-
-  ehub: false,
-  dashcam: false,
-  alert_button: false,
-  fuel_card: false,
-  reverse_squawker: false,
-  uhf_radio: false,
-  fire_extinguisher: false,
-  first_aid_kit: false,
-  snake_bite_kit: false,
-  wheel_nut_indicators: false,
-  wheel_chocks: false,
-  shovel: false,
-  knapsack: false,
-
-  new_project: "",
-  new_crew: "",
-  project_onboard_date: "",
-  project_offboard_date: "",
-  project_transfer_notes: "",
-};
-
-const vehicleServiceTypes = [
-  "Scheduled Service",
-  "Repair",
-  "Inspection",
-  "Tyres",
-  "Breakdown",
-  "Defect Rectification",
-  "Other",
-];
-
-const trailerInspectionTypes = [
-  "Trailer Inspection",
-  "Registration Check",
-  "Tyres / Wheels",
-  "Brakes",
-  "Lights / Electrical",
-  "Coupling / Chains",
-  "Defect Rectification",
-  "Other",
-];
-
-const modificationTypes = [
-  "General",
-  "Addition",
-  "Removal",
-  "Replacement",
-  "Repair",
-  "Upgrade",
-  "Compliance Item",
-  "Safety Equipment",
-  "Electrical / Technology",
-  "Other",
-];
-
-const statusOptions = [
-  "Available",
-  "In Use",
-  "Under Maintenance",
-  "Off Site",
-  "Off Hire",
-  "Inactive",
-];
 
 function clean(value: string | null | undefined) {
-  return value?.trim() ?? "";
+  return value?.trim() || "N/A";
 }
 
-function display(value: string | null | undefined) {
-  return clean(value) || "N/A";
+function optional(value: string | null | undefined) {
+  return value?.trim() || "";
+}
+
+function yesNo(value: boolean | null | undefined) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "N/A";
 }
 
 function dateInput(value: string | null | undefined) {
   return value ? value.slice(0, 10) : "";
 }
 
-function makeModel(vehicle: VehicleAsset | null) {
-  if (!vehicle) return "N/A";
-  return [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ") || "N/A";
-}
-
-function toNumber(value: string) {
-  const cleaned = value.trim();
-  if (!cleaned) return null;
-  const number = Number(cleaned);
-  return Number.isFinite(number) ? number : null;
-}
-
-function addMonths(dateValue: string, months: number) {
-  if (!dateValue) return "";
-
-  const date = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return "";
-
-  date.setMonth(date.getMonth() + months);
-  return date.toISOString().slice(0, 10);
-}
-
 function formatDate(value: string | null | undefined) {
   if (!value) return "N/A";
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "N/A";
 
@@ -269,6 +210,23 @@ function formatDate(value: string | null | undefined) {
     month: "short",
     year: "numeric",
   });
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (value === null || value === undefined) return "N/A";
+
+  return value.toLocaleString("en-AU", {
+    style: "currency",
+    currency: "AUD",
+  });
+}
+
+function toNumber(value: string) {
+  const cleaned = value.trim();
+  if (!cleaned) return null;
+
+  const number = Number(cleaned);
+  return Number.isFinite(number) ? number : null;
 }
 
 function getTone(status: string | null | undefined): Tone {
@@ -290,97 +248,153 @@ function getTone(status: string | null | undefined): Tone {
   return "amber";
 }
 
-function Field({
+function makeModel(vehicle: VehicleAsset | null) {
+  if (!vehicle) return "Vehicle Detail";
+
+  return [vehicle.make, vehicle.model]
+    .map(clean)
+    .filter((value) => value !== "N/A")
+    .join(" ");
+}
+
+function historyTitle(record: ServiceHistory) {
+  return clean(
+    record.modification_type ||
+      record.service_type ||
+      record.inspection_type ||
+      record.record_type,
+  );
+}
+
+function historyDate(record: ServiceHistory) {
+  return formatDate(
+    record.modification_date ||
+      record.service_date ||
+      record.inspection_date ||
+      record.created_at,
+  );
+}
+
+function findAddedDate(
+  serviceHistory: ServiceHistory[],
+  keywords: string[],
+  fallbackDate: string | null | undefined,
+  fitted: boolean | null | undefined,
+) {
+  if (!fitted) return "Not fitted";
+
+  const match = serviceHistory.find((record) => {
+    const text = [
+      record.modification_type,
+      record.modification_description,
+      record.work_completed,
+      record.invoice_notes,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+  });
+
+  return formatDate(
+    match?.modification_date || match?.created_at || fallbackDate,
+  );
+}
+
+function ImportantDateCard({
+  label,
+  value,
+  helper,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-black text-slate-950">{value}</p>
+      <p className="mt-1 text-xs font-medium text-slate-500">{helper}</p>
+    </div>
+  );
+}
+
+function EmptyCard({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+      <div className="mb-3 inline-flex rounded-xl bg-white p-2 text-slate-500 shadow-sm">
+        {icon}
+      </div>
+      <p className="font-bold text-slate-800">{title}</p>
+      <p className="mt-1">{description}</p>
+    </div>
+  );
+}
+
+function SetupItem({
+  label,
+  value,
+  addedDate,
+}: {
+  label: string;
+  value: boolean | null | undefined;
+  addedDate: string;
+}) {
+  const isFitted = value === true;
+
+  return (
+    <div
+      className={`rounded-xl border p-3 ${
+        isFitted
+          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+          : "border-rose-200 bg-rose-50 text-rose-800"
+      }`}
+    >
+      <p className="text-xs font-bold uppercase tracking-wide opacity-70">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-black">
+        {isFitted ? "Fitted" : "Missing"}
+      </p>
+      <p className="mt-1 text-xs font-semibold opacity-75">
+        {isFitted ? `Added: ${addedDate}` : "Requires update if fitted later"}
+      </p>
+    </div>
+  );
+}
+
+function TextField({
   label,
   value,
   onChange,
-  placeholder,
   type = "text",
-  required = false,
-  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  placeholder?: string;
   type?: string;
-  required?: boolean;
-  disabled?: boolean;
 }) {
   return (
     <label className="space-y-1">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
         {label}
-        {required ? <span className="text-rose-600"> *</span> : null}
       </span>
       <input
         type={type}
         value={value}
-        required={required}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400 disabled:bg-slate-100"
-      />
-    </label>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  required = false,
-  placeholder = "Select option",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: string[];
-  required?: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <label className="space-y-1">
-      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        {label}
-        {required ? <span className="text-rose-600"> *</span> : null}
-      </span>
-      <select
-        value={value}
-        required={required}
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-      >
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={`${label}-${option}`} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function CheckField({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-700">
-      {label}
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="h-4 w-4"
       />
     </label>
   );
@@ -390,26 +404,19 @@ function TextAreaField({
   label,
   value,
   onChange,
-  placeholder,
-  required = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  placeholder?: string;
-  required?: boolean;
 }) {
   return (
     <label className="space-y-1">
       <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
         {label}
-        {required ? <span className="text-rose-600"> *</span> : null}
       </span>
       <textarea
         value={value}
-        required={required}
         onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
         rows={4}
         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
       />
@@ -417,79 +424,27 @@ function TextAreaField({
   );
 }
 
-function Section({
+function SectionHeader({
+  icon,
   title,
   description,
-  children,
 }: {
+  icon: React.ReactNode;
   title: string;
   description: string;
-  children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4">
-        <h2 className="text-base font-bold text-slate-950">{title}</h2>
-        <p className="mt-1 text-sm text-slate-600">{description}</p>
+    <div className="mb-5 flex items-center gap-3">
+      <div className="rounded-xl bg-slate-100 p-2 text-slate-600">{icon}</div>
+      <div>
+        <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+        <p className="text-sm text-slate-600">{description}</p>
       </div>
-      {children}
-    </section>
-  );
-}
-
-function SummaryItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-        {label}
-      </p>
-      <div className="mt-1 text-sm font-semibold text-slate-800">{value}</div>
     </div>
   );
 }
 
-function DocumentUploadField({
-  label,
-  helper,
-  file,
-  onChange,
-}: {
-  label: string;
-  helper: string;
-  file: File | null;
-  onChange: (file: File | null) => void;
-}) {
-  return (
-    <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <p className="text-sm font-bold text-slate-800">{label}</p>
-        <p className="text-xs text-slate-500">{file ? file.name : helper}</p>
-      </div>
-
-      <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
-        <FileUp size={14} />
-        Attach file
-        <input
-          type="file"
-          className="hidden"
-          accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-          onChange={(event) => {
-            onChange(event.target.files?.[0] ?? null);
-            event.target.value = "";
-          }}
-        />
-      </span>
-    </label>
-  );
-}
-
-export default function UpdateVehiclePage() {
+export default function VehicleDetailPage() {
   const router = useRouter();
   const params = useParams<{ vehicleId: string }>();
   const vehicleId = params.vehicleId;
@@ -506,163 +461,435 @@ export default function UpdateVehiclePage() {
   }, []);
 
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [crews, setCrews] = useState<CrewOption[]>([]);
-  const [form, setForm] = useState<UpdateForm>(emptyForm);
-  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
-  const [complianceFiles, setComplianceFiles] = useState<
-    Record<ComplianceFileKey, File | null>
-  >({
-    rego: null,
-    insurance: null,
-  });
+  const [documents, setDocuments] = useState<VehicleDocument[]>([]);
+  const [serviceHistory, setServiceHistory] = useState<ServiceHistory[]>([]);
+  const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
+  const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
+  const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
+  const [showVehicleSetup, setShowVehicleSetup] = useState(false);
+  const [serviceIntervalInput, setServiceIntervalInput] = useState("10000");
+  const [savingServiceInterval, setSavingServiceInterval] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(
+    null,
+  );
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(
+    null,
+  );
+  const [editingRecord, setEditingRecord] = useState<ServiceHistory | null>(
+    null,
+  );
+  const [editForm, setEditForm] = useState<EditHistoryForm | null>(null);
+  const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingHistory, setSavingHistory] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
-
-  const loadPageData = useCallback(async () => {
+  async function loadVehicle() {
     setLoading(true);
+    setErrorMessage("");
 
-    const [vehicleResult, projectResult, crewResult] = await Promise.all([
-      supabase
-        .from("vehicle_assets")
-        .select("*")
-        .eq("id", vehicleId)
-        .single<VehicleAsset>(),
-      supabase.from("projects").select("id, name").order("name", { ascending: true }),
-      supabase
-        .from("crews")
-        .select("id, crew_number, crew_name, leading_hand, active")
-        .order("crew_number", { ascending: true }),
-    ]);
+    const vehicleResult = await supabase
+      .from("vehicle_assets")
+      .select("*")
+      .eq("id", vehicleId)
+      .single<VehicleAsset>();
 
     if (vehicleResult.error || !vehicleResult.data) {
-      setErrorMessage(vehicleResult.error?.message || "Vehicle could not be loaded.");
       setVehicle(null);
-    } else {
-      const data = vehicleResult.data;
-      setVehicle(data);
-
-      setForm((current) => ({
-        ...current,
-        rego_expiry: dateInput(data.rego_expiry),
-        insurance_expiry: dateInput(data.insurance_expiry),
-        last_service: dateInput(data.last_service),
-        next_service_due: dateInput(data.next_service_due),
-        next_service_km:
-          data.next_service_km === null || data.next_service_km === undefined
-            ? ""
-            : String(data.next_service_km),
-        next_inspection_due: dateInput(data.next_inspection_due),
-        status_after_update: clean(data.status) || "Available",
-
-        ehub: Boolean(data.ehub),
-        dashcam: Boolean(data.dashcam),
-        alert_button: Boolean(data.alert_button),
-        fuel_card: Boolean(data.fuel_card),
-        reverse_squawker: Boolean(data.reverse_squawker),
-        uhf_radio: Boolean(data.uhf_radio),
-        fire_extinguisher: Boolean(data.fire_extinguisher),
-        first_aid_kit: Boolean(data.first_aid_kit),
-        snake_bite_kit: Boolean(data.snake_bite_kit),
-        wheel_nut_indicators: Boolean(data.wheel_nut_indicators),
-        wheel_chocks: Boolean(data.wheel_chocks),
-        shovel: Boolean(data.shovel),
-        knapsack: Boolean(data.knapsack),
-
-        new_project: clean(data.project),
-        new_crew: clean(data.crew),
-      }));
+      setDocuments([]);
+      setServiceHistory([]);
+      setProjectHistory([]);
+      setPrestartHistory([]);
+      setFleetJobs([]);
+      setErrorMessage(
+        vehicleResult.error?.message || "Vehicle could not be loaded.",
+      );
+      setLoading(false);
+      return;
     }
 
-    setProjects(projectResult.error ? [] : ((projectResult.data ?? []) as ProjectOption[]));
-    setCrews(crewResult.error ? [] : ((crewResult.data ?? []) as CrewOption[]));
+    const vehicleData = vehicleResult.data;
+    setVehicle(vehicleData);
+    setServiceIntervalInput(String(vehicleData.service_interval_km ?? 10000));
+
+    const prestartMatchFilters = [
+      `vehicle_asset_id.eq.${vehicleId}`,
+      vehicleData.vehicle_rego
+        ? `vehicle_rego.eq.${vehicleData.vehicle_rego}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+
+    const [
+      documentsResult,
+      serviceHistoryResult,
+      projectHistoryResult,
+      prestartResult,
+    ] = await Promise.all([
+      supabase
+        .from("vehicle_documents")
+        .select("*")
+        .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<VehicleDocument[]>(),
+      supabase
+        .from("vehicle_service_history")
+        .select("*")
+        .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<ServiceHistory[]>(),
+      supabase
+        .from("vehicle_project_history")
+        .select("*")
+        .eq("vehicle_asset_id", vehicleId)
+        .order("project_onboard_date", { ascending: false })
+        .returns<ProjectHistory[]>(),
+      supabase
+        .from("vehicle_prestarts")
+        .select(
+          "id, vehicle_asset_id, asset_label, vehicle_rego, kilometres, project, crew, inspected_by_name, overall_condition, comments, severity, result, fleet_job_id, prestart_date, created_at",
+        )
+        .or(prestartMatchFilters)
+        .order("prestart_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(3)
+        .returns<PrestartRecord[]>(),
+    ]);
+
+    const loadedPrestarts = prestartResult.error
+      ? []
+      : (prestartResult.data ?? []);
+
+    const linkedFleetJobIds = loadedPrestarts
+      .map((prestart) => prestart.fleet_job_id)
+      .filter((id): id is string => Boolean(id));
+
+    const linkedPrestartIds = loadedPrestarts
+      .map((prestart) => prestart.id)
+      .filter((id): id is string => Boolean(id));
+
+    const [
+      vehicleFleetJobsResult,
+      linkedFleetJobsResult,
+      sourceFleetJobsResult,
+    ] = await Promise.all([
+      supabase
+        .from("fleet_jobs")
+        .select(
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+        )
+        .eq("vehicle_asset_id", vehicleId)
+        .order("created_at", { ascending: false })
+        .returns<FleetJob[]>(),
+
+      linkedFleetJobIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("id", linkedFleetJobIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
+
+      linkedPrestartIds.length > 0
+        ? supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+            )
+            .in("source_id", linkedPrestartIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    const allFleetJobs = [
+      ...(vehicleFleetJobsResult.data ?? []),
+      ...(linkedFleetJobsResult.data ?? []),
+      ...(sourceFleetJobsResult.data ?? []),
+    ];
+
+    const uniqueFleetJobs = Array.from(
+      new Map(allFleetJobs.map((job) => [job.id, job])).values(),
+    );
+
+    setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
+    setServiceHistory(
+      serviceHistoryResult.error ? [] : (serviceHistoryResult.data ?? []),
+    );
+    setProjectHistory(
+      projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
+    );
+    setPrestartHistory(loadedPrestarts);
+    setFleetJobs(
+      uniqueFleetJobs.filter((job) => {
+        const status = clean(job.status).toLowerCase();
+        return !["closed", "complete", "completed", "resolved"].includes(
+          status,
+        );
+      }),
+    );
+
     setLoading(false);
-  }, [supabase, vehicleId]);
+  }
 
   useEffect(() => {
-    void loadPageData();
-  }, [loadPageData]);
+    void loadVehicle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vehicleId]);
 
-  const projectOptions = useMemo(() => {
-    return projects.map((project) => clean(project.name)).filter(Boolean);
-  }, [projects]);
+  const isTrailer = clean(vehicle?.category).toLowerCase() === "trailer";
+  const [today] = useState(() => new Date());
 
-  const crewOptions = useMemo(() => {
-    return crews
-      .filter((crew) => crew.active !== false)
-      .map((crew) =>
-        [crew.crew_number, crew.crew_name, crew.leading_hand]
-          .map(clean)
-          .filter(Boolean)
-          .join(" - "),
+  const latestPrestart = prestartHistory[0] ?? null;
+  const currentKm = latestPrestart?.kilometres ?? null;
+  const serviceIntervalKm = vehicle?.service_interval_km ?? 10000;
+
+  const remainingKm =
+    currentKm !== null &&
+    vehicle?.next_service_km !== null &&
+    vehicle?.next_service_km !== undefined
+      ? vehicle.next_service_km - currentKm
+      : null;
+
+  const daysUntilService = vehicle?.next_service_due
+    ? Math.ceil(
+        (new Date(vehicle.next_service_due).getTime() - today.getTime()) /
+          (1000 * 60 * 60 * 24),
       )
-      .filter(Boolean);
-  }, [crews]);
+    : null;
 
-  const calculatedNextServiceKm = useMemo(() => {
-    const currentKm = toNumber(form.odometer_km);
-    const manualNextKm = toNumber(form.next_service_km);
-    const intervalKm = toNumber(form.service_interval_km) ?? 10000;
+  const hasServiceTrigger = Boolean(
+    vehicle?.next_service_due ||
+    (vehicle?.next_service_km !== null &&
+      vehicle?.next_service_km !== undefined),
+  );
 
-    if (manualNextKm !== null) return manualNextKm;
-    if (currentKm !== null) return currentKm + intervalKm;
+  const serviceOverdue =
+    hasServiceTrigger &&
+    ((remainingKm !== null && remainingKm <= 0) ||
+      (daysUntilService !== null && daysUntilService <= 0));
 
-    return null;
-  }, [form.odometer_km, form.service_interval_km, form.next_service_km]);
+  const serviceDueSoon =
+    hasServiceTrigger &&
+    !serviceOverdue &&
+    ((remainingKm !== null && remainingKm <= 1000) ||
+      (daysUntilService !== null && daysUntilService <= 30));
 
-const calculatedNextServiceDue = useMemo(() => {
-  if (form.update_type === "Service" && form.service_date) {
-    return addMonths(form.service_date, 6);
-  }
+  const serviceStatusLabel = !hasServiceTrigger
+    ? "Not Set"
+    : serviceOverdue
+      ? "Overdue"
+      : serviceDueSoon
+        ? "Due Soon"
+        : "Compliant";
 
-  if (form.next_service_due) return form.next_service_due;
+  const serviceStatusTone: Tone = !hasServiceTrigger
+    ? "slate"
+    : serviceOverdue
+      ? "rose"
+      : serviceDueSoon
+        ? "amber"
+        : "emerald";
 
-  return "";
-}, [form.update_type, form.service_date, form.next_service_due]);
+  const kmRemainingDisplay =
+    remainingKm !== null ? `${remainingKm.toLocaleString()} km` : "N/A";
 
-  const kmUntilNextServiceDisplay = useMemo(() => {
-    const currentKm = toNumber(form.odometer_km);
+  const daysRemainingDisplay =
+    daysUntilService !== null
+      ? `${daysUntilService.toLocaleString()} days`
+      : "N/A";
 
-    if (currentKm === null || calculatedNextServiceKm === null) return "N/A";
+  const fleetJobTone = (job: FleetJob): Tone => {
+    const priority = clean(job.priority).toLowerCase();
+    const status = clean(job.status).toLowerCase();
 
-    return `${(calculatedNextServiceKm - currentKm).toLocaleString()} km`;
-  }, [form.odometer_km, calculatedNextServiceKm]);
+    if (priority === "urgent" || priority === "high") return "rose";
+    if (status.includes("progress") || status.includes("open")) return "amber";
+    return "blue";
+  };
 
-  function updateField<K extends keyof UpdateForm>(
-    key: K,
-    value: UpdateForm[K],
-  ) {
-    setForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  }
+  const vehicleTitle =
+    vehicle && clean(vehicle.vehicle_id) !== "N/A"
+      ? `${clean(vehicle.vehicle_id)} - ${
+          makeModel(vehicle) || clean(vehicle.vehicle_rego)
+        }`
+      : vehicle
+        ? makeModel(vehicle) || clean(vehicle.vehicle_rego)
+        : "Vehicle Detail";
 
-  function updateComplianceFile(key: ComplianceFileKey, file: File | null) {
-    setComplianceFiles((current) => ({
-      ...current,
-      [key]: file,
-    }));
-  }
+  const serviceRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return type.includes("service") || Boolean(record.service_date);
+  });
 
-  async function uploadInvoiceDocument(historyId: string) {
-    if (!invoiceFile) {
-      return {
-        document_name: null,
-        document_url: null,
-        storage_path: null,
-      };
+  const latestServiceRecord = serviceRecords[0] ?? null;
+  const latestServiceKm = latestServiceRecord
+    ? (latestServiceRecord.odometer_km ??
+      latestServiceRecord.service_km ??
+      latestServiceRecord.kilometres ??
+      latestServiceRecord.km_at_service ??
+      (latestServiceRecord.next_service_km !== null &&
+      latestServiceRecord.next_service_km !== undefined
+        ? latestServiceRecord.next_service_km - serviceIntervalKm
+        : null))
+    : null;
+
+  const inspectionRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return type.includes("inspection") || Boolean(record.inspection_date);
+  });
+
+  const modificationRecords = serviceHistory.filter((record) => {
+    const type = clean(record.record_type).toLowerCase();
+    return (
+      type.includes("modification") ||
+      type.includes("addition") ||
+      Boolean(record.modification_date)
+    );
+  });
+
+  const registerDocuments = documents.filter((document) => {
+    const type = clean(document.document_type).toLowerCase();
+    return !type.includes("service");
+  });
+
+  const basicDetailItems = vehicle
+    ? [
+        { label: "Vehicle ID", value: clean(vehicle.vehicle_id) },
+        { label: "Rego", value: clean(vehicle.vehicle_rego) },
+        { label: "Category", value: clean(vehicle.category) },
+        { label: "Make / Model", value: makeModel(vehicle) || "N/A" },
+        { label: "Year", value: clean(vehicle.year) },
+        ...(isTrailer ? [] : [{ label: "Style", value: clean(vehicle.style) }]),
+        { label: "VIN / Chassis", value: clean(vehicle.vin_number) },
+        {
+          label: "Status",
+          value: (
+            <StatusBadge
+              label={clean(vehicle.status)}
+              tone={getTone(vehicle.status)}
+            />
+          ),
+        },
+      ]
+    : [];
+
+  const allocationItems = vehicle
+    ? [
+        { label: "Project", value: clean(vehicle.project) },
+        { label: "Crew", value: clean(vehicle.crew) },
+        {
+          label: "Spare Key",
+          value: vehicle.spare_key_provided
+            ? `Yes - ${clean(vehicle.spare_key_location)}`
+            : yesNo(vehicle.spare_key_provided),
+        },
+        { label: "Owner", value: clean(vehicle.owner) },
+        { label: "Hired?", value: yesNo(vehicle.hired) },
+        {
+          label: "Hire Details",
+          value: vehicle.hired
+            ? `${clean(vehicle.hired_from)} / ${clean(vehicle.hire_term)}`
+            : "N/A",
+        },
+      ]
+    : [];
+
+  async function saveServiceInterval() {
+    if (!vehicle || isTrailer) return;
+
+    const newInterval = toNumber(serviceIntervalInput);
+
+    if (!newInterval || newInterval <= 0) {
+      setErrorMessage("Service interval must be a positive kilometre value.");
+      return;
     }
 
-    const safeFileName = invoiceFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    setSavingServiceInterval(true);
+    setErrorMessage("");
+
+    const currentInterval = vehicle.service_interval_km ?? 10000;
+    const fallbackBaseKm =
+      vehicle.next_service_km !== null && vehicle.next_service_km !== undefined
+        ? vehicle.next_service_km - currentInterval
+        : null;
+
+    const baseServiceKm =
+      latestServiceKm ?? fallbackBaseKm ?? currentKm ?? null;
+
+    const nextServiceKm =
+      baseServiceKm !== null ? baseServiceKm + newInterval : null;
+
+    const { error } = await supabase
+      .from("vehicle_assets")
+      .update({
+        service_interval_km: newInterval,
+        next_service_km: nextServiceKm,
+      })
+      .eq("id", vehicleId);
+
+    if (error) {
+      setErrorMessage(error.message);
+      setSavingServiceInterval(false);
+      return;
+    }
+
+    setVehicle((current) =>
+      current
+        ? {
+            ...current,
+            service_interval_km: newInterval,
+            next_service_km: nextServiceKm,
+          }
+        : current,
+    );
+
+    setSavingServiceInterval(false);
+    router.refresh();
+  }
+
+  function openEditRecord(record: ServiceHistory) {
+    setReplacementFile(null);
+    setEditingRecord(record);
+    setEditForm({
+      record_type: optional(record.record_type),
+      service_date: dateInput(record.service_date),
+      inspection_date: dateInput(record.inspection_date),
+      modification_date: dateInput(record.modification_date),
+      service_type: optional(record.service_type),
+      inspection_type: optional(record.inspection_type),
+      modification_type: optional(record.modification_type),
+      modification_description: optional(record.modification_description),
+      supplier: optional(record.supplier),
+      invoice_number: optional(record.invoice_number),
+      invoice_cost:
+        record.invoice_cost === null || record.invoice_cost === undefined
+          ? ""
+          : String(record.invoice_cost),
+      work_completed: optional(record.work_completed),
+      mechanic_recommendations: optional(record.mechanic_recommendations),
+      follow_up_actions: optional(record.follow_up_actions),
+      invoice_notes: optional(record.invoice_notes),
+      next_service_due: dateInput(record.next_service_due),
+      next_inspection_due: dateInput(record.next_inspection_due),
+    });
+  }
+
+  async function uploadReplacementAttachment(historyId: string) {
+    if (!replacementFile) {
+      return null;
+    }
+
+    const safeFileName = replacementFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const filePath = `${vehicleId}/${historyId}/${Date.now()}-${safeFileName}`;
 
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from("vehicle_service_documents")
-      .upload(filePath, invoiceFile, {
+      .upload(filePath, replacementFile, {
         cacheControl: "3600",
         upsert: false,
       });
@@ -676,263 +903,313 @@ const calculatedNextServiceDue = useMemo(() => {
       .getPublicUrl(uploadData.path);
 
     return {
-      document_name: invoiceFile.name,
+      document_name: replacementFile.name,
       document_url: publicUrl,
       storage_path: uploadData.path,
     };
   }
 
-  async function uploadSupersedingVehicleDocument(
-    documentType: string,
-    file: File | null,
-  ) {
-    if (!file) return;
+  async function saveHistoryRecord() {
+    if (!editingRecord || !editForm) return;
 
-    const { data: existingDocuments, error: existingError } = await supabase
-      .from("vehicle_documents")
-      .select("id, storage_path")
-      .eq("vehicle_asset_id", vehicleId)
-      .eq("document_type", documentType)
-      .returns<VehicleDocument[]>();
+    setSavingHistory(true);
+    setErrorMessage("");
 
-    if (existingError) throw new Error(existingError.message);
+    let replacementAttachment: {
+      document_name: string;
+      document_url: string;
+      storage_path: string;
+    } | null = null;
 
-    const existingPaths =
-      existingDocuments
-        ?.map((document) => document.storage_path)
-        .filter((path): path is string => Boolean(path)) ?? [];
+    try {
+      replacementAttachment = await uploadReplacementAttachment(
+        editingRecord.id,
+      );
 
-    if (existingPaths.length > 0) {
-      await supabase.storage.from("vehicle_documents").remove(existingPaths);
-    }
-
-    if (existingDocuments && existingDocuments.length > 0) {
-      const existingIds = existingDocuments.map((document) => document.id);
-
-      const { error: deleteError } = await supabase
-        .from("vehicle_documents")
-        .delete()
-        .in("id", existingIds);
-
-      if (deleteError) throw new Error(deleteError.message);
-    }
-
-    const safeDocumentType = documentType.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const filePath = `${vehicleId}/${safeDocumentType}/${Date.now()}-${safeFileName}`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("vehicle_documents")
-      .upload(filePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-      });
-
-    if (uploadError) throw new Error(uploadError.message);
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("vehicle_documents").getPublicUrl(uploadData.path);
-
-    const { error: insertError } = await supabase.from("vehicle_documents").insert({
-      vehicle_asset_id: vehicleId,
-      document_type: documentType,
-      file_name: file.name,
-      file_url: publicUrl,
-      storage_path: uploadData.path,
-    });
-
-    if (insertError) throw new Error(insertError.message);
-  }
-
-  async function uploadComplianceDocuments() {
-    await uploadSupersedingVehicleDocument("Rego", complianceFiles.rego);
-
-    if (!isTrailer) {
-      await uploadSupersedingVehicleDocument("Insurance", complianceFiles.insurance);
-    }
-  }
-
-  async function saveServiceOrModificationHistory() {
-    const isModification = form.update_type === "Modification";
-    const intervalKmValue = toNumber(form.service_interval_km) ?? 10000;
-    const nextServiceKmValue = isTrailer ? null : calculatedNextServiceKm;
-    const nextServiceDueValue = isTrailer ? null : calculatedNextServiceDue;
-
-    const historyPayload = isModification
-      ? {
-          vehicle_asset_id: vehicleId,
-          record_type: "Modification / Addition",
-          modification_date: form.modification_date || null,
-          modification_type: form.modification_type || "General",
-          modification_description: form.modification_description.trim() || null,
-          supplier: form.supplier.trim() || null,
-          invoice_number: form.invoice_number.trim() || null,
-          invoice_cost: toNumber(form.invoice_cost),
-          work_completed: form.modification_description.trim() || null,
-          mechanic_recommendations: form.mechanic_recommendations.trim() || null,
-          follow_up_actions: form.follow_up_actions.trim() || null,
-          invoice_notes: form.invoice_notes.trim() || null,
-          status_after_update: form.status_after_update || null,
-        }
-      : {
-          vehicle_asset_id: vehicleId,
-          record_type: isTrailer ? "Trailer Inspection" : "Vehicle Service",
-          service_date: isTrailer ? null : form.service_date || null,
-          inspection_date: isTrailer ? form.inspection_date || null : null,
-          odometer_km: isTrailer ? null : toNumber(form.odometer_km),
-          service_interval_km: isTrailer ? null : intervalKmValue,
-          next_service_km: nextServiceKmValue,
-          service_type: isTrailer ? null : form.service_type || null,
-          inspection_type: isTrailer ? form.inspection_type || null : null,
-          supplier: form.supplier.trim() || null,
-          invoice_number: form.invoice_number.trim() || null,
-          invoice_cost: toNumber(form.invoice_cost),
-          work_completed: form.work_completed.trim() || null,
-          mechanic_recommendations: form.mechanic_recommendations.trim() || null,
-          follow_up_actions: form.follow_up_actions.trim() || null,
-          invoice_notes: form.invoice_notes.trim() || null,
-          next_service_due: nextServiceDueValue,
-          next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
-          status_after_update: form.status_after_update || null,
-          trailer_registration_checked: isTrailer ? form.trailer_registration_checked : false,
-          trailer_tyres_checked: isTrailer ? form.trailer_tyres_checked : false,
-          trailer_brakes_checked: isTrailer ? form.trailer_brakes_checked : false,
-          trailer_lights_checked: isTrailer ? form.trailer_lights_checked : false,
-          trailer_coupling_checked: isTrailer ? form.trailer_coupling_checked : false,
-          trailer_chains_checked: isTrailer ? form.trailer_chains_checked : false,
-          trailer_defects_found: isTrailer ? form.trailer_defects_found : false,
-          trailer_defect_notes: isTrailer ? form.trailer_defect_notes.trim() || null : null,
-        };
-
-    const { data: historyData, error: historyError } = await supabase
-      .from("vehicle_service_history")
-      .insert(historyPayload)
-      .select("id")
-      .single();
-
-    if (historyError || !historyData) {
-      throw new Error(historyError?.message || "Failed to save update record.");
-    }
-
-    const documentData = await uploadInvoiceDocument(historyData.id);
-
-    if (documentData.document_url) {
-      const { error } = await supabase
-        .from("vehicle_service_history")
-        .update(documentData)
-        .eq("id", historyData.id);
-
-      if (error) throw new Error(error.message);
-    }
-  }
-
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!vehicle) {
-      setErrorMessage("Vehicle could not be loaded.");
+      if (replacementAttachment && editingRecord.storage_path) {
+        await supabase.storage
+          .from("vehicle_service_documents")
+          .remove([editingRecord.storage_path]);
+      }
+    } catch (uploadError) {
+      setErrorMessage(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "Failed to upload replacement attachment.",
+      );
+      setSavingHistory(false);
       return;
     }
 
-    setSaving(true);
+    const { error } = await supabase
+      .from("vehicle_service_history")
+      .update({
+        record_type: editForm.record_type.trim() || null,
+        service_date: editForm.service_date || null,
+        inspection_date: editForm.inspection_date || null,
+        modification_date: editForm.modification_date || null,
+        service_type: editForm.service_type.trim() || null,
+        inspection_type: editForm.inspection_type.trim() || null,
+        modification_type: editForm.modification_type.trim() || null,
+        modification_description:
+          editForm.modification_description.trim() || null,
+        supplier: editForm.supplier.trim() || null,
+        invoice_number: editForm.invoice_number.trim() || null,
+        invoice_cost: toNumber(editForm.invoice_cost),
+        work_completed: editForm.work_completed.trim() || null,
+        mechanic_recommendations:
+          editForm.mechanic_recommendations.trim() || null,
+        follow_up_actions: editForm.follow_up_actions.trim() || null,
+        invoice_notes: editForm.invoice_notes.trim() || null,
+        next_service_due: editForm.next_service_due || null,
+        next_inspection_due: editForm.next_inspection_due || null,
+        ...(replacementAttachment
+          ? {
+              document_name: replacementAttachment.document_name,
+              document_url: replacementAttachment.document_url,
+              storage_path: replacementAttachment.storage_path,
+            }
+          : {}),
+      })
+      .eq("id", editingRecord.id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      setSavingHistory(false);
+      return;
+    }
+
+    setEditingRecord(null);
+    setEditForm(null);
+    setReplacementFile(null);
+    setSavingHistory(false);
+
+    await loadVehicle();
+    router.refresh();
+  }
+
+  async function deleteHistoryRecord(record: ServiceHistory) {
+    const confirmed = window.confirm(
+      "Delete this history record? This should only be used for incorrect duplicate entries.",
+    );
+
+    if (!confirmed) return;
+
     setErrorMessage("");
 
-    try {
-      if (form.update_type === "Project Transfer") {
-        await supabase.from("vehicle_project_history").insert({
-          vehicle_asset_id: vehicleId,
-          project: form.new_project.trim() || null,
-          crew: form.new_crew.trim() || null,
-          project_onboard_date: form.project_onboard_date || null,
-          project_offboard_date: form.project_offboard_date || null,
-          notes: form.project_transfer_notes.trim() || null,
-        });
-      } else {
-        await saveServiceOrModificationHistory();
-      }
-
-      const vehicleUpdatePayload = {
-        status: form.status_after_update || null,
-        rego_expiry: form.rego_expiry || null,
-        insurance_expiry: isTrailer ? null : form.insurance_expiry || null,
-last_service:
-  isTrailer
-    ? null
-    : form.update_type === "Service" && form.service_date
-      ? form.service_date
-      : form.last_service || null,
-
-next_service_due:
-  isTrailer
-    ? null
-    : form.update_type === "Service" && form.service_date
-      ? addMonths(form.service_date, 6)
-      : form.next_service_due || null,
-
-next_service_km:
-  isTrailer
-    ? null
-    : calculatedNextServiceKm,
-        next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
-
-        project:
-          form.update_type === "Project Transfer"
-            ? form.new_project.trim() || null
-            : vehicle.project,
-        crew:
-          form.update_type === "Project Transfer"
-            ? form.new_crew.trim() || null
-            : vehicle.crew,
-
-        ehub: isTrailer ? false : form.ehub,
-        dashcam: isTrailer ? false : form.dashcam,
-        alert_button: isTrailer ? false : form.alert_button,
-        fuel_card: isTrailer ? false : form.fuel_card,
-        reverse_squawker: isTrailer ? false : form.reverse_squawker,
-        uhf_radio: isTrailer ? false : form.uhf_radio,
-        fire_extinguisher: isTrailer ? false : form.fire_extinguisher,
-        first_aid_kit: isTrailer ? false : form.first_aid_kit,
-        snake_bite_kit: isTrailer ? false : form.snake_bite_kit,
-        wheel_nut_indicators: isTrailer ? false : form.wheel_nut_indicators,
-        wheel_chocks: isTrailer ? false : form.wheel_chocks,
-        shovel: isTrailer ? false : form.shovel,
-        knapsack: isTrailer ? false : form.knapsack,
-      };
-
-      const { error } = await supabase
-        .from("vehicle_assets")
-        .update(vehicleUpdatePayload)
-        .eq("id", vehicleId);
-
-      if (error) throw new Error(error.message);
-
-      await uploadComplianceDocuments();
-
-      router.push("/assets/vehicles");
-      router.refresh();
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to save asset update.",
-      );
-      setSaving(false);
+    if (record.storage_path) {
+      await supabase.storage
+        .from("vehicle_service_documents")
+        .remove([record.storage_path]);
     }
+
+    const { error } = await supabase
+      .from("vehicle_service_history")
+      .delete()
+      .eq("id", record.id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    await loadVehicle();
+    router.refresh();
+  }
+
+  function HistoryCard({ record }: { record: ServiceHistory }) {
+    const isExpanded = expandedHistoryId === record.id;
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-slate-950">
+              {historyTitle(record)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">{historyDate(record)}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setExpandedHistoryId(isExpanded ? null : record.id)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+          >
+            {isExpanded ? "Hide Details" : "View Details"}
+          </button>
+        </div>
+
+        <p className="mt-3 line-clamp-2 text-sm text-slate-700">
+          {clean(record.modification_description || record.work_completed)}
+        </p>
+
+        {isExpanded ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="grid gap-3 text-sm sm:grid-cols-2">
+              <p>
+                <span className="font-bold">Record Type:</span>{" "}
+                {clean(record.record_type)}
+              </p>
+              <p>
+                <span className="font-bold">Supplier:</span>{" "}
+                {clean(record.supplier)}
+              </p>
+              <p>
+                <span className="font-bold">Invoice:</span>{" "}
+                {clean(record.invoice_number)}
+              </p>
+              <p>
+                <span className="font-bold">Cost:</span>{" "}
+                {formatMoney(record.invoice_cost)}
+              </p>
+              <p>
+                <span className="font-bold">Next Service:</span>{" "}
+                {formatDate(record.next_service_due)}
+              </p>
+              <p>
+                <span className="font-bold">Next Inspection:</span>{" "}
+                {formatDate(record.next_inspection_due)}
+              </p>
+            </div>
+
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <p>
+                <span className="font-bold">Work Completed:</span>{" "}
+                {clean(record.work_completed)}
+              </p>
+              <p>
+                <span className="font-bold">Recommendations:</span>{" "}
+                {clean(record.mechanic_recommendations)}
+              </p>
+              <p>
+                <span className="font-bold">Follow Up:</span>{" "}
+                {clean(record.follow_up_actions)}
+              </p>
+              <p>
+                <span className="font-bold">Notes:</span>{" "}
+                {clean(record.invoice_notes)}
+              </p>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {record.document_url ? (
+                <a
+                  href={record.document_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Open {record.document_name || "Attachment"}
+                </a>
+              ) : (
+                <span className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-400">
+                  No attachment
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => openEditRecord(record)}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              >
+                <Pencil size={13} />
+                Edit Record
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void deleteHistoryRecord(record)}
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
+              >
+                <Trash2 size={13} />
+                Delete Record
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <PageShell>
+        <PageHeader
+          eyebrow="Vehicle Record"
+          title="Loading vehicle..."
+          description="Please wait while the vehicle record loads."
+          actions={
+            <ActionButton
+              href="/assets/vehicles"
+              variant="secondary"
+              icon={<ArrowLeft size={16} />}
+            >
+              Back to Vehicles
+            </ActionButton>
+          }
+        />
+      </PageShell>
+    );
+  }
+
+  if (!vehicle) {
+    return (
+      <PageShell>
+        <PageHeader
+          eyebrow="Vehicle Record"
+          title="Vehicle not found"
+          description="This vehicle could not be found in the register."
+          actions={
+            <ActionButton
+              href="/assets/vehicles"
+              variant="secondary"
+              icon={<ArrowLeft size={16} />}
+            >
+              Back to Vehicles
+            </ActionButton>
+          }
+        />
+
+        {errorMessage ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+            {errorMessage}
+          </div>
+        ) : null}
+      </PageShell>
+    );
   }
 
   return (
     <PageShell>
       <PageHeader
-        eyebrow={isTrailer ? "Trailer Update" : "Vehicle Update"}
-        title={loading ? "Update Asset" : `Update ${display(vehicle?.vehicle_id)}`}
-        description="Record services, modifications, compliance proof or project transfers."
+        eyebrow="Vehicle Record"
+        title={vehicleTitle}
+        description="A clean asset profile showing key dates, current setup, documents and recent history."
         actions={
-          <Link
-            href="/assets/vehicles"
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <ArrowLeft size={16} />
-            Back to Vehicles
-          </Link>
+          <>
+            <ActionButton
+              href="/assets/vehicles"
+              variant="secondary"
+              icon={<ArrowLeft size={16} />}
+            >
+              Back
+            </ActionButton>
+
+            <ActionButton
+              href={`/assets/vehicles/${vehicleId}/edit`}
+              variant="secondary"
+              icon={<Pencil size={16} />}
+            >
+              Edit Details
+            </ActionButton>
+
+            <ActionButton
+              href={`/assets/vehicles/${vehicleId}/update`}
+              icon={<Wrench size={16} />}
+            >
+              Update Asset
+            </ActionButton>
+          </>
         }
       />
 
@@ -942,595 +1219,1005 @@ next_service_km:
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-3">
-          <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
-            <Wrench size={18} />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-slate-950">Asset Summary</h2>
-            <p className="text-sm text-slate-600">
-              Current information before recording the update.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryItem label="Vehicle ID" value={display(vehicle?.vehicle_id)} />
-          <SummaryItem label="Rego" value={display(vehicle?.vehicle_rego)} />
-          <SummaryItem label="Make & Model" value={makeModel(vehicle)} />
-          <SummaryItem label="Category" value={display(vehicle?.category)} />
-          <SummaryItem label="Project" value={display(vehicle?.project)} />
-          <SummaryItem label="Crew" value={display(vehicle?.crew)} />
-          <SummaryItem
-            label="Current Status"
-            value={
-              <StatusBadge
-                label={display(vehicle?.status)}
-                tone={getTone(vehicle?.status)}
-              />
-            }
+      <section className="space-y-5">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <SectionHeader
+            icon={<Calendar size={18} />}
+            title="Asset Snapshot"
+            description="Key dates and the main information needed at a glance."
           />
-          <SummaryItem
-            label={isTrailer ? "Next Inspection" : "Next Service"}
-            value={
-              isTrailer
-                ? formatDate(vehicle?.next_inspection_due)
-                : formatDate(vehicle?.next_service_due)
-            }
-          />
-        </div>
-      </section>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <Section
-          title="Update Type"
-          description="Choose the type of update you want to record."
-        >
-          <div className="grid gap-3 md:grid-cols-3">
-            {(["Service", "Modification", "Project Transfer"] as UpdateType[]).map(
-              (type) => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => updateField("update_type", type)}
-                  className={`rounded-2xl border p-4 text-left ${
-                    form.update_type === type
-                      ? "border-slate-950 bg-slate-950 text-white"
-                      : "border-slate-200 bg-white text-slate-800"
-                  }`}
-                >
-                  <p className="font-bold">{type}</p>
-                  <p className="mt-1 text-sm opacity-80">
-                    {type === "Service"
-                      ? "Service, inspection and next due dates."
-                      : type === "Modification"
-                        ? "General changes, additions, removals and fitted equipment."
-                        : "Project movement and crew allocation history."}
-                  </p>
-                </button>
-              ),
-            )}
-          </div>
-        </Section>
-
-        <Section
-          title="Current Expiry / Compliance Dates"
-          description="Update expiry dates and attach proof. New proof supersedes the existing document of the same type."
-        >
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <Field
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <ImportantDateCard
               label="Rego Expiry"
-              type="date"
-              value={form.rego_expiry}
-              onChange={(value) => updateField("rego_expiry", value)}
+              value={formatDate(vehicle.rego_expiry)}
+              helper="Registration renewal"
             />
 
             {!isTrailer && (
-              <>
-                <Field
-                  label="Insurance Expiry"
-                  type="date"
-                  value={form.insurance_expiry}
-                  onChange={(value) => updateField("insurance_expiry", value)}
-                />
-
-                <Field
-                  label="Last Service"
-                  type="date"
-                  value={form.last_service}
-                  onChange={(value) => updateField("last_service", value)}
-                />
-
-                <Field
-                  label="Next Service Due"
-                  type="date"
-                  value={calculatedNextServiceDue || form.next_service_due}
-                  onChange={(value) => updateField("next_service_due", value)}
-                />
-              </>
-            )}
-
-            {isTrailer && (
-              <Field
-                label="Next Inspection Due"
-                type="date"
-                value={form.next_inspection_due}
-                onChange={(value) => updateField("next_inspection_due", value)}
+              <ImportantDateCard
+                label="Insurance Expiry"
+                value={formatDate(vehicle.insurance_expiry)}
+                helper="Insurance renewal"
               />
             )}
-          </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <DocumentUploadField
-              label="Rego Proof"
-              helper="Attach updated rego certificate or proof"
-              file={complianceFiles.rego}
-              onChange={(file) => updateComplianceFile("rego", file)}
+            <ImportantDateCard
+              label={isTrailer ? "Next Inspection" : "Last Service"}
+              value={
+                isTrailer
+                  ? formatDate(vehicle.next_inspection_due)
+                  : formatDate(vehicle.last_service)
+              }
+              helper={isTrailer ? "Inspection due" : "Most recent service"}
             />
 
-            {!isTrailer && (
-              <DocumentUploadField
-                label="Insurance Proof"
-                helper="Attach updated insurance certificate or proof"
-                file={complianceFiles.insurance}
-                onChange={(file) => updateComplianceFile("insurance", file)}
-              />
-            )}
+            <ImportantDateCard
+              label="Company Onboard"
+              value={formatDate(vehicle.company_onboard_date)}
+              helper="Insurance / ownership reference"
+            />
           </div>
-        </Section>
 
-        {form.update_type === "Project Transfer" && (
-          <Section
-            title="Project Transfer / Onboarding"
-            description="Record project movement history and update the current project and crew allocation."
-          >
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <SelectField
-                label="New Project"
-                value={form.new_project}
-                onChange={(value) => updateField("new_project", value)}
-                options={projectOptions}
-                placeholder="Select project"
-              />
-
-              <SelectField
-                label="New Crew"
-                value={form.new_crew}
-                onChange={(value) => updateField("new_crew", value)}
-                options={crewOptions}
-                placeholder="Select crew"
-              />
-
-              <Field
-                label="Project Onboard Date"
-                type="date"
-                value={form.project_onboard_date}
-                onChange={(value) => updateField("project_onboard_date", value)}
-              />
-
-              <Field
-                label="Project Offboard Date"
-                type="date"
-                value={form.project_offboard_date}
-                onChange={(value) => updateField("project_offboard_date", value)}
-              />
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <h3 className="mb-4 text-sm font-black uppercase tracking-wide text-slate-500">
+                Basic Details
+              </h3>
+              <DetailGrid items={basicDetailItems} />
             </div>
 
-            <div className="mt-4">
-              <TextAreaField
-                label="Project Transfer Notes"
-                value={form.project_transfer_notes}
-                onChange={(value) => updateField("project_transfer_notes", value)}
-                placeholder="Reason for transfer, site office notes, handover notes..."
-              />
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <h3 className="mb-4 text-sm font-black uppercase tracking-wide text-slate-500">
+                Allocation / Keys / Ownership
+              </h3>
+              <DetailGrid items={allocationItems} />
             </div>
-          </Section>
-        )}
+          </div>
+        </section>
 
-        {form.update_type === "Service" && (
-          <>
-            {isTrailer ? (
-              <>
-                <Section
-                  title="Trailer Inspection"
-                  description="Record inspection details and checks completed."
-                >
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <Field
-                      label="Inspection Date"
-                      type="date"
-                      value={form.inspection_date}
-                      onChange={(value) => updateField("inspection_date", value)}
-                      required
-                    />
+        {!isTrailer && (
+          <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title="Service Status"
+                description="Whichever service trigger is reached first: time or kilometres."
+              />
 
-                    <SelectField
-                      label="Inspection Type"
-                      value={form.inspection_type}
-                      onChange={(value) => updateField("inspection_type", value)}
-                      options={trailerInspectionTypes}
-                      required
-                    />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ImportantDateCard
+                  label="Current KM"
+                  value={
+                    currentKm !== null
+                      ? `${currentKm.toLocaleString()} km`
+                      : "N/A"
+                  }
+                  helper={
+                    latestPrestart
+                      ? `Latest prestart: ${formatDate(
+                          latestPrestart.prestart_date ||
+                            latestPrestart.created_at,
+                        )}`
+                      : "No prestart KM recorded"
+                  }
+                />
 
-                    <Field
-                      label="Supplier / Mechanic"
-                      value={form.supplier}
-                      onChange={(value) => updateField("supplier", value)}
-                      placeholder="Workshop, mechanic or supplier"
-                    />
-
-                    <Field
-                      label="Invoice Number"
-                      value={form.invoice_number}
-                      onChange={(value) => updateField("invoice_number", value)}
-                      placeholder="Invoice or job number"
-                    />
-
-                    <Field
-                      label="Invoice Cost"
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Service Interval
+                  </p>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                    <input
                       type="number"
-                      value={form.invoice_cost}
-                      onChange={(value) => updateField("invoice_cost", value)}
-                      placeholder="0.00"
+                      min="1"
+                      value={serviceIntervalInput}
+                      onChange={(event) =>
+                        setServiceIntervalInput(event.target.value)
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-950 outline-none focus:border-slate-400"
                     />
+                    <button
+                      type="button"
+                      disabled={savingServiceInterval}
+                      onClick={() => void saveServiceInterval()}
+                      className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {savingServiceInterval ? "Saving" : "Save"}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs font-medium text-slate-500">
+                    Asset-specific interval, e.g. 10,000 km or 15,000 km.
+                  </p>
+                </div>
 
-                    <SelectField
-                      label="Asset Availability"
-                      value={form.status_after_update}
-                      onChange={(value) => updateField("status_after_update", value)}
-                      options={statusOptions}
+                <ImportantDateCard
+                  label="Next Service KM"
+                  value={
+                    vehicle.next_service_km !== null &&
+                    vehicle.next_service_km !== undefined
+                      ? `${vehicle.next_service_km.toLocaleString()} km`
+                      : "N/A"
+                  }
+                  helper={
+                    latestServiceKm !== null
+                      ? `Based on last service at ${latestServiceKm.toLocaleString()} km`
+                      : `Based on ${serviceIntervalKm.toLocaleString()} km interval`
+                  }
+                />
+
+                <ImportantDateCard
+                  label="KM Remaining"
+                  value={kmRemainingDisplay}
+                  helper="Based on latest prestart"
+                />
+
+                <ImportantDateCard
+                  label="Date Trigger"
+                  value={formatDate(vehicle.next_service_due)}
+                  helper={`Time remaining: ${daysRemainingDisplay}`}
+                />
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:col-span-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Service Status
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        Triggered by KM or date, whichever comes first.
+                      </p>
+                    </div>
+
+                    <StatusBadge
+                      label={serviceStatusLabel}
+                      tone={serviceStatusTone}
                     />
                   </div>
-                </Section>
+                </div>
+              </div>
+            </section>
 
-                <Section
-                  title="Trailer Checks"
-                  description="Tick the checks completed as part of this inspection."
-                >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <CheckField
-                      label="Registration checked"
-                      checked={form.trailer_registration_checked}
-                      onChange={(value) => updateField("trailer_registration_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Tyres / wheels checked"
-                      checked={form.trailer_tyres_checked}
-                      onChange={(value) => updateField("trailer_tyres_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Brakes checked"
-                      checked={form.trailer_brakes_checked}
-                      onChange={(value) => updateField("trailer_brakes_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Lights / electrical checked"
-                      checked={form.trailer_lights_checked}
-                      onChange={(value) => updateField("trailer_lights_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Coupling checked"
-                      checked={form.trailer_coupling_checked}
-                      onChange={(value) => updateField("trailer_coupling_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Chains checked"
-                      checked={form.trailer_chains_checked}
-                      onChange={(value) => updateField("trailer_chains_checked", value)}
-                    />
-
-                    <CheckField
-                      label="Defects found"
-                      checked={form.trailer_defects_found}
-                      onChange={(value) => updateField("trailer_defects_found", value)}
-                    />
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setShowVehicleSetup((current) => !current)}
+                className="flex w-full items-start justify-between gap-4 text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                    <ShieldCheck size={18} />
                   </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">
+                      Vehicle Setup & Compliance Equipment
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      Required onboard systems and safety equipment for LVs and
+                      HVs.
+                    </p>
+                  </div>
+                </div>
 
-                  {form.trailer_defects_found && (
-                    <div className="mt-4">
-                      <TextAreaField
-                        label="Trailer Defect Notes"
-                        value={form.trailer_defect_notes}
-                        onChange={(value) => updateField("trailer_defect_notes", value)}
-                        placeholder="Describe defects found, repairs required or restrictions..."
+                <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
+                  {showVehicleSetup ? "Hide" : "Show"}
+                </span>
+              </button>
+
+              {showVehicleSetup ? (
+                <div className="space-y-5">
+                  <div>
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Electronic Systems
+                    </p>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <SetupItem
+                        label="eHub"
+                        value={vehicle.ehub}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["ehub"],
+                          vehicle.company_onboard_date,
+                          vehicle.ehub,
+                        )}
+                      />
+                      <SetupItem
+                        label="Dashcam"
+                        value={vehicle.dashcam}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["dashcam"],
+                          vehicle.company_onboard_date,
+                          vehicle.dashcam,
+                        )}
+                      />
+                      <SetupItem
+                        label="Alert Button"
+                        value={vehicle.alert_button}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["alert button"],
+                          vehicle.company_onboard_date,
+                          vehicle.alert_button,
+                        )}
+                      />
+                      <SetupItem
+                        label="UHF Radio"
+                        value={vehicle.uhf_radio}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["uhf"],
+                          vehicle.company_onboard_date,
+                          vehicle.uhf_radio,
+                        )}
+                      />
+                      <SetupItem
+                        label="Reverse Squawker"
+                        value={vehicle.reverse_squawker}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["reverse squawker"],
+                          vehicle.company_onboard_date,
+                          vehicle.reverse_squawker,
+                        )}
                       />
                     </div>
-                  )}
-                </Section>
-              </>
-            ) : (
-              <Section
-                title="Vehicle Service"
-                description="Record service details. If no next service date or KM is manually entered, the system uses 6 months and 10,000km."
-              >
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  <Field
-                    label="Service Date"
-                    type="date"
-                    value={form.service_date}
-                    onChange={(value) => updateField("service_date", value)}
-                    required
-                  />
+                  </div>
 
-                  <SelectField
-                    label="Service Type"
-                    value={form.service_type}
-                    onChange={(value) => updateField("service_type", value)}
-                    options={vehicleServiceTypes}
-                    required
-                  />
-
-                  <Field
-                    label="Service Odometer KM"
-                    type="number"
-                    value={form.odometer_km}
-                    onChange={(value) => updateField("odometer_km", value)}
-                    placeholder="Current km at service"
-                  />
-
-                  <Field
-                    label="KM Until Next Service"
-                    type="number"
-                    value={form.service_interval_km}
-                    onChange={(value) => updateField("service_interval_km", value)}
-                    placeholder="Optional, defaults to 10000"
-                  />
-
-                  <Field
-                    label="Next Service KM"
-                    type="number"
-                    value={form.next_service_km}
-                    onChange={(value) => updateField("next_service_km", value)}
-                    placeholder={
-                      calculatedNextServiceKm
-                        ? `${calculatedNextServiceKm.toLocaleString()} calculated`
-                        : "Optional manual override"
-                    }
-                  />
-
-                  <Field
-                    label="Calculated KM Remaining"
-                    value={kmUntilNextServiceDisplay}
-                    onChange={() => undefined}
-                    disabled
-                  />
-
-                  <Field
-                    label="Calculated Next Service Date"
-                    value={calculatedNextServiceDue ? formatDate(calculatedNextServiceDue) : "N/A"}
-                    onChange={() => undefined}
-                    disabled
-                  />
-
-                  <Field
-                    label="Supplier / Mechanic"
-                    value={form.supplier}
-                    onChange={(value) => updateField("supplier", value)}
-                    placeholder="Workshop, mechanic or supplier"
-                  />
-
-                  <Field
-                    label="Invoice Number"
-                    value={form.invoice_number}
-                    onChange={(value) => updateField("invoice_number", value)}
-                    placeholder="Invoice or job number"
-                  />
-
-                  <Field
-                    label="Invoice Cost"
-                    type="number"
-                    value={form.invoice_cost}
-                    onChange={(value) => updateField("invoice_cost", value)}
-                    placeholder="0.00"
-                  />
-
-                  <SelectField
-                    label="Asset Availability"
-                    value={form.status_after_update}
-                    onChange={(value) => updateField("status_after_update", value)}
-                    options={statusOptions}
-                  />
+                  <div>
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Safety Equipment
+                    </p>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <SetupItem
+                        label="Fire Extinguisher"
+                        value={vehicle.fire_extinguisher}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["fire extinguisher"],
+                          vehicle.company_onboard_date,
+                          vehicle.fire_extinguisher,
+                        )}
+                      />
+                      <SetupItem
+                        label="First Aid Kit"
+                        value={vehicle.first_aid_kit}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["first aid"],
+                          vehicle.company_onboard_date,
+                          vehicle.first_aid_kit,
+                        )}
+                      />
+                      <SetupItem
+                        label="Snake Bite Kit"
+                        value={vehicle.snake_bite_kit}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["snake bite"],
+                          vehicle.company_onboard_date,
+                          vehicle.snake_bite_kit,
+                        )}
+                      />
+                      <SetupItem
+                        label="Wheel Nut Indicators"
+                        value={vehicle.wheel_nut_indicators}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["wheel nut"],
+                          vehicle.company_onboard_date,
+                          vehicle.wheel_nut_indicators,
+                        )}
+                      />
+                      <SetupItem
+                        label="Wheel Chocks"
+                        value={vehicle.wheel_chocks}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["wheel chocks"],
+                          vehicle.company_onboard_date,
+                          vehicle.wheel_chocks,
+                        )}
+                      />
+                      <SetupItem
+                        label="Shovel"
+                        value={vehicle.shovel}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["shovel"],
+                          vehicle.company_onboard_date,
+                          vehicle.shovel,
+                        )}
+                      />
+                      <SetupItem
+                        label="Knapsack"
+                        value={vehicle.knapsack}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["knapsack"],
+                          vehicle.company_onboard_date,
+                          vehicle.knapsack,
+                        )}
+                      />
+                      <SetupItem
+                        label="Fuel Card"
+                        value={vehicle.fuel_card}
+                        addedDate={findAddedDate(
+                          serviceHistory,
+                          ["fuel card"],
+                          vehicle.company_onboard_date,
+                          vehicle.fuel_card,
+                        )}
+                      />
+                    </div>
+                  </div>
                 </div>
-              </Section>
-            )}
-          </>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  <p className="font-bold text-slate-800">
+                    Equipment checklist collapsed
+                  </p>
+                  <p className="mt-1">
+                    Click Show to review fitted and missing setup items without
+                    pushing the history sections down the page.
+                  </p>
+                </div>
+              )}
+            </section>
+          </section>
         )}
 
-        {form.update_type === "Modification" && (
-          <>
-            <Section
-              title="Modification / Addition"
-              description="Use a broad modification type and use the description to explain exactly what was added, removed, replaced or repaired."
-            >
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <Field
-                  label="Modification Date"
-                  type="date"
-                  value={form.modification_date}
-                  onChange={(value) => updateField("modification_date", value)}
-                  required
-                />
+        <section className="space-y-5">
+          <div className="space-y-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title={isTrailer ? "Inspection History" : "Service History"}
+                description="Service and inspection records. Service attachments live here, not in documents."
+              />
 
-                <SelectField
-                  label="Modification Type"
-                  value={form.modification_type}
-                  onChange={(value) => updateField("modification_type", value)}
-                  options={modificationTypes}
-                  required
+              {(isTrailer ? inspectionRecords : serviceRecords).length > 0 ? (
+                <div className="space-y-3">
+                  {(isTrailer ? inspectionRecords : serviceRecords).map(
+                    (record) => (
+                      <HistoryCard key={record.id} record={record} />
+                    ),
+                  )}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<Wrench size={18} />}
+                  title={isTrailer ? "No inspections yet" : "No services yet"}
+                  description={
+                    isTrailer
+                      ? "Trailer inspection records will appear here."
+                      : "Vehicle service records will appear here."
+                  }
                 />
-
-                <Field
-                  label="Supplier / Mechanic"
-                  value={form.supplier}
-                  onChange={(value) => updateField("supplier", value)}
-                  placeholder="Workshop, mechanic or supplier"
-                />
-
-                <Field
-                  label="Invoice Number"
-                  value={form.invoice_number}
-                  onChange={(value) => updateField("invoice_number", value)}
-                  placeholder="Invoice or job number"
-                />
-
-                <Field
-                  label="Cost"
-                  type="number"
-                  value={form.invoice_cost}
-                  onChange={(value) => updateField("invoice_cost", value)}
-                  placeholder="0.00"
-                />
-
-                <SelectField
-                  label="Asset Availability"
-                  value={form.status_after_update}
-                  onChange={(value) => updateField("status_after_update", value)}
-                  options={statusOptions}
-                />
-              </div>
-
-              <div className="mt-4">
-                <TextAreaField
-                  label="Modification Description"
-                  value={form.modification_description}
-                  onChange={(value) => updateField("modification_description", value)}
-                  placeholder="Example: Added new fire extinguisher, removed broken wheel chock, replaced battery, installed UHF radio..."
-                  required
-                />
-              </div>
-            </Section>
+              )}
+            </section>
 
             {!isTrailer && (
-              <Section
-                title="Update Fitted Equipment"
-                description="Tick any equipment now fitted to this vehicle after the modification."
-              >
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <CheckField label="eHub fitted" checked={form.ehub} onChange={(value) => updateField("ehub", value)} />
-                  <CheckField label="Dashcam fitted" checked={form.dashcam} onChange={(value) => updateField("dashcam", value)} />
-                  <CheckField label="Alert button fitted" checked={form.alert_button} onChange={(value) => updateField("alert_button", value)} />
-                  <CheckField label="UHF radio fitted" checked={form.uhf_radio} onChange={(value) => updateField("uhf_radio", value)} />
-                  <CheckField label="Reverse squawker fitted" checked={form.reverse_squawker} onChange={(value) => updateField("reverse_squawker", value)} />
-                  <CheckField label="Fire extinguisher" checked={form.fire_extinguisher} onChange={(value) => updateField("fire_extinguisher", value)} />
-                  <CheckField label="First aid kit" checked={form.first_aid_kit} onChange={(value) => updateField("first_aid_kit", value)} />
-                  <CheckField label="Snake bite kit" checked={form.snake_bite_kit} onChange={(value) => updateField("snake_bite_kit", value)} />
-                  <CheckField label="Wheel nut indicators" checked={form.wheel_nut_indicators} onChange={(value) => updateField("wheel_nut_indicators", value)} />
-                  <CheckField label="Wheel chocks" checked={form.wheel_chocks} onChange={(value) => updateField("wheel_chocks", value)} />
-                  <CheckField label="Shovel" checked={form.shovel} onChange={(value) => updateField("shovel", value)} />
-                  <CheckField label="Knapsack" checked={form.knapsack} onChange={(value) => updateField("knapsack", value)} />
-                  <CheckField label="Fuel card issued" checked={form.fuel_card} onChange={(value) => updateField("fuel_card", value)} />
-                </div>
-              </Section>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <SectionHeader
+                  icon={<ShieldCheck size={18} />}
+                  title="Modification / Addition History"
+                  description="Equipment added, replacements, upgrades and other asset changes."
+                />
+
+                {modificationRecords.length > 0 ? (
+                  <div className="space-y-3">
+                    {modificationRecords.map((record) => (
+                      <HistoryCard key={record.id} record={record} />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyCard
+                    icon={<ShieldCheck size={18} />}
+                    title="No modifications yet"
+                    description="Added equipment, spare keys and replacement items will appear here."
+                  />
+                )}
+              </section>
             )}
-          </>
-        )}
 
-        {form.update_type === "Service" && (
-          <Section
-            title="Work Completed"
-            description="Summarise what was completed during the service or inspection."
-          >
-            <TextAreaField
-              label="Work Completed"
-              value={form.work_completed}
-              onChange={(value) => updateField("work_completed", value)}
-              placeholder="Summarise the work completed..."
-              required
-            />
-          </Section>
-        )}
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Car size={18} />}
+                title="Project History"
+                description="Project onboarding, offboarding and movement history."
+              />
 
-        {form.update_type !== "Project Transfer" && (
-          <>
-            <Section
-              title="Recommendations / Follow Up"
-              description="Capture recommendations, issues to monitor or follow-up actions."
-            >
+              {projectHistory.length > 0 ? (
+                <div className="space-y-3">
+                  {projectHistory.map((record) => {
+                    const isExpanded = expandedProjectId === record.id;
+
+                    return (
+                      <div
+                        key={record.id}
+                        className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-bold text-slate-950">
+                              {clean(record.project)}
+                            </p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                              Onboarded:{" "}
+                              {formatDate(record.project_onboard_date)}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedProjectId(
+                                isExpanded ? null : record.id,
+                              )
+                            }
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                          >
+                            {isExpanded ? "Hide Details" : "View Details"}
+                          </button>
+                        </div>
+
+                        {isExpanded ? (
+                          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <p>
+                                <span className="font-bold">Project:</span>{" "}
+                                {clean(record.project)}
+                              </p>
+                              <p>
+                                <span className="font-bold">Crew:</span>{" "}
+                                {clean(record.crew)}
+                              </p>
+                              <p>
+                                <span className="font-bold">Onboarded:</span>{" "}
+                                {formatDate(record.project_onboard_date)}
+                              </p>
+                              <p>
+                                <span className="font-bold">Offboarded:</span>{" "}
+                                {record.project_offboard_date
+                                  ? formatDate(record.project_offboard_date)
+                                  : "Current / Not recorded"}
+                              </p>
+                            </div>
+
+                            <p className="mt-4">
+                              <span className="font-bold">Notes:</span>{" "}
+                              {clean(record.notes)}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<Car size={18} />}
+                  title="No project history yet"
+                  description="Project transfer and onboarding history will appear here once recorded."
+                />
+              )}
+            </section>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<Wrench size={18} />}
+                title="Active Fleet Jobs"
+                description="Open maintenance, defect or fleet jobs linked to this vehicle."
+              />
+
+              {fleetJobs.length > 0 ? (
+                <div className="space-y-3">
+                  {fleetJobs.map((job) => (
+                    <Link
+                      key={job.id}
+                      href={`/assets/fleet-jobs/${job.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {clean(job.job_number)} · {clean(job.title)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Created {formatDate(job.created_at)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(job.status)}
+                          tone={fleetJobTone(job)}
+                        />
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-700">
+                        {clean(job.description)}
+                      </p>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">Priority:</span>{" "}
+                          {clean(job.priority)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Due:</span>{" "}
+                          {formatDate(job.due_date)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Assigned:</span>{" "}
+                          {clean(job.assigned_to)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Reported By:</span>{" "}
+                          {clean(job.reported_by)}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-700">
+                        Open Fleet Job
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<Wrench size={18} />}
+                  title="No active fleet jobs"
+                  description="Open fleet jobs, defects or maintenance requests linked to this vehicle will appear here."
+                />
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<ClipboardCheck size={18} />}
+                title="Recent Prestarts"
+                description="Showing the 3 most recent prestarts for this vehicle."
+              />
+
+              {prestartHistory.length > 0 ? (
+                <div className="space-y-3">
+                  {prestartHistory.map((record) => (
+                    <Link
+                      key={record.id}
+                      href={`/assets/prestarts/${record.id}`}
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {formatDate(
+                              record.prestart_date || record.created_at,
+                            )}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Inspected by {clean(record.inspected_by_name)}
+                          </p>
+                        </div>
+
+                        <StatusBadge
+                          label={clean(record.result)}
+                          tone={
+                            clean(record.severity).toLowerCase() ===
+                              "critical" ||
+                            clean(record.severity).toLowerCase() === "major"
+                              ? "rose"
+                              : clean(record.severity).toLowerCase() === "minor"
+                                ? "amber"
+                                : "emerald"
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                        <p>
+                          <span className="font-bold">KM:</span>{" "}
+                          {record.kilometres !== null &&
+                          record.kilometres !== undefined
+                            ? `${record.kilometres.toLocaleString()} km`
+                            : "N/A"}
+                        </p>
+                        <p>
+                          <span className="font-bold">Severity:</span>{" "}
+                          {clean(record.severity)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Project:</span>{" "}
+                          {clean(record.project)}
+                        </p>
+                        <p>
+                          <span className="font-bold">Crew:</span>{" "}
+                          {clean(record.crew)}
+                        </p>
+                      </div>
+
+                      {record.comments ? (
+                        <p className="mt-3 text-sm text-slate-600">
+                          {record.comments}
+                        </p>
+                      ) : null}
+
+                      <div className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-sky-700">
+                        Open Prestart
+                        <ExternalLink size={13} />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<ClipboardCheck size={18} />}
+                  title="No prestarts yet"
+                  description="The 3 most recent prestarts will appear here once vehicle prestarts are added."
+                />
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<FileText size={18} />}
+                title="Documents"
+                description="Risk assessment, rego, insurance, project documents, pictures and other non-service files."
+              />
+
+              {registerDocuments.length > 0 ? (
+                <div className="space-y-3">
+                  {registerDocuments.map((document) => (
+                    <a
+                      key={document.id}
+                      href={document.file_url ?? "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-xl border border-slate-200 bg-slate-50 p-3 hover:bg-white"
+                    >
+                      <p className="text-sm font-bold text-slate-900">
+                        {clean(document.document_type)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {clean(document.file_name)}
+                      </p>
+                      <p className="mt-2 text-xs text-slate-400">
+                        Uploaded {formatDate(document.created_at)}
+                      </p>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCard
+                  icon={<FileText size={18} />}
+                  title="No documents uploaded"
+                  description="Non-service documents will appear here once attached."
+                />
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <SectionHeader
+                icon={<KeyRound size={18} />}
+                title="Notes"
+                description="General asset notes."
+              />
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                {clean(vehicle.notes)}
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      {editingRecord && editForm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                  Edit History Record
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  {historyTitle(editingRecord)}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingRecord(null);
+                  setEditForm(null);
+                  setReplacementFile(null);
+                }}
+                className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <TextField
+                label="Record Type"
+                value={editForm.record_type}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, record_type: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Supplier / Mechanic"
+                value={editForm.supplier}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, supplier: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Service Date"
+                type="date"
+                value={editForm.service_date}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, service_date: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Inspection Date"
+                type="date"
+                value={editForm.inspection_date}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, inspection_date: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Modification Date"
+                type="date"
+                value={editForm.modification_date}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current
+                      ? { ...current, modification_date: value }
+                      : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Service Type"
+                value={editForm.service_type}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, service_type: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Inspection Type"
+                value={editForm.inspection_type}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, inspection_type: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Modification Type"
+                value={editForm.modification_type}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current
+                      ? { ...current, modification_type: value }
+                      : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Invoice Number"
+                value={editForm.invoice_number}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, invoice_number: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Invoice Cost"
+                type="number"
+                value={editForm.invoice_cost}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, invoice_cost: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Next Service Due"
+                type="date"
+                value={editForm.next_service_due}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, next_service_due: value } : current,
+                  )
+                }
+              />
+
+              <TextField
+                label="Next Inspection Due"
+                type="date"
+                value={editForm.next_inspection_due}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current
+                      ? { ...current, next_inspection_due: value }
+                      : current,
+                  )
+                }
+              />
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <TextAreaField
+                label="Modification Description"
+                value={editForm.modification_description}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current
+                      ? { ...current, modification_description: value }
+                      : current,
+                  )
+                }
+              />
+
+              <TextAreaField
+                label="Work Completed"
+                value={editForm.work_completed}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, work_completed: value } : current,
+                  )
+                }
+              />
+
               <div className="grid gap-4 md:grid-cols-2">
                 <TextAreaField
                   label="Mechanic Recommendations"
-                  value={form.mechanic_recommendations}
-                  onChange={(value) => updateField("mechanic_recommendations", value)}
-                  placeholder="Recommendations from mechanic or supplier..."
+                  value={editForm.mechanic_recommendations}
+                  onChange={(value) =>
+                    setEditForm((current) =>
+                      current
+                        ? { ...current, mechanic_recommendations: value }
+                        : current,
+                    )
+                  }
                 />
 
                 <TextAreaField
                   label="Follow Up Actions"
-                  value={form.follow_up_actions}
-                  onChange={(value) => updateField("follow_up_actions", value)}
-                  placeholder="Who needs to action what and by when..."
+                  value={editForm.follow_up_actions}
+                  onChange={(value) =>
+                    setEditForm((current) =>
+                      current
+                        ? { ...current, follow_up_actions: value }
+                        : current,
+                    )
+                  }
                 />
               </div>
-            </Section>
 
-            <Section
-              title="Notes"
-              description="Digitise important invoice notes or update notes."
-            >
               <TextAreaField
                 label="Invoice / Update Notes"
-                value={form.invoice_notes}
-                onChange={(value) => updateField("invoice_notes", value)}
-                placeholder="Invoice notes, parts replaced, restrictions, warranty notes..."
+                value={editForm.invoice_notes}
+                onChange={(value) =>
+                  setEditForm((current) =>
+                    current ? { ...current, invoice_notes: value } : current,
+                  )
+                }
               />
-            </Section>
 
-            <Section
-              title="Attach Invoice / Report"
-              description="Attach the invoice, service report, modification record or supporting photo. This goes into the service/update history only."
-            >
-              <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-bold text-slate-800">
-                    {invoiceFile ? invoiceFile.name : "No file selected"}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    PDF, image or document upload
-                  </p>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-black text-slate-950">
+                  Service / Modification Attachment
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  View the existing attachment or upload a replacement invoice,
+                  service report, inspection report or receipt.
+                </p>
+
+                <div className="mt-4 space-y-3">
+                  {editingRecord.document_url ? (
+                    <a
+                      href={editingRecord.document_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                    >
+                      <FileText size={14} />
+                      View Current Attachment
+                    </a>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-sm text-slate-500">
+                      No attachment currently saved for this record.
+                    </div>
+                  )}
+
+                  <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">
+                        {replacementFile
+                          ? replacementFile.name
+                          : "No replacement file selected"}
+                      </p>
+
+                      <p className="text-xs text-slate-500">
+                        Uploading a new file will replace the existing
+                        attachment.
+                      </p>
+                    </div>
+
+                    <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-white">
+                      <FileUp size={14} />
+                      Upload Replacement
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                        onChange={(event) => {
+                          setReplacementFile(event.target.files?.[0] ?? null);
+                          event.target.value = "";
+                        }}
+                      />
+                    </span>
+                  </label>
                 </div>
+              </div>
+            </div>
 
-                <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
-                  <FileUp size={14} />
-                  Attach file
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                    onChange={(event) => {
-                      setInvoiceFile(event.target.files?.[0] ?? null);
-                      event.target.value = "";
-                    }}
-                  />
-                </span>
-              </label>
-            </Section>
-          </>
-        )}
+            <div className="mt-5 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingRecord(null);
+                  setEditForm(null);
+                  setReplacementFile(null);
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
 
-        <div className="sticky bottom-4 z-10 flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center sm:justify-end">
-          <Link
-            href="/assets/vehicles"
-            className="inline-flex justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-          >
-            Cancel
-          </Link>
-
-          <button
-            type="submit"
-            disabled={saving || loading}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Save size={16} />
-            {saving ? "Saving Update..." : "Save Asset Update"}
-          </button>
+              <button
+                type="button"
+                disabled={savingHistory}
+                onClick={() => void saveHistoryRecord()}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Save size={16} />
+                {savingHistory ? "Saving..." : "Save Record"}
+              </button>
+            </div>
+          </div>
         </div>
-      </form>
+      ) : null}
     </PageShell>
   );
 }
