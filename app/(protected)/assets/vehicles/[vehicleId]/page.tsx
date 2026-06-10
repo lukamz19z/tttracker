@@ -1459,8 +1459,7 @@ export default function VehicleDetailPage() {
           </section>
         )}
 
-        <section className="grid gap-5 xl:grid-cols-[1fr_0.8fr]">
-          <div className="space-y-5">
+<section className="grid gap-5 xl:grid-cols-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <SectionHeader
                 icon={<Wrench size={18} />}
@@ -1665,7 +1664,7 @@ export default function VehicleDetailPage() {
                 {clean(vehicle.notes)}
               </div>
             </section>
-          </div>
+
         </section>
       </section>
 
