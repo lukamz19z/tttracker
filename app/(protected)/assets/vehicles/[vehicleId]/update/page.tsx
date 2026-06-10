@@ -856,11 +856,18 @@ const calculatedNextServiceDue = useMemo(() => {
         status: form.status_after_update || null,
         rego_expiry: form.rego_expiry || null,
         insurance_expiry: isTrailer ? null : form.insurance_expiry || null,
-        last_service: isTrailer
-          ? null
-          : form.service_date || form.last_service || null,
-        next_service_due:
-          isTrailer ? null : calculatedNextServiceDue || form.next_service_due || null,
+last_service:
+  isTrailer
+    ? null
+    : form.update_type === "Service" && form.service_date
+      ? form.service_date
+      : form.last_service || null,
+next_service_due:
+  isTrailer
+    ? null
+    : form.update_type === "Service" && form.service_date
+      ? addMonths(form.service_date, 6)
+      : calculatedNextServiceDue || form.next_service_due || null,
         next_service_km: isTrailer ? null : calculatedNextServiceKm,
         next_inspection_due: isTrailer ? form.next_inspection_due || null : null,
 
