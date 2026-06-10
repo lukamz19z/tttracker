@@ -1348,33 +1348,7 @@ export default function VehicleDetailPage() {
                   }
                 />
 
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Service Interval
-                  </p>
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <input
-                      type="number"
-                      min="1"
-                      value={serviceIntervalInput}
-                      onChange={(event) =>
-                        setServiceIntervalInput(event.target.value)
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-950 outline-none focus:border-slate-400"
-                    />
-                    <button
-                      type="button"
-                      disabled={savingServiceInterval}
-                      onClick={() => void saveServiceInterval()}
-                      className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-60"
-                    >
-                      {savingServiceInterval ? "Saving" : "Save"}
-                    </button>
-                  </div>
-                  <p className="mt-1 text-xs font-medium text-slate-500">
-                    Asset-specific interval, e.g. 10,000 km or 15,000 km.
-                  </p>
-                </div>
+            
 
                 <ImportantDateCard
                   label="Next Service KM"
