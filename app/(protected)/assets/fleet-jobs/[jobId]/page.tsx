@@ -19,6 +19,7 @@ import {
   Truck,
   Wrench,
   X,
+  Trash2,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { DetailGrid, PageHeader, PageShell, StatusBadge } from "../../components";
@@ -325,6 +326,15 @@ function appendJobNote(existingNotes: string | null, heading: string, body: stri
   return [existingNotes?.trim(), entry].filter(Boolean).join("\n\n");
 }
 
+function extractCloseOutComment(comment: string | null | undefined) {
+  if (!comment) return "";
+
+return comment
+  .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+  .replace(/\n?Asset update record:[\s\S]*$/, "")
+  .trim();
+}
+
 export default function FleetJobDetailPage() {
   const params = useParams();
 
@@ -571,7 +581,10 @@ export default function FleetJobDetailPage() {
     : "/assets/prestarts";
 
   const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
-  const isClosed = job?.status === "Completed" || job?.status === "Closed";
+  const normalisedJobStatus = clean(job?.status).toLowerCase();
+  const isClosed = ["completed", "closed", "complete", "resolved"].includes(
+    normalisedJobStatus,
+  );
   const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
 
   const latestCloseOutUpdate = useMemo(() => {
@@ -801,6 +814,75 @@ Asset update record: ${assetTitle}`;
   }
 
 
+
+  function openCloseOutModalFromExisting() {
+    setShowCloseOutModal(true);
+    setCloseOutForm((current) => ({
+      ...current,
+      history_date: assetHistoryRecord?.history_date || job?.completed_date || todayDate(),
+      history_type:
+        (assetHistoryRecord?.history_type as AssetHistoryType) || current.history_type,
+      title: assetHistoryRecord?.title || job?.title || current.title,
+      description:
+        assetHistoryRecord?.description || job?.description || current.description,
+      vendor: assetHistoryRecord?.vendor || job?.vendor || current.vendor,
+      cost:
+        assetHistoryRecord?.cost !== null &&
+        assetHistoryRecord?.cost !== undefined
+          ? String(assetHistoryRecord.cost)
+          : current.cost,
+      odometer_km:
+        assetHistoryRecord?.odometer_km !== null &&
+        assetHistoryRecord?.odometer_km !== undefined
+          ? String(assetHistoryRecord.odometer_km)
+          : current.odometer_km,
+      engine_hours:
+        assetHistoryRecord?.engine_hours !== null &&
+        assetHistoryRecord?.engine_hours !== undefined
+          ? String(assetHistoryRecord.engine_hours)
+          : current.engine_hours,
+      next_service_due_date:
+        assetHistoryRecord?.next_service_due_date || current.next_service_due_date,
+      next_service_due_km:
+        assetHistoryRecord?.next_service_due_km !== null &&
+        assetHistoryRecord?.next_service_due_km !== undefined
+          ? String(assetHistoryRecord.next_service_due_km)
+          : current.next_service_due_km,
+      next_service_due_hours:
+        assetHistoryRecord?.next_service_due_hours !== null &&
+        assetHistoryRecord?.next_service_due_hours !== undefined
+          ? String(assetHistoryRecord.next_service_due_hours)
+          : current.next_service_due_hours,
+      close_out_comments: extractCloseOutComment(latestCloseOutUpdate?.comment),
+    }));
+  }
+
+  async function deleteCloseOutComment() {
+    if (!job || !latestCloseOutUpdate) return;
+
+    const confirmed = window.confirm(
+      "Delete the close-out comment from this fleet job? This will not delete the asset history record.",
+    );
+
+    if (!confirmed) return;
+
+    setSaving(true);
+
+    const { error } = await supabase
+      .from("fleet_job_updates")
+      .delete()
+      .eq("id", latestCloseOutUpdate.id);
+
+    if (error) {
+      console.error("Failed to delete close-out comment:", error.message);
+      alert(error.message);
+      setSaving(false);
+      return;
+    }
+
+    await loadJob();
+    setSaving(false);
+  }
 
   async function reopenJob() {
     if (!job) return;
@@ -1182,9 +1264,13 @@ Asset update record: ${assetTitle}`;
 
         <aside className="space-y-5">
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">Action Job</h2>
+            <h2 className="text-lg font-bold text-slate-950">
+              {isClosed ? "Job Closed" : "Action Job"}
+            </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Track progress here while the job is active. Once closed, progress updates are locked so the job record stays clean.
+              {isClosed
+                ? "This job is closed. Progress controls are locked; use the actions below to reopen or edit the close-out record."
+                : "Track progress here while the job is active. Once closed, progress updates are locked so the job record stays clean."}
             </p>
 
             {isClosed ? (
@@ -1239,50 +1325,25 @@ Asset update record: ${assetTitle}`;
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowCloseOutModal(true);
-                      setCloseOutForm((current) => ({
-                        ...current,
-                        history_date: assetHistoryRecord?.history_date || job.completed_date || todayDate(),
-                        history_type: (assetHistoryRecord?.history_type as AssetHistoryType) || current.history_type,
-                        title: assetHistoryRecord?.title || job.title || current.title,
-                        description: assetHistoryRecord?.description || job.description || current.description,
-                        vendor: assetHistoryRecord?.vendor || job.vendor || current.vendor,
-                        cost:
-                          assetHistoryRecord?.cost !== null &&
-                          assetHistoryRecord?.cost !== undefined
-                            ? String(assetHistoryRecord.cost)
-                            : current.cost,
-                        odometer_km:
-                          assetHistoryRecord?.odometer_km !== null &&
-                          assetHistoryRecord?.odometer_km !== undefined
-                            ? String(assetHistoryRecord.odometer_km)
-                            : current.odometer_km,
-                        engine_hours:
-                          assetHistoryRecord?.engine_hours !== null &&
-                          assetHistoryRecord?.engine_hours !== undefined
-                            ? String(assetHistoryRecord.engine_hours)
-                            : current.engine_hours,
-                        next_service_due_date:
-                          assetHistoryRecord?.next_service_due_date || current.next_service_due_date,
-                        next_service_due_km:
-                          assetHistoryRecord?.next_service_due_km !== null &&
-                          assetHistoryRecord?.next_service_due_km !== undefined
-                            ? String(assetHistoryRecord.next_service_due_km)
-                            : current.next_service_due_km,
-                        next_service_due_hours:
-                          assetHistoryRecord?.next_service_due_hours !== null &&
-                          assetHistoryRecord?.next_service_due_hours !== undefined
-                            ? String(assetHistoryRecord.next_service_due_hours)
-                            : current.next_service_due_hours,
-                      }));
-                    }}
+                    onClick={openCloseOutModalFromExisting}
                     disabled={saving}
                     className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Settings size={16} />
                     {assetHistoryRecord ? "Edit Close-out Record" : "Record Asset History Again"}
                   </button>
+
+                  {latestCloseOutUpdate ? (
+                    <button
+                      type="button"
+                      onClick={() => void deleteCloseOutComment()}
+                      disabled={saving}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 border border-rose-200 bg-white px-4 text-sm font-bold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Trash2 size={16} />
+                      Delete Close-out Comment
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -1472,6 +1533,28 @@ Asset update record: ${assetTitle}`;
                       <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                         {update.comment}
                       </p>
+
+                      {update.id === latestCloseOutUpdate?.id ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={openCloseOutModalFromExisting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                          >
+                            <Settings size={13} />
+                            Edit Close-out Comment
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void deleteCloseOutComment()}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
+                          >
+                            <Trash2 size={13} />
+                            Delete Close-out Comment
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -1720,7 +1803,7 @@ Asset update record: ${assetTitle}`;
                 className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                Complete Job & Save Asset History
+                {assetHistoryRecord ? "Save Close-out Changes" : "Complete Job & Save Asset History"}
               </button>
             </div>
           </div>
