@@ -71,6 +71,24 @@ type FleetJob = {
   updated_at: string | null;
 };
 
+type FleetJobUpdate = {
+  id: string;
+  fleet_job_id: string;
+  update_type: string | null;
+  status: string | null;
+  comment: string | null;
+  created_at: string | null;
+};
+
+type AssetHistoryRecord = {
+  id: string;
+  fleet_job_id: string | null;
+  history_type: string | null;
+  history_date: string | null;
+  title: string | null;
+  created_at: string | null;
+};
+
 type VehicleAsset = {
   id: string;
   vehicle_id: string | null;
@@ -108,6 +126,12 @@ type EnhancedFleetJob = FleetJob & {
   tone: Tone;
   priorityTone: Tone;
   isPrestartLinked: boolean;
+  latest_update_type: string | null;
+  latest_update_status: string | null;
+  has_asset_history: boolean;
+  status_note: string;
+  displayed_date: string | null;
+  displayed_date_label: "Due" | "Completed";
 };
 
 type JobForm = {
@@ -182,6 +206,7 @@ function csvSafe(value: string | number | null | undefined) {
 
 function dateDisplay(value: string | null | undefined) {
   if (!value) return "N/A";
+
   return new Date(value).toLocaleDateString("en-AU", {
     day: "2-digit",
     month: "short",
@@ -237,6 +262,28 @@ function toFleetJobSource(
 function toAssetType(value: string | null, plantId?: string | null): AssetType {
   if (value === "Plant" || plantId) return "Plant";
   return "Vehicle";
+}
+
+function latestByFleetJob<T extends { fleet_job_id: string | null; created_at: string | null }>(
+  rows: T[],
+) {
+  const map = new Map<string, T>();
+
+  rows.forEach((row) => {
+    if (!row.fleet_job_id) return;
+
+    const existing = map.get(row.fleet_job_id);
+    const existingTime = existing?.created_at
+      ? new Date(existing.created_at).getTime()
+      : 0;
+    const rowTime = row.created_at ? new Date(row.created_at).getTime() : 0;
+
+    if (!existing || rowTime >= existingTime) {
+      map.set(row.fleet_job_id, row);
+    }
+  });
+
+  return map;
 }
 
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
@@ -318,6 +365,8 @@ export default function FleetJobsPage() {
   const [jobs, setJobs] = useState<FleetJob[]>([]);
   const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
   const [plantAssets, setPlantAssets] = useState<PlantAsset[]>([]);
+  const [jobUpdates, setJobUpdates] = useState<FleetJobUpdate[]>([]);
+  const [assetHistory, setAssetHistory] = useState<AssetHistoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -333,47 +382,60 @@ export default function FleetJobsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    const [jobsResult, vehiclesResult, plantResult] = await Promise.all([
-      supabase
-        .from("fleet_jobs")
-        .select("*")
-        .order("created_at", { ascending: false }),
+    const [jobsResult, vehiclesResult, plantResult, updatesResult, assetHistoryResult] =
+      await Promise.all([
+        supabase
+          .from("fleet_jobs")
+          .select("*")
+          .order("updated_at", { ascending: false })
+          .order("created_at", { ascending: false }),
 
-      supabase
-        .from("vehicle_assets")
-        .select(
-          "id, vehicle_id, vehicle_rego, make, model, category, project, crew, status",
-        )
-        .order("vehicle_id", { ascending: true }),
+        supabase
+          .from("vehicle_assets")
+          .select(
+            "id, vehicle_id, vehicle_rego, make, model, category, project, crew, status",
+          )
+          .order("vehicle_id", { ascending: true }),
 
-      supabase
-        .from("plant_assets")
-        .select(
-          "id, asset_id, make, model, plant_type, serial_number, rego, crew, project, asset_status",
-        )
-        .order("asset_id", { ascending: true }),
-    ]);
+        supabase
+          .from("plant_assets")
+          .select(
+            "id, asset_id, make, model, plant_type, serial_number, rego, crew, project, asset_status",
+          )
+          .order("asset_id", { ascending: true }),
 
-    if (jobsResult.error) {
-      console.error("Failed to load fleet jobs:", jobsResult.error.message);
-      setJobs([]);
-    } else {
-      setJobs((jobsResult.data ?? []) as FleetJob[]);
-    }
+        supabase
+          .from("fleet_job_updates")
+          .select("id, fleet_job_id, update_type, status, comment, created_at")
+          .order("created_at", { ascending: false }),
 
-    if (vehiclesResult.error) {
-      console.error("Failed to load vehicles:", vehiclesResult.error.message);
-      setVehicles([]);
-    } else {
-      setVehicles((vehiclesResult.data ?? []) as VehicleAsset[]);
-    }
+        supabase
+          .from("asset_history")
+          .select("id, fleet_job_id, history_type, history_date, title, created_at")
+          .order("created_at", { ascending: false }),
+      ]);
 
-    if (plantResult.error) {
-      console.error("Failed to load plant:", plantResult.error.message);
-      setPlantAssets([]);
-    } else {
-      setPlantAssets((plantResult.data ?? []) as PlantAsset[]);
-    }
+    setJobs(jobsResult.error ? [] : ((jobsResult.data ?? []) as FleetJob[]));
+    setVehicles(
+      vehiclesResult.error ? [] : ((vehiclesResult.data ?? []) as VehicleAsset[]),
+    );
+    setPlantAssets(
+      plantResult.error ? [] : ((plantResult.data ?? []) as PlantAsset[]),
+    );
+    setJobUpdates(
+      updatesResult.error ? [] : ((updatesResult.data ?? []) as FleetJobUpdate[]),
+    );
+    setAssetHistory(
+      assetHistoryResult.error
+        ? []
+        : ((assetHistoryResult.data ?? []) as AssetHistoryRecord[]),
+    );
+
+    if (jobsResult.error) console.error(jobsResult.error.message);
+    if (vehiclesResult.error) console.error(vehiclesResult.error.message);
+    if (plantResult.error) console.error(plantResult.error.message);
+    if (updatesResult.error) console.error(updatesResult.error.message);
+    if (assetHistoryResult.error) console.error(assetHistoryResult.error.message);
 
     setLoading(false);
   }, [supabase]);
@@ -381,6 +443,31 @@ export default function FleetJobsPage() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("fleet-jobs-register-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fleet_jobs" },
+        () => void loadData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "fleet_job_updates" },
+        () => void loadData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "asset_history" },
+        () => void loadData(),
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadData, supabase]);
 
   const vehicleMap = useMemo(() => {
     return new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
@@ -390,13 +477,80 @@ export default function FleetJobsPage() {
     return new Map(plantAssets.map((asset) => [asset.id, asset]));
   }, [plantAssets]);
 
+  const latestUpdateMap = useMemo(() => {
+    return latestByFleetJob(jobUpdates);
+  }, [jobUpdates]);
+
+  const latestCloseOutMap = useMemo(() => {
+    return latestByFleetJob(
+      jobUpdates.filter((update) => {
+        const updateType = clean(update.update_type).toLowerCase();
+        return updateType === "close out" || updateType === "close out edited";
+      }),
+    );
+  }, [jobUpdates]);
+
+  const assetHistoryMap = useMemo(() => {
+    return latestByFleetJob(assetHistory);
+  }, [assetHistory]);
+
   const enhancedJobs = useMemo<EnhancedFleetJob[]>(() => {
     return jobs.map((job) => {
       const resolved_vehicle_id = job.vehicle_id || job.vehicle_asset_id || null;
       const resolved_prestart_id = job.prestart_id || job.source_id || null;
 
       const calculated_asset_type = toAssetType(job.asset_type, job.plant_id);
-      const calculated_status = toFleetJobStatus(job.status);
+
+      const latest_update = latestUpdateMap.get(job.id) ?? null;
+      const latest_close_out = latestCloseOutMap.get(job.id) ?? null;
+      const linked_asset_history = assetHistoryMap.get(job.id) ?? null;
+
+      const raw_status = toFleetJobStatus(job.status);
+      const latest_update_type = clean(latest_update?.update_type);
+      const latest_update_status = clean(latest_update?.status);
+      const latest_update_type_lower = latest_update_type.toLowerCase();
+
+      let calculated_status = raw_status;
+      let status_note = "";
+
+      if (latest_update_type_lower === "reopened") {
+        calculated_status = "Open";
+        status_note = "Reopened";
+      } else if (
+        latest_update_status &&
+        statuses.includes(latest_update_status as FleetJobStatus)
+      ) {
+        calculated_status = latest_update_status as FleetJobStatus;
+      }
+
+      if (
+        latest_close_out &&
+        latest_update_type_lower !== "reopened" &&
+        (raw_status === "Completed" ||
+          raw_status === "Closed" ||
+          latest_update_status === "Completed" ||
+          latest_update_status === "Closed" ||
+          Boolean(job.completed_date))
+      ) {
+        calculated_status = "Completed";
+        status_note =
+          latest_close_out.update_type === "Close Out Edited"
+            ? "Close-out edited"
+            : "Closed out";
+      }
+
+      if (
+        linked_asset_history &&
+        latest_update_type_lower !== "reopened" &&
+        (raw_status === "Completed" ||
+          raw_status === "Closed" ||
+          calculated_status === "Completed" ||
+          Boolean(job.completed_date))
+      ) {
+        calculated_status = "Completed";
+        status_note = status_note || "Asset history recorded";
+      }
+
       const calculated_priority = toFleetJobPriority(job.priority);
       const calculated_source = toFleetJobSource(job.source, job.source_type);
 
@@ -448,6 +602,9 @@ export default function FleetJobsPage() {
         clean(job.source_type).toLowerCase().includes("prestart") ||
         Boolean(job.prestart_id);
 
+      const isDone =
+        calculated_status === "Completed" || calculated_status === "Closed";
+
       return {
         ...job,
         calculated_status,
@@ -461,9 +618,22 @@ export default function FleetJobsPage() {
         tone: getStatusTone(calculated_status),
         priorityTone: getPriorityTone(calculated_priority),
         isPrestartLinked,
+        latest_update_type: latest_update_type || null,
+        latest_update_status: latest_update_status || null,
+        has_asset_history: Boolean(linked_asset_history),
+        status_note,
+        displayed_date: isDone ? job.completed_date : job.due_date,
+        displayed_date_label: isDone ? "Completed" : "Due",
       };
     });
-  }, [jobs, vehicleMap, plantMap]);
+  }, [
+    jobs,
+    vehicleMap,
+    plantMap,
+    latestUpdateMap,
+    latestCloseOutMap,
+    assetHistoryMap,
+  ]);
 
   const filteredJobs = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -479,6 +649,9 @@ export default function FleetJobsPage() {
         job.calculated_source,
         job.calculated_priority,
         job.calculated_status,
+        job.status_note,
+        job.latest_update_type,
+        job.latest_update_status,
         job.project,
         job.crew,
         job.vendor,
@@ -536,6 +709,7 @@ export default function FleetJobsPage() {
       active: active.length,
       overdue: overdue.length,
       prestarts: enhancedJobs.filter((job) => job.isPrestartLinked).length,
+      reopened: enhancedJobs.filter((job) => job.status_note === "Reopened").length,
       completed: enhancedJobs.filter(
         (job) =>
           job.calculated_status === "Completed" ||
@@ -553,6 +727,7 @@ export default function FleetJobsPage() {
       "Source",
       "Priority",
       "Status",
+      "Status Note",
       "Project",
       "Crew",
       "Reported Date",
@@ -571,6 +746,7 @@ export default function FleetJobsPage() {
       job.calculated_source,
       job.calculated_priority,
       job.calculated_status,
+      job.status_note,
       clean(job.project),
       clean(job.crew),
       clean(job.reported_date),
@@ -724,7 +900,7 @@ export default function FleetJobsPage() {
         }
       />
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Total Jobs"
           value={stats.total}
@@ -755,6 +931,14 @@ export default function FleetJobsPage() {
           detail="Auto-linked issues"
           tone="violet"
           icon={<Settings size={22} />}
+        />
+
+        <StatCard
+          label="Reopened"
+          value={stats.reopened}
+          detail="Returned for action"
+          tone="blue"
+          icon={<RefreshCw size={22} />}
         />
 
         <StatCard
@@ -821,7 +1005,7 @@ export default function FleetJobsPage() {
           </select>
 
           <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700">
-            Failed prestart issues now appear here as linked Fleet Jobs.
+            Status is now calculated from Fleet Jobs, Job Updates and Asset History.
           </div>
         </div>
       </section>
@@ -891,18 +1075,26 @@ export default function FleetJobsPage() {
           {
             label: "Status",
             render: (job) => (
-              <StatusPill label={job.calculated_status} tone={job.tone} />
+              <div className="space-y-1">
+                <StatusPill label={job.calculated_status} tone={job.tone} />
+                {job.status_note ? (
+                  <p className="text-xs font-semibold text-slate-500">
+                    {job.status_note}
+                  </p>
+                ) : null}
+              </div>
             ),
           },
           {
-            label: "Due",
+            label: "Date",
             render: (job) => (
               <div>
                 <p className="font-semibold text-slate-950">
-                  {dateDisplay(job.due_date)}
+                  {dateDisplay(job.displayed_date)}
                 </p>
                 <p className="mt-1 text-xs font-semibold text-slate-500">
-                  Reported: {dateDisplay(job.reported_date)}
+                  {job.displayed_date_label} · Reported:{" "}
+                  {dateDisplay(job.reported_date)}
                 </p>
               </div>
             ),
@@ -949,7 +1141,14 @@ export default function FleetJobsPage() {
                 </p>
               </div>
 
-              <StatusPill label={job.calculated_status} tone={job.tone} />
+              <div className="space-y-1 text-right">
+                <StatusPill label={job.calculated_status} tone={job.tone} />
+                {job.status_note ? (
+                  <p className="text-xs font-semibold text-slate-500">
+                    {job.status_note}
+                  </p>
+                ) : null}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
@@ -984,10 +1183,10 @@ export default function FleetJobsPage() {
 
               <div>
                 <p className="text-xs font-bold uppercase text-slate-400">
-                  Due
+                  {job.displayed_date_label}
                 </p>
                 <p className="font-semibold text-slate-800">
-                  {dateDisplay(job.due_date)}
+                  {dateDisplay(job.displayed_date)}
                 </p>
               </div>
             </div>
@@ -1093,13 +1292,7 @@ export default function FleetJobsPage() {
                     <option value="">Select plant</option>
                     {plantAssets.map((asset) => (
                       <option key={asset.id} value={asset.id}>
-                        {[
-                          asset.asset_id,
-                          asset.rego,
-                          asset.make,
-                          asset.model,
-                          asset.plant_type,
-                        ]
+                        {[asset.asset_id, asset.rego, asset.make, asset.model]
                           .map(clean)
                           .filter(Boolean)
                           .join(" · ")}
@@ -1110,15 +1303,28 @@ export default function FleetJobsPage() {
               )}
 
               <label className="grid gap-1.5 md:col-span-2">
-                <span className="text-sm font-bold text-slate-700">
-                  Job Title
-                </span>
+                <span className="text-sm font-bold text-slate-700">Title</span>
                 <input
                   value={form.title}
                   onChange={(event) =>
                     setForm({ ...form, title: event.target.value })
                   }
-                  placeholder="Example: Replace tyre / Service due / Defect from prestart"
+                  placeholder="Example: Repair failed brake light"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5 md:col-span-2">
+                <span className="text-sm font-bold text-slate-700">
+                  Description
+                </span>
+                <textarea
+                  value={form.description}
+                  onChange={(event) =>
+                    setForm({ ...form, description: event.target.value })
+                  }
+                  rows={4}
+                  placeholder="Describe the issue or required action..."
                   className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
                 />
               </label>
@@ -1177,10 +1383,26 @@ export default function FleetJobsPage() {
                   }
                   className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
                 >
-                  {statuses.map((status) => (
-                    <option key={status}>{status}</option>
-                  ))}
+                  {statuses
+                    .filter((status) => status !== "Completed" && status !== "Closed")
+                    .map((status) => (
+                      <option key={status}>{status}</option>
+                    ))}
                 </select>
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">
+                  Reported Date
+                </span>
+                <input
+                  type="date"
+                  value={form.reported_date}
+                  onChange={(event) =>
+                    setForm({ ...form, reported_date: event.target.value })
+                  }
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
               </label>
 
               <label className="grid gap-1.5">
@@ -1197,22 +1419,104 @@ export default function FleetJobsPage() {
                 />
               </label>
 
-              <label className="grid gap-1.5 md:col-span-2">
+              <label className="grid gap-1.5">
                 <span className="text-sm font-bold text-slate-700">
-                  Description
+                  Assigned To
                 </span>
-                <textarea
-                  value={form.description}
+                <input
+                  value={form.assigned_to}
                   onChange={(event) =>
-                    setForm({ ...form, description: event.target.value })
+                    setForm({ ...form, assigned_to: event.target.value })
                   }
-                  rows={4}
+                  placeholder="Employee or mechanic"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">
+                  Vendor / Mechanic
+                </span>
+                <input
+                  value={form.vendor}
+                  onChange={(event) =>
+                    setForm({ ...form, vendor: event.target.value })
+                  }
+                  placeholder="Workshop or supplier"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">
+                  Project
+                </span>
+                <input
+                  value={form.project}
+                  onChange={(event) =>
+                    setForm({ ...form, project: event.target.value })
+                  }
+                  placeholder="Optional"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">Crew</span>
+                <input
+                  value={form.crew}
+                  onChange={(event) =>
+                    setForm({ ...form, crew: event.target.value })
+                  }
+                  placeholder="Optional"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">
+                  Reported By
+                </span>
+                <input
+                  value={form.reported_by}
+                  onChange={(event) =>
+                    setForm({ ...form, reported_by: event.target.value })
+                  }
+                  placeholder="Optional"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="text-sm font-bold text-slate-700">
+                  Cost Estimate
+                </span>
+                <input
+                  type="number"
+                  value={form.cost}
+                  onChange={(event) =>
+                    setForm({ ...form, cost: event.target.value })
+                  }
+                  placeholder="0.00"
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                />
+              </label>
+
+              <label className="grid gap-1.5 md:col-span-2">
+                <span className="text-sm font-bold text-slate-700">Notes</span>
+                <textarea
+                  value={form.notes}
+                  onChange={(event) =>
+                    setForm({ ...form, notes: event.target.value })
+                  }
+                  rows={3}
+                  placeholder="Optional internal notes..."
                   className="rounded-xl border border-slate-200 px-4 py-3 text-sm"
                 />
               </label>
             </div>
 
-            <div className="mt-5 flex justify-end gap-3">
+            <div className="mt-6 flex justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setShowCreate(false)}
@@ -1227,7 +1531,7 @@ export default function FleetJobsPage() {
                 disabled={saving || !form.title.trim()}
                 className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? "Saving..." : "Create Job"}
+                {saving ? "Saving..." : "Create Fleet Job"}
               </button>
             </div>
           </div>
