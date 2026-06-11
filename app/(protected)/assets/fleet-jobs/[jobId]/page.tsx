@@ -581,11 +581,6 @@ export default function FleetJobDetailPage() {
     : "/assets/prestarts";
 
   const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
-  const normalisedJobStatus = clean(job?.status).toLowerCase();
-  const isClosed = ["completed", "closed", "complete", "resolved"].includes(
-    normalisedJobStatus,
-  );
-  const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
 
   const latestCloseOutUpdate = useMemo(() => {
     return updates.find(
@@ -594,6 +589,19 @@ export default function FleetJobDetailPage() {
         update.update_type === "Close Out Edited",
     );
   }, [updates]);
+
+  const normalisedJobStatus = clean(job?.status).toLowerCase();
+  const jobStatusIsClosed = ["completed", "closed", "complete", "resolved"].includes(
+    normalisedJobStatus,
+  );
+
+  const isClosed =
+    jobStatusIsClosed || Boolean(assetHistoryRecord) || Boolean(latestCloseOutUpdate);
+
+  const closedWithoutAssetHistory =
+    (jobStatusIsClosed || Boolean(latestCloseOutUpdate)) && !assetHistoryRecord;
+
+  const displayStatus = isClosed ? "Completed" : job?.status || "Open";
 
   const visibleUpdates = useMemo(() => {
     const progressUpdates = updates.filter(
@@ -747,7 +755,13 @@ Asset update record: ${assetTitle}`;
           .from("asset_history")
           .update(assetHistoryPayload)
           .eq("id", assetHistoryRecord.id)
-      : await supabase.from("asset_history").insert(assetHistoryPayload);
+          .select("*")
+          .single()
+      : await supabase
+          .from("asset_history")
+          .insert(assetHistoryPayload)
+          .select("*")
+          .single();
 
     const historyError = historyResult.error;
 
@@ -756,6 +770,11 @@ Asset update record: ${assetTitle}`;
       alert(historyError.message);
       setSaving(false);
       return;
+    }
+
+    const savedAssetHistory = (historyResult.data as AssetHistoryRecord) || null;
+    if (savedAssetHistory) {
+      setAssetHistoryRecord(savedAssetHistory);
     }
 
     const closeOutUpdateResult =
@@ -809,6 +828,19 @@ Asset update record: ${assetTitle}`;
     }
 
     setShowCloseOutModal(false);
+    setStatus("Completed");
+    setJob((current) =>
+      current
+        ? {
+            ...current,
+            status: "Completed",
+            completed_date: closeOutForm.history_date,
+            vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
+            cost: numberOrNull(closeOutForm.cost),
+            updated_at: new Date().toISOString(),
+          }
+        : current,
+    );
     await loadJob();
     setSaving(false);
   }
@@ -1001,7 +1033,7 @@ Asset update record: ${assetTitle}`;
       <section className="grid gap-4 md:grid-cols-4">
         <SummaryCard
           label="Status"
-          value={job.status || "Open"}
+          value={displayStatus}
           icon={<ClipboardList size={20} />}
           tone={toneForStatus(job.status)}
         />
@@ -1037,7 +1069,7 @@ Asset update record: ${assetTitle}`;
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <StatusBadge label={job.status || "Open"} tone={toneForStatus(job.status)} />
+                <StatusBadge label={displayStatus} tone={toneForStatus(displayStatus)} />
                 <StatusBadge label={job.priority || "Medium"} tone={toneForPriority(job.priority)} />
               </div>
             </div>
@@ -1484,7 +1516,7 @@ Asset update record: ${assetTitle}`;
             </h2>
 
             <div className="mt-4 space-y-3 text-sm">
-              <InfoRow label="Current Status" value={job.status || "Open"} />
+              <InfoRow label="Current Status" value={displayStatus} />
               <InfoRow label="Completed Date" value={dateDisplay(job.completed_date)} />
               <InfoRow label="Vendor" value={job.vendor || "N/A"} />
               <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
