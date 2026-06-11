@@ -390,6 +390,7 @@ export default function FleetJobDetailPage() {
   const [progressUpdate, setProgressUpdate] = useState("");
 
   const [showCloseOutModal, setShowCloseOutModal] = useState(false);
+  const [showClosedJobUpdates, setShowClosedJobUpdates] = useState(false);
   const [closeOutForm, setCloseOutForm] = useState<CloseOutForm>({
     history_type: "Repair",
     history_date: todayDate(),
@@ -654,6 +655,9 @@ export default function FleetJobDetailPage() {
     return [latestCloseOutUpdate, ...progressUpdates];
   }, [updates, assetHistoryRecord, latestCloseOutUpdate]);
 
+  const jobUpdateCount = visibleUpdates.length;
+  const shouldShowJobUpdates = !isClosed || showClosedJobUpdates;
+
   async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
 
@@ -880,6 +884,7 @@ Asset update record: ${assetTitle}`;
 
     setShowCloseOutModal(false);
     setJobModeOverride("closed");
+    setShowClosedJobUpdates(false);
     setStatus("Completed");
     setCompletedDate(closeOutForm.history_date);
     const closedJob =
@@ -1047,6 +1052,7 @@ Asset update record: ${assetTitle}`;
           };
 
     setJobModeOverride("open");
+    setShowClosedJobUpdates(false);
     setJob(reopenedJob);
     setStatus("Open");
     setPriority(job.priority || "Medium");
@@ -1813,105 +1819,146 @@ Asset update record: ${assetTitle}`;
           </section>
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
-              <CheckCircle2 size={20} />
-              Job Updates
-            </h2>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
+                  <CheckCircle2 size={20} />
+                  Job Updates
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  {isClosed
+                    ? "Closed jobs keep the audit trail collapsed so the close-out view stays clean."
+                    : "Progress updates, reopen notes and close-out history for this fleet job."}
+                </p>
+              </div>
 
-            <div className="mt-4 space-y-3 text-sm">
-              <InfoRow label="Current Status" value={displayStatus} />
-              <InfoRow
-                label="Completed Date"
-                value={dateDisplay(job.completed_date)}
-              />
-              <InfoRow label="Vendor" value={job.vendor || "N/A"} />
-              <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
-              <InfoRow
-                label="Last Updated"
-                value={dateDisplay(job.updated_at)}
-              />
+              {isClosed ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowClosedJobUpdates((current) => !current)
+                  }
+                  className="shrink-0 border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                >
+                  {showClosedJobUpdates
+                    ? "Hide Updates"
+                    : `Show Updates (${jobUpdateCount})`}
+                </button>
+              ) : null}
             </div>
 
-            {closedWithoutAssetHistory ? (
-              <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                <p className="font-black">Asset history record missing</p>
-                <p className="mt-1">
-                  This job is marked as closed, but the linked asset history
-                  record has been deleted or cannot be found. The stale
-                  close-out entry is hidden below. Reopen the job or record the
-                  asset history again.
-                </p>
+            {isClosed && !showClosedJobUpdates ? (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <InfoRow label="Current Status" value={displayStatus} />
+                  <InfoRow
+                    label="Completed Date"
+                    value={dateDisplay(job.completed_date)}
+                  />
+                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
+                  <InfoRow label="Updates" value={jobUpdateCount.toString()} />
+                </div>
               </div>
             ) : null}
 
-            <div className="mt-5 border-t border-slate-200 pt-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Progress / Close-out History
-              </p>
+            {shouldShowJobUpdates ? (
+              <>
+                <div className="mt-4 space-y-3 text-sm">
+                  <InfoRow label="Current Status" value={displayStatus} />
+                  <InfoRow
+                    label="Completed Date"
+                    value={dateDisplay(job.completed_date)}
+                  />
+                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
+                  <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
+                  <InfoRow
+                    label="Last Updated"
+                    value={dateDisplay(job.updated_at)}
+                  />
+                </div>
 
-              {visibleUpdates.length > 0 ? (
-                <div className="mt-3 space-y-3">
-                  {visibleUpdates.map((update) => (
-                    <div
-                      key={update.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-950">
-                            {update.update_type}
+                {closedWithoutAssetHistory ? (
+                  <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                    <p className="font-black">Asset history record missing</p>
+                    <p className="mt-1">
+                      This job is marked as closed, but the linked asset history
+                      record has been deleted or cannot be found. The stale
+                      close-out entry is hidden below. Reopen the job or record
+                      the asset history again.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Progress / Close-out History
+                  </p>
+
+                  {visibleUpdates.length > 0 ? (
+                    <div className="mt-3 space-y-3">
+                      {visibleUpdates.map((update) => (
+                        <div
+                          key={update.id}
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold text-slate-950">
+                                {update.update_type}
+                              </p>
+
+                              {update.status ? (
+                                <p className="mt-1 text-xs font-semibold text-slate-500">
+                                  Status: {update.status}
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <p className="text-right text-xs font-semibold text-slate-500">
+                              {dateTimeDisplay(update.created_at)}
+                            </p>
+                          </div>
+
+                          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {update.comment}
                           </p>
 
-                          {update.status ? (
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              Status: {update.status}
-                            </p>
+                          {update.id === latestCloseOutUpdate?.id ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={openCloseOutModalFromExisting}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                              >
+                                <Settings size={13} />
+                                Edit Close-out Comment
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void deleteCloseOutComment()}
+                                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
+                              >
+                                <Trash2 size={13} />
+                                Delete Close-out Comment
+                              </button>
+                            </div>
                           ) : null}
                         </div>
-
-                        <p className="text-right text-xs font-semibold text-slate-500">
-                          {dateTimeDisplay(update.created_at)}
-                        </p>
-                      </div>
-
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                        {update.comment}
-                      </p>
-
-                      {update.id === latestCloseOutUpdate?.id ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={openCloseOutModalFromExisting}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                          >
-                            <Settings size={13} />
-                            Edit Close-out Comment
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => void deleteCloseOutComment()}
-                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 size={13} />
-                            Delete Close-out Comment
-                          </button>
-                        </div>
-                      ) : null}
+                      ))}
                     </div>
-                  ))}
+                  ) : job.notes ? (
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {job.notes}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm leading-6 text-slate-700">
+                      No progress or close-out comments recorded.
+                    </p>
+                  )}
                 </div>
-              ) : job.notes ? (
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                  {job.notes}
-                </p>
-              ) : (
-                <p className="mt-2 text-sm leading-6 text-slate-700">
-                  No progress or close-out comments recorded.
-                </p>
-              )}
-            </div>
+              </>
+            ) : null}
           </section>
         </aside>
       </section>
