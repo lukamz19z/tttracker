@@ -151,6 +151,13 @@ type CloseOutForm = {
   close_out_comments: string;
 };
 
+type FaultCorrection = {
+  id: string;
+  fault: string;
+  prestart_comment: string;
+  correction: string;
+};
+
 const statuses = [
   "Open",
   "In Progress",
@@ -322,12 +329,96 @@ function getPrestartFlaggedItems(
 function formatIssueLabel(item: string) {
   const [rawLabel, ...commentParts] = item.split(" - ");
   const label = rawLabel
-    .replaceAll("_", " ")
+    .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
   const comment = commentParts.join(" - ");
 
   return { label, comment };
 }
+
+const faultCorrectionJsonStart = "[[FAULT_CORRECTIONS_JSON_START]]";
+const faultCorrectionJsonEnd = "[[FAULT_CORRECTIONS_JSON_END]]";
+
+function correctionRowId(value: string, index: number) {
+  return `${value.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index}`;
+}
+
+function buildFaultCorrectionsFromFailedItems(items: string[]): FaultCorrection[] {
+  return items.map((item, index) => {
+    const { label, comment } = formatIssueLabel(item);
+
+    return {
+      id: correctionRowId(label, index),
+      fault: label,
+      prestart_comment: comment || "No additional prestart comment provided.",
+      correction: "",
+    };
+  });
+}
+
+function stripFaultCorrectionJson(value: string) {
+  const startIndex = value.indexOf(faultCorrectionJsonStart);
+  const endIndex = value.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1) return value;
+
+  return `${value.slice(0, startIndex)}${value.slice(
+    endIndex + faultCorrectionJsonEnd.length,
+  )}`;
+}
+
+function parseFaultCorrectionsFromComment(
+  comment: string | null | undefined,
+): FaultCorrection[] {
+  if (!comment) return [];
+
+  const startIndex = comment.indexOf(faultCorrectionJsonStart);
+  const endIndex = comment.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return [];
+  }
+
+  const rawJson = comment
+    .slice(startIndex + faultCorrectionJsonStart.length, endIndex)
+    .trim();
+
+  try {
+    const parsed = JSON.parse(rawJson) as FaultCorrection[];
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((row, index) => ({
+        id: row.id || correctionRowId(row.fault || `fault-${index}`, index),
+        fault: clean(row.fault) || `Fault ${index + 1}`,
+        prestart_comment:
+          clean(row.prestart_comment) || "No additional prestart comment provided.",
+        correction: clean(row.correction),
+      }))
+      .filter((row) => row.fault);
+  } catch {
+    return [];
+  }
+}
+
+function buildFaultCorrectionText(corrections: FaultCorrection[]) {
+  if (corrections.length === 0) return "";
+
+  const readable = corrections
+    .map(
+      (row, index) =>
+        `${index + 1}. ${row.fault}
+Prestart comment: ${row.prestart_comment || "N/A"}
+Mechanic correction: ${row.correction || "N/A"}`,
+    )
+    .join("\n\n");
+
+  return `Fault Corrections:\n${readable}\n\n${faultCorrectionJsonStart}\n${JSON.stringify(
+    corrections,
+  )}\n${faultCorrectionJsonEnd}`;
+}
+
 
 function appendJobNote(
   existingNotes: string | null,
@@ -341,7 +432,10 @@ function appendJobNote(
 function extractCloseOutComment(comment: string | null | undefined) {
   if (!comment) return "";
 
-  return comment
+  const withoutJson = stripFaultCorrectionJson(comment);
+
+  return withoutJson
+    .replace(/\n?Fault Corrections:[\s\S]*$/, "")
     .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
     .replace(/\n?Asset update record:[\s\S]*$/, "")
     .trim();
@@ -390,7 +484,7 @@ export default function FleetJobDetailPage() {
   const [progressUpdate, setProgressUpdate] = useState("");
 
   const [showCloseOutModal, setShowCloseOutModal] = useState(false);
-  const [showClosedJobUpdates, setShowClosedJobUpdates] = useState(false);
+  const [faultCorrections, setFaultCorrections] = useState<FaultCorrection[]>([]);
   const [closeOutForm, setCloseOutForm] = useState<CloseOutForm>({
     history_type: "Repair",
     history_date: todayDate(),
@@ -605,7 +699,10 @@ export default function FleetJobDetailPage() {
     ? `/assets/prestarts/${resolvedPrestartId}`
     : "/assets/prestarts";
 
-  const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
+  const failedItems = useMemo(
+    () => (job ? getPrestartFlaggedItems(prestart, job) : []),
+    [job, prestart],
+  );
 
   const latestCloseOutUpdate = useMemo(() => {
     return updates.find(
@@ -614,6 +711,11 @@ export default function FleetJobDetailPage() {
         update.update_type === "Close Out Edited",
     );
   }, [updates]);
+
+  const closeOutFaultCorrections = useMemo(
+    () => parseFaultCorrectionsFromComment(latestCloseOutUpdate?.comment),
+    [latestCloseOutUpdate],
+  );
 
   const normalisedJobStatus = clean(job?.status).toLowerCase();
   const jobStatusIsClosed = [
@@ -654,9 +756,6 @@ export default function FleetJobDetailPage() {
 
     return [latestCloseOutUpdate, ...progressUpdates];
   }, [updates, assetHistoryRecord, latestCloseOutUpdate]);
-
-  const jobUpdateCount = visibleUpdates.length;
-  const shouldShowJobUpdates = !isClosed || showClosedJobUpdates;
 
   async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
@@ -753,12 +852,32 @@ export default function FleetJobDetailPage() {
       return;
     }
 
+    const missingCorrection = faultCorrections.find(
+      (row) => !row.correction.trim(),
+    );
+
+    if (faultCorrections.length > 0 && missingCorrection) {
+      alert(`Add the mechanic correction for: ${missingCorrection.fault}`);
+      return;
+    }
+
     setSaving(true);
 
-    const closeOutComment = `${closeOutForm.close_out_comments.trim()}
+    const correctionText = buildFaultCorrectionText(
+      faultCorrections.map((row) => ({
+        ...row,
+        correction: row.correction.trim(),
+      })),
+    );
 
-Asset history recorded as: ${closeOutForm.history_type}
-Asset update record: ${assetTitle}`;
+    const closeOutComment = [
+      closeOutForm.close_out_comments.trim(),
+      correctionText,
+      `Asset history recorded as: ${closeOutForm.history_type}`,
+      `Asset update record: ${assetTitle}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const finalNotes = appendJobNote(
       job.notes || null,
@@ -884,7 +1003,6 @@ Asset update record: ${assetTitle}`;
 
     setShowCloseOutModal(false);
     setJobModeOverride("closed");
-    setShowClosedJobUpdates(false);
     setStatus("Completed");
     setCompletedDate(closeOutForm.history_date);
     const closedJob =
@@ -907,6 +1025,15 @@ Asset update record: ${assetTitle}`;
   }
 
   function openCloseOutModalFromExisting() {
+    const parsedCorrections = parseFaultCorrectionsFromComment(
+      latestCloseOutUpdate?.comment,
+    );
+
+    setFaultCorrections(
+      parsedCorrections.length > 0
+        ? parsedCorrections
+        : buildFaultCorrectionsFromFailedItems(failedItems),
+    );
     setShowCloseOutModal(true);
     setCloseOutForm((current) => ({
       ...current,
@@ -1052,7 +1179,6 @@ Asset update record: ${assetTitle}`;
           };
 
     setJobModeOverride("open");
-    setShowClosedJobUpdates(false);
     setJob(reopenedJob);
     setStatus("Open");
     setPriority(job.priority || "Medium");
@@ -1209,14 +1335,54 @@ Asset update record: ${assetTitle}`;
                   />
                 </div>
 
+                {closeOutFaultCorrections.length > 0 ? (
+                  <section className="mt-5 rounded-2xl border border-emerald-200 bg-white p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                      Fault Corrections
+                    </p>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full min-w-[720px] border-collapse text-sm">
+                        <thead>
+                          <tr className="border-y border-slate-200 bg-slate-50">
+                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                              Flagged fault
+                            </th>
+                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                              Prestart comment
+                            </th>
+                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                              Mechanic correction
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {closeOutFaultCorrections.map((row) => (
+                            <tr key={row.id} className="border-b border-slate-100">
+                              <td className="px-3 py-3 align-top font-bold text-slate-950">
+                                {row.fault}
+                              </td>
+                              <td className="px-3 py-3 align-top text-slate-600">
+                                {row.prestart_comment}
+                              </td>
+                              <td className="px-3 py-3 align-top font-semibold text-emerald-800">
+                                {row.correction}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+
                 {latestCloseOutUpdate ? (
                   <div className="mt-5 rounded-2xl border border-emerald-200 bg-white p-4">
                     <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
-                      Close-out Comment
+                      General Close-out Comment
                     </p>
                     <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                       {extractCloseOutComment(latestCloseOutUpdate.comment) ||
-                        latestCloseOutUpdate.comment}
+                        "No general close-out comment recorded."}
                     </p>
                   </div>
                 ) : null}
@@ -1806,7 +1972,10 @@ Asset update record: ${assetTitle}`;
 
                   <button
                     type="button"
-                    onClick={() => setShowCloseOutModal(true)}
+                    onClick={() => {
+                      setFaultCorrections(buildFaultCorrectionsFromFailedItems(failedItems));
+                      setShowCloseOutModal(true);
+                    }}
                     disabled={saving}
                     className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1819,146 +1988,105 @@ Asset update record: ${assetTitle}`;
           </section>
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
-                  <CheckCircle2 size={20} />
-                  Job Updates
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  {isClosed
-                    ? "Closed jobs keep the audit trail collapsed so the close-out view stays clean."
-                    : "Progress updates, reopen notes and close-out history for this fleet job."}
-                </p>
-              </div>
+            <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
+              <CheckCircle2 size={20} />
+              Job Updates
+            </h2>
 
-              {isClosed ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowClosedJobUpdates((current) => !current)
-                  }
-                  className="shrink-0 border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
-                >
-                  {showClosedJobUpdates
-                    ? "Hide Updates"
-                    : `Show Updates (${jobUpdateCount})`}
-                </button>
-              ) : null}
+            <div className="mt-4 space-y-3 text-sm">
+              <InfoRow label="Current Status" value={displayStatus} />
+              <InfoRow
+                label="Completed Date"
+                value={dateDisplay(job.completed_date)}
+              />
+              <InfoRow label="Vendor" value={job.vendor || "N/A"} />
+              <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
+              <InfoRow
+                label="Last Updated"
+                value={dateDisplay(job.updated_at)}
+              />
             </div>
 
-            {isClosed && !showClosedJobUpdates ? (
-              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <InfoRow label="Current Status" value={displayStatus} />
-                  <InfoRow
-                    label="Completed Date"
-                    value={dateDisplay(job.completed_date)}
-                  />
-                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
-                  <InfoRow label="Updates" value={jobUpdateCount.toString()} />
-                </div>
+            {closedWithoutAssetHistory ? (
+              <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                <p className="font-black">Asset history record missing</p>
+                <p className="mt-1">
+                  This job is marked as closed, but the linked asset history
+                  record has been deleted or cannot be found. The stale
+                  close-out entry is hidden below. Reopen the job or record the
+                  asset history again.
+                </p>
               </div>
             ) : null}
 
-            {shouldShowJobUpdates ? (
-              <>
-                <div className="mt-4 space-y-3 text-sm">
-                  <InfoRow label="Current Status" value={displayStatus} />
-                  <InfoRow
-                    label="Completed Date"
-                    value={dateDisplay(job.completed_date)}
-                  />
-                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
-                  <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
-                  <InfoRow
-                    label="Last Updated"
-                    value={dateDisplay(job.updated_at)}
-                  />
-                </div>
+            <div className="mt-5 border-t border-slate-200 pt-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Progress / Close-out History
+              </p>
 
-                {closedWithoutAssetHistory ? (
-                  <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                    <p className="font-black">Asset history record missing</p>
-                    <p className="mt-1">
-                      This job is marked as closed, but the linked asset history
-                      record has been deleted or cannot be found. The stale
-                      close-out entry is hidden below. Reopen the job or record
-                      the asset history again.
-                    </p>
-                  </div>
-                ) : null}
-
-                <div className="mt-5 border-t border-slate-200 pt-5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Progress / Close-out History
-                  </p>
-
-                  {visibleUpdates.length > 0 ? (
-                    <div className="mt-3 space-y-3">
-                      {visibleUpdates.map((update) => (
-                        <div
-                          key={update.id}
-                          className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-bold text-slate-950">
-                                {update.update_type}
-                              </p>
-
-                              {update.status ? (
-                                <p className="mt-1 text-xs font-semibold text-slate-500">
-                                  Status: {update.status}
-                                </p>
-                              ) : null}
-                            </div>
-
-                            <p className="text-right text-xs font-semibold text-slate-500">
-                              {dateTimeDisplay(update.created_at)}
-                            </p>
-                          </div>
-
-                          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                            {update.comment}
+              {visibleUpdates.length > 0 ? (
+                <div className="mt-3 space-y-3">
+                  {visibleUpdates.map((update) => (
+                    <div
+                      key={update.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">
+                            {update.update_type}
                           </p>
 
-                          {update.id === latestCloseOutUpdate?.id ? (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={openCloseOutModalFromExisting}
-                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                              >
-                                <Settings size={13} />
-                                Edit Close-out Comment
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => void deleteCloseOutComment()}
-                                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
-                              >
-                                <Trash2 size={13} />
-                                Delete Close-out Comment
-                              </button>
-                            </div>
+                          {update.status ? (
+                            <p className="mt-1 text-xs font-semibold text-slate-500">
+                              Status: {update.status}
+                            </p>
                           ) : null}
                         </div>
-                      ))}
+
+                        <p className="text-right text-xs font-semibold text-slate-500">
+                          {dateTimeDisplay(update.created_at)}
+                        </p>
+                      </div>
+
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                        {update.comment}
+                      </p>
+
+                      {update.id === latestCloseOutUpdate?.id ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={openCloseOutModalFromExisting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                          >
+                            <Settings size={13} />
+                            Edit Close-out Comment
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void deleteCloseOutComment()}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
+                          >
+                            <Trash2 size={13} />
+                            Delete Close-out Comment
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
-                  ) : job.notes ? (
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {job.notes}
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-sm leading-6 text-slate-700">
-                      No progress or close-out comments recorded.
-                    </p>
-                  )}
+                  ))}
                 </div>
-              </>
-            ) : null}
+              ) : job.notes ? (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {job.notes}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  No progress or close-out comments recorded.
+                </p>
+              )}
+            </div>
           </section>
         </aside>
       </section>
@@ -2160,6 +2288,72 @@ Asset update record: ${assetTitle}`;
                     />
                   </label>
                 </>
+              ) : null}
+
+              {faultCorrections.length > 0 ? (
+                <section className="md:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-wide text-amber-700">
+                        Fault Correction Table
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-amber-800">
+                        Reply to each prestart fault so the close-out reads clearly for the mechanic and office review.
+                      </p>
+                    </div>
+
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-amber-700 shadow-sm">
+                      {faultCorrections.length} fault{faultCorrections.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full min-w-[820px] border-collapse bg-white text-sm">
+                      <thead>
+                        <tr className="border-y border-amber-100 bg-amber-50">
+                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
+                            Flagged fault
+                          </th>
+                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
+                            Prestart comment
+                          </th>
+                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
+                            Mechanic correction
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {faultCorrections.map((row, index) => (
+                          <tr key={row.id} className="border-b border-amber-50">
+                            <td className="w-[24%] px-3 py-3 align-top font-bold text-slate-950">
+                              {row.fault}
+                            </td>
+                            <td className="w-[32%] px-3 py-3 align-top text-slate-600">
+                              {row.prestart_comment}
+                            </td>
+                            <td className="px-3 py-3 align-top">
+                              <textarea
+                                value={row.correction}
+                                onChange={(event) =>
+                                  setFaultCorrections((current) =>
+                                    current.map((item, currentIndex) =>
+                                      currentIndex === index
+                                        ? { ...item, correction: event.target.value }
+                                        : item,
+                                    ),
+                                  )
+                                }
+                                rows={3}
+                                placeholder="Example: Replaced globe and tested OK..."
+                                className="w-full border border-amber-200 bg-white px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-500"
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
               ) : null}
 
               <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
