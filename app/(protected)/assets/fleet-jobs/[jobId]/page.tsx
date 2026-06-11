@@ -360,7 +360,6 @@ export default function FleetJobDetailPage() {
   const [vendor, setVendor] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [completedDate, setCompletedDate] = useState("");
   const [cost, setCost] = useState("");
   const [progressUpdate, setProgressUpdate] = useState("");
 
@@ -414,7 +413,6 @@ export default function FleetJobDetailPage() {
     setVendor(loadedJob.vendor || "");
     setAssignedTo(loadedJob.assigned_to || "");
     setDueDate(loadedJob.due_date || "");
-    setCompletedDate(loadedJob.completed_date || "");
     setCost(
       loadedJob.cost !== null && loadedJob.cost !== undefined
         ? String(loadedJob.cost)
@@ -575,10 +573,28 @@ export default function FleetJobDetailPage() {
   const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
   const isClosed = job?.status === "Completed" || job?.status === "Closed";
   const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
-  const visibleUpdates = updates.filter((update) => {
-    if (update.update_type !== "Close Out") return true;
-    return Boolean(assetHistoryRecord);
-  });
+
+  const latestCloseOutUpdate = useMemo(() => {
+    return updates.find(
+      (update) =>
+        update.update_type === "Close Out" ||
+        update.update_type === "Close Out Edited",
+    );
+  }, [updates]);
+
+  const visibleUpdates = useMemo(() => {
+    const progressUpdates = updates.filter(
+      (update) =>
+        update.update_type !== "Close Out" &&
+        update.update_type !== "Close Out Edited",
+    );
+
+    if (!assetHistoryRecord || !latestCloseOutUpdate) {
+      return progressUpdates;
+    }
+
+    return [latestCloseOutUpdate, ...progressUpdates];
+  }, [updates, assetHistoryRecord, latestCloseOutUpdate]);
 
   async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
@@ -729,18 +745,30 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
-    const { error: closeOutUpdateError } = await supabase
-      .from("fleet_job_updates")
-      .insert({
-        fleet_job_id: job.id,
-        update_type: assetHistoryRecord ? "Close Out Edited" : "Close Out",
-        status: "Completed",
-        comment: closeOutComment,
-      });
+    const closeOutUpdateResult =
+      assetHistoryRecord && latestCloseOutUpdate
+        ? await supabase
+            .from("fleet_job_updates")
+            .update({
+              update_type: "Close Out Edited",
+              status: "Completed",
+              comment: closeOutComment,
+              created_at: new Date().toISOString(),
+            })
+            .eq("id", latestCloseOutUpdate.id)
+        : await supabase.from("fleet_job_updates").insert({
+            fleet_job_id: job.id,
+            update_type: assetHistoryRecord ? "Close Out Edited" : "Close Out",
+            status: "Completed",
+            comment: closeOutComment,
+          });
 
-    if (closeOutUpdateError) {
-      console.error("Failed to save close-out update:", closeOutUpdateError.message);
-      alert(closeOutUpdateError.message);
+    if (closeOutUpdateResult.error) {
+      console.error(
+        "Failed to save close-out update:",
+        closeOutUpdateResult.error.message,
+      );
+      alert(closeOutUpdateResult.error.message);
       setSaving(false);
       return;
     }
