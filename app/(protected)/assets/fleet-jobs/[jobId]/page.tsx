@@ -22,7 +22,12 @@ import {
   Trash2,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import { DetailGrid, PageHeader, PageShell, StatusBadge } from "../../components";
+import {
+  DetailGrid,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+} from "../../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type AssetHistoryType = "Repair" | "Modification" | "Service";
@@ -231,7 +236,10 @@ function normaliseFailedItems(value: unknown): string[] {
   if (!value) return [];
 
   if (Array.isArray(value)) {
-    return value.map(String).map((item) => item.trim()).filter(Boolean);
+    return value
+      .map(String)
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
   if (typeof value === "object") {
@@ -321,7 +329,11 @@ function formatIssueLabel(item: string) {
   return { label, comment };
 }
 
-function appendJobNote(existingNotes: string | null, heading: string, body: string) {
+function appendJobNote(
+  existingNotes: string | null,
+  heading: string,
+  body: string,
+) {
   const entry = `[${timestampDisplay()}] ${heading}\n${body.trim()}`;
   return [existingNotes?.trim(), entry].filter(Boolean).join("\n\n");
 }
@@ -329,10 +341,10 @@ function appendJobNote(existingNotes: string | null, heading: string, body: stri
 function extractCloseOutComment(comment: string | null | undefined) {
   if (!comment) return "";
 
-return comment
-  .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
-  .replace(/\n?Asset update record:[\s\S]*$/, "")
-  .trim();
+  return comment
+    .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+    .replace(/\n?Asset update record:[\s\S]*$/, "")
+    .trim();
 }
 
 export default function FleetJobDetailPage() {
@@ -360,11 +372,14 @@ export default function FleetJobDetailPage() {
   const [plant, setPlant] = useState<PlantAsset | null>(null);
   const [prestart, setPrestart] = useState<VehiclePrestart | null>(null);
   const [updates, setUpdates] = useState<FleetJobUpdate[]>([]);
-  const [assetHistoryRecord, setAssetHistoryRecord] = useState<AssetHistoryRecord | null>(null);
+  const [assetHistoryRecord, setAssetHistoryRecord] =
+    useState<AssetHistoryRecord | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [jobModeOverride, setJobModeOverride] = useState<"open" | "closed" | null>(null);
+  const [jobModeOverride, setJobModeOverride] = useState<
+    "open" | "closed" | null
+  >(null);
 
   const [status, setStatus] = useState("Open");
   const [priority, setPriority] = useState("Medium");
@@ -431,7 +446,8 @@ export default function FleetJobDetailPage() {
     );
     setProgressUpdate("");
 
-    const resolvedVehicleId = loadedJob.vehicle_id || loadedJob.vehicle_asset_id;
+    const resolvedVehicleId =
+      loadedJob.vehicle_id || loadedJob.vehicle_asset_id;
     const resolvedPrestartId = loadedJob.prestart_id || loadedJob.source_id;
 
     const { data: updatesData, error: updatesError } = await supabase
@@ -455,7 +471,10 @@ export default function FleetJobDetailPage() {
       .limit(1);
 
     if (assetHistoryError) {
-      console.error("Failed to load linked asset history:", assetHistoryError.message);
+      console.error(
+        "Failed to load linked asset history:",
+        assetHistoryError.message,
+      );
       setAssetHistoryRecord(null);
     } else {
       setAssetHistoryRecord(
@@ -541,7 +560,8 @@ export default function FleetJobDetailPage() {
     void loadJob();
   }, [loadJob]);
 
-  const assetType = job?.asset_type === "Plant" || job?.plant_id ? "Plant" : "Vehicle";
+  const assetType =
+    job?.asset_type === "Plant" || job?.plant_id ? "Plant" : "Vehicle";
 
   const assetTitle =
     assetType === "Vehicle"
@@ -595,9 +615,12 @@ export default function FleetJobDetailPage() {
   }, [updates]);
 
   const normalisedJobStatus = clean(job?.status).toLowerCase();
-  const jobStatusIsClosed = ["completed", "closed", "complete", "resolved"].includes(
-    normalisedJobStatus,
-  );
+  const jobStatusIsClosed = [
+    "completed",
+    "closed",
+    "complete",
+    "resolved",
+  ].includes(normalisedJobStatus);
 
   // This local override fixes the UI immediately after Close Out / Reopen.
   // Without it, React can render the old fetched job.status for a moment and leave
@@ -631,7 +654,9 @@ export default function FleetJobDetailPage() {
     if (!job) return;
 
     if (isClosed) {
-      alert("This fleet job is closed. Reopen it before adding progress updates.");
+      alert(
+        "This fleet job is closed. Reopen it before adding progress updates.",
+      );
       return;
     }
 
@@ -714,7 +739,9 @@ export default function FleetJobDetailPage() {
     }
 
     if (!closeOutForm.close_out_comments.trim()) {
-      alert("Close-out comments are required before completing or closing this job.");
+      alert(
+        "Close-out comments are required before completing or closing this job.",
+      );
       return;
     }
 
@@ -725,7 +752,11 @@ export default function FleetJobDetailPage() {
 Asset history recorded as: ${closeOutForm.history_type}
 Asset update record: ${assetTitle}`;
 
-    const finalNotes = appendJobNote(job.notes || null, "Close Out", closeOutComment);
+    const finalNotes = appendJobNote(
+      job.notes || null,
+      "Close Out",
+      closeOutComment,
+    );
 
     const assetHistoryPayload = {
       asset_type: assetType,
@@ -745,7 +776,8 @@ Asset update record: ${assetTitle}`;
       engine_hours: numberOrNull(closeOutForm.engine_hours),
 
       next_service_due_date:
-        closeOutForm.history_type === "Service" && closeOutForm.next_service_due_date
+        closeOutForm.history_type === "Service" &&
+        closeOutForm.next_service_due_date
           ? closeOutForm.next_service_due_date
           : null,
       next_service_due_km:
@@ -782,7 +814,8 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
-    const savedAssetHistoryRows = (historyResult.data ?? []) as AssetHistoryRecord[];
+    const savedAssetHistoryRows = (historyResult.data ??
+      []) as AssetHistoryRecord[];
     const savedAssetHistory =
       savedAssetHistoryRows.length > 0 ? savedAssetHistoryRows[0] : null;
 
@@ -850,30 +883,34 @@ Asset update record: ${assetTitle}`;
         ? (closedJobRows[0] as FleetJob)
         : null;
 
-    setJob(closedJob || {
-      ...job,
-      status: "Completed",
-      completed_date: closeOutForm.history_date,
-      vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
-      cost: numberOrNull(closeOutForm.cost),
-      updated_at: new Date().toISOString(),
-    });
+    setJob(
+      closedJob || {
+        ...job,
+        status: "Completed",
+        completed_date: closeOutForm.history_date,
+        vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
+        cost: numberOrNull(closeOutForm.cost),
+        updated_at: new Date().toISOString(),
+      },
+    );
     await loadJob();
     setSaving(false);
   }
-
-
 
   function openCloseOutModalFromExisting() {
     setShowCloseOutModal(true);
     setCloseOutForm((current) => ({
       ...current,
-      history_date: assetHistoryRecord?.history_date || job?.completed_date || todayDate(),
+      history_date:
+        assetHistoryRecord?.history_date || job?.completed_date || todayDate(),
       history_type:
-        (assetHistoryRecord?.history_type as AssetHistoryType) || current.history_type,
+        (assetHistoryRecord?.history_type as AssetHistoryType) ||
+        current.history_type,
       title: assetHistoryRecord?.title || job?.title || current.title,
       description:
-        assetHistoryRecord?.description || job?.description || current.description,
+        assetHistoryRecord?.description ||
+        job?.description ||
+        current.description,
       vendor: assetHistoryRecord?.vendor || job?.vendor || current.vendor,
       cost:
         assetHistoryRecord?.cost !== null &&
@@ -891,7 +928,8 @@ Asset update record: ${assetTitle}`;
           ? String(assetHistoryRecord.engine_hours)
           : current.engine_hours,
       next_service_due_date:
-        assetHistoryRecord?.next_service_due_date || current.next_service_due_date,
+        assetHistoryRecord?.next_service_due_date ||
+        current.next_service_due_date,
       next_service_due_km:
         assetHistoryRecord?.next_service_due_km !== null &&
         assetHistoryRecord?.next_service_due_km !== undefined
@@ -988,7 +1026,10 @@ Asset update record: ${assetTitle}`;
       });
 
     if (noteError) {
-      console.error("Fleet job reopened, but update note failed:", noteError.message);
+      console.error(
+        "Fleet job reopened, but update note failed:",
+        noteError.message,
+      );
     }
 
     const reopenedJob: FleetJob =
@@ -1009,9 +1050,7 @@ Asset update record: ${assetTitle}`;
     setAssignedTo(job.assigned_to || "");
     setCompletedDate(job.completed_date || "");
     setCost(
-      job.cost !== null && job.cost !== undefined
-        ? String(job.cost)
-        : "",
+      job.cost !== null && job.cost !== undefined ? String(job.cost) : "",
     );
     setProgressUpdate("");
     setShowCloseOutModal(false);
@@ -1117,239 +1156,441 @@ Asset update record: ${assetTitle}`;
 
       <section className="grid gap-5 lg:grid-cols-[1.35fr_0.9fr]">
         <div className="space-y-5">
-          <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">Job Details</h2>
-                <p className="text-sm text-slate-600">
-                  Fleet job notification, source details and linked asset context.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <StatusBadge label={displayStatus} tone={toneForStatus(displayStatus)} />
-                <StatusBadge label={job.priority || "Medium"} tone={toneForPriority(job.priority)} />
-              </div>
-            </div>
-
-            <DetailGrid
-              items={[
-                { label: "Job Number", value: job.job_number || "N/A" },
-                { label: "Source", value: job.source || job.source_type || "N/A" },
-                { label: "Asset Type", value: assetType },
-                { label: "Reported", value: dateDisplay(job.reported_date) },
-                { label: "Created", value: dateDisplay(job.created_at) },
-                { label: "Updated", value: dateDisplay(job.updated_at) },
-                { label: "Project", value: job.project || vehicle?.project || plant?.project || "N/A" },
-                { label: "Crew", value: job.crew || vehicle?.crew || plant?.crew || "N/A" },
-                { label: "Reported By", value: job.reported_by || "N/A" },
-                { label: "Assigned To", value: job.assigned_to || "N/A" },
-                { label: "Vendor", value: job.vendor || "N/A" },
-                { label: "Completed", value: dateDisplay(job.completed_date) },
-              ]}
-            />
-
-            <div className="mt-5 border-t border-slate-200 pt-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Description
-              </p>
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                {job.description || "No description provided."}
-              </p>
-            </div>
-          </section>
-
-          <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2">
-              <Truck size={20} className="text-slate-600" />
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">Linked Asset</h2>
-                <p className="text-sm text-slate-600">{assetTitle}</p>
-              </div>
-            </div>
-
-            {assetType === "Vehicle" ? (
-              <DetailGrid
-                items={[
-                  { label: "Vehicle ID", value: vehicle?.vehicle_id || "N/A" },
-                  { label: "Rego", value: vehicle?.vehicle_rego || "N/A" },
-                  { label: "Category", value: vehicle?.category || "N/A" },
-                  {
-                    label: "Make / Model",
-                    value:
-                      [vehicle?.make, vehicle?.model]
-                        .map(clean)
-                        .filter(Boolean)
-                        .join(" ") || "N/A",
-                  },
-                  { label: "Project", value: vehicle?.project || job.project || "N/A" },
-                  { label: "Crew", value: vehicle?.crew || job.crew || "N/A" },
-                  { label: "Status", value: vehicle?.status || "N/A" },
-                  { label: "Asset Label", value: job.asset_label || "N/A" },
-                ]}
-              />
-            ) : (
-              <DetailGrid
-                items={[
-                  { label: "Asset ID", value: plant?.asset_id || "N/A" },
-                  { label: "Rego", value: plant?.rego || "N/A" },
-                  { label: "Plant Type", value: plant?.plant_type || "N/A" },
-                  { label: "Serial", value: plant?.serial_number || "N/A" },
-                  {
-                    label: "Make / Model",
-                    value:
-                      [plant?.make, plant?.model]
-                        .map(clean)
-                        .filter(Boolean)
-                        .join(" ") || "N/A",
-                  },
-                  { label: "Project", value: plant?.project || job.project || "N/A" },
-                  { label: "Crew", value: plant?.crew || job.crew || "N/A" },
-                  { label: "Status", value: plant?.asset_status || "N/A" },
-                ]}
-              />
-            )}
-
-            <div className="mt-5 flex flex-wrap gap-3">
-              <Link
-                href={assetHref}
-                className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <ExternalLink size={16} />
-                Open Asset Record
-              </Link>
-
-              <Link
-                href={assetUpdateHref}
-                className="inline-flex min-h-10 items-center gap-2 bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                <Settings size={16} />
-                Record Modification / Service
-              </Link>
-            </div>
-          </section>
-
-          <section className="overflow-hidden border border-violet-100 bg-white shadow-sm">
-            <div className="border-b border-violet-100 bg-violet-50 px-5 py-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-xl bg-white p-2 text-violet-700 shadow-sm">
-                    <AlertTriangle size={20} />
+          {isClosed ? (
+            <>
+              <section className="border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-700">
+                      Closed Out
+                    </p>
+                    <h2 className="mt-2 text-xl font-black text-slate-950">
+                      {job.job_number || "Fleet Job"} ·{" "}
+                      {job.title || "Closed Fleet Job"}
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-emerald-900">
+                      This job has been closed out. The prestart issue details
+                      are hidden so the page stays focused on the correction and
+                      close-out record.
+                    </p>
                   </div>
 
+                  <StatusBadge label="Completed" tone="emerald" />
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <MiniInfo
+                    label="Completed"
+                    value={dateDisplay(
+                      job.completed_date || assetHistoryRecord?.history_date,
+                    )}
+                  />
+                  <MiniInfo
+                    label="Correction Type"
+                    value={assetHistoryRecord?.history_type || "Close Out"}
+                  />
+                  <MiniInfo
+                    label="Vendor / Mechanic"
+                    value={job.vendor || assetHistoryRecord?.vendor || "N/A"}
+                  />
+                  <MiniInfo
+                    label="Cost"
+                    value={moneyDisplay(job.cost ?? assetHistoryRecord?.cost)}
+                  />
+                </div>
+
+                {latestCloseOutUpdate ? (
+                  <div className="mt-5 rounded-2xl border border-emerald-200 bg-white p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                      Close-out Comment
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {extractCloseOutComment(latestCloseOutUpdate.comment) ||
+                        latestCloseOutUpdate.comment}
+                    </p>
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+                      <Truck size={18} />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-950">
+                        Asset Summary
+                      </h2>
+                      <p className="text-sm text-slate-600">{assetTitle}</p>
+                    </div>
+                  </div>
+
+                  <Link
+                    href={assetHref}
+                    className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <ExternalLink size={16} />
+                    Open Asset
+                  </Link>
+                </div>
+
+                <DetailGrid
+                  items={[
+                    { label: "Asset Type", value: assetType },
+                    {
+                      label:
+                        assetType === "Vehicle" ? "Vehicle ID" : "Asset ID",
+                      value:
+                        assetType === "Vehicle"
+                          ? vehicle?.vehicle_id || "N/A"
+                          : plant?.asset_id || "N/A",
+                    },
+                    {
+                      label: "Rego",
+                      value:
+                        assetType === "Vehicle"
+                          ? vehicle?.vehicle_rego || "N/A"
+                          : plant?.rego || "N/A",
+                    },
+                    {
+                      label: "Make / Model",
+                      value:
+                        assetType === "Vehicle"
+                          ? [vehicle?.make, vehicle?.model]
+                              .map(clean)
+                              .filter(Boolean)
+                              .join(" ") || "N/A"
+                          : [plant?.make, plant?.model]
+                              .map(clean)
+                              .filter(Boolean)
+                              .join(" ") || "N/A",
+                    },
+                    {
+                      label: "Project",
+                      value:
+                        job.project ||
+                        vehicle?.project ||
+                        plant?.project ||
+                        "N/A",
+                    },
+                    {
+                      label: "Crew",
+                      value: job.crew || vehicle?.crew || plant?.crew || "N/A",
+                    },
+                    { label: "Reported By", value: job.reported_by || "N/A" },
+                    { label: "Assigned To", value: job.assigned_to || "N/A" },
+                  ]}
+                />
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-bold text-slate-950">
-                      Linked Prestart Issue
+                      Job Details
                     </h2>
-                    <p className="mt-1 text-sm text-slate-600">
-                      This fleet job was raised from a failed prestart item.
+                    <p className="text-sm text-slate-600">
+                      Fleet job notification, source details and linked asset
+                      context.
                     </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge
+                      label={displayStatus}
+                      tone={toneForStatus(displayStatus)}
+                    />
+                    <StatusBadge
+                      label={job.priority || "Medium"}
+                      tone={toneForPriority(job.priority)}
+                    />
                   </div>
                 </div>
 
-                <StatusBadge
-                  label={prestart?.severity ? prestart.severity.toUpperCase() : "PRESTART"}
-                  tone={prestart?.severity === "major" ? "rose" : "amber"}
+                <DetailGrid
+                  items={[
+                    { label: "Job Number", value: job.job_number || "N/A" },
+                    {
+                      label: "Source",
+                      value: job.source || job.source_type || "N/A",
+                    },
+                    { label: "Asset Type", value: assetType },
+                    {
+                      label: "Reported",
+                      value: dateDisplay(job.reported_date),
+                    },
+                    { label: "Created", value: dateDisplay(job.created_at) },
+                    { label: "Updated", value: dateDisplay(job.updated_at) },
+                    {
+                      label: "Project",
+                      value:
+                        job.project ||
+                        vehicle?.project ||
+                        plant?.project ||
+                        "N/A",
+                    },
+                    {
+                      label: "Crew",
+                      value: job.crew || vehicle?.crew || plant?.crew || "N/A",
+                    },
+                    { label: "Reported By", value: job.reported_by || "N/A" },
+                    { label: "Assigned To", value: job.assigned_to || "N/A" },
+                    { label: "Vendor", value: job.vendor || "N/A" },
+                    {
+                      label: "Completed",
+                      value: dateDisplay(job.completed_date),
+                    },
+                  ]}
                 />
-              </div>
-            </div>
 
-            {resolvedPrestartId ? (
-              <div className="p-5">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <MiniInfo label="Date" value={dateDisplay(prestart?.prestart_date || prestart?.created_at)} />
-                  <MiniInfo
-                    label="Operator"
-                    value={prestart?.employee_name || prestart?.operator_name || job.reported_by || "N/A"}
-                  />
-                  <MiniInfo label="Asset" value={prestart?.asset_label || job.asset_label || assetTitle} />
-                  <MiniInfo label="Source" value="Prestart" />
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Description
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                    {job.description || "No description provided."}
+                  </p>
                 </div>
+              </section>
 
-                <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wide text-rose-500">
-                        Flagged Items
-                      </p>
-                      <p className="mt-1 text-sm text-rose-700">
-                        Items marked as failed or requiring attention during the prestart.
-                      </p>
-                    </div>
-
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-rose-700 shadow-sm">
-                      {failedItems.length} issue{failedItems.length === 1 ? "" : "s"}
-                    </span>
+              <section className="border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <Truck size={20} className="text-slate-600" />
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">
+                      Linked Asset
+                    </h2>
+                    <p className="text-sm text-slate-600">{assetTitle}</p>
                   </div>
-
-                  {failedItems.length > 0 ? (
-                    <div className="mt-4 grid gap-3">
-                      {failedItems.map((item, index) => {
-                        const { label, comment } = formatIssueLabel(item);
-
-                        return (
-                          <div
-                            key={`${item}-${index}`}
-                            className="rounded-xl border border-rose-100 bg-white p-4 shadow-sm"
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xs font-black text-rose-700">
-                                {index + 1}
-                              </div>
-
-                              <div>
-                                <p className="text-sm font-black text-slate-950">
-                                  {label}
-                                </p>
-
-                                {comment ? (
-                                  <p className="mt-1 text-sm font-semibold text-rose-700">
-                                    {comment}
-                                  </p>
-                                ) : (
-                                  <p className="mt-1 text-sm text-slate-500">
-                                    No additional comment provided.
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
-                      No checklist item list was found, but this job is linked to a prestart.
-                    </p>
-                  )}
                 </div>
+
+                {assetType === "Vehicle" ? (
+                  <DetailGrid
+                    items={[
+                      {
+                        label: "Vehicle ID",
+                        value: vehicle?.vehicle_id || "N/A",
+                      },
+                      { label: "Rego", value: vehicle?.vehicle_rego || "N/A" },
+                      { label: "Category", value: vehicle?.category || "N/A" },
+                      {
+                        label: "Make / Model",
+                        value:
+                          [vehicle?.make, vehicle?.model]
+                            .map(clean)
+                            .filter(Boolean)
+                            .join(" ") || "N/A",
+                      },
+                      {
+                        label: "Project",
+                        value: vehicle?.project || job.project || "N/A",
+                      },
+                      {
+                        label: "Crew",
+                        value: vehicle?.crew || job.crew || "N/A",
+                      },
+                      { label: "Status", value: vehicle?.status || "N/A" },
+                      { label: "Asset Label", value: job.asset_label || "N/A" },
+                    ]}
+                  />
+                ) : (
+                  <DetailGrid
+                    items={[
+                      { label: "Asset ID", value: plant?.asset_id || "N/A" },
+                      { label: "Rego", value: plant?.rego || "N/A" },
+                      {
+                        label: "Plant Type",
+                        value: plant?.plant_type || "N/A",
+                      },
+                      { label: "Serial", value: plant?.serial_number || "N/A" },
+                      {
+                        label: "Make / Model",
+                        value:
+                          [plant?.make, plant?.model]
+                            .map(clean)
+                            .filter(Boolean)
+                            .join(" ") || "N/A",
+                      },
+                      {
+                        label: "Project",
+                        value: plant?.project || job.project || "N/A",
+                      },
+                      {
+                        label: "Crew",
+                        value: plant?.crew || job.crew || "N/A",
+                      },
+                      { label: "Status", value: plant?.asset_status || "N/A" },
+                    ]}
+                  />
+                )}
 
                 <div className="mt-5 flex flex-wrap gap-3">
                   <Link
-                    href={prestartHref}
-                    className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+                    href={assetHref}
+                    className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     <ExternalLink size={16} />
-                    Open Prestart
+                    Open Asset Record
                   </Link>
 
                   <Link
                     href={assetUpdateHref}
-                    className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    className="inline-flex min-h-10 items-center gap-2 bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
                   >
                     <Settings size={16} />
-                    Record Asset Update
+                    Record Modification / Service
                   </Link>
                 </div>
-              </div>
-            ) : (
-              <div className="p-5">
-                <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-                  This job is not linked to a prestart.
-                </p>
-              </div>
-            )}
-          </section>
+              </section>
+
+              <section className="overflow-hidden border border-violet-100 bg-white shadow-sm">
+                <div className="border-b border-violet-100 bg-violet-50 px-5 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-xl bg-white p-2 text-violet-700 shadow-sm">
+                        <AlertTriangle size={20} />
+                      </div>
+
+                      <div>
+                        <h2 className="text-lg font-bold text-slate-950">
+                          Linked Prestart Issue
+                        </h2>
+                        <p className="mt-1 text-sm text-slate-600">
+                          This fleet job was raised from a failed prestart item.
+                        </p>
+                      </div>
+                    </div>
+
+                    <StatusBadge
+                      label={
+                        prestart?.severity
+                          ? prestart.severity.toUpperCase()
+                          : "PRESTART"
+                      }
+                      tone={prestart?.severity === "major" ? "rose" : "amber"}
+                    />
+                  </div>
+                </div>
+
+                {resolvedPrestartId ? (
+                  <div className="p-5">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <MiniInfo
+                        label="Date"
+                        value={dateDisplay(
+                          prestart?.prestart_date || prestart?.created_at,
+                        )}
+                      />
+                      <MiniInfo
+                        label="Operator"
+                        value={
+                          prestart?.employee_name ||
+                          prestart?.operator_name ||
+                          job.reported_by ||
+                          "N/A"
+                        }
+                      />
+                      <MiniInfo
+                        label="Asset"
+                        value={
+                          prestart?.asset_label || job.asset_label || assetTitle
+                        }
+                      />
+                      <MiniInfo label="Source" value="Prestart" />
+                    </div>
+
+                    <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wide text-rose-500">
+                            Flagged Items
+                          </p>
+                          <p className="mt-1 text-sm text-rose-700">
+                            Items marked as failed or requiring attention during
+                            the prestart.
+                          </p>
+                        </div>
+
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-rose-700 shadow-sm">
+                          {failedItems.length} issue
+                          {failedItems.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+
+                      {failedItems.length > 0 ? (
+                        <div className="mt-4 grid gap-3">
+                          {failedItems.map((item, index) => {
+                            const { label, comment } = formatIssueLabel(item);
+
+                            return (
+                              <div
+                                key={`${item}-${index}`}
+                                className="rounded-xl border border-rose-100 bg-white p-4 shadow-sm"
+                              >
+                                <div className="flex items-start gap-3">
+                                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xs font-black text-rose-700">
+                                    {index + 1}
+                                  </div>
+
+                                  <div>
+                                    <p className="text-sm font-black text-slate-950">
+                                      {label}
+                                    </p>
+
+                                    {comment ? (
+                                      <p className="mt-1 text-sm font-semibold text-rose-700">
+                                        {comment}
+                                      </p>
+                                    ) : (
+                                      <p className="mt-1 text-sm text-slate-500">
+                                        No additional comment provided.
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+                          No checklist item list was found, but this job is
+                          linked to a prestart.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <Link
+                        href={prestartHref}
+                        className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+                      >
+                        <ExternalLink size={16} />
+                        Open Prestart
+                      </Link>
+
+                      <Link
+                        href={assetUpdateHref}
+                        className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <Settings size={16} />
+                        Record Asset Update
+                      </Link>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-5">
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                      This job is not linked to a prestart.
+                    </p>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
         </div>
 
         <aside className="space-y-5">
@@ -1394,10 +1635,14 @@ Asset update record: ${assetTitle}`;
                       {assetHistoryRecord.title || "Untitled record"}
                     </p>
                     <p className="mt-1 text-slate-600">
-                      {dateDisplay(assetHistoryRecord.history_date || assetHistoryRecord.created_at)}
+                      {dateDisplay(
+                        assetHistoryRecord.history_date ||
+                          assetHistoryRecord.created_at,
+                      )}
                     </p>
                     <p className="mt-3 whitespace-pre-wrap">
-                      {assetHistoryRecord.description || "No description recorded."}
+                      {assetHistoryRecord.description ||
+                        "No description recorded."}
                     </p>
                   </div>
                 ) : null}
@@ -1409,7 +1654,11 @@ Asset update record: ${assetTitle}`;
                     disabled={saving}
                     className="inline-flex min-h-11 items-center justify-center gap-2 border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
+                    {saving ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Wrench size={16} />
+                    )}
                     Reopen Job
                   </button>
 
@@ -1420,7 +1669,9 @@ Asset update record: ${assetTitle}`;
                     className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Settings size={16} />
-                    {assetHistoryRecord ? "Edit Close-out Record" : "Record Asset History Again"}
+                    {assetHistoryRecord
+                      ? "Edit Close-out Record"
+                      : "Record Asset History Again"}
                   </button>
 
                   {latestCloseOutUpdate ? (
@@ -1439,7 +1690,9 @@ Asset update record: ${assetTitle}`;
             ) : (
               <>
                 <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-                  Fleet Jobs are for notification and progress tracking. Closing this job will create a repair, modification or service record against the asset.
+                  Fleet Jobs are for notification and progress tracking. Closing
+                  this job will create a repair, modification or service record
+                  against the asset.
                 </div>
 
                 <div className="mt-5 grid gap-4">
@@ -1451,7 +1704,9 @@ Asset update record: ${assetTitle}`;
                       className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                     >
                       {statuses
-                        .filter((item) => item !== "Completed" && item !== "Closed")
+                        .filter(
+                          (item) => item !== "Completed" && item !== "Closed",
+                        )
                         .map((item) => (
                           <option key={item}>{item}</option>
                         ))}
@@ -1516,7 +1771,9 @@ Asset update record: ${assetTitle}`;
                     Progress Update
                     <textarea
                       value={progressUpdate}
-                      onChange={(event) => setProgressUpdate(event.target.value)}
+                      onChange={(event) =>
+                        setProgressUpdate(event.target.value)
+                      }
                       rows={4}
                       placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
                       className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
@@ -1529,10 +1786,13 @@ Asset update record: ${assetTitle}`;
                     disabled={saving}
                     className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {saving ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Save size={16} />
+                    )}
                     Save Progress Update
                   </button>
-
 
                   <button
                     type="button"
@@ -1548,7 +1808,7 @@ Asset update record: ${assetTitle}`;
             )}
           </section>
 
-<section className="border border-slate-200 bg-white p-5 shadow-sm">
+          <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <CheckCircle2 size={20} />
               Job Updates
@@ -1556,17 +1816,26 @@ Asset update record: ${assetTitle}`;
 
             <div className="mt-4 space-y-3 text-sm">
               <InfoRow label="Current Status" value={displayStatus} />
-              <InfoRow label="Completed Date" value={dateDisplay(job.completed_date)} />
+              <InfoRow
+                label="Completed Date"
+                value={dateDisplay(job.completed_date)}
+              />
               <InfoRow label="Vendor" value={job.vendor || "N/A"} />
               <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
-              <InfoRow label="Last Updated" value={dateDisplay(job.updated_at)} />
+              <InfoRow
+                label="Last Updated"
+                value={dateDisplay(job.updated_at)}
+              />
             </div>
 
             {closedWithoutAssetHistory ? (
               <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
                 <p className="font-black">Asset history record missing</p>
                 <p className="mt-1">
-                  This job is marked as closed, but the linked asset history record has been deleted or cannot be found. The stale close-out entry is hidden below. Reopen the job or record the asset history again.
+                  This job is marked as closed, but the linked asset history
+                  record has been deleted or cannot be found. The stale
+                  close-out entry is hidden below. Reopen the job or record the
+                  asset history again.
                 </p>
               </div>
             ) : null}
@@ -1655,7 +1924,8 @@ Asset update record: ${assetTitle}`;
                   Record Asset History
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  This will close the fleet job and create a repair, modification or service record against {assetTitle}.
+                  This will close the fleet job and create a repair,
+                  modification or service record against {assetTitle}.
                 </p>
               </div>
 
@@ -1873,8 +2143,14 @@ Asset update record: ${assetTitle}`;
                 disabled={saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                {assetHistoryRecord ? "Save Close-out Changes" : "Complete Job & Save Asset History"}
+                {saving ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <CheckCircle2 size={16} />
+                )}
+                {assetHistoryRecord
+                  ? "Save Close-out Changes"
+                  : "Complete Job & Save Asset History"}
               </button>
             </div>
           </div>
