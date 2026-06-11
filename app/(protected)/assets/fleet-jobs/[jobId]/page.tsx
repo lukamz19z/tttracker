@@ -622,17 +622,21 @@ export default function FleetJobDetailPage() {
     "resolved",
   ].includes(normalisedJobStatus);
 
-  // This local override fixes the UI immediately after Close Out / Reopen.
-  // Without it, React can render the old fetched job.status for a moment and leave
-  // the Action Job form visible even though the close-out has just succeeded.
+  const hasValidCloseOut = Boolean(assetHistoryRecord) && Boolean(latestCloseOutUpdate);
+
+  // Closed view should match the register logic:
+  // - Completed/Closed status means closed.
+  // - Asset history + close-out update means closed, even if the status field is stale.
+  // - Reopen uses a local override so the full page returns immediately.
   const isClosed =
     jobModeOverride === "closed"
       ? true
       : jobModeOverride === "open"
         ? false
-        : jobStatusIsClosed;
+        : jobStatusIsClosed || hasValidCloseOut;
 
-  const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
+  const closedWithoutAssetHistory =
+    (jobStatusIsClosed || Boolean(latestCloseOutUpdate)) && !assetHistoryRecord;
 
   const displayStatus = isClosed ? "Completed" : job?.status || "Open";
 
@@ -1132,7 +1136,7 @@ Asset update record: ${assetTitle}`;
           label="Status"
           value={displayStatus}
           icon={<ClipboardList size={20} />}
-          tone={toneForStatus(job.status)}
+          tone={toneForStatus(displayStatus)}
         />
         <SummaryCard
           label="Priority"
