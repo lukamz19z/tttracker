@@ -364,6 +364,7 @@ export default function FleetJobDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [jobModeOverride, setJobModeOverride] = useState<"open" | "closed" | null>(null);
 
   const [status, setStatus] = useState("Open");
   const [priority, setPriority] = useState("Medium");
@@ -595,14 +596,19 @@ export default function FleetJobDetailPage() {
     normalisedJobStatus,
   );
 
-  // Only the actual fleet job status should lock the Action Job form.
-  // Asset history and close-out updates can still exist after reopening,
-  // so they must not keep the job locked.
-  const isClosed = jobStatusIsClosed;
+  // This local override fixes the UI immediately after Close Out / Reopen.
+  // Without it, React can render the old fetched job.status for a moment and leave
+  // the Action Job form visible even though the close-out has just succeeded.
+  const isClosed =
+    jobModeOverride === "closed"
+      ? true
+      : jobModeOverride === "open"
+        ? false
+        : jobStatusIsClosed;
 
   const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
 
-  const displayStatus = job?.status || "Open";
+  const displayStatus = isClosed ? "Completed" : job?.status || "Open";
 
   const visibleUpdates = useMemo(() => {
     const progressUpdates = updates.filter(
@@ -806,7 +812,7 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
-    const { error: jobError } = await supabase
+    const { data: closedJobData, error: jobError } = await supabase
       .from("fleet_jobs")
       .update({
         status: "Completed",
@@ -819,7 +825,9 @@ Asset update record: ${assetTitle}`;
         notes: finalNotes,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", job.id);
+      .eq("id", job.id)
+      .select("*")
+      .single();
 
     if (jobError) {
       console.error("Failed to close fleet job:", jobError.message);
@@ -829,19 +837,16 @@ Asset update record: ${assetTitle}`;
     }
 
     setShowCloseOutModal(false);
+    setJobModeOverride("closed");
     setStatus("Completed");
-    setJob((current) =>
-      current
-        ? {
-            ...current,
-            status: "Completed",
-            completed_date: closeOutForm.history_date,
-            vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
-            cost: numberOrNull(closeOutForm.cost),
-            updated_at: new Date().toISOString(),
-          }
-        : current,
-    );
+    setJob((closedJobData as FleetJob) || {
+      ...job,
+      status: "Completed",
+      completed_date: closeOutForm.history_date,
+      vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
+      cost: numberOrNull(closeOutForm.cost),
+      updated_at: new Date().toISOString(),
+    });
     await loadJob();
     setSaving(false);
   }
@@ -928,14 +933,16 @@ Asset update record: ${assetTitle}`;
 
     setSaving(true);
 
-    const { error: updateError } = await supabase
+    const { data: reopenedJobData, error: updateError } = await supabase
       .from("fleet_jobs")
       .update({
         status: "Open",
         completed_date: null,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", job.id);
+      .eq("id", job.id)
+      .select("*")
+      .single();
 
     if (updateError) {
       console.error("Failed to reopen fleet job:", updateError.message);
@@ -959,13 +966,15 @@ Asset update record: ${assetTitle}`;
       console.error("Fleet job reopened, but update note failed:", noteError.message);
     }
 
-    const reopenedJob: FleetJob = {
-      ...job,
-      status: "Open",
-      completed_date: null,
-      updated_at: new Date().toISOString(),
-    };
+    const reopenedJob: FleetJob =
+      (reopenedJobData as FleetJob) || {
+        ...job,
+        status: "Open",
+        completed_date: null,
+        updated_at: new Date().toISOString(),
+      };
 
+    setJobModeOverride("open");
     setJob(reopenedJob);
     setStatus("Open");
     setPriority(job.priority || "Medium");
