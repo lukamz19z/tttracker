@@ -23,17 +23,50 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 import { PageHeader, PageShell, RegisterList } from "../components";
 
 type Tone = "emerald" | "amber" | "rose" | "blue" | "teal" | "slate";
+type AssetType = "Vehicle" | "Plant";
 
-type VehicleAsset = {
+type RawVehicleAsset = {
   id: string;
-  vehicle_id: string | null;
-  vehicle_rego: string | null;
-  make: string | null;
-  model: string | null;
-  category: string | null;
-  project: string | null;
-  crew: string | null;
-  status: string | null;
+  vehicle_id?: string | null;
+  vehicle_rego?: string | null;
+  rego?: string | null;
+  make?: string | null;
+  model?: string | null;
+  category?: string | null;
+  project?: string | null;
+  crew?: string | null;
+  status?: string | null;
+};
+
+type RawPlantAsset = {
+  id: string;
+  asset_id?: string | null;
+  plant_id?: string | null;
+  equipment_id?: string | null;
+  name?: string | null;
+  make?: string | null;
+  model?: string | null;
+  category?: string | null;
+  plant_type?: string | null;
+  project?: string | null;
+  crew?: string | null;
+  status?: string | null;
+  cab_hours?: number | null;
+  current_hours?: number | null;
+  hours?: number | null;
+};
+
+type PrestartAsset = {
+  id: string;
+  assetType: AssetType;
+  assetId: string;
+  rego: string;
+  makeModel: string;
+  category: string;
+  project: string;
+  crew: string;
+  status: string;
+  currentHours: number | null;
 };
 
 type Crew = {
@@ -55,16 +88,26 @@ type ProjectOption = {
   name: string | null;
 };
 
-type VehiclePrestart = {
+type ChecklistValue = {
+  answer: string;
+  severity: string;
+  comment: string;
+};
+
+type PrestartRecord = {
   id: string;
+  asset_type: AssetType | string | null;
   vehicle_asset_id: string | null;
+  plant_asset_id: string | null;
   asset_label: string | null;
   vehicle_rego: string | null;
+  asset_category: string | null;
   kilometres: number | null;
+  cab_hours: number | null;
   project: string | null;
   crew: string | null;
   inspected_by_name: string | null;
-  checklist: Record<string, { answer: string; severity: string; comment: string }> | null;
+  checklist: Record<string, ChecklistValue> | null;
   overall_condition: string | null;
   comments: string | null;
   severity: string | null;
@@ -76,16 +119,9 @@ type VehiclePrestart = {
 
 const checklistSections = [
   {
-    title: "Vehicle Condition",
-    items: [
-      "Tyres",
-      "Doors",
-      "Windows",
-      "Mirrors",
-      "Wipers",
-    ],
+    title: "Vehicle / Plant Condition",
+    items: ["Tyres", "Doors", "Windows", "Mirrors", "Wipers"],
   },
-
   {
     title: "Lights & Alarms",
     items: [
@@ -99,9 +135,8 @@ const checklistSections = [
       "Horn",
     ],
   },
-
   {
-    title: "Driver Controls",
+    title: "Operator Controls",
     items: [
       "Steering",
       "Foot brake",
@@ -111,43 +146,26 @@ const checklistSections = [
       "Instruments",
     ],
   },
-
   {
     title: "Safety Equipment",
-    items: [
-      "Fire extinguisher",
-      "First aid kit",
-      "Wheel chocks",
-    ],
+    items: ["Fire extinguisher", "First aid kit", "Wheel chocks"],
   },
-
   {
     title: "Communications",
-    items: [
-      "UHF radio working",
-      "IVMS working",
-    ],
+    items: ["UHF radio working", "IVMS working"],
   },
-
   {
     title: "Mechanical",
-    items: [
-      "Battery",
-      "Engine oil",
-      "Coolant",
-    ],
+    items: ["Battery", "Engine oil", "Coolant"],
   },
-
   {
     title: "Transport Compliance",
-    items: [
-      "Spare wheel",
-    ],
+    items: ["Spare wheel"],
   },
 ];
-const checklistItems = checklistSections.flatMap(
-  (section) => section.items,
-);
+
+const checklistItems = checklistSections.flatMap((section) => section.items);
+
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
 }
@@ -157,9 +175,7 @@ function checklistKey(label: string) {
 }
 
 function defaultChecklist() {
-  return checklistItems.reduce<
-    Record<string, { answer: string; severity: string; comment: string }>
-  >((acc, item) => {
+  return checklistItems.reduce<Record<string, ChecklistValue>>((acc, item) => {
     acc[checklistKey(item)] = {
       answer: "yes",
       severity: "minor",
@@ -169,29 +185,27 @@ function defaultChecklist() {
   }, {});
 }
 
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function csvSafe(value: string | number | null | undefined) {
   const text = String(value ?? "");
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function getMakeModel(vehicle: VehicleAsset) {
-  return [vehicle.make, vehicle.model].map(clean).filter(Boolean).join(" ");
+function prestartDateValue(prestart: PrestartRecord) {
+  return prestart.prestart_date || prestart.created_at;
 }
 
-function getVehicleLabel(vehicle: VehicleAsset) {
-  return [
-    clean(vehicle.vehicle_id) || "No ID",
-    clean(vehicle.vehicle_rego) || "No rego",
-    getMakeModel(vehicle),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
+function formatShortDate(value: string | null) {
+  if (!value) return "No date";
 
-function getPrestartAssetLabel(prestart: VehiclePrestart) {
-  return [clean(prestart.asset_label), clean(prestart.vehicle_rego)]
-    .filter(Boolean)
-    .join(" · ");
+  return new Date(value).toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function formatDate(value: string | null) {
@@ -204,20 +218,6 @@ function formatDate(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatShortDate(value: string | null) {
-  if (!value) return "-";
-
-  return new Date(value).toLocaleDateString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function prestartDateValue(prestart: VehiclePrestart) {
-  return prestart.prestart_date || prestart.created_at;
 }
 
 function daysSince(value: string | null) {
@@ -255,6 +255,12 @@ function severityToPriority(severity: string) {
   return "Low";
 }
 
+function severityToResult(severity: string) {
+  if (severity === "none") return "Passed";
+  if (severity === "do_not_use") return "Do Not Use";
+  return "Issue Raised";
+}
+
 function highestSeverity(severities: string[]) {
   const rank: Record<string, number> = {
     none: 0,
@@ -269,14 +275,76 @@ function highestSeverity(severities: string[]) {
   }, "none");
 }
 
-function severityToResult(severity: string) {
-  if (severity === "none") return "Passed";
-  if (severity === "do_not_use") return "Do Not Use";
-  return "Issue Raised";
-}
-
 function crewLabel(crew: Crew) {
   return `${crew.crew_number}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`;
+}
+
+function makeModel(make?: string | null, model?: string | null) {
+  return [make, model].map(clean).filter(Boolean).join(" ");
+}
+
+function mapVehicleAsset(vehicle: RawVehicleAsset): PrestartAsset {
+  return {
+    id: vehicle.id,
+    assetType: "Vehicle",
+    assetId: clean(vehicle.vehicle_id) || "Vehicle",
+    rego: clean(vehicle.vehicle_rego) || clean(vehicle.rego),
+    makeModel: makeModel(vehicle.make, vehicle.model),
+    category: clean(vehicle.category) || "Vehicle",
+    project: clean(vehicle.project),
+    crew: clean(vehicle.crew),
+    status: clean(vehicle.status),
+    currentHours: null,
+  };
+}
+
+function mapPlantAsset(plant: RawPlantAsset): PrestartAsset {
+  return {
+    id: plant.id,
+    assetType: "Plant",
+    assetId:
+      clean(plant.asset_id) ||
+      clean(plant.plant_id) ||
+      clean(plant.equipment_id) ||
+      clean(plant.name) ||
+      "Plant",
+    rego: "",
+    makeModel: makeModel(plant.make, plant.model) || clean(plant.name),
+    category: clean(plant.category) || clean(plant.plant_type) || "Plant",
+    project: clean(plant.project),
+    crew: clean(plant.crew),
+    status: clean(plant.status),
+    currentHours:
+      typeof plant.cab_hours === "number"
+        ? plant.cab_hours
+        : typeof plant.current_hours === "number"
+          ? plant.current_hours
+          : typeof plant.hours === "number"
+            ? plant.hours
+            : null,
+  };
+}
+
+function getAssetLabel(asset: PrestartAsset) {
+  return [
+    asset.assetType,
+    asset.assetId || "No ID",
+    asset.rego || "",
+    asset.makeModel,
+    asset.category,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function getPrestartAssetLabel(prestart: PrestartRecord) {
+  return [
+    clean(prestart.asset_label),
+    clean(prestart.vehicle_rego),
+    clean(prestart.asset_category),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
@@ -362,10 +430,8 @@ function SearchPicker<T>({
   const displayValue = open ? search : value || search;
 
   const filteredItems = items
-    .filter((item) =>
-      getLabel(item).toLowerCase().includes(search.toLowerCase()),
-    )
-    .slice(0, 10);
+    .filter((item) => getLabel(item).toLowerCase().includes(search.toLowerCase()))
+    .slice(0, 12);
 
   return (
     <div className="relative grid gap-2 text-sm font-bold text-slate-700">
@@ -451,11 +517,11 @@ function StatCard({
   );
 }
 
-export default function VehiclePrestartsPage() {
+export default function AssetPrestartsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
-  const [prestarts, setPrestarts] = useState<VehiclePrestart[]>([]);
+  const [assets, setAssets] = useState<PrestartAsset[]>([]);
+  const [prestarts, setPrestarts] = useState<PrestartRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
@@ -466,70 +532,83 @@ export default function VehiclePrestartsPage() {
   const [showForm, setShowForm] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(true);
 
+  const [assetTypeFilter, setAssetTypeFilter] = useState<"All Assets" | AssetType>("All Assets");
+  const [formAssetType, setFormAssetType] = useState<AssetType>("Vehicle");
+
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState("All Severities");
   const [projectFilter, setProjectFilter] = useState("All Projects");
   const [crewFilter, setCrewFilter] = useState("All Crews");
   const [inspectorFilter, setInspectorFilter] = useState("All Inspectors");
 
-  const [selectedVehicleId, setSelectedVehicleId] = useState("");
-  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [selectedAssetKey, setSelectedAssetKey] = useState("");
+  const [assetSearch, setAssetSearch] = useState("");
 
   const [selectedEmployeeName, setSelectedEmployeeName] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
 
   const [selectedProject, setSelectedProject] = useState("");
   const [selectedCrew, setSelectedCrew] = useState("");
-  const [checklistValues, setChecklistValues] = useState<
-    Record<string, { answer: string; severity: string; comment: string }>
-  >(defaultChecklist);
+  const [checklistValues, setChecklistValues] =
+    useState<Record<string, ChecklistValue>>(defaultChecklist);
 
-  const selectedVehicle = vehicles.find(
-    (vehicle) => vehicle.id === selectedVehicleId,
+  const selectedAsset = assets.find(
+    (asset) => `${asset.assetType}:${asset.id}` === selectedAssetKey,
   );
+
+  const formAssets = useMemo(() => {
+    return assets.filter((asset) => asset.assetType === formAssetType);
+  }, [assets, formAssetType]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    const vehiclesResult = await supabase
-.from("vehicle_assets")
-.select("id, vehicle_id, vehicle_rego, make, model, category, project, crew, status")
-.neq("category", "Trailer")
-.order("vehicle_id", { ascending: true });
+    const [vehiclesResult, plantResult, prestartsResult, employeesResult, projectsResult, crewsResult] =
+      await Promise.all([
+        supabase.from("vehicle_assets").select("*").order("vehicle_id", { ascending: true }),
+        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
+        supabase
+          .from("vehicle_prestarts")
+          .select("*")
+          .order("prestart_date", { ascending: false })
+          .order("created_at", { ascending: false }),
+        supabase.from("employees").select("*").order("full_name", { ascending: true }),
+        supabase.from("projects").select("id, name").order("name", { ascending: true }),
+        supabase.from("crews").select("id, crew_number, crew_name").order("crew_number", { ascending: true }),
+      ]);
 
-    const prestartsResult = await supabase
-      .from("vehicle_prestarts")
-      .select("*")
-      .order("prestart_date", { ascending: false })
-      .order("created_at", { ascending: false });
+    const vehicleAssets =
+      vehiclesResult.error || !vehiclesResult.data
+        ? []
+        : (vehiclesResult.data as RawVehicleAsset[])
+            .filter((vehicle) => clean(vehicle.category).toLowerCase() !== "trailer")
+            .map(mapVehicleAsset);
 
-    const employeesResult = await supabase
-      .from("employees")
-      .select("*")
-      .order("full_name", { ascending: true });
-
-    const projectsResult = await supabase
-      .from("projects")
-      .select("id, name")
-      .order("name", { ascending: true });
-
-    const crewsResult = await supabase
-      .from("crews")
-      .select("id, crew_number, crew_name")
-      .order("crew_number", { ascending: true });
+    const plantAssets =
+      plantResult.error || !plantResult.data
+        ? []
+        : (plantResult.data as RawPlantAsset[])
+            .filter((plant) => {
+              const category = clean(plant.category || plant.plant_type).toLowerCase();
+              return category.includes("crane") || category.includes("tele");
+            })
+            .map(mapPlantAsset);
 
     if (vehiclesResult.error) {
       console.error("Failed to load vehicles:", vehiclesResult.error.message);
-      setVehicles([]);
-    } else {
-      setVehicles((vehiclesResult.data ?? []) as VehicleAsset[]);
     }
+
+    if (plantResult.error) {
+      console.error("Failed to load plant:", plantResult.error.message);
+    }
+
+    setAssets([...vehicleAssets, ...plantAssets]);
 
     if (prestartsResult.error) {
       console.error("Failed to load prestarts:", prestartsResult.error.message);
       setPrestarts([]);
     } else {
-      setPrestarts((prestartsResult.data ?? []) as VehiclePrestart[]);
+      setPrestarts((prestartsResult.data ?? []) as PrestartRecord[]);
     }
 
     if (employeesResult.error) {
@@ -538,8 +617,7 @@ export default function VehiclePrestartsPage() {
     } else {
       setEmployees(
         ((employeesResult.data ?? []) as Employee[]).filter(
-          (employee) =>
-            employee.active !== false && clean(employee.full_name).length > 0,
+          (employee) => employee.active !== false && clean(employee.full_name).length > 0,
         ),
       );
     }
@@ -557,27 +635,24 @@ export default function VehiclePrestartsPage() {
   const projectOptions = useMemo(() => {
     const values = [
       ...projects.map((project) => clean(project.name)),
-      ...vehicles.map((vehicle) => clean(vehicle.project)),
+      ...assets.map((asset) => clean(asset.project)),
       ...prestarts.map((prestart) => clean(prestart.project)),
     ].filter(Boolean);
 
     return ["All Projects", ...Array.from(new Set(values)).sort()];
-  }, [projects, vehicles, prestarts]);
+  }, [projects, assets, prestarts]);
 
   const crewOptions = useMemo(() => {
     const crewLabels =
       crews.length > 0
         ? crews.map((crew) => crewLabel(crew))
         : [
-            ...vehicles.map((vehicle) => clean(vehicle.crew)),
+            ...assets.map((asset) => clean(asset.crew)),
             ...prestarts.map((prestart) => clean(prestart.crew)),
           ];
 
-    return [
-      "All Crews",
-      ...Array.from(new Set(crewLabels.filter(Boolean))).sort(),
-    ];
-  }, [crews, vehicles, prestarts]);
+    return ["All Crews", ...Array.from(new Set(crewLabels.filter(Boolean))).sort()];
+  }, [crews, assets, prestarts]);
 
   const inspectorOptions = useMemo(() => {
     return [
@@ -593,8 +668,8 @@ export default function VehiclePrestartsPage() {
     ];
   }, [employees, prestarts]);
 
-  function matchCrewOption(vehicleCrew: string | null) {
-    const value = clean(vehicleCrew);
+  function matchCrewOption(assetCrew: string | null) {
+    const value = clean(assetCrew);
 
     if (!value) return "";
 
@@ -608,40 +683,52 @@ export default function VehiclePrestartsPage() {
   }
 
   function openForm() {
-    setSelectedVehicleId("");
-    setVehicleSearch("");
+    setSelectedAssetKey("");
+    setAssetSearch("");
     setSelectedEmployeeName("");
     setEmployeeSearch("");
     setSelectedProject("");
     setSelectedCrew("");
+    setFormAssetType("Vehicle");
     setChecklistValues(defaultChecklist());
     setShowForm(true);
   }
 
-  function handleVehicleChange(vehicleId: string) {
-    setSelectedVehicleId(vehicleId);
-
-    const vehicle = vehicles.find((item) => item.id === vehicleId);
-
-    setSelectedProject(clean(vehicle?.project));
-    setSelectedCrew(matchCrewOption(vehicle?.crew ?? null));
+  function handleAssetTypeChange(assetType: AssetType) {
+    setFormAssetType(assetType);
+    setSelectedAssetKey("");
+    setAssetSearch("");
+    setSelectedProject("");
+    setSelectedCrew("");
   }
 
-  const latestByVehicle = useMemo(() => {
-    const map = new Map<string, VehiclePrestart>();
+  function handleAssetChange(asset: PrestartAsset) {
+    setSelectedAssetKey(`${asset.assetType}:${asset.id}`);
+    setSelectedProject(clean(asset.project));
+    setSelectedCrew(matchCrewOption(asset.crew));
+  }
+
+  const latestByAsset = useMemo(() => {
+    const map = new Map<string, PrestartRecord>();
 
     prestarts.forEach((prestart) => {
-      const vehicleId = clean(prestart.vehicle_asset_id);
-      if (!vehicleId) return;
+      const assetType = clean(prestart.asset_type) === "Plant" ? "Plant" : "Vehicle";
+      const assetId =
+        assetType === "Plant"
+          ? clean(prestart.plant_asset_id)
+          : clean(prestart.vehicle_asset_id);
 
-      const existing = map.get(vehicleId);
+      if (!assetId) return;
+
+      const key = `${assetType}:${assetId}`;
+      const existing = map.get(key);
       const currentTime = new Date(prestartDateValue(prestart) ?? "").getTime();
       const existingTime = existing
         ? new Date(prestartDateValue(existing) ?? "").getTime()
         : 0;
 
       if (!existing || currentTime > existingTime) {
-        map.set(vehicleId, prestart);
+        map.set(key, prestart);
       }
     });
 
@@ -649,20 +736,20 @@ export default function VehiclePrestartsPage() {
   }, [prestarts]);
 
   const overdue7Days = useMemo(() => {
-    return vehicles.filter((vehicle) => {
-      const latest = latestByVehicle.get(vehicle.id);
+    return assets.filter((asset) => {
+      const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
       const days = latest ? daysSince(prestartDateValue(latest)) : null;
       return days === null || days >= 7;
     });
-  }, [vehicles, latestByVehicle]);
+  }, [assets, latestByAsset]);
 
   const overdue21Days = useMemo(() => {
-    return vehicles.filter((vehicle) => {
-      const latest = latestByVehicle.get(vehicle.id);
+    return assets.filter((asset) => {
+      const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
       const days = latest ? daysSince(prestartDateValue(latest)) : null;
       return days === null || days >= 21;
     });
-  }, [vehicles, latestByVehicle]);
+  }, [assets, latestByAsset]);
 
   const submittedThisWeek = useMemo(() => {
     return prestarts.filter((prestart) => {
@@ -671,30 +758,40 @@ export default function VehiclePrestartsPage() {
     }).length;
   }, [prestarts]);
 
-  const vehiclesCheckedThisWeek = useMemo(() => {
+  const assetsCheckedThisWeek = useMemo(() => {
     return new Set(
       prestarts
         .filter((prestart) => {
           const days = daysSince(prestartDateValue(prestart));
           return days !== null && days <= 7;
         })
-        .map((prestart) => clean(prestart.vehicle_asset_id))
+        .map((prestart) => {
+          const assetType = clean(prestart.asset_type) === "Plant" ? "Plant" : "Vehicle";
+          const assetId =
+            assetType === "Plant"
+              ? clean(prestart.plant_asset_id)
+              : clean(prestart.vehicle_asset_id);
+          return `${assetType}:${assetId}`;
+        })
         .filter(Boolean),
     ).size;
   }, [prestarts]);
 
   const issuesRaised = useMemo(() => {
-    return prestarts.filter((prestart) => clean(prestart.severity) !== "none")
-      .length;
+    return prestarts.filter((prestart) => clean(prestart.severity) !== "none").length;
   }, [prestarts]);
 
   const filteredPrestarts = useMemo(() => {
     const term = search.trim().toLowerCase();
 
     return prestarts.filter((prestart) => {
+      const assetType = clean(prestart.asset_type) === "Plant" ? "Plant" : "Vehicle";
+
       const searchable = [
+        assetType,
         prestart.asset_label,
         prestart.vehicle_rego,
+        prestart.asset_category,
         prestart.inspected_by_name,
         prestart.project,
         prestart.crew,
@@ -707,10 +804,10 @@ export default function VehiclePrestartsPage() {
 
       return (
         searchable.includes(term) &&
+        (assetTypeFilter === "All Assets" || assetType === assetTypeFilter) &&
         (severityFilter === "All Severities" ||
           severityLabel(prestart.severity) === severityFilter) &&
-        (projectFilter === "All Projects" ||
-          clean(prestart.project) === projectFilter) &&
+        (projectFilter === "All Projects" || clean(prestart.project) === projectFilter) &&
         (crewFilter === "All Crews" || clean(prestart.crew) === crewFilter) &&
         (inspectorFilter === "All Inspectors" ||
           clean(prestart.inspected_by_name) === inspectorFilter)
@@ -719,6 +816,7 @@ export default function VehiclePrestartsPage() {
   }, [
     prestarts,
     search,
+    assetTypeFilter,
     severityFilter,
     projectFilter,
     crewFilter,
@@ -728,18 +826,14 @@ export default function VehiclePrestartsPage() {
   async function handleCreatePrestart(formData: FormData) {
     setSaving(true);
 
-    const vehicle = vehicles.find(
-      (item) => item.id === clean(formData.get("vehicle_asset_id") as string),
-    );
-
-    if (!vehicle) {
-      alert("Please select a vehicle.");
+    if (!selectedAsset) {
+      alert("Please select an asset.");
       setSaving(false);
       return;
     }
 
     if (!selectedEmployeeName) {
-      alert("Please select who inspected the vehicle.");
+      alert("Please select who inspected the asset.");
       setSaving(false);
       return;
     }
@@ -749,6 +843,28 @@ export default function VehiclePrestartsPage() {
 
     if (!prestartDate) {
       alert("Please select the prestart date.");
+      setSaving(false);
+      return;
+    }
+
+    const kilometres =
+      selectedAsset.assetType === "Vehicle"
+        ? Number(formData.get("kilometres") || 0)
+        : null;
+
+    const cabHours =
+      selectedAsset.assetType === "Plant"
+        ? Number(formData.get("cab_hours") || 0)
+        : null;
+
+    if (selectedAsset.assetType === "Vehicle" && !kilometres) {
+      alert("Please enter kilometres.");
+      setSaving(false);
+      return;
+    }
+
+    if (selectedAsset.assetType === "Plant" && !cabHours) {
+      alert("Please enter cab hours.");
       setSaving(false);
       return;
     }
@@ -788,38 +904,44 @@ export default function VehiclePrestartsPage() {
     const severity = failedItems.length > 0 ? highestSeverity(failedSeverities) : "none";
 
     const failedChecklistDetails = failedItems.map((item) => {
-  const key = checklistKey(item);
-  const itemSeverity = checklistValues[key]?.severity || "minor";
-  const itemComment =
-    checklistValues[key]?.comment?.trim() || "No comment provided";
+      const key = checklistKey(item);
+      const itemSeverity = checklistValues[key]?.severity || "minor";
+      const itemComment =
+        checklistValues[key]?.comment?.trim() || "No comment provided";
 
-  return `${item}\nSeverity: ${severityLabel(itemSeverity)}\nComment: ${itemComment}`;
-});
+      return `${item}\nSeverity: ${severityLabel(itemSeverity)}\nComment: ${itemComment}`;
+    });
 
-const fleetJobDescription = [
-  failedChecklistDetails.length > 0
-    ? `Vehicle prestart defect(s):\n\n${failedChecklistDetails.join("\n\n")}`
-    : "",
-  comments ? `General comments:\n${comments}` : "",
-]
-  .filter(Boolean)
-  .join("\n\n");
+    const fleetJobDescription = [
+      failedChecklistDetails.length > 0
+        ? `${selectedAsset.assetType} prestart defect(s):\n\n${failedChecklistDetails.join("\n\n")}`
+        : "",
+      comments ? `General comments:\n${comments}` : "",
+      selectedAsset.assetType === "Plant" ? `Cab hours: ${cabHours}` : "",
+      selectedAsset.assetType === "Vehicle" ? `Kilometres: ${kilometres}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const assetLabel = [
-      clean(vehicle.vehicle_id) || "Vehicle",
-      getMakeModel(vehicle),
+      selectedAsset.assetId || selectedAsset.assetType,
+      selectedAsset.makeModel,
     ]
       .filter(Boolean)
       .join(" ");
 
     const insertPayload = {
-      vehicle_asset_id: vehicle.id,
+      asset_type: selectedAsset.assetType,
+      vehicle_asset_id: selectedAsset.assetType === "Vehicle" ? selectedAsset.id : null,
+      plant_asset_id: selectedAsset.assetType === "Plant" ? selectedAsset.id : null,
       asset_label: assetLabel,
-      vehicle_rego: clean(vehicle.vehicle_rego),
+      vehicle_rego: selectedAsset.assetType === "Vehicle" ? selectedAsset.rego : null,
+      asset_category: selectedAsset.category,
       prestart_date: prestartDate,
-      kilometres: Number(formData.get("kilometres") || 0),
-      project: selectedProject || clean(vehicle.project),
-      crew: selectedCrew || matchCrewOption(vehicle.crew),
+      kilometres,
+      cab_hours: cabHours,
+      project: selectedProject || clean(selectedAsset.project),
+      crew: selectedCrew || matchCrewOption(selectedAsset.crew),
       inspected_by_name: selectedEmployeeName,
       checklist: checklistValues,
       overall_condition: clean(formData.get("overall_condition") as string),
@@ -841,80 +963,73 @@ const fleetJobDescription = [
       return;
     }
 
-if (newPrestart && severity !== "none") {
-  const jobNumber = `FJ-${Date.now().toString().slice(-6)}`;
+    if (newPrestart && severity !== "none") {
+      const jobNumber = `FJ-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+      const selectedPriority = severityToPriority(severity);
 
-  const selectedPriority = severityToPriority(severity);
+      const jobTitle =
+        failedItems.length === 1
+          ? `${severityLabel(severity)} issue - ${failedItems[0]} - ${assetLabel}`
+          : `${severityLabel(severity)} prestart issues - ${assetLabel}`;
 
-  const jobTitle =
-    failedItems.length === 1
-      ? `${severityLabel(severity)} issue - ${failedItems[0]} - ${assetLabel}`
-      : `${severityLabel(severity)} prestart issues - ${assetLabel}`;
+      const { data: fleetJob, error: fleetJobError } = await supabase
+        .from("fleet_jobs")
+        .insert({
+          job_number: jobNumber,
 
-  const { data: fleetJob, error: fleetJobError } = await supabase
-    .from("fleet_jobs")
-    .insert({
-      job_number: jobNumber,
+          asset_type: selectedAsset.assetType,
+          vehicle_id: selectedAsset.assetType === "Vehicle" ? selectedAsset.id : null,
+          plant_id: selectedAsset.assetType === "Plant" ? selectedAsset.id : null,
+          prestart_id: newPrestart.id,
 
-      // New linked structure
-      asset_type: "Vehicle",
-      vehicle_id: vehicle.id,
-      plant_id: null,
-      prestart_id: newPrestart.id,
+          source_type:
+            selectedAsset.assetType === "Vehicle" ? "vehicle_prestart" : "plant_prestart",
+          source_id: newPrestart.id,
+          vehicle_asset_id: selectedAsset.assetType === "Vehicle" ? selectedAsset.id : null,
+          plant_asset_id: selectedAsset.assetType === "Plant" ? selectedAsset.id : null,
+          asset_label: assetLabel,
 
-      // Keep old CodeX/current compatibility fields
-      source_type: "vehicle_prestart",
-      source_id: newPrestart.id,
-      vehicle_asset_id: vehicle.id,
-      asset_label: assetLabel,
+          source: "Prestart",
+          title: jobTitle,
+          description: fleetJobDescription || "Issue raised from prestart.",
+          priority: selectedPriority,
+          status: "Open",
 
-      // Main job details
-      source: "Prestart",
-      title: jobTitle,
-      description:
-        fleetJobDescription || "Issue raised from vehicle prestart.",
-      priority: selectedPriority,
-      status: "Open",
+          project: selectedProject || clean(selectedAsset.project) || null,
+          crew: selectedCrew || matchCrewOption(selectedAsset.crew) || null,
 
-      // Asset/project context
-      project: selectedProject || clean(vehicle.project) || null,
-      crew: selectedCrew || matchCrewOption(vehicle.crew) || null,
+          reported_by: selectedEmployeeName || null,
+          assigned_to: null,
+          vendor: null,
 
-      // People/context
-      reported_by: selectedEmployeeName || null,
-      assigned_to: null,
-      vendor: null,
+          reported_date: prestartDate,
+          due_date: null,
+          completed_date: null,
 
-      // Dates
-      reported_date: prestartDate,
-      due_date: null,
-      completed_date: null,
+          cost: null,
+          notes: `Created automatically from ${selectedAsset.assetType.toLowerCase()} prestart on ${prestartDate}.`,
+        })
+        .select("id")
+        .single();
 
-      // Close-out
-      cost: null,
-      notes: `Created automatically from vehicle prestart on ${prestartDate}.`,
-    })
-    .select("id")
-    .single();
+      if (!fleetJobError && fleetJob?.id) {
+        await supabase
+          .from("vehicle_prestarts")
+          .update({ fleet_job_id: fleetJob.id })
+          .eq("id", newPrestart.id);
+      }
 
-  if (!fleetJobError && fleetJob?.id) {
-    await supabase
-      .from("vehicle_prestarts")
-      .update({ fleet_job_id: fleetJob.id })
-      .eq("id", newPrestart.id);
-  }
-
-  if (fleetJobError) {
-    console.warn(
-      "Prestart saved, but Fleet Job was not created:",
-      fleetJobError.message,
-    );
-  }
-}
+      if (fleetJobError) {
+        console.warn(
+          "Prestart saved, but Fleet Job was not created:",
+          fleetJobError.message,
+        );
+      }
+    }
 
     setShowForm(false);
-    setSelectedVehicleId("");
-    setVehicleSearch("");
+    setSelectedAssetKey("");
+    setAssetSearch("");
     setSelectedEmployeeName("");
     setEmployeeSearch("");
     setSelectedProject("");
@@ -927,10 +1042,13 @@ if (newPrestart && severity !== "none") {
   function exportFilteredPrestarts() {
     const headers = [
       "Date",
-      "Vehicle",
+      "Asset Type",
+      "Asset",
       "Rego",
+      "Category",
       "Inspected By",
       "Kilometres",
+      "Cab Hours",
       "Project",
       "Crew",
       "Result",
@@ -941,10 +1059,13 @@ if (newPrestart && severity !== "none") {
 
     const rows = filteredPrestarts.map((prestart) => [
       formatShortDate(prestartDateValue(prestart)),
+      clean(prestart.asset_type) || "Vehicle",
       clean(prestart.asset_label),
       clean(prestart.vehicle_rego),
+      clean(prestart.asset_category),
       clean(prestart.inspected_by_name),
       clean(prestart.kilometres),
+      clean(prestart.cab_hours),
       clean(prestart.project),
       clean(prestart.crew),
       clean(prestart.result),
@@ -967,7 +1088,7 @@ if (newPrestart && severity !== "none") {
     const date = new Date().toISOString().slice(0, 10);
 
     link.href = url;
-    link.download = `vehicle-prestarts-${date}.csv`;
+    link.download = `asset-prestarts-${date}.csv`;
     link.click();
 
     URL.revokeObjectURL(url);
@@ -976,9 +1097,9 @@ if (newPrestart && severity !== "none") {
   return (
     <PageShell>
       <PageHeader
-        eyebrow="Vehicle Checks"
-        title="Vehicle Prestarts"
-        description="Submit, review and track vehicle prestarts. Issues raised here create Fleet Jobs based on severity."
+        eyebrow="Asset Checks"
+        title="Prestarts"
+        description="Submit, review and track vehicle and plant prestarts. Vehicle prestarts record kilometres; plant prestarts record cab hours for service tracking."
         actions={
           <div className="flex flex-wrap gap-2">
             <button
@@ -1022,9 +1143,9 @@ if (newPrestart && severity !== "none") {
         />
 
         <StatCard
-          label="Vehicles Checked"
-          value={vehiclesCheckedThisWeek}
-          detail="Unique vehicles this week"
+          label="Assets Checked"
+          value={assetsCheckedThisWeek}
+          detail="Unique assets this week"
           tone="blue"
           icon={<Car size={22} />}
         />
@@ -1054,7 +1175,7 @@ if (newPrestart && severity !== "none") {
                 Prestart Notice Board
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Vehicles not checked recently are shown here.
+                Vehicles and plant not checked recently are shown here. Trailers are excluded.
               </p>
             </div>
             <StatusPill
@@ -1066,17 +1187,17 @@ if (newPrestart && severity !== "none") {
           <div className="mt-4 grid gap-3">
             {overdue7Days.length === 0 ? (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
-                All vehicles have a recent prestart.
+                All required assets have a recent prestart.
               </div>
             ) : (
-              overdue7Days.slice(0, 8).map((vehicle) => {
-                const latest = latestByVehicle.get(vehicle.id);
+              overdue7Days.slice(0, 8).map((asset) => {
+                const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
                 const days = latest ? daysSince(prestartDateValue(latest)) : null;
                 const critical = days === null || days >= 21;
 
                 return (
                   <div
-                    key={vehicle.id}
+                    key={`${asset.assetType}:${asset.id}`}
                     className={`rounded-2xl border p-4 ${
                       critical
                         ? "border-rose-200 bg-rose-50"
@@ -1086,7 +1207,7 @@ if (newPrestart && severity !== "none") {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="font-black text-slate-950">
-                          {getVehicleLabel(vehicle)}
+                          {getAssetLabel(asset)}
                         </p>
                         <p className="mt-1 text-sm font-medium text-slate-700">
                           {days === null
@@ -1095,10 +1216,13 @@ if (newPrestart && severity !== "none") {
                         </p>
                       </div>
 
-                      <StatusPill
-                        label={critical ? "3+ Weeks" : "7+ Days"}
-                        tone={critical ? "rose" : "amber"}
-                      />
+                      <div className="flex flex-wrap gap-2">
+                        <StatusPill label={asset.assetType} tone="blue" />
+                        <StatusPill
+                          label={critical ? "3+ Weeks" : "7+ Days"}
+                          tone={critical ? "rose" : "amber"}
+                        />
+                      </div>
                     </div>
                   </div>
                 );
@@ -1114,7 +1238,7 @@ if (newPrestart && severity !== "none") {
                 Latest Prestarts
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Most recent vehicle checks submitted.
+                Most recent asset checks submitted.
               </p>
             </div>
             <CheckCircle2 size={22} className="text-emerald-600" />
@@ -1130,7 +1254,7 @@ if (newPrestart && severity !== "none") {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-black text-slate-950">
-                      {getPrestartAssetLabel(prestart) || "Vehicle"}
+                      {getPrestartAssetLabel(prestart) || "Asset"}
                     </p>
                     <p className="mt-1 text-sm font-medium text-slate-600">
                       {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
@@ -1138,10 +1262,16 @@ if (newPrestart && severity !== "none") {
                     </p>
                   </div>
 
-                  <StatusPill
-                    label={severityLabel(prestart.severity)}
-                    tone={severityTone(prestart.severity)}
-                  />
+                  <div className="flex flex-wrap gap-2">
+                    <StatusPill
+                      label={clean(prestart.asset_type) || "Vehicle"}
+                      tone="blue"
+                    />
+                    <StatusPill
+                      label={severityLabel(prestart.severity)}
+                      tone={severityTone(prestart.severity)}
+                    />
+                  </div>
                 </div>
               </Link>
             ))}
@@ -1177,7 +1307,7 @@ if (newPrestart && severity !== "none") {
 
         {registerOpen ? (
           <div className="border-t border-slate-200 p-5">
-            <div className="grid gap-3 md:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-6">
               <div className="relative md:col-span-2">
                 <Search
                   size={16}
@@ -1186,10 +1316,22 @@ if (newPrestart && severity !== "none") {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search vehicle, rego, inspector, comments..."
+                  placeholder="Search asset, inspector, comments..."
                   className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                 />
               </div>
+
+              <select
+                value={assetTypeFilter}
+                onChange={(event) =>
+                  setAssetTypeFilter(event.target.value as "All Assets" | AssetType)
+                }
+                className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+              >
+                <option>All Assets</option>
+                <option>Vehicle</option>
+                <option>Plant</option>
+              </select>
 
               <select
                 value={severityFilter}
@@ -1244,7 +1386,7 @@ if (newPrestart && severity !== "none") {
 
       {registerOpen ? (
         <RegisterList
-          title="Submitted Vehicle Prestarts"
+          title="Submitted Prestarts"
           description={
             loading
               ? "Loading prestarts..."
@@ -1254,11 +1396,11 @@ if (newPrestart && severity !== "none") {
           getKey={(prestart) => prestart.id}
           columns={[
             {
-              label: "Prestart Date",
+              label: "Date",
               render: (prestart) => formatShortDate(prestartDateValue(prestart)),
             },
             {
-              label: "Vehicle",
+              label: "Asset",
               render: (prestart) => (
                 <div className="flex items-center gap-3">
                   <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
@@ -1267,10 +1409,12 @@ if (newPrestart && severity !== "none") {
 
                   <div>
                     <p className="font-bold text-slate-950">
-                      {clean(prestart.asset_label) || "Vehicle"}
+                      {clean(prestart.asset_label) || "Asset"}
                     </p>
                     <p className="mt-1 text-xs font-semibold text-slate-500">
-                      {clean(prestart.vehicle_rego) || "No rego"}
+                      {[clean(prestart.asset_type) || "Vehicle", clean(prestart.vehicle_rego), clean(prestart.asset_category)]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
                   </div>
                 </div>
@@ -1281,8 +1425,11 @@ if (newPrestart && severity !== "none") {
               render: (prestart) => clean(prestart.inspected_by_name) || "N/A",
             },
             {
-              label: "KM",
-              render: (prestart) => clean(prestart.kilometres) || "-",
+              label: "Reading",
+              render: (prestart) =>
+                clean(prestart.asset_type) === "Plant"
+                  ? `${clean(prestart.cab_hours) || "-"} hrs`
+                  : `${clean(prestart.kilometres) || "-"} km`,
             },
             {
               label: "Allocation",
@@ -1340,10 +1487,12 @@ if (newPrestart && severity !== "none") {
 
                   <div>
                     <p className="font-bold text-slate-950">
-                      {clean(prestart.asset_label) || "Vehicle"}
+                      {clean(prestart.asset_label) || "Asset"}
                     </p>
                     <p className="text-sm text-slate-600">
-                      {clean(prestart.vehicle_rego) || "No rego"}
+                      {[clean(prestart.asset_type) || "Vehicle", clean(prestart.vehicle_rego), clean(prestart.asset_category)]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
                   </div>
                 </div>
@@ -1357,7 +1506,7 @@ if (newPrestart && severity !== "none") {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Submitted
+                    Prestart Date
                   </p>
                   <p className="font-semibold text-slate-800">
                     {formatShortDate(prestartDateValue(prestart))}
@@ -1384,10 +1533,12 @@ if (newPrestart && severity !== "none") {
 
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Crew
+                    Reading
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {clean(prestart.crew) || "Unallocated"}
+                    {clean(prestart.asset_type) === "Plant"
+                      ? `${clean(prestart.cab_hours) || "-"} hrs`
+                      : `${clean(prestart.kilometres) || "-"} km`}
                   </p>
                 </div>
               </div>
@@ -1411,14 +1562,13 @@ if (newPrestart && severity !== "none") {
               <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
                 <div>
                   <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                    New Vehicle Prestart
+                    New Asset Prestart
                   </p>
                   <h2 className="mt-1 text-2xl font-black text-slate-950">
                     Add Prestart
                   </h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Complete the vehicle check. Any issue raised will be pushed
-                    to Fleet Jobs.
+                    Select Vehicle or Plant. Vehicles record kilometres; plant records cab hours.
                   </p>
                 </div>
 
@@ -1438,28 +1588,50 @@ if (newPrestart && severity !== "none") {
                   </h3>
 
                   <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    <div className="grid gap-2 text-sm font-bold text-slate-700">
+                      Asset Type
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["Vehicle", "Plant"] as AssetType[]).map((assetType) => (
+                          <button
+                            key={assetType}
+                            type="button"
+                            onClick={() => handleAssetTypeChange(assetType)}
+                            className={`rounded-xl border px-4 py-3 text-sm font-black ${
+                              formAssetType === assetType
+                                ? "border-slate-950 bg-slate-950 text-white"
+                                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            {assetType}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className="md:col-span-2">
                       <SearchPicker
-                        label="Asset ID / Rego"
-                        placeholder="Start typing asset ID, rego, make or model..."
-                        value={
-                          selectedVehicle ? getVehicleLabel(selectedVehicle) : ""
+                        label={formAssetType === "Plant" ? "Plant Asset" : "Asset ID / Rego"}
+                        placeholder={
+                          formAssetType === "Plant"
+                            ? "Start typing crane / telehandler ID..."
+                            : "Start typing asset ID, rego, make or model..."
                         }
-                        search={vehicleSearch}
-                        setSearch={setVehicleSearch}
-                        items={vehicles}
-                        getKey={(vehicle) => vehicle.id}
-                        getLabel={getVehicleLabel}
-                        onSelect={(vehicle) => {
-                          handleVehicleChange(vehicle.id);
-                          setVehicleSearch(getVehicleLabel(vehicle));
+                        value={selectedAsset ? getAssetLabel(selectedAsset) : ""}
+                        search={assetSearch}
+                        setSearch={setAssetSearch}
+                        items={formAssets}
+                        getKey={(asset) => `${asset.assetType}:${asset.id}`}
+                        getLabel={getAssetLabel}
+                        onSelect={(asset) => {
+                          handleAssetChange(asset);
+                          setAssetSearch(getAssetLabel(asset));
                         }}
                       />
 
                       <input
                         type="hidden"
-                        name="vehicle_asset_id"
-                        value={selectedVehicleId}
+                        name="asset_id"
+                        value={selectedAsset?.id || ""}
                       />
                     </div>
 
@@ -1469,22 +1641,37 @@ if (newPrestart && severity !== "none") {
                         name="prestart_date"
                         type="date"
                         required
-                        defaultValue={new Date().toISOString().slice(0, 10)}
+                        defaultValue={todayDate()}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       />
                     </label>
 
-                    <label className="grid gap-2 text-sm font-bold text-slate-700">
-                      Kilometres
-                      <input
-                        name="kilometres"
-                        type="number"
-                        min="0"
-                        step="1"
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                      />
-                    </label>
+                    {selectedAsset?.assetType === "Plant" ? (
+                      <label className="grid gap-2 text-sm font-bold text-slate-700">
+                        Cab Hours
+                        <input
+                          name="cab_hours"
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          required
+                          defaultValue={selectedAsset.currentHours ?? ""}
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                        />
+                      </label>
+                    ) : (
+                      <label className="grid gap-2 text-sm font-bold text-slate-700">
+                        Kilometres
+                        <input
+                          name="kilometres"
+                          type="number"
+                          min="0"
+                          step="1"
+                          required
+                          className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                        />
+                      </label>
+                    )}
 
                     <div>
                       <SearchPicker
@@ -1514,9 +1701,7 @@ if (newPrestart && severity !== "none") {
                       <select
                         name="project"
                         value={selectedProject}
-                        onChange={(event) =>
-                          setSelectedProject(event.target.value)
-                        }
+                        onChange={(event) => setSelectedProject(event.target.value)}
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       >
                         <option value="">No project selected</option>
@@ -1545,9 +1730,9 @@ if (newPrestart && severity !== "none") {
                       </select>
                     </label>
 
-                    {selectedVehicle ? (
+                    {selectedAsset ? (
                       <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-800 md:col-span-2">
-                        Selected: {getVehicleLabel(selectedVehicle)}
+                        Selected: {getAssetLabel(selectedAsset)}
                       </div>
                     ) : null}
                   </div>
@@ -1556,183 +1741,183 @@ if (newPrestart && severity !== "none") {
                 <section className="rounded-2xl border border-slate-200 bg-white">
                   <div className="border-b border-slate-200 bg-slate-50 p-4">
                     <h3 className="text-base font-black text-slate-950">
-                      Vehicle Checklist
+                      Checklist
                     </h3>
                     <p className="mt-1 text-sm text-slate-600">
-                      Tap Y, N or N/A for each item.
+                      Tap Y, N or N/A for each item. Selecting N requires item severity and a comment.
                     </p>
                   </div>
 
-<div className="grid gap-5 p-4">
-  {checklistSections.map((section) => (
-    <div key={section.title}>
-      <div className="mb-3 border-b border-slate-200 pb-2">
-        <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
-          {section.title}
-        </h3>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {section.items.map((item) => {
-          const key = checklistKey(item);
-          const value = checklistValues[key]?.answer || "yes";
-          const itemSeverity =
-            checklistValues[key]?.severity || "minor";
-          const comment =
-            checklistValues[key]?.comment || "";
-
-          return (
-                        <div
-                          key={item}
-                          className={`rounded-xl border px-3 py-2 ${
-                            value === "no"
-                              ? "border-rose-200 bg-rose-50"
-                              : "border-slate-200 bg-slate-50"
-                          }`}
-                        >
-                          <div className="grid grid-cols-[1fr_auto] items-center gap-2">
-                            <p className="truncate text-xs font-black text-slate-800">
-                              {item}
-                            </p>
-
-                            <div className="flex gap-1">
-                              <ChecklistButton
-                                active={value === "yes"}
-                                tone="yes"
-                                onClick={() =>
-                                  setChecklistValues((current) => ({
-                                    ...current,
-                                    [key]: {
-                                      ...(current[key] || {
-                                        answer: "yes",
-                                        severity: "minor",
-                                        comment: "",
-                                      }),
-                                      answer: "yes",
-                                      comment: "",
-                                    },
-                                  }))
-                                }
-                              >
-                                Y
-                              </ChecklistButton>
-
-                              <ChecklistButton
-                                active={value === "no"}
-                                tone="no"
-                                onClick={() =>
-                                  setChecklistValues((current) => ({
-                                    ...current,
-                                    [key]: {
-                                      ...(current[key] || {
-                                        answer: "yes",
-                                        severity: "minor",
-                                        comment: "",
-                                      }),
-                                      answer: "no",
-                                      severity: current[key]?.severity || "minor",
-                                    },
-                                  }))
-                                }
-                              >
-                                N
-                              </ChecklistButton>
-
-                              <ChecklistButton
-                                active={value === "na"}
-                                tone="na"
-                                onClick={() =>
-                                  setChecklistValues((current) => ({
-                                    ...current,
-                                    [key]: {
-                                      ...(current[key] || {
-                                        answer: "yes",
-                                        severity: "minor",
-                                        comment: "",
-                                      }),
-                                      answer: "na",
-                                      comment: "",
-                                    },
-                                  }))
-                                }
-                              >
-                                N/A
-                              </ChecklistButton>
-                            </div>
-                          </div>
-
-                          {value === "no" ? (
-                            <div className="mt-2 grid gap-2">
-                              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
-                                {[
-                                  ["minor", "Minor"],
-                                  ["moderate", "Moderate"],
-                                  ["major", "Major"],
-                                  ["do_not_use", "Do Not Use"],
-                                ].map(([severityValue, label]) => (
-                                  <button
-                                    key={severityValue}
-                                    type="button"
-                                    onClick={() =>
-                                      setChecklistValues((current) => ({
-                                        ...current,
-                                        [key]: {
-                                          ...(current[key] || {
-                                            answer: "no",
-                                            severity: "minor",
-                                            comment: "",
-                                          }),
-                                          answer: "no",
-                                          severity: severityValue,
-                                        },
-                                      }))
-                                    }
-                                    className={`rounded-md border px-2 py-1.5 text-[10px] font-black transition ${
-                                      itemSeverity === severityValue
-                                        ? severityTone(severityValue) === "rose"
-                                          ? "border-rose-500 bg-rose-600 text-white"
-                                          : severityTone(severityValue) === "amber"
-                                            ? "border-amber-500 bg-amber-500 text-white"
-                                            : "border-blue-500 bg-blue-600 text-white"
-                                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                                    }`}
-                                  >
-                                    {label}
-                                  </button>
-                                ))}
-                              </div>
-
-                              <textarea
-                                value={comment}
-                                onChange={(event) =>
-                                  setChecklistValues((current) => ({
-                                    ...current,
-                                    [key]: {
-                                      ...(current[key] || {
-                                        answer: "no",
-                                        severity: "minor",
-                                        comment: "",
-                                      }),
-                                      answer: "no",
-                                      comment: event.target.value,
-                                    },
-                                  }))
-                                }
-                                placeholder="Required: explain this defect..."
-                                rows={2}
-                                className="w-full rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
-                              />
-                            </div>
-                          ) : null}
-
-                          <input type="hidden" name={key} value={value} />
+                  <div className="grid gap-5 p-4">
+                    {checklistSections.map((section) => (
+                      <div key={section.title}>
+                        <div className="mb-3 border-b border-slate-200 pb-2">
+                          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
+                            {section.title}
+                          </h3>
                         </div>
-                      );
-                    })}
+
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {section.items.map((item) => {
+                            const key = checklistKey(item);
+                            const value = checklistValues[key]?.answer || "yes";
+                            const itemSeverity =
+                              checklistValues[key]?.severity || "minor";
+                            const comment = checklistValues[key]?.comment || "";
+
+                            return (
+                              <div
+                                key={item}
+                                className={`rounded-xl border px-3 py-2 ${
+                                  value === "no"
+                                    ? "border-rose-200 bg-rose-50"
+                                    : "border-slate-200 bg-slate-50"
+                                }`}
+                              >
+                                <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                                  <p className="truncate text-xs font-black text-slate-800">
+                                    {item}
+                                  </p>
+
+                                  <div className="flex gap-1">
+                                    <ChecklistButton
+                                      active={value === "yes"}
+                                      tone="yes"
+                                      onClick={() =>
+                                        setChecklistValues((current) => ({
+                                          ...current,
+                                          [key]: {
+                                            ...(current[key] || {
+                                              answer: "yes",
+                                              severity: "minor",
+                                              comment: "",
+                                            }),
+                                            answer: "yes",
+                                            comment: "",
+                                          },
+                                        }))
+                                      }
+                                    >
+                                      Y
+                                    </ChecklistButton>
+
+                                    <ChecklistButton
+                                      active={value === "no"}
+                                      tone="no"
+                                      onClick={() =>
+                                        setChecklistValues((current) => ({
+                                          ...current,
+                                          [key]: {
+                                            ...(current[key] || {
+                                              answer: "yes",
+                                              severity: "minor",
+                                              comment: "",
+                                            }),
+                                            answer: "no",
+                                            severity:
+                                              current[key]?.severity || "minor",
+                                          },
+                                        }))
+                                      }
+                                    >
+                                      N
+                                    </ChecklistButton>
+
+                                    <ChecklistButton
+                                      active={value === "na"}
+                                      tone="na"
+                                      onClick={() =>
+                                        setChecklistValues((current) => ({
+                                          ...current,
+                                          [key]: {
+                                            ...(current[key] || {
+                                              answer: "yes",
+                                              severity: "minor",
+                                              comment: "",
+                                            }),
+                                            answer: "na",
+                                            comment: "",
+                                          },
+                                        }))
+                                      }
+                                    >
+                                      N/A
+                                    </ChecklistButton>
+                                  </div>
+                                </div>
+
+                                {value === "no" ? (
+                                  <div className="mt-2 grid gap-2">
+                                    <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                                      {[
+                                        ["minor", "Minor"],
+                                        ["moderate", "Moderate"],
+                                        ["major", "Major"],
+                                        ["do_not_use", "Do Not Use"],
+                                      ].map(([severityValue, label]) => (
+                                        <button
+                                          key={severityValue}
+                                          type="button"
+                                          onClick={() =>
+                                            setChecklistValues((current) => ({
+                                              ...current,
+                                              [key]: {
+                                                ...(current[key] || {
+                                                  answer: "no",
+                                                  severity: "minor",
+                                                  comment: "",
+                                                }),
+                                                answer: "no",
+                                                severity: severityValue,
+                                              },
+                                            }))
+                                          }
+                                          className={`rounded-md border px-2 py-1.5 text-[10px] font-black transition ${
+                                            itemSeverity === severityValue
+                                              ? severityTone(severityValue) === "rose"
+                                                ? "border-rose-500 bg-rose-600 text-white"
+                                                : severityTone(severityValue) === "amber"
+                                                  ? "border-amber-500 bg-amber-500 text-white"
+                                                  : "border-blue-500 bg-blue-600 text-white"
+                                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                          }`}
+                                        >
+                                          {label}
+                                        </button>
+                                      ))}
+                                    </div>
+
+                                    <textarea
+                                      value={comment}
+                                      onChange={(event) =>
+                                        setChecklistValues((current) => ({
+                                          ...current,
+                                          [key]: {
+                                            ...(current[key] || {
+                                              answer: "no",
+                                              severity: "minor",
+                                              comment: "",
+                                            }),
+                                            answer: "no",
+                                            comment: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      placeholder="Required: explain this defect..."
+                                      rows={2}
+                                      className="w-full rounded-lg border border-rose-300 bg-white px-2 py-2 text-xs font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-rose-400 focus:ring-4 focus:ring-rose-100"
+                                    />
+                                  </div>
+                                ) : null}
+
+                                <input type="hidden" name={key} value={value} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              ))}
-            </div>
                 </section>
 
                 <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -1756,11 +1941,11 @@ if (newPrestart && severity !== "none") {
                     </label>
 
                     <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
-                      Defect Description / General Comments
+                      General Comments
                       <textarea
                         name="comments"
                         rows={5}
-                        placeholder="Describe defects, missing items, warning lights, damage, or general comments."
+                        placeholder="Any general comments not covered by failed checklist items."
                         className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                       />
                     </label>
