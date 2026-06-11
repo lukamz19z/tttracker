@@ -109,6 +109,27 @@ type FleetJobUpdate = {
   created_at: string | null;
 };
 
+type AssetHistoryRecord = {
+  id: string;
+  asset_type: string | null;
+  vehicle_id: string | null;
+  plant_id: string | null;
+  fleet_job_id: string | null;
+  history_type: string | null;
+  history_date: string | null;
+  title: string | null;
+  description: string | null;
+  vendor: string | null;
+  cost: number | null;
+  odometer_km: number | null;
+  engine_hours: number | null;
+  next_service_due_date: string | null;
+  next_service_due_km: number | null;
+  next_service_due_hours: number | null;
+  document_url: string | null;
+  created_at: string | null;
+};
+
 type CloseOutForm = {
   history_type: AssetHistoryType;
   history_date: string;
@@ -329,6 +350,7 @@ export default function FleetJobDetailPage() {
   const [plant, setPlant] = useState<PlantAsset | null>(null);
   const [prestart, setPrestart] = useState<VehiclePrestart | null>(null);
   const [updates, setUpdates] = useState<FleetJobUpdate[]>([]);
+  const [assetHistoryRecord, setAssetHistoryRecord] = useState<AssetHistoryRecord | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -379,6 +401,7 @@ export default function FleetJobDetailPage() {
       setPlant(null);
       setPrestart(null);
       setUpdates([]);
+      setAssetHistoryRecord(null);
       setLoading(false);
       return;
     }
@@ -413,6 +436,21 @@ export default function FleetJobDetailPage() {
       setUpdates([]);
     } else {
       setUpdates((updatesData ?? []) as FleetJobUpdate[]);
+    }
+
+    const { data: assetHistoryData, error: assetHistoryError } = await supabase
+      .from("asset_history")
+      .select("*")
+      .eq("fleet_job_id", loadedJob.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (assetHistoryError) {
+      console.error("Failed to load linked asset history:", assetHistoryError.message);
+      setAssetHistoryRecord(null);
+    } else {
+      setAssetHistoryRecord((assetHistoryData as AssetHistoryRecord) || null);
     }
 
     if (resolvedVehicleId) {
@@ -536,9 +574,19 @@ export default function FleetJobDetailPage() {
 
   const failedItems = job ? getPrestartFlaggedItems(prestart, job) : [];
   const isClosed = job?.status === "Completed" || job?.status === "Closed";
+  const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
+  const visibleUpdates = updates.filter((update) => {
+    if (update.update_type !== "Close Out") return true;
+    return Boolean(assetHistoryRecord);
+  });
 
   async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
+
+    if (isClosed) {
+      alert("This fleet job is closed. Reopen it before adding progress updates.");
+      return;
+    }
 
     const finalStatus = nextStatus || status;
 
@@ -632,7 +680,7 @@ Asset update record: ${assetTitle}`;
 
     const finalNotes = appendJobNote(job.notes || null, "Close Out", closeOutComment);
 
-    const { error: historyError } = await supabase.from("asset_history").insert({
+    const assetHistoryPayload = {
       asset_type: assetType,
       vehicle_id: assetType === "Vehicle" ? resolvedVehicleId : null,
       plant_id: assetType === "Plant" ? job.plant_id : null,
@@ -663,7 +711,16 @@ Asset update record: ${assetTitle}`;
           : null,
 
       document_url: null,
-    });
+    };
+
+    const historyResult = assetHistoryRecord
+      ? await supabase
+          .from("asset_history")
+          .update(assetHistoryPayload)
+          .eq("id", assetHistoryRecord.id)
+      : await supabase.from("asset_history").insert(assetHistoryPayload);
+
+    const historyError = historyResult.error;
 
     if (historyError) {
       console.error("Failed to save asset history:", historyError.message);
@@ -676,7 +733,7 @@ Asset update record: ${assetTitle}`;
       .from("fleet_job_updates")
       .insert({
         fleet_job_id: job.id,
-        update_type: "Close Out",
+        update_type: assetHistoryRecord ? "Close Out Edited" : "Close Out",
         status: "Completed",
         comment: closeOutComment,
       });
@@ -715,6 +772,53 @@ Asset update record: ${assetTitle}`;
     setSaving(false);
   }
 
+
+
+  async function reopenJob() {
+    if (!job) return;
+
+    const confirmed = window.confirm(
+      "Reopen this fleet job? This will let you add progress updates or complete it again if the asset history record was deleted or needs correction.",
+    );
+
+    if (!confirmed) return;
+
+    setSaving(true);
+
+    const { error: updateError } = await supabase
+      .from("fleet_jobs")
+      .update({
+        status: "Open",
+        completed_date: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+
+    if (updateError) {
+      console.error("Failed to reopen fleet job:", updateError.message);
+      alert(updateError.message);
+      setSaving(false);
+      return;
+    }
+
+    const { error: noteError } = await supabase
+      .from("fleet_job_updates")
+      .insert({
+        fleet_job_id: job.id,
+        update_type: "Reopened",
+        status: "Open",
+        comment: assetHistoryRecord
+          ? "Fleet job reopened for further action."
+          : "Fleet job reopened because the linked asset history record is missing or was deleted.",
+      });
+
+    if (noteError) {
+      console.error("Fleet job reopened, but update note failed:", noteError.message);
+    }
+
+    await loadJob();
+    setSaving(false);
+  }
   if (loading) {
     return (
       <PageShell>
@@ -1052,137 +1156,239 @@ Asset update record: ${assetTitle}`;
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">Action Job</h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Track progress here. Complete the job using the close-out modal so the asset history is updated.
+              Track progress here while the job is active. Once closed, progress updates are locked so the job record stays clean.
             </p>
 
-            <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-              Fleet Jobs are for notification and progress tracking. Closing this job will create a repair, modification or service record against the asset.
-            </div>
-
-            <div className="mt-5 grid gap-4">
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Status
-                <select
-                  value={status}
-                  onChange={(event) => setStatus(event.target.value)}
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+            {isClosed ? (
+              <div className="mt-5 space-y-4">
+                <div
+                  className={`rounded-xl border p-4 text-sm leading-6 ${
+                    closedWithoutAssetHistory
+                      ? "border-rose-200 bg-rose-50 text-rose-800"
+                      : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  }`}
                 >
-                  {statuses
-                    .filter((item) => item !== "Completed" && item !== "Closed")
-                    .map((item) => (
-                      <option key={item}>{item}</option>
-                    ))}
-                </select>
-              </label>
+                  <p className="font-black">
+                    {closedWithoutAssetHistory
+                      ? "Closed job is missing its asset history record"
+                      : "This fleet job is closed"}
+                  </p>
+                  <p className="mt-1">
+                    {closedWithoutAssetHistory
+                      ? "The linked repair, modification or service record appears to have been deleted from the asset view page. Reopen this job to record the asset history again."
+                      : "Progress updates are locked. Reopen the job if further work is required, or open the linked Fleet Job close-out record below."}
+                  </p>
+                </div>
 
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Priority
-                <select
-                  value={priority}
-                  onChange={(event) => setPriority(event.target.value)}
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                >
-                  {priorities.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
+                {assetHistoryRecord ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                      Linked Asset History
+                    </p>
+                    <p className="mt-2 font-black text-slate-950">
+                      {assetHistoryRecord.history_type || "Asset History"} ·{" "}
+                      {assetHistoryRecord.title || "Untitled record"}
+                    </p>
+                    <p className="mt-1 text-slate-600">
+                      {dateDisplay(assetHistoryRecord.history_date || assetHistoryRecord.created_at)}
+                    </p>
+                    <p className="mt-3 whitespace-pre-wrap">
+                      {assetHistoryRecord.description || "No description recorded."}
+                    </p>
+                  </div>
+                ) : null}
 
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Assigned To
-                <input
-                  value={assignedTo}
-                  onChange={(event) => setAssignedTo(event.target.value)}
-                  placeholder="Employee, mechanic or responsible person"
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                />
-              </label>
+                <div className="grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void reopenJob()}
+                    disabled={saving}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
+                    Reopen Job
+                  </button>
 
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Vendor / Mechanic
-                <input
-                  value={vendor}
-                  onChange={(event) => setVendor(event.target.value)}
-                  placeholder="Workshop, supplier or mechanic"
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Due Date
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={(event) => setDueDate(event.target.value)}
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Cost Estimate / Cost
-                <input
-                  type="number"
-                  value={cost}
-                  onChange={(event) => setCost(event.target.value)}
-                  placeholder="0.00"
-                  className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Progress Update
-                <textarea
-                  value={progressUpdate}
-                  onChange={(event) => setProgressUpdate(event.target.value)}
-                  rows={4}
-                  placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
-                  className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                />
-              </label>
-
-              <button
-                type="button"
-                onClick={() => void saveProgressUpdate()}
-                disabled={saving}
-                className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                Save Progress Update
-              </button>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => void saveProgressUpdate("In Progress")}
-                  disabled={saving}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                >
-                  Start Job
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void saveProgressUpdate("Waiting Parts")}
-                  disabled={saving}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                >
-                  Waiting Parts
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCloseOutModal(true);
+                      setCloseOutForm((current) => ({
+                        ...current,
+                        history_date: assetHistoryRecord?.history_date || job.completed_date || todayDate(),
+                        history_type: (assetHistoryRecord?.history_type as AssetHistoryType) || current.history_type,
+                        title: assetHistoryRecord?.title || job.title || current.title,
+                        description: assetHistoryRecord?.description || job.description || current.description,
+                        vendor: assetHistoryRecord?.vendor || job.vendor || current.vendor,
+                        cost:
+                          assetHistoryRecord?.cost !== null &&
+                          assetHistoryRecord?.cost !== undefined
+                            ? String(assetHistoryRecord.cost)
+                            : current.cost,
+                        odometer_km:
+                          assetHistoryRecord?.odometer_km !== null &&
+                          assetHistoryRecord?.odometer_km !== undefined
+                            ? String(assetHistoryRecord.odometer_km)
+                            : current.odometer_km,
+                        engine_hours:
+                          assetHistoryRecord?.engine_hours !== null &&
+                          assetHistoryRecord?.engine_hours !== undefined
+                            ? String(assetHistoryRecord.engine_hours)
+                            : current.engine_hours,
+                        next_service_due_date:
+                          assetHistoryRecord?.next_service_due_date || current.next_service_due_date,
+                        next_service_due_km:
+                          assetHistoryRecord?.next_service_due_km !== null &&
+                          assetHistoryRecord?.next_service_due_km !== undefined
+                            ? String(assetHistoryRecord.next_service_due_km)
+                            : current.next_service_due_km,
+                        next_service_due_hours:
+                          assetHistoryRecord?.next_service_due_hours !== null &&
+                          assetHistoryRecord?.next_service_due_hours !== undefined
+                            ? String(assetHistoryRecord.next_service_due_hours)
+                            : current.next_service_due_hours,
+                      }));
+                    }}
+                    disabled={saving}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Settings size={16} />
+                    {assetHistoryRecord ? "Edit Close-out Record" : "Record Asset History Again"}
+                  </button>
+                </div>
               </div>
+            ) : (
+              <>
+                <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
+                  Fleet Jobs are for notification and progress tracking. Closing this job will create a repair, modification or service record against the asset.
+                </div>
 
-              <button
-                type="button"
-                onClick={() => setShowCloseOutModal(true)}
-                disabled={saving || isClosed}
-                className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <CheckCircle2 size={16} />
-                Complete / Close Out Job
-              </button>
-            </div>
+                <div className="mt-5 grid gap-4">
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Status
+                    <select
+                      value={status}
+                      onChange={(event) => setStatus(event.target.value)}
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    >
+                      {statuses
+                        .filter((item) => item !== "Completed" && item !== "Closed")
+                        .map((item) => (
+                          <option key={item}>{item}</option>
+                        ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Priority
+                    <select
+                      value={priority}
+                      onChange={(event) => setPriority(event.target.value)}
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    >
+                      {priorities.map((item) => (
+                        <option key={item}>{item}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Assigned To
+                    <input
+                      value={assignedTo}
+                      onChange={(event) => setAssignedTo(event.target.value)}
+                      placeholder="Employee, mechanic or responsible person"
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Vendor / Mechanic
+                    <input
+                      value={vendor}
+                      onChange={(event) => setVendor(event.target.value)}
+                      placeholder="Workshop, supplier or mechanic"
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Due Date
+                    <input
+                      type="date"
+                      value={dueDate}
+                      onChange={(event) => setDueDate(event.target.value)}
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Cost Estimate / Cost
+                    <input
+                      type="number"
+                      value={cost}
+                      onChange={(event) => setCost(event.target.value)}
+                      placeholder="0.00"
+                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                    Progress Update
+                    <textarea
+                      value={progressUpdate}
+                      onChange={(event) => setProgressUpdate(event.target.value)}
+                      rows={4}
+                      placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
+                      className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => void saveProgressUpdate()}
+                    disabled={saving}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Save Progress Update
+                  </button>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveProgressUpdate("In Progress")}
+                      disabled={saving}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                    >
+                      Start Job
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void saveProgressUpdate("Waiting Parts")}
+                      disabled={saving}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      Waiting Parts
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowCloseOutModal(true)}
+                    disabled={saving}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={16} />
+                    Complete / Close Out Job
+                  </button>
+                </div>
+              </>
+            )}
           </section>
 
-          <section className="border border-slate-200 bg-white p-5 shadow-sm">
+<section className="border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
               <CheckCircle2 size={20} />
               Job Updates
@@ -1196,14 +1402,23 @@ Asset update record: ${assetTitle}`;
               <InfoRow label="Last Updated" value={dateDisplay(job.updated_at)} />
             </div>
 
+            {closedWithoutAssetHistory ? (
+              <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                <p className="font-black">Asset history record missing</p>
+                <p className="mt-1">
+                  This job is marked as closed, but the linked asset history record has been deleted or cannot be found. The stale close-out entry is hidden below. Reopen the job or record the asset history again.
+                </p>
+              </div>
+            ) : null}
+
             <div className="mt-5 border-t border-slate-200 pt-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Progress / Close-out History
               </p>
 
-              {updates.length > 0 ? (
+              {visibleUpdates.length > 0 ? (
                 <div className="mt-3 space-y-3">
-                  {updates.map((update) => (
+                  {visibleUpdates.map((update) => (
                     <div
                       key={update.id}
                       className="rounded-xl border border-slate-200 bg-slate-50 p-3"
