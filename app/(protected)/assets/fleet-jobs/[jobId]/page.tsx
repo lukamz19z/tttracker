@@ -595,13 +595,14 @@ export default function FleetJobDetailPage() {
     normalisedJobStatus,
   );
 
-  const isClosed =
-    jobStatusIsClosed || Boolean(assetHistoryRecord) || Boolean(latestCloseOutUpdate);
+  // Only the actual fleet job status should lock the Action Job form.
+  // Asset history and close-out updates can still exist after reopening,
+  // so they must not keep the job locked.
+  const isClosed = jobStatusIsClosed;
 
-  const closedWithoutAssetHistory =
-    (jobStatusIsClosed || Boolean(latestCloseOutUpdate)) && !assetHistoryRecord;
+  const closedWithoutAssetHistory = isClosed && !assetHistoryRecord;
 
-  const displayStatus = isClosed ? "Completed" : job?.status || "Open";
+  const displayStatus = job?.status || "Open";
 
   const visibleUpdates = useMemo(() => {
     const progressUpdates = updates.filter(
@@ -957,6 +958,27 @@ Asset update record: ${assetTitle}`;
     if (noteError) {
       console.error("Fleet job reopened, but update note failed:", noteError.message);
     }
+
+    const reopenedJob: FleetJob = {
+      ...job,
+      status: "Open",
+      completed_date: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    setJob(reopenedJob);
+    setStatus("Open");
+    setPriority(job.priority || "Medium");
+    setVendor(job.vendor || "");
+    setAssignedTo(job.assigned_to || "");
+    setDueDate(job.due_date || "");
+    setCost(
+      job.cost !== null && job.cost !== undefined
+        ? String(job.cost)
+        : "",
+    );
+    setProgressUpdate("");
+    setShowCloseOutModal(false);
 
     await loadJob();
     setSaving(false);
