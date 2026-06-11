@@ -329,10 +329,10 @@ function appendJobNote(existingNotes: string | null, heading: string, body: stri
 function extractCloseOutComment(comment: string | null | undefined) {
   if (!comment) return "";
 
-  return comment
-    .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
-    .replace(/\n?Asset update record:[\s\S]*$/, "")
-    .trim();
+return comment
+  .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+  .replace(/\n?Asset update record:[\s\S]*$/, "")
+  .trim();
 }
 
 export default function FleetJobDetailPage() {
@@ -460,7 +460,7 @@ export default function FleetJobDetailPage() {
     } else {
       setAssetHistoryRecord(
         assetHistoryRows && assetHistoryRows.length > 0
-          ? ((assetHistoryRows[0] as AssetHistoryRecord) || null)
+          ? (assetHistoryRows[0] as AssetHistoryRecord)
           : null,
       );
     }
@@ -766,12 +766,12 @@ Asset update record: ${assetTitle}`;
           .update(assetHistoryPayload)
           .eq("id", assetHistoryRecord.id)
           .select("*")
-          .single()
+          .limit(1)
       : await supabase
           .from("asset_history")
           .insert(assetHistoryPayload)
           .select("*")
-          .single();
+          .limit(1);
 
     const historyError = historyResult.error;
 
@@ -782,27 +782,31 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
-    const savedAssetHistory = (historyResult.data as AssetHistoryRecord) || null;
+    const savedAssetHistoryRows = (historyResult.data ?? []) as AssetHistoryRecord[];
+    const savedAssetHistory =
+      savedAssetHistoryRows.length > 0 ? savedAssetHistoryRows[0] : null;
+
     if (savedAssetHistory) {
       setAssetHistoryRecord(savedAssetHistory);
     }
 
-    const closeOutUpdatePayload = {
-      update_type: latestCloseOutUpdate ? "Close Out Edited" : "Close Out",
-      status: "Completed",
-      comment: closeOutComment,
-      created_at: new Date().toISOString(),
-    };
-
-    const closeOutUpdateResult = latestCloseOutUpdate
-      ? await supabase
-          .from("fleet_job_updates")
-          .update(closeOutUpdatePayload)
-          .eq("id", latestCloseOutUpdate.id)
-      : await supabase.from("fleet_job_updates").insert({
-          fleet_job_id: job.id,
-          ...closeOutUpdatePayload,
-        });
+    const closeOutUpdateResult =
+      assetHistoryRecord && latestCloseOutUpdate
+        ? await supabase
+            .from("fleet_job_updates")
+            .update({
+              update_type: "Close Out Edited",
+              status: "Completed",
+              comment: closeOutComment,
+              created_at: new Date().toISOString(),
+            })
+            .eq("id", latestCloseOutUpdate.id)
+        : await supabase.from("fleet_job_updates").insert({
+            fleet_job_id: job.id,
+            update_type: assetHistoryRecord ? "Close Out Edited" : "Close Out",
+            status: "Completed",
+            comment: closeOutComment,
+          });
 
     if (closeOutUpdateResult.error) {
       console.error(
@@ -814,7 +818,7 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
-    const { data: closedJobData, error: jobError } = await supabase
+    const { data: closedJobRows, error: jobError } = await supabase
       .from("fleet_jobs")
       .update({
         status: "Completed",
@@ -829,7 +833,7 @@ Asset update record: ${assetTitle}`;
       })
       .eq("id", job.id)
       .select("*")
-      .single();
+      .limit(1);
 
     if (jobError) {
       console.error("Failed to close fleet job:", jobError.message);
@@ -841,7 +845,12 @@ Asset update record: ${assetTitle}`;
     setShowCloseOutModal(false);
     setJobModeOverride("closed");
     setStatus("Completed");
-    setJob((closedJobData as FleetJob) || {
+    const closedJob =
+      closedJobRows && closedJobRows.length > 0
+        ? (closedJobRows[0] as FleetJob)
+        : null;
+
+    setJob(closedJob || {
       ...job,
       status: "Completed",
       completed_date: closeOutForm.history_date,
@@ -935,7 +944,7 @@ Asset update record: ${assetTitle}`;
 
     setSaving(true);
 
-    const { data: reopenedJobData, error: updateError } = await supabase
+    const { data: reopenedJobRows, error: updateError } = await supabase
       .from("fleet_jobs")
       .update({
         status: "Open",
@@ -944,7 +953,7 @@ Asset update record: ${assetTitle}`;
       })
       .eq("id", job.id)
       .select("*")
-      .single();
+      .limit(1);
 
     if (updateError) {
       console.error("Failed to reopen fleet job:", updateError.message);
@@ -969,12 +978,14 @@ Asset update record: ${assetTitle}`;
     }
 
     const reopenedJob: FleetJob =
-      (reopenedJobData as FleetJob) || {
-        ...job,
-        status: "Open",
-        completed_date: null,
-        updated_at: new Date().toISOString(),
-      };
+      reopenedJobRows && reopenedJobRows.length > 0
+        ? (reopenedJobRows[0] as FleetJob)
+        : {
+            ...job,
+            status: "Open",
+            completed_date: null,
+            updated_at: new Date().toISOString(),
+          };
 
     setJobModeOverride("open");
     setJob(reopenedJob);
