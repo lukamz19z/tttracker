@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Briefcase, Car, Pencil } from "lucide-react";
+import { ArrowLeft, Briefcase, Car, Pencil, Wrench } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import {
   DetailGrid,
@@ -22,22 +22,33 @@ type ChecklistAnswer =
       comment?: string;
     };
 
-type VehiclePrestart = {
+type Prestart = {
   id: string;
+  asset_type: string | null;
+  asset_category: string | null;
   prestart_date: string | null;
+
   vehicle_asset_id: string | null;
+  plant_asset_id: string | null;
+
   asset_label: string | null;
   vehicle_rego: string | null;
+
   kilometres: number | null;
+  cab_hours: number | null;
+
   project: string | null;
   crew: string | null;
   inspected_by_name: string | null;
+
   checklist: Record<string, ChecklistAnswer> | null;
   overall_condition: string | null;
   comments: string | null;
+
   severity: string | null;
   result: string | null;
   fleet_job_id: string | null;
+
   created_at: string | null;
   updated_at: string | null;
 };
@@ -54,6 +65,24 @@ type VehicleAsset = {
   status: string | null;
 };
 
+type PlantAsset = {
+  id: string;
+  plant_id?: string | null;
+  asset_id?: string | null;
+  asset_number?: string | null;
+  fleet_number?: string | null;
+  name?: string | null;
+  make?: string | null;
+  model?: string | null;
+  category?: string | null;
+  plant_type?: string | null;
+  project?: string | null;
+  crew?: string | null;
+  status?: string | null;
+  hired_from?: string | null;
+  serial_number?: string | null;
+};
+
 type FleetJob = {
   id: string;
   title: string | null;
@@ -65,7 +94,7 @@ type FleetJob = {
 
 const checklistSections = [
   {
-    title: "Vehicle Condition",
+    title: "Vehicle / Plant Condition",
     items: ["Tyres", "Doors", "Windows", "Mirrors", "Wipers"],
   },
   {
@@ -82,7 +111,7 @@ const checklistSections = [
     ],
   },
   {
-    title: "Driver Controls",
+    title: "Operator Controls",
     items: [
       "Steering",
       "Foot brake",
@@ -110,7 +139,7 @@ const checklistSections = [
   },
 ];
 
-function clean(value: string | number | null | undefined) {
+function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
@@ -216,6 +245,29 @@ function getHighestSeverity(checklist: Record<string, ChecklistAnswer>) {
   return highest;
 }
 
+function plantAssetId(plant: PlantAsset | null) {
+  return (
+    clean(plant?.plant_id) ||
+    clean(plant?.asset_id) ||
+    clean(plant?.asset_number) ||
+    clean(plant?.fleet_number) ||
+    "-"
+  );
+}
+
+function plantMakeModel(plant: PlantAsset | null) {
+  return [clean(plant?.make), clean(plant?.model)].filter(Boolean).join(" ");
+}
+
+function plantCategory(plant: PlantAsset | null, prestart: Prestart) {
+  return (
+    clean(prestart.asset_category) ||
+    clean(plant?.category) ||
+    clean(plant?.plant_type) ||
+    "Plant"
+  );
+}
+
 export default function PrestartDetailPage() {
   const params = useParams<{ prestartId: string }>();
   const prestartId = params.prestartId;
@@ -223,8 +275,9 @@ export default function PrestartDetailPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [loading, setLoading] = useState(true);
-  const [prestart, setPrestart] = useState<VehiclePrestart | null>(null);
+  const [prestart, setPrestart] = useState<Prestart | null>(null);
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
+  const [plant, setPlant] = useState<PlantAsset | null>(null);
   const [fleetJob, setFleetJob] = useState<FleetJob | null>(null);
 
   useEffect(() => {
@@ -244,17 +297,35 @@ export default function PrestartDetailPage() {
         return;
       }
 
-      const loadedPrestart = prestartData as VehiclePrestart;
+      const loadedPrestart = prestartData as Prestart;
       setPrestart(loadedPrestart);
 
       if (loadedPrestart.vehicle_asset_id) {
-        const { data: vehicleData } = await supabase
+        const { data: vehicleData, error: vehicleError } = await supabase
           .from("vehicle_assets")
           .select("*")
           .eq("id", loadedPrestart.vehicle_asset_id)
           .maybeSingle();
 
+        if (vehicleError) {
+          console.warn("Vehicle asset not found:", vehicleError.message);
+        }
+
         setVehicle((vehicleData as VehicleAsset) ?? null);
+      }
+
+      if (loadedPrestart.plant_asset_id) {
+        const { data: plantData, error: plantError } = await supabase
+          .from("plant_assets")
+          .select("*")
+          .eq("id", loadedPrestart.plant_asset_id)
+          .maybeSingle();
+
+        if (plantError) {
+          console.warn("Plant asset not found:", plantError.message);
+        }
+
+        setPlant((plantData as PlantAsset) ?? null);
       }
 
       if (loadedPrestart.fleet_job_id) {
@@ -277,9 +348,9 @@ export default function PrestartDetailPage() {
     return (
       <PageShell>
         <PageHeader
-          eyebrow="Vehicle Prestart"
+          eyebrow="Prestart"
           title="Loading prestart..."
-          description="Fetching submitted vehicle prestart details."
+          description="Fetching submitted prestart details."
         />
       </PageShell>
     );
@@ -289,7 +360,7 @@ export default function PrestartDetailPage() {
     return (
       <PageShell>
         <PageHeader
-          eyebrow="Vehicle Prestart"
+          eyebrow="Prestart"
           title="Prestart not found"
           description="This prestart could not be found."
           actions={
@@ -314,18 +385,27 @@ export default function PrestartDetailPage() {
 
   const highestSeverity = getHighestSeverity(checklist);
 
-  const vehicleTitle =
-    clean(prestart.asset_label) ||
-    [clean(vehicle?.vehicle_id), clean(vehicle?.make), clean(vehicle?.model)]
-      .filter(Boolean)
-      .join(" ") ||
-    "Vehicle Prestart";
+  const isPlant =
+    clean(prestart.asset_type).toLowerCase() === "plant" ||
+    Boolean(prestart.plant_asset_id);
+
+  const assetTypeLabel = isPlant ? "Plant" : "Vehicle";
+
+  const assetTitle = isPlant
+    ? clean(prestart.asset_label) ||
+      [plantAssetId(plant), plantMakeModel(plant)].filter(Boolean).join(" ") ||
+      "Plant Prestart"
+    : clean(prestart.asset_label) ||
+      [clean(vehicle?.vehicle_id), clean(vehicle?.make), clean(vehicle?.model)]
+        .filter(Boolean)
+        .join(" ") ||
+      "Vehicle Prestart";
 
   return (
     <PageShell>
       <PageHeader
-        eyebrow="Vehicle Prestart"
-        title={vehicleTitle}
+        eyebrow={`${assetTypeLabel} Prestart`}
+        title={assetTitle}
         description={`Inspected by ${
           clean(prestart.inspected_by_name) || "Unknown"
         } on ${formatDate(prestart.prestart_date || prestart.created_at)}`}
@@ -353,6 +433,15 @@ export default function PrestartDetailPage() {
       <section className="border border-slate-200 bg-white p-5 shadow-sm">
         <DetailGrid
           items={[
+            {
+              label: "Asset Type",
+              value: (
+                <StatusBadge
+                  label={assetTypeLabel}
+                  tone={isPlant ? "violet" : "blue"}
+                />
+              ),
+            },
             {
               label: "Result",
               value: (
@@ -386,8 +475,10 @@ export default function PrestartDetailPage() {
               value: clean(prestart.inspected_by_name) || "-",
             },
             {
-              label: "Kilometres",
-              value: clean(prestart.kilometres) || "-",
+              label: isPlant ? "Cab Hours" : "Kilometres",
+              value: isPlant
+                ? clean(prestart.cab_hours) || "-"
+                : clean(prestart.kilometres) || "-",
             },
             {
               label: "Project",
@@ -412,55 +503,107 @@ export default function PrestartDetailPage() {
       <section className="grid gap-5 xl:grid-cols-2">
         <div className="border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center gap-2">
-            <Car size={18} className="text-slate-500" />
+            {isPlant ? (
+              <Wrench size={18} className="text-slate-500" />
+            ) : (
+              <Car size={18} className="text-slate-500" />
+            )}
+
             <h2 className="text-lg font-bold text-slate-950">
-              Vehicle Details
+              {assetTypeLabel} Details
             </h2>
           </div>
 
           <div className="mt-4">
-            <DetailGrid
-              items={[
-                {
-                  label: "Asset ID",
-                  value:
-                    clean(vehicle?.vehicle_id) ||
-                    clean(prestart.asset_label) ||
-                    "-",
-                },
-                {
-                  label: "Rego",
-                  value:
-                    clean(vehicle?.vehicle_rego) ||
-                    clean(prestart.vehicle_rego) ||
-                    "-",
-                },
-                {
-                  label: "Make",
-                  value: clean(vehicle?.make) || "-",
-                },
-                {
-                  label: "Model",
-                  value: clean(vehicle?.model) || "-",
-                },
-                {
-                  label: "Category",
-                  value: clean(vehicle?.category) || "-",
-                },
-                {
-                  label: "Status",
-                  value: clean(vehicle?.status) || "-",
-                },
-                {
-                  label: "Asset Project",
-                  value: clean(vehicle?.project) || "-",
-                },
-                {
-                  label: "Asset Crew",
-                  value: clean(vehicle?.crew) || "-",
-                },
-              ]}
-            />
+            {isPlant ? (
+              <DetailGrid
+                items={[
+                  {
+                    label: "Plant ID",
+                    value: plantAssetId(plant) !== "-" ? plantAssetId(plant) : clean(prestart.asset_label) || "-",
+                  },
+                  {
+                    label: "Category",
+                    value: plantCategory(plant, prestart),
+                  },
+                  {
+                    label: "Make",
+                    value: clean(plant?.make) || "-",
+                  },
+                  {
+                    label: "Model",
+                    value: clean(plant?.model) || "-",
+                  },
+                  {
+                    label: "Serial No.",
+                    value: clean(plant?.serial_number) || "-",
+                  },
+                  {
+                    label: "Status",
+                    value: clean(plant?.status) || "-",
+                  },
+                  {
+                    label: "Asset Project",
+                    value: clean(plant?.project) || "-",
+                  },
+                  {
+                    label: "Asset Crew",
+                    value: clean(plant?.crew) || "-",
+                  },
+                  {
+                    label: "Hired From",
+                    value: clean(plant?.hired_from) || "-",
+                  },
+                  {
+                    label: "Cab Hours",
+                    value: clean(prestart.cab_hours) || "-",
+                  },
+                ]}
+              />
+            ) : (
+              <DetailGrid
+                items={[
+                  {
+                    label: "Asset ID",
+                    value:
+                      clean(vehicle?.vehicle_id) ||
+                      clean(prestart.asset_label) ||
+                      "-",
+                  },
+                  {
+                    label: "Rego",
+                    value:
+                      clean(vehicle?.vehicle_rego) ||
+                      clean(prestart.vehicle_rego) ||
+                      "-",
+                  },
+                  {
+                    label: "Make",
+                    value: clean(vehicle?.make) || "-",
+                  },
+                  {
+                    label: "Model",
+                    value: clean(vehicle?.model) || "-",
+                  },
+                  {
+                    label: "Category",
+                    value: clean(vehicle?.category) || "-",
+                  },
+                  {
+                    label: "Status",
+                    value: clean(vehicle?.status) || "-",
+                  },
+                  {
+                    label: "Asset Project",
+                    value: clean(vehicle?.project) || "-",
+                  },
+                  {
+                    label: "Asset Crew",
+                    value: clean(vehicle?.crew) || "-",
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
 
@@ -564,7 +707,7 @@ export default function PrestartDetailPage() {
 
       <section className="border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">
-          Vehicle Checklist
+          {assetTypeLabel} Checklist
         </h2>
 
         <div className="mt-4 space-y-6">
