@@ -370,7 +370,7 @@ export default function FleetJobDetailPage() {
   const [priority, setPriority] = useState("Medium");
   const [vendor, setVendor] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  const [completedDate, setCompletedDate] = useState("");
   const [cost, setCost] = useState("");
   const [progressUpdate, setProgressUpdate] = useState("");
 
@@ -423,7 +423,7 @@ export default function FleetJobDetailPage() {
     setPriority(loadedJob.priority || "Medium");
     setVendor(loadedJob.vendor || "");
     setAssignedTo(loadedJob.assigned_to || "");
-    setDueDate(loadedJob.due_date || "");
+    setCompletedDate(loadedJob.completed_date || "");
     setCost(
       loadedJob.cost !== null && loadedJob.cost !== undefined
         ? String(loadedJob.cost)
@@ -673,7 +673,7 @@ export default function FleetJobDetailPage() {
         priority,
         vendor: vendor.trim() || null,
         assigned_to: assignedTo.trim() || null,
-        due_date: dueDate || null,
+        completed_date: completedDate || null,
         cost: cost ? Number(cost) : null,
         notes: finalNotes,
         updated_at: new Date().toISOString(),
@@ -825,7 +825,6 @@ Asset update record: ${assetTitle}`;
         priority,
         vendor: closeOutForm.vendor.trim() || vendor.trim() || null,
         assigned_to: assignedTo.trim() || null,
-        due_date: dueDate || null,
         completed_date: closeOutForm.history_date,
         cost: numberOrNull(closeOutForm.cost),
         notes: finalNotes,
@@ -845,6 +844,7 @@ Asset update record: ${assetTitle}`;
     setShowCloseOutModal(false);
     setJobModeOverride("closed");
     setStatus("Completed");
+    setCompletedDate(closeOutForm.history_date);
     const closedJob =
       closedJobRows && closedJobRows.length > 0
         ? (closedJobRows[0] as FleetJob)
@@ -962,6 +962,20 @@ Asset update record: ${assetTitle}`;
       return;
     }
 
+    if (latestCloseOutUpdate) {
+      const { error: deleteCloseOutError } = await supabase
+        .from("fleet_job_updates")
+        .delete()
+        .eq("id", latestCloseOutUpdate.id);
+
+      if (deleteCloseOutError) {
+        console.error(
+          "Fleet job reopened, but old close-out comment could not be deleted:",
+          deleteCloseOutError.message,
+        );
+      }
+    }
+
     const { error: noteError } = await supabase
       .from("fleet_job_updates")
       .insert({
@@ -993,7 +1007,7 @@ Asset update record: ${assetTitle}`;
     setPriority(job.priority || "Medium");
     setVendor(job.vendor || "");
     setAssignedTo(job.assigned_to || "");
-    setDueDate(job.due_date || "");
+    setCompletedDate(job.completed_date || "");
     setCost(
       job.cost !== null && job.cost !== undefined
         ? String(job.cost)
@@ -1088,8 +1102,8 @@ Asset update record: ${assetTitle}`;
           tone={toneForPriority(job.priority)}
         />
         <SummaryCard
-          label="Due Date"
-          value={dateDisplay(job.due_date)}
+          label="Completed Date"
+          value={dateDisplay(job.completed_date)}
           icon={<Calendar size={20} />}
           tone="blue"
         />
@@ -1478,11 +1492,11 @@ Asset update record: ${assetTitle}`;
                   </label>
 
                   <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Due Date
+                    Completed Date
                     <input
                       type="date"
-                      value={dueDate}
-                      onChange={(event) => setDueDate(event.target.value)}
+                      value={completedDate}
+                      onChange={(event) => setCompletedDate(event.target.value)}
                       className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                     />
                   </label>
@@ -1519,25 +1533,6 @@ Asset update record: ${assetTitle}`;
                     Save Progress Update
                   </button>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void saveProgressUpdate("In Progress")}
-                      disabled={saving}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                    >
-                      Start Job
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void saveProgressUpdate("Waiting Parts")}
-                      disabled={saving}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                    >
-                      Waiting Parts
-                    </button>
-                  </div>
 
                   <button
                     type="button"
