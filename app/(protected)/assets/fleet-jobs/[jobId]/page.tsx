@@ -329,10 +329,10 @@ function appendJobNote(existingNotes: string | null, heading: string, body: stri
 function extractCloseOutComment(comment: string | null | undefined) {
   if (!comment) return "";
 
-return comment
-  .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
-  .replace(/\n?Asset update record:[\s\S]*$/, "")
-  .trim();
+  return comment
+    .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+    .replace(/\n?Asset update record:[\s\S]*$/, "")
+    .trim();
 }
 
 export default function FleetJobDetailPage() {
@@ -447,19 +447,22 @@ export default function FleetJobDetailPage() {
       setUpdates((updatesData ?? []) as FleetJobUpdate[]);
     }
 
-    const { data: assetHistoryData, error: assetHistoryError } = await supabase
+    const { data: assetHistoryRows, error: assetHistoryError } = await supabase
       .from("asset_history")
       .select("*")
       .eq("fleet_job_id", loadedJob.id)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
 
     if (assetHistoryError) {
       console.error("Failed to load linked asset history:", assetHistoryError.message);
       setAssetHistoryRecord(null);
     } else {
-      setAssetHistoryRecord((assetHistoryData as AssetHistoryRecord) || null);
+      setAssetHistoryRecord(
+        assetHistoryRows && assetHistoryRows.length > 0
+          ? ((assetHistoryRows[0] as AssetHistoryRecord) || null)
+          : null,
+      );
     }
 
     if (resolvedVehicleId) {
@@ -784,23 +787,22 @@ Asset update record: ${assetTitle}`;
       setAssetHistoryRecord(savedAssetHistory);
     }
 
-    const closeOutUpdateResult =
-      assetHistoryRecord && latestCloseOutUpdate
-        ? await supabase
-            .from("fleet_job_updates")
-            .update({
-              update_type: "Close Out Edited",
-              status: "Completed",
-              comment: closeOutComment,
-              created_at: new Date().toISOString(),
-            })
-            .eq("id", latestCloseOutUpdate.id)
-        : await supabase.from("fleet_job_updates").insert({
-            fleet_job_id: job.id,
-            update_type: assetHistoryRecord ? "Close Out Edited" : "Close Out",
-            status: "Completed",
-            comment: closeOutComment,
-          });
+    const closeOutUpdatePayload = {
+      update_type: latestCloseOutUpdate ? "Close Out Edited" : "Close Out",
+      status: "Completed",
+      comment: closeOutComment,
+      created_at: new Date().toISOString(),
+    };
+
+    const closeOutUpdateResult = latestCloseOutUpdate
+      ? await supabase
+          .from("fleet_job_updates")
+          .update(closeOutUpdatePayload)
+          .eq("id", latestCloseOutUpdate.id)
+      : await supabase.from("fleet_job_updates").insert({
+          fleet_job_id: job.id,
+          ...closeOutUpdatePayload,
+        });
 
     if (closeOutUpdateResult.error) {
       console.error(
