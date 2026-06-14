@@ -573,11 +573,22 @@ function rowHasPlantDetails(row: PlantRow) {
   );
 }
 
-function mergeAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantRow[]) {
-  const existingWithDetails = existingRows.filter(rowHasPlantDetails);
-  const blankRows = existingRows.filter((row) => !rowHasPlantDetails(row));
-  const seen = new Set(existingWithDetails.map(plantRowKey).filter(Boolean));
-  const nextRows = [...existingWithDetails];
+function isAutoAllocatedPlantRow(row: PlantRow) {
+  const notes = row.notes.trim().toLowerCase();
+  return (
+    notes === "auto-added from crew vehicle allocation" ||
+    notes === "auto-added from crew plant allocation"
+  );
+}
+
+function replaceAutoAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantRow[]) {
+  const manualRows = existingRows.filter((row) => {
+    if (!rowHasPlantDetails(row)) return false;
+    return !isAutoAllocatedPlantRow(row);
+  });
+
+  const seen = new Set(manualRows.map(plantRowKey).filter(Boolean));
+  const nextRows = [...manualRows];
 
   allocatedRows.forEach((row) => {
     const key = plantRowKey(row);
@@ -586,7 +597,7 @@ function mergeAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantR
     nextRows.push(row);
   });
 
-  return [...nextRows, ...(blankRows.length ? blankRows : [blankPlantRow()])];
+  return nextRows;
 }
 
 type DelayRowInput = {
@@ -843,7 +854,7 @@ export default function DailyDocketForm({
   const [plantRows, setPlantRows] = useState<PlantRow[]>(
     initialPlantRows && initialPlantRows.length > 0
       ? initialPlantRows.map((r) => makePlantRow(r))
-      : [blankPlantRow()]
+      : []
   );
 
   const [delayRows, setDelayRows] = useState<DelayRow[]>(
@@ -1409,10 +1420,28 @@ const labourRowsWithProduction = labourRows.map((row) => {
           .filter(Boolean) as PlantRow[]),
       ];
 
-      if (allocatedRows.length === 0) return;
+      const nextPlantRows = replaceAutoAllocatedPlantRows(plantRows, allocatedRows);
+      const availableNames = new Set(
+        nextPlantRows.map((row, index) => normaliseAssetText(plantDisplayName(row, index)))
+      );
 
-      setPlantRows((prev) => mergeAllocatedPlantRows(prev, allocatedRows));
-      setShowPlantUsedSection(true);
+      setPlantRows(nextPlantRows);
+      setDelayRows((prev) =>
+        prev.map((delay) =>
+          delay.delay_applies_mode === "labour_and_plant"
+            ? {
+                ...delay,
+                plant_names: delay.plant_names.filter((name) =>
+                  availableNames.has(normaliseAssetText(name))
+                ),
+              }
+            : delay
+        )
+      );
+
+      if (nextPlantRows.length > 0) {
+        setShowPlantUsedSection(true);
+      }
     } catch (error) {
       console.warn("Crew asset allocation could not be loaded", error);
     }
@@ -1424,6 +1453,14 @@ const labourRowsWithProduction = labourRows.map((row) => {
     setSelectedCrewId(crewIdValue);
 
     if (!crewIdValue) {
+      setPlantRows((prev) => prev.filter((row) => rowHasPlantDetails(row) && !isAutoAllocatedPlantRow(row)));
+      setDelayRows((prev) =>
+        prev.map((delay) =>
+          delay.delay_applies_mode === "labour_and_plant"
+            ? { ...delay, plant_names: [] }
+            : delay
+        )
+      );
       return;
     }
 
@@ -2424,7 +2461,7 @@ if (incidentOccurred && !incidentNotes.trim()) {
       if (plant && plant.length > 0) {
         setPlantRows([...plant.map((r) => makePlantRow(r)), blankPlantRow()]);
       } else {
-        setPlantRows([blankPlantRow()]);
+        setPlantRows([]);
       }
 
       // Do not carry previous day delay events by default. Delays should be entered for the actual day.
@@ -2507,10 +2544,7 @@ if (incidentOccurred && !incidentNotes.trim()) {
 
   function removePlantRow(index: number) {
     if (isView || locked) return;
-    setPlantRows((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      return next.length > 0 ? next : [blankPlantRow()];
-    });
+    setPlantRows((prev) => prev.filter((_, i) => i !== index));
   }
 
   function updatePlantRow(index: number, key: keyof PlantRow, value: string) {
