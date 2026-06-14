@@ -237,65 +237,107 @@ function isBodyExtensionRow(row: ProgressRow) {
   return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
 }
 
-function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
-  const normalisedExtra = Object.fromEntries(
-    Object.entries(extra).map(([key, value]) => [
-      key.trim().toLowerCase(),
-      value,
-    ])
-  );
+function normaliseText(value: unknown) {
+  return toStringValue(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[_\-.()/]+/g, " ")
+    .replace(/\s+/g, " ");
+}
 
-  for (const key of keys) {
-    const value = normalisedExtra[key.trim().toLowerCase()];
-    if (value === null || value === undefined || value === "") continue;
+function parsePositiveIndicator(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
 
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-
-    const text = String(value).trim().toLowerCase();
-
-    if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
-    if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
-
-    const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-    if (match) {
-      const n = Number(match[0]);
-      if (Number.isFinite(n)) return n;
-    }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 0;
   }
+
+  const text = normaliseText(value);
+  if (!text) return null;
+
+  if (["yes", "y", "true", "included", "include", "required", "req", "body extension"].includes(text)) {
+    return true;
+  }
+
+  if (["no", "n", "false", "none", "nil", "na", "n a", "not required", "not included"].includes(text)) {
+    return false;
+  }
+
+  const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+  if (match) {
+    const n = Number(match[0]);
+    if (Number.isFinite(n)) return n > 0;
+  }
+
+  return null;
+}
+
+function readExtraBodyExtensionValue(extra: Record<string, unknown>) {
+  const bodyExtensionKeys = [
+    "Body Extension",
+    "Body Extensions",
+    "Body Extension Height",
+    "Body Extension Length",
+    "Body Extension Qty",
+    "Body Extension Required",
+    "Body Ext (m)",
+    "BODY EXT (M)",
+    "Body Ext",
+    "Body Ext.",
+    "BE",
+    "BE Height",
+    "Extension",
+    "Extension Height",
+    "body_extension",
+    "body_extensions",
+    "body_extension_height",
+    "body_ext_m",
+    "body_ext",
+  ].map(normaliseText);
+
+  const normalisedExtra = Object.entries(extra).map(([key, value]) => ({
+    key,
+    normalisedKey: normaliseText(key),
+    value,
+  }));
+
+  for (const expectedKey of bodyExtensionKeys) {
+    const found = normalisedExtra.find((entry) => entry.normalisedKey === expectedKey);
+    if (!found) continue;
+
+    const parsed = parsePositiveIndicator(found.value);
+    if (parsed !== null) return parsed;
+  }
+
+  for (const entry of normalisedExtra) {
+    const key = entry.normalisedKey;
+
+    const looksLikeBodyExtensionKey =
+      (key.includes("body") && (key.includes("ext") || key.includes("extension"))) ||
+      key === "be" ||
+      key === "b e";
+
+    if (!looksLikeBodyExtensionKey) continue;
+
+    const parsed = parsePositiveIndicator(entry.value);
+    if (parsed !== null) return parsed;
+  }
+
+  const joinedExtra = Object.values(extra).map(normaliseText).join(" ");
+  if (/\bbody\s*(ext|extension)\b/.test(joinedExtra)) return true;
 
   return null;
 }
 
 function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   const extra = tower?.extra_data || {};
+  const value = readExtraBodyExtensionValue(extra);
 
-const value = readExtraNumber(extra, [
-  "Body Extension",
-  "Body Extensions",
-  "Body Extension Height",
-  "Body Extension Length",
-  "Body Extension Qty",
-  "Body Extension Required",
+  if (value !== null) return value;
 
-  "Body Ext (m)",
-  "BODY EXT (M)",
-  "Body Ext",
-  "Body Ext.",
-  "BE",
-  "BE Height",
-
-  "Extension",
-  "Extension Height",
-
-  "body_extension",
-  "body_extensions",
-  "body_extension_height",
-  "body_ext_m",
-  "body_ext",
-]);
-
-  if (value === null) return false;
-  return value > 0;
+  // Fail safe: if the CSV does not expose a body-extension field at all,
+  // keep the row visible so the user does not accidentally under-claim progress.
+  return true;
 }
 function makeUiId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
