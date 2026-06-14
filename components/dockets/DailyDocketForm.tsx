@@ -126,6 +126,8 @@ type EmployeeRecord = {
   active: boolean | null;
 };
 
+type AssetAllocationRow = Record<string, unknown>;
+
 const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
   { section_label: "Legs", assembled_qty: "", erected_qty: "" },
   { section_label: "Body Extensions", assembled_qty: "", erected_qty: "" },
@@ -235,65 +237,107 @@ function isBodyExtensionRow(row: ProgressRow) {
   return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
 }
 
-function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
-  const normalisedExtra = Object.fromEntries(
-    Object.entries(extra).map(([key, value]) => [
-      key.trim().toLowerCase(),
-      value,
-    ])
-  );
+function normaliseText(value: unknown) {
+  return toStringValue(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[_\-.()/]+/g, " ")
+    .replace(/\s+/g, " ");
+}
 
-  for (const key of keys) {
-    const value = normalisedExtra[key.trim().toLowerCase()];
-    if (value === null || value === undefined || value === "") continue;
+function parsePositiveIndicator(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
 
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-
-    const text = String(value).trim().toLowerCase();
-
-    if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
-    if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
-
-    const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-    if (match) {
-      const n = Number(match[0]);
-      if (Number.isFinite(n)) return n;
-    }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 0;
   }
+
+  const text = normaliseText(value);
+  if (!text) return null;
+
+  if (["yes", "y", "true", "included", "include", "required", "req", "body extension"].includes(text)) {
+    return true;
+  }
+
+  if (["no", "n", "false", "none", "nil", "na", "n a", "not required", "not included"].includes(text)) {
+    return false;
+  }
+
+  const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+  if (match) {
+    const n = Number(match[0]);
+    if (Number.isFinite(n)) return n > 0;
+  }
+
+  return null;
+}
+
+function readExtraBodyExtensionValue(extra: Record<string, unknown>) {
+  const bodyExtensionKeys = [
+    "Body Extension",
+    "Body Extensions",
+    "Body Extension Height",
+    "Body Extension Length",
+    "Body Extension Qty",
+    "Body Extension Required",
+    "Body Ext (m)",
+    "BODY EXT (M)",
+    "Body Ext",
+    "Body Ext.",
+    "BE",
+    "BE Height",
+    "Extension",
+    "Extension Height",
+    "body_extension",
+    "body_extensions",
+    "body_extension_height",
+    "body_ext_m",
+    "body_ext",
+  ].map(normaliseText);
+
+  const normalisedExtra = Object.entries(extra).map(([key, value]) => ({
+    key,
+    normalisedKey: normaliseText(key),
+    value,
+  }));
+
+  for (const expectedKey of bodyExtensionKeys) {
+    const found = normalisedExtra.find((entry) => entry.normalisedKey === expectedKey);
+    if (!found) continue;
+
+    const parsed = parsePositiveIndicator(found.value);
+    if (parsed !== null) return parsed;
+  }
+
+  for (const entry of normalisedExtra) {
+    const key = entry.normalisedKey;
+
+    const looksLikeBodyExtensionKey =
+      (key.includes("body") && (key.includes("ext") || key.includes("extension"))) ||
+      key === "be" ||
+      key === "b e";
+
+    if (!looksLikeBodyExtensionKey) continue;
+
+    const parsed = parsePositiveIndicator(entry.value);
+    if (parsed !== null) return parsed;
+  }
+
+  const joinedExtra = Object.values(extra).map(normaliseText).join(" ");
+  if (/\bbody\s*(ext|extension)\b/.test(joinedExtra)) return true;
 
   return null;
 }
 
 function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   const extra = tower?.extra_data || {};
+  const value = readExtraBodyExtensionValue(extra);
 
-const value = readExtraNumber(extra, [
-  "Body Extension",
-  "Body Extensions",
-  "Body Extension Height",
-  "Body Extension Length",
-  "Body Extension Qty",
-  "Body Extension Required",
+  if (value !== null) return value;
 
-  "Body Ext (m)",
-  "BODY EXT (M)",
-  "Body Ext",
-  "Body Ext.",
-  "BE",
-  "BE Height",
-
-  "Extension",
-  "Extension Height",
-
-  "body_extension",
-  "body_extensions",
-  "body_extension_height",
-  "body_ext_m",
-  "body_ext",
-]);
-
-  if (value === null) return false;
-  return value > 0;
+  // Fail safe: if the CSV does not expose a body-extension field at all,
+  // keep the row visible so the user does not accidentally under-claim progress.
+  return true;
 }
 function makeUiId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -380,6 +424,117 @@ function blankPlantRow(): PlantRow {
     total_hours: "",
     notes: "",
   });
+}
+
+function firstAssetString(row: AssetAllocationRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function assetStatusIsUsable(row: AssetAllocationRow) {
+  const rawStatus = firstAssetString(row, [
+    "status",
+    "asset_status",
+    "availability_status",
+    "fleet_status",
+    "hire_status",
+  ]).toLowerCase();
+
+  if (!rawStatus) return true;
+
+  const blocked = [
+    "retired",
+    "superseded",
+    "no longer hired",
+    "no_longer_hired",
+    "off hired",
+    "off-hired",
+    "inactive",
+    "sold",
+    "archived",
+    "out of service",
+  ];
+
+  return !blocked.some((status) => rawStatus.includes(status));
+}
+
+function buildAllocatedPlantRow(row: AssetAllocationRow, source: "plant" | "vehicle"): PlantRow | null {
+  if (!assetStatusIsUsable(row)) return null;
+
+  const assetCode = firstAssetString(row, [
+    "asset_id",
+    "asset_number",
+    "plant_id",
+    "vehicle_id",
+    "fleet_number",
+    "unit_number",
+    "rego",
+    "registration",
+    "registration_number",
+  ]);
+
+  const makeModel = [
+    firstAssetString(row, ["make_model", "make_and_model", "model", "description", "name"]),
+    firstAssetString(row, ["rego", "registration", "registration_number"]),
+  ]
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index && value !== assetCode)
+    .join(" ");
+
+  const category = firstAssetString(row, [
+    "category",
+    "asset_category",
+    "plant_category",
+    "vehicle_type",
+    "type",
+  ]);
+
+  const plantType = source === "vehicle" ? category || "Vehicle" : category || "Plant";
+  const plantName = [assetCode, makeModel].filter(Boolean).join(" - ") || plantType;
+
+  if (!plantName && !assetCode && !plantType) return null;
+
+  return makePlantRow({
+    plant_name: plantName,
+    plant_type: plantType,
+    asset_id: assetCode,
+    operator_name: "",
+    time_in: "",
+    time_out: "",
+    total_hours: "",
+    notes: "Auto-added from crew allocation",
+  });
+}
+
+function plantRowKey(row: PlantRow) {
+  return [row.asset_id, row.plant_name, row.plant_type]
+    .map((value) => normalizeWorkerName(value))
+    .filter(Boolean)
+    .join("|");
+}
+
+function mergeAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantRow[]) {
+  const nonEmptyExisting = existingRows.filter(
+    (row) => row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim() || row.notes.trim(),
+  );
+
+  const seen = new Set(nonEmptyExisting.map(plantRowKey).filter(Boolean));
+  const nextRows = [...nonEmptyExisting];
+
+  allocatedRows.forEach((row) => {
+    const key = plantRowKey(row);
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    nextRows.push(row);
+  });
+
+  return nextRows.length > 0 ? nextRows : [blankPlantRow()];
 }
 
 type DelayRowInput = {
@@ -1092,7 +1247,13 @@ const labourRowsWithProduction = labourRows.map((row) => {
     return delayRows.some((delay) => delay.delay_applies_mode === "labour_and_plant");
   }, [delayRows]);
 
-  const shouldShowPlantSection = rateType === "schedule_of_rates" || hasLabourAndPlantDelay;
+  const hasEnteredPlantRows = useMemo(() => {
+    return plantRows.some((row) =>
+      row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim() || row.notes.trim()
+    );
+  }, [plantRows]);
+
+  const shouldShowPlantSection = rateType === "schedule_of_rates" || hasLabourAndPlantDelay || hasEnteredPlantRows;
 
   const totalLunchHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
@@ -1161,6 +1322,70 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
   function crewMembersForCrew(crewId: string) {
     return employees.filter((employee) => employee.crew_id === crewId);
+  }
+
+  async function loadAssignedAssetsForCrew(crewIdValue: string) {
+    if (!crewIdValue || isView || locked) return;
+
+    try {
+      const selectedCrew = crews.find((crew) => crew.id === crewIdValue);
+      const crewNumber = toStringValue(selectedCrew?.crew_number);
+      const crewNameValue = toStringValue(selectedCrew?.crew_name);
+
+      const [plantResult, vehicleResult] = await Promise.all([
+        supabase
+          .from("plant_assets")
+          .select("*")
+          .or(
+            [
+              `crew_id.eq.${crewIdValue}`,
+              crewNumber ? `crew.eq.${crewNumber}` : "",
+              crewNumber ? `crew_number.eq.${crewNumber}` : "",
+              crewNameValue ? `crew.eq.${crewNameValue}` : "",
+              crewNameValue ? `assigned_crew.eq.${crewNameValue}` : "",
+            ]
+              .filter(Boolean)
+              .join(","),
+          ),
+        supabase
+          .from("vehicle_assets")
+          .select("*")
+          .or(
+            [
+              `crew_id.eq.${crewIdValue}`,
+              crewNumber ? `crew.eq.${crewNumber}` : "",
+              crewNumber ? `crew_number.eq.${crewNumber}` : "",
+              crewNameValue ? `crew.eq.${crewNameValue}` : "",
+              crewNameValue ? `assigned_crew.eq.${crewNameValue}` : "",
+            ]
+              .filter(Boolean)
+              .join(","),
+          ),
+      ]);
+
+      if (plantResult.error) {
+        console.warn("Crew plant allocation could not be loaded", plantResult.error);
+      }
+
+      if (vehicleResult.error) {
+        console.warn("Crew vehicle allocation could not be loaded", vehicleResult.error);
+      }
+
+      const allocatedRows = [
+        ...(((plantResult.data || []) as AssetAllocationRow[])
+          .map((row) => buildAllocatedPlantRow(row, "plant"))
+          .filter(Boolean) as PlantRow[]),
+        ...(((vehicleResult.data || []) as AssetAllocationRow[])
+          .map((row) => buildAllocatedPlantRow(row, "vehicle"))
+          .filter(Boolean) as PlantRow[]),
+      ];
+
+      if (allocatedRows.length === 0) return;
+
+      setPlantRows((prev) => mergeAllocatedPlantRows(prev, allocatedRows));
+    } catch (error) {
+      console.warn("Crew asset allocation could not be loaded", error);
+    }
   }
 
   function handleCrewSelection(crewIdValue: string) {
@@ -1576,9 +1801,9 @@ const labourRowsWithProduction = labourRows.map((row) => {
         plant_name: row.plant_name.trim() || null,
         plant_type: row.plant_type.trim() || null,
         asset_number: row.asset_id.trim() || null,
-        time_in: rateType === "schedule_of_rates" ? row.time_in || null : null,
-        time_out: rateType === "schedule_of_rates" ? row.time_out || null : null,
-        total_hours: rateType === "schedule_of_rates" ? Number(row.total_hours || 0) : 0,
+        time_in: row.time_in || null,
+        time_out: row.time_out || null,
+        total_hours: Number(row.total_hours || 0),
         notes: row.notes || null,
       }));
   }
@@ -2380,7 +2605,7 @@ if (incidentOccurred && !incidentNotes.trim()) {
               ))}
             </select>
             <p className="text-xs text-slate-500 mt-1">
-              Selecting a crew auto-fills labour from Admin → Crews. You can still edit workers below.
+              Selecting a crew auto-fills labour from Admin → Crews and auto-adds assigned plant/vehicles from Assets.
             </p>
           </div>
 
@@ -2658,8 +2883,8 @@ if (incidentOccurred && !incidentNotes.trim()) {
               <h2 className="text-xl font-semibold text-slate-900">Plant & Equipment</h2>
               <p className="text-sm text-slate-500 mt-1">
                 {rateType === "schedule_of_rates"
-                  ? "Used for Schedule of Rates dockets and commercial delay tracking. This can later link to the Assets page."
-                  : "Manual plant used for commercial delay tracking only. This does not affect production MH/t."}
+                  ? "Used for Schedule of Rates dockets and commercial delay tracking. Crew-assigned plant and vehicles are auto-added from Assets."
+                  : "Crew-assigned plant and vehicles are auto-added from Assets for commercial delay tracking only. This does not affect production MH/t."}
               </p>
             </div>
             <MiniSummary label={rateType === "schedule_of_rates" ? "Plant Hrs" : "Plant Items"} value={rateType === "schedule_of_rates" ? totalPlantHours.toFixed(2) : String(plantItemCount)} />
