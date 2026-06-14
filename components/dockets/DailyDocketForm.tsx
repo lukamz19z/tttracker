@@ -237,107 +237,65 @@ function isBodyExtensionRow(row: ProgressRow) {
   return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
 }
 
-function normaliseText(value: unknown) {
-  return toStringValue(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[_\-.()/]+/g, " ")
-    .replace(/\s+/g, " ");
-}
+function readExtraNumber(extra: Record<string, unknown>, keys: string[]) {
+  const normalisedExtra = Object.fromEntries(
+    Object.entries(extra).map(([key, value]) => [
+      key.trim().toLowerCase(),
+      value,
+    ])
+  );
 
-function parsePositiveIndicator(value: unknown) {
-  if (value === null || value === undefined || value === "") return null;
+  for (const key of keys) {
+    const value = normalisedExtra[key.trim().toLowerCase()];
+    if (value === null || value === undefined || value === "") continue;
 
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value > 0;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+
+    const text = String(value).trim().toLowerCase();
+
+    if (["yes", "y", "true", "included", "include"].includes(text)) return 1;
+    if (["no", "n", "false", "none", "nil", "na", "n/a"].includes(text)) return 0;
+
+    const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+    if (match) {
+      const n = Number(match[0]);
+      if (Number.isFinite(n)) return n;
+    }
   }
-
-  const text = normaliseText(value);
-  if (!text) return null;
-
-  if (["yes", "y", "true", "included", "include", "required", "req", "body extension"].includes(text)) {
-    return true;
-  }
-
-  if (["no", "n", "false", "none", "nil", "na", "n a", "not required", "not included"].includes(text)) {
-    return false;
-  }
-
-  const match = text.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-  if (match) {
-    const n = Number(match[0]);
-    if (Number.isFinite(n)) return n > 0;
-  }
-
-  return null;
-}
-
-function readExtraBodyExtensionValue(extra: Record<string, unknown>) {
-  const bodyExtensionKeys = [
-    "Body Extension",
-    "Body Extensions",
-    "Body Extension Height",
-    "Body Extension Length",
-    "Body Extension Qty",
-    "Body Extension Required",
-    "Body Ext (m)",
-    "BODY EXT (M)",
-    "Body Ext",
-    "Body Ext.",
-    "BE",
-    "BE Height",
-    "Extension",
-    "Extension Height",
-    "body_extension",
-    "body_extensions",
-    "body_extension_height",
-    "body_ext_m",
-    "body_ext",
-  ].map(normaliseText);
-
-  const normalisedExtra = Object.entries(extra).map(([key, value]) => ({
-    key,
-    normalisedKey: normaliseText(key),
-    value,
-  }));
-
-  for (const expectedKey of bodyExtensionKeys) {
-    const found = normalisedExtra.find((entry) => entry.normalisedKey === expectedKey);
-    if (!found) continue;
-
-    const parsed = parsePositiveIndicator(found.value);
-    if (parsed !== null) return parsed;
-  }
-
-  for (const entry of normalisedExtra) {
-    const key = entry.normalisedKey;
-
-    const looksLikeBodyExtensionKey =
-      (key.includes("body") && (key.includes("ext") || key.includes("extension"))) ||
-      key === "be" ||
-      key === "b e";
-
-    if (!looksLikeBodyExtensionKey) continue;
-
-    const parsed = parsePositiveIndicator(entry.value);
-    if (parsed !== null) return parsed;
-  }
-
-  const joinedExtra = Object.values(extra).map(normaliseText).join(" ");
-  if (/\bbody\s*(ext|extension)\b/.test(joinedExtra)) return true;
 
   return null;
 }
 
 function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   const extra = tower?.extra_data || {};
-  const value = readExtraBodyExtensionValue(extra);
 
-  if (value !== null) return value;
+const value = readExtraNumber(extra, [
+  "Body Extension",
+  "Body Extensions",
+  "Body Extension Height",
+  "Body Extension Length",
+  "Body Extension Qty",
+  "Body Extension Required",
 
-  // Fail safe: if the CSV does not expose a body-extension field at all,
-  // keep the row visible so the user does not accidentally under-claim progress.
-  return true;
+  "Body Ext (m)",
+  "BODY EXT (M)",
+  "Body Ext",
+  "Body Ext.",
+  "BE",
+  "BE Height",
+
+  "Extension",
+  "Extension Height",
+
+  "body_extension",
+  "body_extensions",
+  "body_extension_height",
+  "body_ext_m",
+  "body_ext",
+]);
+
+  if (value === null) return false;
+  return value > 0;
 }
 function makeUiId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -426,6 +384,7 @@ function blankPlantRow(): PlantRow {
   });
 }
 
+
 function firstAssetString(row: AssetAllocationRow, keys: string[]) {
   for (const key of keys) {
     const value = row[key];
@@ -437,6 +396,10 @@ function firstAssetString(row: AssetAllocationRow, keys: string[]) {
   return "";
 }
 
+function normaliseAssetText(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function assetStatusIsUsable(row: AssetAllocationRow) {
   const rawStatus = firstAssetString(row, [
     "status",
@@ -444,6 +407,7 @@ function assetStatusIsUsable(row: AssetAllocationRow) {
     "availability_status",
     "fleet_status",
     "hire_status",
+    "current_status",
   ]).toLowerCase();
 
   if (!rawStatus) return true;
@@ -464,6 +428,47 @@ function assetStatusIsUsable(row: AssetAllocationRow) {
   return !blocked.some((status) => rawStatus.includes(status));
 }
 
+function assetBelongsToCrew(
+  row: AssetAllocationRow,
+  crewIdValue: string,
+  crewNumber: string,
+  crewNameValue: string
+) {
+  const accepted = [crewIdValue, crewNumber, crewNameValue]
+    .map((value) => normaliseAssetText(value))
+    .filter(Boolean);
+
+  if (accepted.length === 0) return false;
+
+  const candidateKeys = [
+    "crew_id",
+    "assigned_crew_id",
+    "allocated_crew_id",
+    "current_crew_id",
+    "crew",
+    "crew_number",
+    "crew_name",
+    "assigned_crew",
+    "allocated_crew",
+    "current_crew",
+    "project_crew",
+  ];
+
+  return candidateKeys.some((key) => {
+    const raw = row[key];
+    if (raw === null || raw === undefined) return false;
+
+    if (Array.isArray(raw)) {
+      return raw.some((value) => accepted.includes(normaliseAssetText(String(value))));
+    }
+
+    const text = normaliseAssetText(String(raw));
+    if (!text) return false;
+
+    return accepted.includes(text) || accepted.some((value) => text.includes(value));
+  });
+}
+
 function buildAllocatedPlantRow(row: AssetAllocationRow, source: "plant" | "vehicle"): PlantRow | null {
   if (!assetStatusIsUsable(row)) return null;
 
@@ -480,7 +485,7 @@ function buildAllocatedPlantRow(row: AssetAllocationRow, source: "plant" | "vehi
   ]);
 
   const makeModel = [
-    firstAssetString(row, ["make_model", "make_and_model", "model", "description", "name"]),
+    firstAssetString(row, ["make_model", "make_and_model", "make", "model", "description", "name"]),
     firstAssetString(row, ["rego", "registration", "registration_number"]),
   ]
     .filter(Boolean)
@@ -508,24 +513,29 @@ function buildAllocatedPlantRow(row: AssetAllocationRow, source: "plant" | "vehi
     time_in: "",
     time_out: "",
     total_hours: "",
-    notes: "Auto-added from crew allocation",
+    notes: source === "vehicle" ? "Auto-added from crew vehicle allocation" : "Auto-added from crew plant allocation",
   });
 }
 
 function plantRowKey(row: PlantRow) {
-  return [row.asset_id, row.plant_name, row.plant_type]
-    .map((value) => normalizeWorkerName(value))
-    .filter(Boolean)
-    .join("|");
+  return normaliseAssetText(row.asset_id || row.plant_name || row.plant_type);
+}
+
+function rowHasPlantDetails(row: PlantRow) {
+  return Boolean(
+    row.plant_name.trim() ||
+      row.asset_id.trim() ||
+      row.plant_type.trim() ||
+      row.operator_name.trim() ||
+      row.notes.trim()
+  );
 }
 
 function mergeAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantRow[]) {
-  const nonEmptyExisting = existingRows.filter(
-    (row) => row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim() || row.notes.trim(),
-  );
-
-  const seen = new Set(nonEmptyExisting.map(plantRowKey).filter(Boolean));
-  const nextRows = [...nonEmptyExisting];
+  const existingWithDetails = existingRows.filter(rowHasPlantDetails);
+  const blankRows = existingRows.filter((row) => !rowHasPlantDetails(row));
+  const seen = new Set(existingWithDetails.map(plantRowKey).filter(Boolean));
+  const nextRows = [...existingWithDetails];
 
   allocatedRows.forEach((row) => {
     const key = plantRowKey(row);
@@ -534,7 +544,7 @@ function mergeAllocatedPlantRows(existingRows: PlantRow[], allocatedRows: PlantR
     nextRows.push(row);
   });
 
-  return nextRows.length > 0 ? nextRows : [blankPlantRow()];
+  return [...nextRows, ...(blankRows.length ? blankRows : [blankPlantRow()])];
 }
 
 type DelayRowInput = {
@@ -751,6 +761,9 @@ export default function DailyDocketForm({
   const [bulkTimeOut, setBulkTimeOut] = useState("");
   const [bulkPlantTimeIn, setBulkPlantTimeIn] = useState("");
   const [bulkPlantTimeOut, setBulkPlantTimeOut] = useState("");
+  const [showPlantUsedSection, setShowPlantUsedSection] = useState(
+    rateType === "schedule_of_rates"
+  );
 
   const [lunchBreakMinutes, setLunchBreakMinutes] = useState(
     toStringValue(initialDocket?.lunch_break_minutes)
@@ -1238,9 +1251,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }, [plantRowsWithTotals]);
 
   const plantItemCount = useMemo(() => {
-    return plantRowsWithTotals.filter((row) =>
-      row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim()
-    ).length;
+    return plantRowsWithTotals.filter(rowHasPlantDetails).length;
   }, [plantRowsWithTotals]);
 
   const hasLabourAndPlantDelay = useMemo(() => {
@@ -1248,12 +1259,12 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }, [delayRows]);
 
   const hasEnteredPlantRows = useMemo(() => {
-    return plantRows.some((row) =>
-      row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim() || row.notes.trim()
-    );
+    return plantRows.some(rowHasPlantDetails);
   }, [plantRows]);
 
-  const shouldShowPlantSection = rateType === "schedule_of_rates" || hasLabourAndPlantDelay || hasEnteredPlantRows;
+  const shouldSavePlantRows = rateType === "schedule_of_rates" || hasLabourAndPlantDelay || hasEnteredPlantRows;
+
+  const plantSectionOpen = showPlantUsedSection || rateType === "schedule_of_rates";
 
   const totalLunchHours = useMemo(() => {
     return labourRowsWithProduction.reduce((sum, row) => {
@@ -1333,34 +1344,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
       const crewNameValue = toStringValue(selectedCrew?.crew_name);
 
       const [plantResult, vehicleResult] = await Promise.all([
-        supabase
-          .from("plant_assets")
-          .select("*")
-          .or(
-            [
-              `crew_id.eq.${crewIdValue}`,
-              crewNumber ? `crew.eq.${crewNumber}` : "",
-              crewNumber ? `crew_number.eq.${crewNumber}` : "",
-              crewNameValue ? `crew.eq.${crewNameValue}` : "",
-              crewNameValue ? `assigned_crew.eq.${crewNameValue}` : "",
-            ]
-              .filter(Boolean)
-              .join(","),
-          ),
-        supabase
-          .from("vehicle_assets")
-          .select("*")
-          .or(
-            [
-              `crew_id.eq.${crewIdValue}`,
-              crewNumber ? `crew.eq.${crewNumber}` : "",
-              crewNumber ? `crew_number.eq.${crewNumber}` : "",
-              crewNameValue ? `crew.eq.${crewNameValue}` : "",
-              crewNameValue ? `assigned_crew.eq.${crewNameValue}` : "",
-            ]
-              .filter(Boolean)
-              .join(","),
-          ),
+        supabase.from("plant_assets").select("*"),
+        supabase.from("vehicle_assets").select("*"),
       ]);
 
       if (plantResult.error) {
@@ -1373,9 +1358,11 @@ const labourRowsWithProduction = labourRows.map((row) => {
 
       const allocatedRows = [
         ...(((plantResult.data || []) as AssetAllocationRow[])
+          .filter((row) => assetBelongsToCrew(row, crewIdValue, crewNumber, crewNameValue))
           .map((row) => buildAllocatedPlantRow(row, "plant"))
           .filter(Boolean) as PlantRow[]),
         ...(((vehicleResult.data || []) as AssetAllocationRow[])
+          .filter((row) => assetBelongsToCrew(row, crewIdValue, crewNumber, crewNameValue))
           .map((row) => buildAllocatedPlantRow(row, "vehicle"))
           .filter(Boolean) as PlantRow[]),
       ];
@@ -1383,6 +1370,7 @@ const labourRowsWithProduction = labourRows.map((row) => {
       if (allocatedRows.length === 0) return;
 
       setPlantRows((prev) => mergeAllocatedPlantRows(prev, allocatedRows));
+      setShowPlantUsedSection(true);
     } catch (error) {
       console.warn("Crew asset allocation could not be loaded", error);
     }
@@ -1396,6 +1384,8 @@ const labourRowsWithProduction = labourRows.map((row) => {
     if (!crewIdValue) {
       return;
     }
+
+    void loadAssignedAssetsForCrew(crewIdValue);
 
     const selectedCrew = crews.find((crew) => crew.id === crewIdValue);
     if (!selectedCrew) return;
@@ -1792,18 +1782,18 @@ const labourRowsWithProduction = labourRows.map((row) => {
   }
 
   function buildPlantPayload(docketIdValue: string) {
-    if (!shouldShowPlantSection) return [];
+    if (!shouldSavePlantRows) return [];
 
     return plantRowsWithTotals
-      .filter((row) => row.plant_name.trim() || row.asset_id.trim() || row.plant_type.trim())
+      .filter(rowHasPlantDetails)
       .map((row) => ({
         docket_id: docketIdValue,
         plant_name: row.plant_name.trim() || null,
         plant_type: row.plant_type.trim() || null,
         asset_number: row.asset_id.trim() || null,
-        time_in: row.time_in || null,
-        time_out: row.time_out || null,
-        total_hours: Number(row.total_hours || 0),
+        time_in: rateType === "schedule_of_rates" ? row.time_in || null : null,
+        time_out: rateType === "schedule_of_rates" ? row.time_out || null : null,
+        total_hours: rateType === "schedule_of_rates" ? Number(row.total_hours || 0) : 0,
         notes: row.notes || null,
       }));
   }
@@ -2181,7 +2171,7 @@ const locationText = towerLocation;
       .delete()
       .eq("docket_id", docketId);
 
-    if (deletePlantRes.error && shouldShowPlantSection) {
+    if (deletePlantRes.error && shouldSavePlantRows) {
       throw new Error("Failed to refresh plant rows. Check that tower_docket_plant exists.");
     }
 
@@ -2586,6 +2576,12 @@ if (incidentOccurred && !incidentNotes.trim()) {
           </div>
         </div>
 
+        {towerLabel && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">Tower:</span> {towerLabel}
+          </div>
+        )}
+
         <div className="grid md:grid-cols-2 gap-4">
           <Input label="Date" type="date" value={docketDate} onChange={setDocketDate} disabled={locked || isView} />
 
@@ -2605,7 +2601,7 @@ if (incidentOccurred && !incidentNotes.trim()) {
               ))}
             </select>
             <p className="text-xs text-slate-500 mt-1">
-              Selecting a crew auto-fills labour from Admin → Crews and auto-adds assigned plant/vehicles from Assets.
+              Selecting a crew auto-fills labour from Admin → Crews. You can still edit workers below.
             </p>
           </div>
 
@@ -2876,81 +2872,101 @@ if (incidentOccurred && !incidentNotes.trim()) {
   )}
 </section>
 
-      {shouldShowPlantSection && (
-        <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Plant & Equipment</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                {rateType === "schedule_of_rates"
-                  ? "Used for Schedule of Rates dockets and commercial delay tracking. Crew-assigned plant and vehicles are auto-added from Assets."
-                  : "Crew-assigned plant and vehicles are auto-added from Assets for commercial delay tracking only. This does not affect production MH/t."}
-              </p>
-            </div>
+      <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Plant & Vehicles Used</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Crew-assigned plant and vehicles are auto-added from Assets. Use this list for Labour + Plant delays. Schedule of Rates uses the same list for plant hours.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
             <MiniSummary label={rateType === "schedule_of_rates" ? "Plant Hrs" : "Plant Items"} value={rateType === "schedule_of_rates" ? totalPlantHours.toFixed(2) : String(plantItemCount)} />
-          </div>
-
-          {rateType === "schedule_of_rates" && !locked && !isView && (
-            <div className="rounded-2xl border border-purple-200 bg-purple-50/60 p-3 flex flex-col md:flex-row md:items-end gap-2">
-              <div className="grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end flex-1">
-                <LabourInput
-                  label="Bulk Plant Time In"
-                  type="time"
-                  value={bulkPlantTimeIn}
-                  onChange={setBulkPlantTimeIn}
-                />
-                <LabourInput
-                  label="Bulk Plant Time Out"
-                  type="time"
-                  value={bulkPlantTimeOut}
-                  onChange={setBulkPlantTimeOut}
-                />
-                <button
-                  type="button"
-                  onClick={applyBulkPlantTimes}
-                  className="bg-purple-700 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-purple-800"
-                >
-                  Apply Times to Plant
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-3">
-            {plantRowsWithTotals.map((row, index) => (
-              <div key={index} className="border border-purple-100 bg-purple-50/40 rounded-xl p-3 space-y-3">
-                <div className="grid grid-cols-2 md:grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 items-end">
-                  <LabourInput label="Plant / Asset Name" value={row.plant_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_name", v)} />
-                  <LabourInput label="Plant Type" value={row.plant_type} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_type", v)} />
-                  <LabourInput label="Asset ID / Rego" value={row.asset_id} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "asset_id", v)} />
-                  <LabourInput label="Operator" value={row.operator_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "operator_name", v)} />
-                </div>
-
-                {rateType === "schedule_of_rates" ? (
-                  <div className="grid grid-cols-2 md:grid-cols-[120px_120px_110px_1fr_auto] gap-2 items-end">
-                    <LabourInput label="Time In" type="time" value={row.time_in} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_in", v)} />
-                    <LabourInput label="Time Out" type="time" value={row.time_out} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_out", v)} />
-                    <LabourInput label="Total Hrs" type="number" value={row.total_hours} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "total_hours", v)} />
-                    <LabourInput label="Notes" value={row.notes} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "notes", v)} />
-                    {!locked && !isView ? <button type="button" onClick={() => removePlantRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
-                    <LabourInput label="Notes" value={row.notes} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "notes", v)} />
-                    {!locked && !isView ? <button type="button" onClick={() => removePlantRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {!locked && !isView && (
-            <button type="button" onClick={addPlantRow} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700">
-              Add Plant / Equipment
+            <button
+              type="button"
+              disabled={rateType === "schedule_of_rates"}
+              onClick={() => {
+                if (rateType === "schedule_of_rates") return;
+                setShowPlantUsedSection((prev) => !prev);
+              }}
+              className="border border-purple-200 bg-white text-purple-800 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-purple-50 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {rateType === "schedule_of_rates" ? "Required for SOR" : plantSectionOpen ? "Hide Plant / Vehicles" : "Show Plant / Vehicles"}
             </button>
-          )}
-        </section>
-      )}
+          </div>
+        </div>
+
+        {plantItemCount === 0 && !plantSectionOpen && (
+          <div className="rounded-xl border border-dashed border-purple-200 bg-purple-50/40 p-4 text-sm text-slate-600">
+            No plant or vehicles have been added yet. Expand this section to add them manually, or select a crew with assigned assets.
+          </div>
+        )}
+
+        {plantSectionOpen && (
+          <>
+            {rateType === "schedule_of_rates" && !locked && !isView && (
+              <div className="rounded-2xl border border-purple-200 bg-purple-50/60 p-3 flex flex-col md:flex-row md:items-end gap-2">
+                <div className="grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end flex-1">
+                  <LabourInput
+                    label="Bulk Plant Time In"
+                    type="time"
+                    value={bulkPlantTimeIn}
+                    onChange={setBulkPlantTimeIn}
+                  />
+                  <LabourInput
+                    label="Bulk Plant Time Out"
+                    type="time"
+                    value={bulkPlantTimeOut}
+                    onChange={setBulkPlantTimeOut}
+                  />
+                  <button
+                    type="button"
+                    onClick={applyBulkPlantTimes}
+                    className="bg-purple-700 text-white rounded-xl px-4 py-2 text-sm font-semibold h-10 hover:bg-purple-800"
+                  >
+                    Apply Times to Plant
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {plantRowsWithTotals.map((row, index) => (
+                <div key={index} className="border border-purple-100 bg-purple-50/40 rounded-xl p-3 space-y-3">
+                  <div className="grid grid-cols-2 md:grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 items-end">
+                    <LabourInput label="Plant / Vehicle Name" value={row.plant_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_name", v)} />
+                    <LabourInput label="Type" value={row.plant_type} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "plant_type", v)} />
+                    <LabourInput label="Asset ID / Rego" value={row.asset_id} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "asset_id", v)} />
+                    <LabourInput label="Operator" value={row.operator_name} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "operator_name", v)} />
+                  </div>
+
+                  {rateType === "schedule_of_rates" ? (
+                    <div className="grid grid-cols-2 md:grid-cols-[120px_120px_110px_1fr_auto] gap-2 items-end">
+                      <LabourInput label="Time In" type="time" value={row.time_in} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_in", v)} />
+                      <LabourInput label="Time Out" type="time" value={row.time_out} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "time_out", v)} />
+                      <LabourInput label="Total Hrs" type="number" value={row.total_hours} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "total_hours", v)} />
+                      <LabourInput label="Notes" value={row.notes} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "notes", v)} />
+                      {!locked && !isView ? <button type="button" onClick={() => removePlantRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+                      <LabourInput label="Notes" value={row.notes} disabled={locked || isView} onChange={(v) => updatePlantRow(index, "notes", v)} />
+                      {!locked && !isView ? <button type="button" onClick={() => removePlantRow(index)} className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50">Remove</button> : <div />}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!locked && !isView && (
+              <button type="button" onClick={addPlantRow} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700">
+                Add Plant / Vehicle
+              </button>
+            )}
+          </>
+        )}
+      </section>
 
       {rateType === "schedule_of_rates" && (
         <section className="bg-white border border-purple-200 rounded-2xl p-4 shadow-sm">
@@ -3076,7 +3092,7 @@ if (incidentOccurred && !incidentNotes.trim()) {
                     <div className="rounded-xl border border-purple-200 bg-white p-3">
                       <div className="text-sm font-medium mb-2 text-purple-900">Affected Plant</div>
                       {availablePlantNames.length === 0 ? (
-                        <div className="text-sm text-slate-500">Add plant or equipment above first. This can be manual for now and linked to Assets later.</div>
+                        <div className="text-sm text-slate-500">Add plant or vehicles in the Plant & Vehicles Used section above first.</div>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {availablePlantNames.map((name) => {
