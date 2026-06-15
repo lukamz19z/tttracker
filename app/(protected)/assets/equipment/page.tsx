@@ -1,191 +1,301 @@
-import { Plus, Wrench } from "lucide-react";
+import Link from "next/link";
 import {
-  ActionButton,
-  DetailGrid,
-  FilterBar,
-  FilterInput,
-  FilterSelect,
-  KpiCard,
-  PageHeader,
-  PageShell,
-  RegisterList,
-  StatusBadge,
-} from "../components";
-import { RecordActions } from "../record-actions";
+  Boxes,
+  Cable,
+  Construction,
+  Gauge,
+  HardHat,
+  Settings,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
 
-type Equipment = {
-  id: string;
-  serial: string;
-  type: string;
-  description: string;
-  crew: string;
-  project: string;
-  tag: string;
-  inspected: string;
-  due: string;
-  status: string;
-  tone: "emerald" | "amber" | "rose" | "slate";
-};
-
-const equipment: Equipment[] = [
+const equipmentCategories = [
   {
-    id: "17707931",
-    serial: "17707931",
-    type: "Round Sling",
-    description: "Legend 1T purple 1.0m",
-    crew: "Crew 3",
-    project: "Snowy 2.0",
-    tag: "Green",
-    inspected: "02 Mar 2026",
-    due: "02 Jun 2026",
-    status: "Due Soon",
-    tone: "amber",
+    title: "Inventory",
+    href: "/assets/equipment/inventory",
+    description:
+      "General tools, consumables, site gear and miscellaneous equipment.",
+    icon: Boxes,
+    stats: "General equipment",
   },
   {
-    id: "104024-047",
-    serial: "104024-047",
-    type: "Harness",
-    description: "Skylotec Ignite Neutron",
-    crew: "Crew 1",
-    project: "Snowy 2.0",
-    tag: "Green",
-    inspected: "26 Feb 2026",
-    due: "26 Aug 2026",
-    status: "Passed",
-    tone: "emerald",
+    title: "Lifting Gear",
+    href: "/assets/equipment/lifting-gear",
+    description:
+      "Slings, shackles, chains, lifting beams, hooks and certified gear.",
+    icon: Cable,
+    stats: "WLL / test certs",
   },
   {
-    id: "chain-001",
-    serial: "CS-001",
-    type: "Chain Sling",
-    description: "Grade 100 2 leg chain sling",
-    crew: "Crew 2",
-    project: "Maragle",
-    tag: "Green",
-    inspected: "26 Feb 2026",
-    due: "26 Aug 2026",
-    status: "Passed",
-    tone: "emerald",
+    title: "Generators",
+    href: "/assets/equipment/generators",
+    description:
+      "Generator register, service tracking, hours and project allocation.",
+    icon: Settings,
+    stats: "Service / hours",
   },
   {
-    id: "tw-001",
-    serial: "TW-001",
-    type: "Torque Wrench",
-    description: "Calibrated torque wrench 40-200Nm",
-    crew: "Workshop",
-    project: "Unassigned",
-    tag: "N/A",
-    inspected: "10 Jan 2026",
-    due: "10 Jul 2026",
-    status: "Calibration",
-    tone: "slate",
+    title: "Ladders",
+    href: "/assets/equipment/ladders",
+    description: "Step ladders, extension ladders and inspection records.",
+    icon: Construction,
+    stats: "Inspection due",
+  },
+  {
+    title: "Torque Wrenches",
+    href: "/assets/equipment/torque-wrenches",
+    description: "Torque wrench register, calibration dates and certificates.",
+    icon: Gauge,
+    stats: "Calibration due",
+  },
+  {
+    title: "Fall Arrest",
+    href: "/assets/equipment/fall-arrest",
+    description:
+      "Harnesses, lanyards, SRLs, inertia reels and height safety gear.",
+    icon: HardHat,
+    stats: "Inspection / expiry",
   },
 ];
 
-export default function AssetsEquipmentPage() {
+const kpis = [
+  {
+    label: "Total Equipment",
+    value: "—",
+    detail: "Across all equipment categories",
+  },
+  {
+    label: "Due Soon",
+    value: "—",
+    detail: "Inspections, services or calibrations",
+  },
+  {
+    label: "Overdue",
+    value: "—",
+    detail: "Expired or past due items",
+  },
+  {
+    label: "Out of Service",
+    value: "—",
+    detail: "Tagged out or unavailable",
+  },
+];
+
+export default function EquipmentLandingPage() {
   return (
-    <PageShell>
-      <PageHeader
-        eyebrow="Asset Register"
-        title="Equipment"
-        description="Lifting gear, fall arrest gear, torque wrenches, hoists and other equipment. Keep this page focused on inspection status, crew allocation and whether gear is safe to use."
-        actions={
-          <>
-            <ActionButton href="/assets/maintenance/new" variant="secondary" icon={<Wrench size={16} />}>
-              Raise Job
-            </ActionButton>
-            <ActionButton href="/assets/equipment/new" icon={<Plus size={16} />}>
-              Add Equipment
-            </ActionButton>
-          </>
-        }
-      />
+    <div className="min-h-screen bg-slate-100">
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="mb-8 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
+              Asset Manager
+            </p>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total Gear" value="4" detail="sample equipment records" tone="blue" />
-        <KpiCard label="Passed" value="2" detail="current inspections" tone="emerald" />
-        <KpiCard label="Due Soon" value="1" detail="next 30 days" tone="amber" />
-        <KpiCard label="Failed" value="0" detail="quarantine required" tone="rose" />
-      </section>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+              Equipment
+            </h1>
 
-      <FilterBar>
-        <FilterInput placeholder="Search serial, type, description..." />
-        <FilterSelect label="Equipment type" options={["All equipment", "Round Sling", "Chain Sling", "Harness", "Torque Wrench"]} />
-        <FilterSelect label="Crew" options={["All crews", "Crew 1", "Crew 2", "Crew 3", "Workshop"]} />
-        <FilterSelect label="Status" options={["All statuses", "Passed", "Due Soon", "Failed", "Calibration"]} />
-      </FilterBar>
-
-      <RegisterList
-        title="Equipment Register"
-        description="A lighter version of the lifting gear spreadsheet, tuned for quick checks on mobile and iPad."
-        items={equipment}
-        getKey={(item) => item.id}
-        columns={[
-          {
-            label: "Item",
-            render: (item) => (
-              <div>
-                <p className="font-semibold text-slate-950">{item.serial}</p>
-                <p className="mt-1 text-slate-600">{item.description}</p>
-              </div>
-            ),
-          },
-          { label: "Type", render: (item) => item.type },
-          {
-            label: "Allocation",
-            render: (item) => (
-              <div>
-                <p className="font-semibold text-slate-950">{item.crew}</p>
-                <p className="mt-1 text-slate-600">{item.project}</p>
-              </div>
-            ),
-          },
-          { label: "Tag", render: (item) => item.tag },
-          { label: "Inspected", render: (item) => item.inspected },
-          { label: "Next Due", render: (item) => item.due },
-          {
-            label: "Status",
-            render: (item) => <StatusBadge label={item.status} tone={item.tone} />,
-          },
-          {
-            label: "Actions",
-            render: (item) => (
-              <RecordActions
-                recordType="equipment"
-                recordLabel={`${item.serial} ${item.type}`}
-                viewHref={`/assets/equipment/${item.id}`}
-                editHref={`/assets/equipment/${item.id}/edit`}
-              />
-            ),
-          },
-        ]}
-        renderMobile={(item) => (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-semibold text-slate-950">{item.serial}</p>
-                <p className="mt-1 text-sm text-slate-600">{item.description}</p>
-              </div>
-              <StatusBadge label={item.status} tone={item.tone} />
-            </div>
-            <DetailGrid
-              items={[
-                { label: "Type", value: item.type },
-                { label: "Crew", value: item.crew },
-                { label: "Project", value: item.project },
-                { label: "Tag", value: item.tag },
-                { label: "Due", value: item.due },
-              ]}
-            />
-            <RecordActions
-              recordType="equipment"
-              recordLabel={`${item.serial} ${item.type}`}
-              viewHref={`/assets/equipment/${item.id}`}
-              editHref={`/assets/equipment/${item.id}/edit`}
-            />
+            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+              Manage inventory, lifting gear, generators, ladders, torque
+              wrenches and fall arrest equipment from one central equipment
+              register.
+            </p>
           </div>
-        )}
-      />
-    </PageShell>
+
+          <div className="flex flex-wrap gap-3">
+            <Link
+              href="/assets/equipment/inventory"
+              className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+            >
+              Open Inventory
+            </Link>
+
+            <Link
+              href="/assets/inspections"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              View Inspections
+            </Link>
+          </div>
+        </div>
+
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {kpis.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                {item.label}
+              </p>
+
+              <p className="mt-3 text-3xl font-bold text-slate-950">
+                {item.value}
+              </p>
+
+              <p className="mt-2 text-sm text-slate-500">{item.detail}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-slate-950">
+                Equipment Registers
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Select a category to open the correct register.
+              </p>
+            </div>
+
+            <div className="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500 sm:block">
+              6 categories
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {equipmentCategories.map((category) => {
+              const Icon = category.icon;
+
+              return (
+                <Link
+                  key={category.href}
+                  href={category.href}
+                  className="group rounded-2xl border border-slate-200 bg-slate-50 p-5 transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-800 shadow-sm ring-1 ring-slate-200 transition group-hover:bg-slate-900 group-hover:text-white">
+                      <Icon className="h-5 w-5" />
+                    </div>
+
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-500 ring-1 ring-slate-200">
+                      {category.stats}
+                    </span>
+                  </div>
+
+                  <h3 className="mt-5 text-lg font-bold text-slate-950">
+                    {category.title}
+                  </h3>
+
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {category.description}
+                  </p>
+
+                  <div className="mt-5 flex items-center gap-2 text-sm font-semibold text-slate-900">
+                    Open register
+                    <span className="transition group-hover:translate-x-1">
+                      →
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-8 grid gap-4 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Compliance Focus
+                </h2>
+
+                <p className="text-sm text-slate-500">
+                  High-risk equipment should be easy to find and track.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">
+                  Lifting gear
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Track WLL, colour code and test certificates.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">
+                  Torque wrenches
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Track calibration dates and cert expiry.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">
+                  Fall arrest
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Track inspections, expiry and retirement dates.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                <Wrench className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Quick Actions
+                </h2>
+
+                <p className="text-sm text-slate-500">
+                  Common equipment tasks.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <Link
+                href="/assets/equipment/inventory"
+                className="block rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Add general inventory item
+              </Link>
+
+              <Link
+                href="/assets/equipment/lifting-gear"
+                className="block rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Check lifting gear register
+              </Link>
+
+              <Link
+                href="/assets/equipment/torque-wrenches"
+                className="block rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Review torque wrench calibration
+              </Link>
+
+              <Link
+                href="/assets/equipment/fall-arrest"
+                className="block rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Review fall arrest inspections
+              </Link>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
