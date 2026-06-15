@@ -15,7 +15,19 @@ const assetNav = [
   { label: "Fleet Jobs", href: "/assets/fleet-jobs" },
   { label: "Plant", href: "/assets/plant" },
   { label: "Vehicles", href: "/assets/vehicles" },
-  { label: "Equipment", href: "/assets/equipment" },
+  {
+    label: "Equipment",
+    href: "/assets/equipment",
+    children: [
+      { label: "Overview", href: "/assets/equipment" },
+      { label: "Inventory", href: "/assets/equipment/inventory" },
+      { label: "Lifting Gear", href: "/assets/equipment/lifting-gear" },
+      { label: "Generators", href: "/assets/equipment/generators" },
+      { label: "Ladders", href: "/assets/equipment/ladders" },
+      { label: "Torque Wrenches", href: "/assets/equipment/torque-wrenches" },
+      { label: "Fall Arrest", href: "/assets/equipment/fall-arrest" },
+    ],
+  },
   { label: "Prestarts", href: "/assets/prestarts" },
   { label: "Compliance", href: "/assets/compliance" },
   { label: "Inspections", href: "/assets/inspections" },
@@ -95,45 +107,47 @@ export default function AssetsLayout({
 
           <nav className="mt-8 flex h-[calc(100vh-260px)] flex-col">
             <div className="space-y-2">
-              {assetNav.slice(0, -1).map((item) => {
+              {assetNav.map((item) => {
+                const hasChildren = "children" in item && item.children;
                 const active =
                   pathname === item.href ||
                   (item.href !== "/assets" && pathname.startsWith(item.href));
 
                 return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
-                      active
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
+                  <div key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
+                        active
+                          ? "bg-slate-900 text-white shadow-sm"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
 
-            <div className="mt-auto border-t border-slate-200 pt-4">
-              {assetNav.slice(-1).map((item) => {
-                const active =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href);
+                    {hasChildren && active && (
+                      <div className="mt-2 space-y-1 border-l border-slate-200 pl-3">
+                        {item.children.map((child) => {
+                          const childActive = pathname === child.href;
 
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
-                      active
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    {item.label}
-                  </Link>
+                          return (
+                            <Link
+                              key={child.href}
+                              href={child.href}
+                              className={`block rounded-lg px-3 py-2 text-xs font-medium transition ${
+                                childActive
+                                  ? "bg-slate-100 text-slate-950"
+                                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                              }`}
+                            >
+                              {child.label}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
