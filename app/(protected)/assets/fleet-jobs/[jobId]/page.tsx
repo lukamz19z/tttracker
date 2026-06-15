@@ -8,10 +8,7 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   AlertTriangle,
-  Calendar,
   CheckCircle2,
-  ClipboardList,
-  DollarSign,
   ExternalLink,
   Loader2,
   Save,
@@ -158,16 +155,11 @@ type FaultCorrection = {
   correction: string;
 };
 
-const statuses = [
-  "Open",
-  "In Progress",
-  "Waiting Parts",
-  "Booked",
-  "Completed",
-  "Closed",
-];
-
+const statuses = ["Open", "In Progress", "Waiting Parts", "Booked", "Completed", "Closed"];
 const priorities = ["Low", "Medium", "High", "Critical"];
+
+const faultCorrectionJsonStart = "[[FAULT_CORRECTIONS_JSON_START]]";
+const faultCorrectionJsonEnd = "[[FAULT_CORRECTIONS_JSON_END]]";
 
 function clean(value: string | null | undefined) {
   return value?.trim() || "";
@@ -243,10 +235,7 @@ function normaliseFailedItems(value: unknown): string[] {
   if (!value) return [];
 
   if (Array.isArray(value)) {
-    return value
-      .map(String)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
   }
 
   if (typeof value === "object") {
@@ -298,10 +287,7 @@ function normaliseFailedItems(value: unknown): string[] {
   return [];
 }
 
-function getPrestartFlaggedItems(
-  prestart: VehiclePrestart | null,
-  job: FleetJob,
-) {
+function getPrestartFlaggedItems(prestart: VehiclePrestart | null, job: FleetJob) {
   const fromPrestart = [
     ...normaliseFailedItems(prestart?.failed_items),
     ...normaliseFailedItems(prestart?.flagged_items),
@@ -335,9 +321,6 @@ function formatIssueLabel(item: string) {
 
   return { label, comment };
 }
-
-const faultCorrectionJsonStart = "[[FAULT_CORRECTIONS_JSON_START]]";
-const faultCorrectionJsonEnd = "[[FAULT_CORRECTIONS_JSON_END]]";
 
 function correctionRowId(value: string, index: number) {
   return `${value.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index}`;
@@ -419,7 +402,6 @@ Mechanic correction: ${row.correction || "N/A"}`,
   )}\n${faultCorrectionJsonEnd}`;
 }
 
-
 function appendJobNote(
   existingNotes: string | null,
   heading: string,
@@ -439,6 +421,12 @@ function extractCloseOutComment(comment: string | null | undefined) {
     .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
     .replace(/\n?Asset update record:[\s\S]*$/, "")
     .trim();
+}
+
+function correctionProgress(corrections: FaultCorrection[]) {
+  const total = corrections.length;
+  const done = corrections.filter((row) => row.correction.trim()).length;
+  return { done, total };
 }
 
 export default function FleetJobDetailPage() {
@@ -474,17 +462,17 @@ export default function FleetJobDetailPage() {
   const [jobModeOverride, setJobModeOverride] = useState<
     "open" | "closed" | null
   >(null);
+  const [showCloseOutModal, setShowCloseOutModal] = useState(false);
+  const [showClosedJobUpdates, setShowClosedJobUpdates] = useState(false);
 
   const [status, setStatus] = useState("Open");
   const [priority, setPriority] = useState("Medium");
   const [vendor, setVendor] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
-  const [completedDate, setCompletedDate] = useState("");
   const [cost, setCost] = useState("");
   const [progressUpdate, setProgressUpdate] = useState("");
-
-  const [showCloseOutModal, setShowCloseOutModal] = useState(false);
   const [faultCorrections, setFaultCorrections] = useState<FaultCorrection[]>([]);
+
   const [closeOutForm, setCloseOutForm] = useState<CloseOutForm>({
     history_type: "Repair",
     history_date: todayDate(),
@@ -533,7 +521,6 @@ export default function FleetJobDetailPage() {
     setPriority(loadedJob.priority || "Medium");
     setVendor(loadedJob.vendor || "");
     setAssignedTo(loadedJob.assigned_to || "");
-    setCompletedDate(loadedJob.completed_date || "");
     setCost(
       loadedJob.cost !== null && loadedJob.cost !== undefined
         ? String(loadedJob.cost)
@@ -712,10 +699,29 @@ export default function FleetJobDetailPage() {
     );
   }, [updates]);
 
+  const latestFaultCorrectionUpdate = useMemo(() => {
+    return updates.find((update) => update.update_type === "Fault Corrections");
+  }, [updates]);
+
   const closeOutFaultCorrections = useMemo(
     () => parseFaultCorrectionsFromComment(latestCloseOutUpdate?.comment),
     [latestCloseOutUpdate],
   );
+
+  const savedFaultCorrections = useMemo(() => {
+    const fromDedicatedUpdate = parseFaultCorrectionsFromComment(
+      latestFaultCorrectionUpdate?.comment,
+    );
+
+    if (fromDedicatedUpdate.length > 0) return fromDedicatedUpdate;
+    if (closeOutFaultCorrections.length > 0) return closeOutFaultCorrections;
+
+    return buildFaultCorrectionsFromFailedItems(failedItems);
+  }, [latestFaultCorrectionUpdate, closeOutFaultCorrections, failedItems]);
+
+  useEffect(() => {
+    setFaultCorrections(savedFaultCorrections);
+  }, [savedFaultCorrections]);
 
   const normalisedJobStatus = clean(job?.status).toLowerCase();
   const jobStatusIsClosed = [
@@ -727,10 +733,6 @@ export default function FleetJobDetailPage() {
 
   const hasValidCloseOut = Boolean(assetHistoryRecord) && Boolean(latestCloseOutUpdate);
 
-  // Closed view should match the register logic:
-  // - Completed/Closed status means closed.
-  // - Asset history + close-out update means closed, even if the status field is stale.
-  // - Reopen uses a local override so the full page returns immediately.
   const isClosed =
     jobModeOverride === "closed"
       ? true
@@ -744,26 +746,28 @@ export default function FleetJobDetailPage() {
   const displayStatus = isClosed ? "Completed" : job?.status || "Open";
 
   const visibleUpdates = useMemo(() => {
-    const progressUpdates = updates.filter(
+    const nonCloseOutUpdates = updates.filter(
       (update) =>
         update.update_type !== "Close Out" &&
         update.update_type !== "Close Out Edited",
     );
 
     if (!assetHistoryRecord || !latestCloseOutUpdate) {
-      return progressUpdates;
+      return nonCloseOutUpdates;
     }
 
-    return [latestCloseOutUpdate, ...progressUpdates];
+    return [latestCloseOutUpdate, ...nonCloseOutUpdates];
   }, [updates, assetHistoryRecord, latestCloseOutUpdate]);
+
+  const shouldShowJobUpdates = !isClosed || showClosedJobUpdates;
+  const jobUpdateCount = visibleUpdates.length;
+  const progress = correctionProgress(faultCorrections);
 
   async function saveProgressUpdate(nextStatus?: string) {
     if (!job) return;
 
     if (isClosed) {
-      alert(
-        "This fleet job is closed. Reopen it before adding progress updates.",
-      );
+      alert("This fleet job is closed. Reopen it before adding progress updates.");
       return;
     }
 
@@ -805,7 +809,6 @@ export default function FleetJobDetailPage() {
         priority,
         vendor: vendor.trim() || null,
         assigned_to: assignedTo.trim() || null,
-        completed_date: completedDate || null,
         cost: cost ? Number(cost) : null,
         notes: finalNotes,
         updated_at: new Date().toISOString(),
@@ -819,6 +822,72 @@ export default function FleetJobDetailPage() {
       await loadJob();
     }
 
+    setSaving(false);
+  }
+
+  async function saveFaultCorrections() {
+    if (!job) return;
+
+    if (isClosed) {
+      alert("This fleet job is closed. Reopen it before editing fault corrections.");
+      return;
+    }
+
+    if (faultCorrections.length === 0) {
+      alert("No flagged faults were found to correct.");
+      return;
+    }
+
+    setSaving(true);
+
+    const cleanedCorrections = faultCorrections.map((row) => ({
+      ...row,
+      correction: row.correction.trim(),
+    }));
+
+    const correctionText = buildFaultCorrectionText(cleanedCorrections);
+
+    const payload = {
+      update_type: "Fault Corrections",
+      status,
+      comment: correctionText,
+      created_at: new Date().toISOString(),
+    };
+
+    const result = latestFaultCorrectionUpdate
+      ? await supabase
+          .from("fleet_job_updates")
+          .update(payload)
+          .eq("id", latestFaultCorrectionUpdate.id)
+      : await supabase.from("fleet_job_updates").insert({
+          fleet_job_id: job.id,
+          ...payload,
+        });
+
+    if (result.error) {
+      console.error("Failed to save fault corrections:", result.error.message);
+      alert(result.error.message);
+      setSaving(false);
+      return;
+    }
+
+    const { error: jobError } = await supabase
+      .from("fleet_jobs")
+      .update({
+        status,
+        priority,
+        vendor: vendor.trim() || null,
+        assigned_to: assignedTo.trim() || null,
+        cost: cost ? Number(cost) : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", job.id);
+
+    if (jobError) {
+      console.error("Fault corrections saved, but job update failed:", jobError.message);
+    }
+
+    await loadJob();
     setSaving(false);
   }
 
@@ -846,9 +915,7 @@ export default function FleetJobDetailPage() {
     }
 
     if (!closeOutForm.close_out_comments.trim()) {
-      alert(
-        "Close-out comments are required before completing or closing this job.",
-      );
+      alert("Close-out comments are required before completing or closing this job.");
       return;
     }
 
@@ -863,12 +930,12 @@ export default function FleetJobDetailPage() {
 
     setSaving(true);
 
-    const correctionText = buildFaultCorrectionText(
-      faultCorrections.map((row) => ({
-        ...row,
-        correction: row.correction.trim(),
-      })),
-    );
+    const cleanedCorrections = faultCorrections.map((row) => ({
+      ...row,
+      correction: row.correction.trim(),
+    }));
+
+    const correctionText = buildFaultCorrectionText(cleanedCorrections);
 
     const closeOutComment = [
       closeOutForm.close_out_comments.trim(),
@@ -879,29 +946,21 @@ export default function FleetJobDetailPage() {
       .filter(Boolean)
       .join("\n\n");
 
-    const finalNotes = appendJobNote(
-      job.notes || null,
-      "Close Out",
-      closeOutComment,
-    );
+    const finalNotes = appendJobNote(job.notes || null, "Close Out", closeOutComment);
 
     const assetHistoryPayload = {
       asset_type: assetType,
       vehicle_id: assetType === "Vehicle" ? resolvedVehicleId : null,
       plant_id: assetType === "Plant" ? job.plant_id : null,
       fleet_job_id: job.id,
-
       history_type: closeOutForm.history_type,
       history_date: closeOutForm.history_date,
-
       title: closeOutForm.title.trim(),
       description: closeOutForm.description.trim(),
       vendor: closeOutForm.vendor.trim() || null,
       cost: numberOrNull(closeOutForm.cost),
-
       odometer_km: numberOrNull(closeOutForm.odometer_km),
       engine_hours: numberOrNull(closeOutForm.engine_hours),
-
       next_service_due_date:
         closeOutForm.history_type === "Service" &&
         closeOutForm.next_service_due_date
@@ -915,7 +974,6 @@ export default function FleetJobDetailPage() {
         closeOutForm.history_type === "Service"
           ? numberOrNull(closeOutForm.next_service_due_hours)
           : null,
-
       document_url: null,
     };
 
@@ -932,17 +990,14 @@ export default function FleetJobDetailPage() {
           .select("*")
           .limit(1);
 
-    const historyError = historyResult.error;
-
-    if (historyError) {
-      console.error("Failed to save asset history:", historyError.message);
-      alert(historyError.message);
+    if (historyResult.error) {
+      console.error("Failed to save asset history:", historyResult.error.message);
+      alert(historyResult.error.message);
       setSaving(false);
       return;
     }
 
-    const savedAssetHistoryRows = (historyResult.data ??
-      []) as AssetHistoryRecord[];
+    const savedAssetHistoryRows = (historyResult.data ?? []) as AssetHistoryRecord[];
     const savedAssetHistory =
       savedAssetHistoryRows.length > 0 ? savedAssetHistoryRows[0] : null;
 
@@ -1003,8 +1058,9 @@ export default function FleetJobDetailPage() {
 
     setShowCloseOutModal(false);
     setJobModeOverride("closed");
+    setShowClosedJobUpdates(false);
     setStatus("Completed");
-    setCompletedDate(closeOutForm.history_date);
+
     const closedJob =
       closedJobRows && closedJobRows.length > 0
         ? (closedJobRows[0] as FleetJob)
@@ -1020,6 +1076,7 @@ export default function FleetJobDetailPage() {
         updated_at: new Date().toISOString(),
       },
     );
+
     await loadJob();
     setSaving(false);
   }
@@ -1032,8 +1089,9 @@ export default function FleetJobDetailPage() {
     setFaultCorrections(
       parsedCorrections.length > 0
         ? parsedCorrections
-        : buildFaultCorrectionsFromFailedItems(failedItems),
+        : savedFaultCorrections,
     );
+
     setShowCloseOutModal(true);
     setCloseOutForm((current) => ({
       ...current,
@@ -1047,12 +1105,12 @@ export default function FleetJobDetailPage() {
         assetHistoryRecord?.description ||
         job?.description ||
         current.description,
-      vendor: assetHistoryRecord?.vendor || job?.vendor || current.vendor,
+      vendor: assetHistoryRecord?.vendor || job?.vendor || vendor || current.vendor,
       cost:
         assetHistoryRecord?.cost !== null &&
         assetHistoryRecord?.cost !== undefined
           ? String(assetHistoryRecord.cost)
-          : current.cost,
+          : cost || current.cost,
       odometer_km:
         assetHistoryRecord?.odometer_km !== null &&
         assetHistoryRecord?.odometer_km !== undefined
@@ -1111,7 +1169,7 @@ export default function FleetJobDetailPage() {
     if (!job) return;
 
     const confirmed = window.confirm(
-      "Reopen this fleet job? This will let you add progress updates or complete it again if the asset history record was deleted or needs correction.",
+      "Reopen this fleet job? The existing fault corrections will stay on the job so you can continue updating them.",
     );
 
     if (!confirmed) return;
@@ -1156,9 +1214,8 @@ export default function FleetJobDetailPage() {
         fleet_job_id: job.id,
         update_type: "Reopened",
         status: "Open",
-        comment: assetHistoryRecord
-          ? "Fleet job reopened for further action."
-          : "Fleet job reopened because the linked asset history record is missing or was deleted.",
+        comment:
+          "Fleet job reopened. Existing fault corrections were retained for continued tracking.",
       });
 
     if (noteError) {
@@ -1179,21 +1236,20 @@ export default function FleetJobDetailPage() {
           };
 
     setJobModeOverride("open");
+    setShowClosedJobUpdates(false);
     setJob(reopenedJob);
     setStatus("Open");
     setPriority(job.priority || "Medium");
     setVendor(job.vendor || "");
     setAssignedTo(job.assigned_to || "");
-    setCompletedDate(job.completed_date || "");
-    setCost(
-      job.cost !== null && job.cost !== undefined ? String(job.cost) : "",
-    );
+    setCost(job.cost !== null && job.cost !== undefined ? String(job.cost) : "");
     setProgressUpdate("");
     setShowCloseOutModal(false);
 
     await loadJob();
     setSaving(false);
   }
+
   if (loading) {
     return (
       <PageShell>
@@ -1251,46 +1307,11 @@ export default function FleetJobDetailPage() {
               <ExternalLink size={16} />
               View Asset
             </Link>
-
-            <Link
-              href={assetUpdateHref}
-              className="inline-flex min-h-10 items-center gap-2 bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-            >
-              <Settings size={16} />
-              Record Asset Update
-            </Link>
           </>
         }
       />
 
-      <section className="grid gap-4 md:grid-cols-4">
-        <SummaryCard
-          label="Status"
-          value={displayStatus}
-          icon={<ClipboardList size={20} />}
-          tone={toneForStatus(displayStatus)}
-        />
-        <SummaryCard
-          label="Priority"
-          value={job.priority || "Medium"}
-          icon={<Wrench size={20} />}
-          tone={toneForPriority(job.priority)}
-        />
-        <SummaryCard
-          label="Completed Date"
-          value={dateDisplay(job.completed_date)}
-          icon={<Calendar size={20} />}
-          tone="blue"
-        />
-        <SummaryCard
-          label="Cost"
-          value={moneyDisplay(job.cost)}
-          icon={<DollarSign size={20} />}
-          tone="slate"
-        />
-      </section>
-
-      <section className="grid gap-5 lg:grid-cols-[1.35fr_0.9fr]">
+      <section className="grid gap-5 lg:grid-cols-[1.35fr_0.85fr]">
         <div className="space-y-5">
           {isClosed ? (
             <>
@@ -1305,9 +1326,9 @@ export default function FleetJobDetailPage() {
                       {job.title || "Closed Fleet Job"}
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-emerald-900">
-                      This job has been closed out. The prestart issue details
-                      are hidden so the page stays focused on the correction and
-                      close-out record.
+                      This view is condensed because the job is closed. The
+                      correction table below shows what was flagged and how it was
+                      answered.
                     </p>
                   </div>
 
@@ -1335,45 +1356,12 @@ export default function FleetJobDetailPage() {
                   />
                 </div>
 
-                {closeOutFaultCorrections.length > 0 ? (
-                  <section className="mt-5 rounded-2xl border border-emerald-200 bg-white p-4">
-                    <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
-                      Fault Corrections
-                    </p>
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="w-full min-w-[720px] border-collapse text-sm">
-                        <thead>
-                          <tr className="border-y border-slate-200 bg-slate-50">
-                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
-                              Flagged fault
-                            </th>
-                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
-                              Prestart comment
-                            </th>
-                            <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
-                              Mechanic correction
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {closeOutFaultCorrections.map((row) => (
-                            <tr key={row.id} className="border-b border-slate-100">
-                              <td className="px-3 py-3 align-top font-bold text-slate-950">
-                                {row.fault}
-                              </td>
-                              <td className="px-3 py-3 align-top text-slate-600">
-                                {row.prestart_comment}
-                              </td>
-                              <td className="px-3 py-3 align-top font-semibold text-emerald-800">
-                                {row.correction}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                ) : null}
+                <FaultCorrectionTable
+                  corrections={closeOutFaultCorrections}
+                  editable={false}
+                  title="Fault Corrections"
+                  description="Original prestart faults with the recorded mechanic response."
+                />
 
                 {latestCloseOutUpdate ? (
                   <div className="mt-5 rounded-2xl border border-emerald-200 bg-white p-4">
@@ -1388,89 +1376,27 @@ export default function FleetJobDetailPage() {
                 ) : null}
               </section>
 
-              <section className="border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
-                      <Truck size={18} />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-bold text-slate-950">
-                        Asset Summary
-                      </h2>
-                      <p className="text-sm text-slate-600">{assetTitle}</p>
-                    </div>
-                  </div>
-
-                  <Link
-                    href={assetHref}
-                    className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <ExternalLink size={16} />
-                    Open Asset
-                  </Link>
-                </div>
-
-                <DetailGrid
-                  items={[
-                    { label: "Asset Type", value: assetType },
-                    {
-                      label:
-                        assetType === "Vehicle" ? "Vehicle ID" : "Asset ID",
-                      value:
-                        assetType === "Vehicle"
-                          ? vehicle?.vehicle_id || "N/A"
-                          : plant?.asset_id || "N/A",
-                    },
-                    {
-                      label: "Rego",
-                      value:
-                        assetType === "Vehicle"
-                          ? vehicle?.vehicle_rego || "N/A"
-                          : plant?.rego || "N/A",
-                    },
-                    {
-                      label: "Make / Model",
-                      value:
-                        assetType === "Vehicle"
-                          ? [vehicle?.make, vehicle?.model]
-                              .map(clean)
-                              .filter(Boolean)
-                              .join(" ") || "N/A"
-                          : [plant?.make, plant?.model]
-                              .map(clean)
-                              .filter(Boolean)
-                              .join(" ") || "N/A",
-                    },
-                    {
-                      label: "Project",
-                      value:
-                        job.project ||
-                        vehicle?.project ||
-                        plant?.project ||
-                        "N/A",
-                    },
-                    {
-                      label: "Crew",
-                      value: job.crew || vehicle?.crew || plant?.crew || "N/A",
-                    },
-                    { label: "Reported By", value: job.reported_by || "N/A" },
-                    { label: "Assigned To", value: job.assigned_to || "N/A" },
-                  ]}
-                />
-              </section>
+              <CondensedAssetCard
+                assetTitle={assetTitle}
+                assetType={assetType}
+                assetHref={assetHref}
+                job={job}
+                vehicle={vehicle}
+                plant={plant}
+              />
             </>
           ) : (
             <>
               <section className="border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-bold text-slate-950">
-                      Job Details
+                      Job Details & Issues Raised
                     </h2>
                     <p className="text-sm text-slate-600">
-                      Fleet job notification, source details and linked asset
-                      context.
+                      Job context, original comments and the issues needing
+                      action. Prestart issues are shown here instead of being
+                      repeated in a separate section.
                     </p>
                   </div>
 
@@ -1483,288 +1409,126 @@ export default function FleetJobDetailPage() {
                       label={job.priority || "Medium"}
                       tone={toneForPriority(job.priority)}
                     />
+                    {prestart?.severity ? (
+                      <StatusBadge
+                        label={prestart.severity.toUpperCase()}
+                        tone={prestart.severity === "major" ? "rose" : "amber"}
+                      />
+                    ) : null}
                   </div>
                 </div>
 
                 <DetailGrid
                   items={[
                     { label: "Job Number", value: job.job_number || "N/A" },
-                    {
-                      label: "Source",
-                      value: job.source || job.source_type || "N/A",
-                    },
-                    { label: "Asset Type", value: assetType },
-                    {
-                      label: "Reported",
-                      value: dateDisplay(job.reported_date),
-                    },
-                    { label: "Created", value: dateDisplay(job.created_at) },
-                    { label: "Updated", value: dateDisplay(job.updated_at) },
-                    {
-                      label: "Project",
-                      value:
-                        job.project ||
-                        vehicle?.project ||
-                        plant?.project ||
-                        "N/A",
-                    },
-                    {
-                      label: "Crew",
-                      value: job.crew || vehicle?.crew || plant?.crew || "N/A",
-                    },
+                    { label: "Source", value: job.source || job.source_type || "N/A" },
+                    { label: "Reported", value: dateDisplay(job.reported_date || job.created_at) },
                     { label: "Reported By", value: job.reported_by || "N/A" },
+                    { label: "Project", value: job.project || vehicle?.project || plant?.project || "N/A" },
+                    { label: "Crew", value: job.crew || vehicle?.crew || plant?.crew || "N/A" },
                     { label: "Assigned To", value: job.assigned_to || "N/A" },
                     { label: "Vendor", value: job.vendor || "N/A" },
-                    {
-                      label: "Completed",
-                      value: dateDisplay(job.completed_date),
-                    },
                   ]}
                 />
 
-                <div className="mt-5 border-t border-slate-200 pt-5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Description
-                  </p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                    {job.description || "No description provided."}
-                  </p>
-                </div>
-              </section>
-
-              <section className="border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <Truck size={20} className="text-slate-600" />
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-950">
-                      Linked Asset
-                    </h2>
-                    <p className="text-sm text-slate-600">{assetTitle}</p>
+                <div className="mt-5 grid gap-4 border-t border-slate-200 pt-5 md:grid-cols-2">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                      Issue Description
+                    </p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {job.description || "No description provided."}
+                    </p>
                   </div>
-                </div>
 
-                {assetType === "Vehicle" ? (
-                  <DetailGrid
-                    items={[
-                      {
-                        label: "Vehicle ID",
-                        value: vehicle?.vehicle_id || "N/A",
-                      },
-                      { label: "Rego", value: vehicle?.vehicle_rego || "N/A" },
-                      { label: "Category", value: vehicle?.category || "N/A" },
-                      {
-                        label: "Make / Model",
-                        value:
-                          [vehicle?.make, vehicle?.model]
-                            .map(clean)
-                            .filter(Boolean)
-                            .join(" ") || "N/A",
-                      },
-                      {
-                        label: "Project",
-                        value: vehicle?.project || job.project || "N/A",
-                      },
-                      {
-                        label: "Crew",
-                        value: vehicle?.crew || job.crew || "N/A",
-                      },
-                      { label: "Status", value: vehicle?.status || "N/A" },
-                      { label: "Asset Label", value: job.asset_label || "N/A" },
-                    ]}
-                  />
-                ) : (
-                  <DetailGrid
-                    items={[
-                      { label: "Asset ID", value: plant?.asset_id || "N/A" },
-                      { label: "Rego", value: plant?.rego || "N/A" },
-                      {
-                        label: "Plant Type",
-                        value: plant?.plant_type || "N/A",
-                      },
-                      { label: "Serial", value: plant?.serial_number || "N/A" },
-                      {
-                        label: "Make / Model",
-                        value:
-                          [plant?.make, plant?.model]
-                            .map(clean)
-                            .filter(Boolean)
-                            .join(" ") || "N/A",
-                      },
-                      {
-                        label: "Project",
-                        value: plant?.project || job.project || "N/A",
-                      },
-                      {
-                        label: "Crew",
-                        value: plant?.crew || job.crew || "N/A",
-                      },
-                      { label: "Status", value: plant?.asset_status || "N/A" },
-                    ]}
-                  />
-                )}
-
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <Link
-                    href={assetHref}
-                    className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <ExternalLink size={16} />
-                    Open Asset Record
-                  </Link>
-
-                  <Link
-                    href={assetUpdateHref}
-                    className="inline-flex min-h-10 items-center gap-2 bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                  >
-                    <Settings size={16} />
-                    Record Modification / Service
-                  </Link>
-                </div>
-              </section>
-
-              <section className="overflow-hidden border border-violet-100 bg-white shadow-sm">
-                <div className="border-b border-violet-100 bg-violet-50 px-5 py-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className="rounded-xl bg-white p-2 text-violet-700 shadow-sm">
-                        <AlertTriangle size={20} />
-                      </div>
-
-                      <div>
-                        <h2 className="text-lg font-bold text-slate-950">
-                          Linked Prestart Issue
-                        </h2>
-                        <p className="mt-1 text-sm text-slate-600">
-                          This fleet job was raised from a failed prestart item.
-                        </p>
-                      </div>
-                    </div>
-
-                    <StatusBadge
-                      label={
-                        prestart?.severity
-                          ? prestart.severity.toUpperCase()
-                          : "PRESTART"
-                      }
-                      tone={prestart?.severity === "major" ? "rose" : "amber"}
-                    />
-                  </div>
-                </div>
-
-                {resolvedPrestartId ? (
-                  <div className="p-5">
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <MiniInfo
-                        label="Date"
-                        value={dateDisplay(
-                          prestart?.prestart_date || prestart?.created_at,
-                        )}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                      Prestart Context
+                    </p>
+                    <div className="mt-2 grid gap-2 text-sm text-slate-700">
+                      <InfoRow
+                        label="Prestart Date"
+                        value={dateDisplay(prestart?.prestart_date || prestart?.created_at)}
                       />
-                      <MiniInfo
+                      <InfoRow
                         label="Operator"
-                        value={
-                          prestart?.employee_name ||
-                          prestart?.operator_name ||
-                          job.reported_by ||
-                          "N/A"
-                        }
+                        value={prestart?.employee_name || prestart?.operator_name || job.reported_by || "N/A"}
                       />
-                      <MiniInfo
+                      <InfoRow
                         label="Asset"
-                        value={
-                          prestart?.asset_label || job.asset_label || assetTitle
-                        }
+                        value={prestart?.asset_label || job.asset_label || assetTitle}
                       />
-                      <MiniInfo label="Source" value="Prestart" />
                     </div>
-
-                    <div className="mt-5 rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-bold uppercase tracking-wide text-rose-500">
-                            Flagged Items
-                          </p>
-                          <p className="mt-1 text-sm text-rose-700">
-                            Items marked as failed or requiring attention during
-                            the prestart.
-                          </p>
-                        </div>
-
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-rose-700 shadow-sm">
-                          {failedItems.length} issue
-                          {failedItems.length === 1 ? "" : "s"}
-                        </span>
-                      </div>
-
-                      {failedItems.length > 0 ? (
-                        <div className="mt-4 grid gap-3">
-                          {failedItems.map((item, index) => {
-                            const { label, comment } = formatIssueLabel(item);
-
-                            return (
-                              <div
-                                key={`${item}-${index}`}
-                                className="rounded-xl border border-rose-100 bg-white p-4 shadow-sm"
-                              >
-                                <div className="flex items-start gap-3">
-                                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-xs font-black text-rose-700">
-                                    {index + 1}
-                                  </div>
-
-                                  <div>
-                                    <p className="text-sm font-black text-slate-950">
-                                      {label}
-                                    </p>
-
-                                    {comment ? (
-                                      <p className="mt-1 text-sm font-semibold text-rose-700">
-                                        {comment}
-                                      </p>
-                                    ) : (
-                                      <p className="mt-1 text-sm text-slate-500">
-                                        No additional comment provided.
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
-                          No checklist item list was found, but this job is
-                          linked to a prestart.
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="mt-5 flex flex-wrap gap-3">
+                    {resolvedPrestartId ? (
                       <Link
                         href={prestartHref}
-                        className="inline-flex min-h-10 items-center gap-2 border border-violet-200 bg-violet-50 px-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
+                        className="mt-4 inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
                         <ExternalLink size={16} />
                         Open Prestart
                       </Link>
-
-                      <Link
-                        href={assetUpdateHref}
-                        className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <Settings size={16} />
-                        Record Asset Update
-                      </Link>
-                    </div>
+                    ) : null}
                   </div>
-                ) : (
-                  <div className="p-5">
-                    <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-                      This job is not linked to a prestart.
+                </div>
+              </section>
+
+              <section className="border border-amber-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">
+                      Fault Corrections
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      The mechanic can answer each fault as work is completed.
+                      Save corrections progressively; close out only when the
+                      remaining items are resolved.
                     </p>
                   </div>
-                )}
+
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                    {progress.done}/{progress.total} corrected
+                  </span>
+                </div>
+
+                <FaultCorrectionTable
+                  corrections={faultCorrections}
+                  editable
+                  onChange={setFaultCorrections}
+                  title=""
+                  description=""
+                />
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void saveFaultCorrections()}
+                    disabled={saving || faultCorrections.length === 0}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Save Fault Corrections
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openCloseOutModalFromExisting}
+                    disabled={saving}
+                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={16} />
+                    Complete / Close Out Job
+                  </button>
+                </div>
               </section>
+
+              <CondensedAssetCard
+                assetTitle={assetTitle}
+                assetType={assetType}
+                assetHref={assetHref}
+                job={job}
+                vehicle={vehicle}
+                plant={plant}
+              />
             </>
           )}
         </div>
@@ -1776,8 +1540,8 @@ export default function FleetJobDetailPage() {
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">
               {isClosed
-                ? "This job is closed. Progress controls are locked; use the actions below to reopen or edit the close-out record."
-                : "Track progress here while the job is active. Once closed, progress updates are locked so the job record stays clean."}
+                ? "Progress controls are locked. Reopen only if further action is required."
+                : "Update job ownership and progress without affecting the final close-out date."}
             </p>
 
             {isClosed ? (
@@ -1796,8 +1560,8 @@ export default function FleetJobDetailPage() {
                   </p>
                   <p className="mt-1">
                     {closedWithoutAssetHistory
-                      ? "The linked repair, modification or service record appears to have been deleted from the asset view page. Reopen this job to record the asset history again."
-                      : "Progress updates are locked. Reopen the job if further work is required, or open the linked Fleet Job close-out record below."}
+                      ? "The linked repair, modification or service record appears to have been deleted from the asset view page."
+                      : "Use edit close-out if the final record needs correcting, or reopen if new work is required."}
                   </p>
                 </div>
 
@@ -1830,11 +1594,7 @@ export default function FleetJobDetailPage() {
                     disabled={saving}
                     className="inline-flex min-h-11 items-center justify-center gap-2 border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {saving ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Wrench size={16} />
-                    )}
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
                     Reopen Job
                   </button>
 
@@ -1845,9 +1605,7 @@ export default function FleetJobDetailPage() {
                     className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Settings size={16} />
-                    {assetHistoryRecord
-                      ? "Edit Close-out Record"
-                      : "Record Asset History Again"}
+                    {assetHistoryRecord ? "Edit Close-out Record" : "Record Asset History Again"}
                   </button>
 
                   {latestCloseOutUpdate ? (
@@ -1864,229 +1622,219 @@ export default function FleetJobDetailPage() {
                 </div>
               </div>
             ) : (
-              <>
-                <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-                  Fleet Jobs are for notification and progress tracking. Closing
-                  this job will create a repair, modification or service record
-                  against the asset.
-                </div>
-
-                <div className="mt-5 grid gap-4">
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Status
-                    <select
-                      value={status}
-                      onChange={(event) => setStatus(event.target.value)}
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    >
-                      {statuses
-                        .filter(
-                          (item) => item !== "Completed" && item !== "Closed",
-                        )
-                        .map((item) => (
-                          <option key={item}>{item}</option>
-                        ))}
-                    </select>
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Priority
-                    <select
-                      value={priority}
-                      onChange={(event) => setPriority(event.target.value)}
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    >
-                      {priorities.map((item) => (
+              <div className="mt-5 grid gap-4">
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Status
+                  <select
+                    value={status}
+                    onChange={(event) => setStatus(event.target.value)}
+                    className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                  >
+                    {statuses
+                      .filter((item) => item !== "Completed" && item !== "Closed")
+                      .map((item) => (
                         <option key={item}>{item}</option>
                       ))}
-                    </select>
-                  </label>
+                  </select>
+                </label>
 
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Assigned To
-                    <input
-                      value={assignedTo}
-                      onChange={(event) => setAssignedTo(event.target.value)}
-                      placeholder="Employee, mechanic or responsible person"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Vendor / Mechanic
-                    <input
-                      value={vendor}
-                      onChange={(event) => setVendor(event.target.value)}
-                      placeholder="Workshop, supplier or mechanic"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Completed Date
-                    <input
-                      type="date"
-                      value={completedDate}
-                      onChange={(event) => setCompletedDate(event.target.value)}
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Cost Estimate / Cost
-                    <input
-                      type="number"
-                      value={cost}
-                      onChange={(event) => setCost(event.target.value)}
-                      placeholder="0.00"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Progress Update
-                    <textarea
-                      value={progressUpdate}
-                      onChange={(event) =>
-                        setProgressUpdate(event.target.value)
-                      }
-                      rows={4}
-                      placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
-                      className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                    />
-                  </label>
-
-                  <button
-                    type="button"
-                    onClick={() => void saveProgressUpdate()}
-                    disabled={saving}
-                    className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Priority
+                  <select
+                    value={priority}
+                    onChange={(event) => setPriority(event.target.value)}
+                    className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
                   >
-                    {saving ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Save size={16} />
-                    )}
-                    Save Progress Update
-                  </button>
+                    {priorities.map((item) => (
+                      <option key={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFaultCorrections(buildFaultCorrectionsFromFailedItems(failedItems));
-                      setShowCloseOutModal(true);
-                    }}
-                    disabled={saving}
-                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <CheckCircle2 size={16} />
-                    Complete / Close Out Job
-                  </button>
-                </div>
-              </>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Assigned To
+                  <input
+                    value={assignedTo}
+                    onChange={(event) => setAssignedTo(event.target.value)}
+                    placeholder="Employee, mechanic or responsible person"
+                    className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                  />
+                </label>
+
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Vendor / Mechanic
+                  <input
+                    value={vendor}
+                    onChange={(event) => setVendor(event.target.value)}
+                    placeholder="Workshop, supplier or mechanic"
+                    className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                  />
+                </label>
+
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Cost Estimate / Cost
+                  <input
+                    type="number"
+                    value={cost}
+                    onChange={(event) => setCost(event.target.value)}
+                    placeholder="0.00"
+                    className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                  />
+                </label>
+
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Progress Update
+                  <textarea
+                    value={progressUpdate}
+                    onChange={(event) => setProgressUpdate(event.target.value)}
+                    rows={4}
+                    placeholder="Example: Booked with mechanic, parts ordered, waiting on workshop availability..."
+                    className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => void saveProgressUpdate()}
+                  disabled={saving}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  Save Progress Update
+                </button>
+              </div>
             )}
           </section>
 
           <section className="border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
-              <CheckCircle2 size={20} />
-              Job Updates
-            </h2>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
+                  <CheckCircle2 size={20} />
+                  Job Updates
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  {isClosed
+                    ? "Closed jobs keep the audit trail collapsed so the close-out view stays clean."
+                    : "Progress, correction saves and reopen notes for this fleet job."}
+                </p>
+              </div>
 
-            <div className="mt-4 space-y-3 text-sm">
-              <InfoRow label="Current Status" value={displayStatus} />
-              <InfoRow
-                label="Completed Date"
-                value={dateDisplay(job.completed_date)}
-              />
-              <InfoRow label="Vendor" value={job.vendor || "N/A"} />
-              <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
-              <InfoRow
-                label="Last Updated"
-                value={dateDisplay(job.updated_at)}
-              />
+              {isClosed ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowClosedJobUpdates((current) => !current)
+                  }
+                  className="shrink-0 border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                >
+                  {showClosedJobUpdates ? "Hide Updates" : `Show Updates (${jobUpdateCount})`}
+                </button>
+              ) : null}
             </div>
 
-            {closedWithoutAssetHistory ? (
-              <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                <p className="font-black">Asset history record missing</p>
-                <p className="mt-1">
-                  This job is marked as closed, but the linked asset history
-                  record has been deleted or cannot be found. The stale
-                  close-out entry is hidden below. Reopen the job or record the
-                  asset history again.
-                </p>
+            {isClosed && !showClosedJobUpdates ? (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <InfoRow label="Current Status" value={displayStatus} />
+                  <InfoRow label="Completed Date" value={dateDisplay(job.completed_date)} />
+                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
+                  <InfoRow label="Updates" value={jobUpdateCount.toString()} />
+                </div>
               </div>
             ) : null}
 
-            <div className="mt-5 border-t border-slate-200 pt-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Progress / Close-out History
-              </p>
+            {shouldShowJobUpdates ? (
+              <>
+                <div className="mt-4 space-y-3 text-sm">
+                  <InfoRow label="Current Status" value={displayStatus} />
+                  <InfoRow label="Completed Date" value={dateDisplay(job.completed_date)} />
+                  <InfoRow label="Vendor" value={job.vendor || "N/A"} />
+                  <InfoRow label="Cost" value={moneyDisplay(job.cost)} />
+                  <InfoRow label="Last Updated" value={dateDisplay(job.updated_at)} />
+                </div>
 
-              {visibleUpdates.length > 0 ? (
-                <div className="mt-3 space-y-3">
-                  {visibleUpdates.map((update) => (
-                    <div
-                      key={update.id}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-bold text-slate-950">
-                            {update.update_type}
+                {closedWithoutAssetHistory ? (
+                  <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+                    <p className="font-black">Asset history record missing</p>
+                    <p className="mt-1">
+                      This job is marked as closed, but the linked asset history
+                      record has been deleted or cannot be found. The stale
+                      close-out entry is hidden below.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 border-t border-slate-200 pt-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Timeline
+                  </p>
+
+                  {visibleUpdates.length > 0 ? (
+                    <div className="mt-3 space-y-3">
+                      {visibleUpdates.map((update) => (
+                        <div
+                          key={update.id}
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold text-slate-950">
+                                {update.update_type}
+                              </p>
+
+                              {update.status ? (
+                                <p className="mt-1 text-xs font-semibold text-slate-500">
+                                  Status: {update.status}
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <p className="text-right text-xs font-semibold text-slate-500">
+                              {dateTimeDisplay(update.created_at)}
+                            </p>
+                          </div>
+
+                          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {stripFaultCorrectionJson(update.comment)}
                           </p>
 
-                          {update.status ? (
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              Status: {update.status}
-                            </p>
+                          {update.id === latestCloseOutUpdate?.id ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={openCloseOutModalFromExisting}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                              >
+                                <Settings size={13} />
+                                Edit Close-out
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void deleteCloseOutComment()}
+                                className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
+                              >
+                                <Trash2 size={13} />
+                                Delete Close-out Comment
+                              </button>
+                            </div>
                           ) : null}
                         </div>
-
-                        <p className="text-right text-xs font-semibold text-slate-500">
-                          {dateTimeDisplay(update.created_at)}
-                        </p>
-                      </div>
-
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                        {update.comment}
-                      </p>
-
-                      {update.id === latestCloseOutUpdate?.id ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={openCloseOutModalFromExisting}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                          >
-                            <Settings size={13} />
-                            Edit Close-out Comment
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => void deleteCloseOutComment()}
-                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50"
-                          >
-                            <Trash2 size={13} />
-                            Delete Close-out Comment
-                          </button>
-                        </div>
-                      ) : null}
+                      ))}
                     </div>
-                  ))}
+                  ) : job.notes ? (
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                      {job.notes}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm leading-6 text-slate-700">
+                      No progress, correction or close-out comments recorded.
+                    </p>
+                  )}
                 </div>
-              ) : job.notes ? (
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                  {job.notes}
-                </p>
-              ) : (
-                <p className="mt-2 text-sm leading-6 text-slate-700">
-                  No progress or close-out comments recorded.
-                </p>
-              )}
-            </div>
+              </>
+            ) : null}
           </section>
         </aside>
       </section>
@@ -2100,10 +1848,10 @@ export default function FleetJobDetailPage() {
                   Close Out Fleet Job
                 </p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">
-                  Record Asset History
+                  Finalise Asset History
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  This will close the fleet job and create a repair,
+                  Close-out uses the fault correction table and creates a repair,
                   modification or service record against {assetTitle}.
                 </p>
               </div>
@@ -2292,67 +2040,13 @@ export default function FleetJobDetailPage() {
 
               {faultCorrections.length > 0 ? (
                 <section className="md:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-wide text-amber-700">
-                        Fault Correction Table
-                      </p>
-                      <p className="mt-1 text-sm leading-6 text-amber-800">
-                        Reply to each prestart fault so the close-out reads clearly for the mechanic and office review.
-                      </p>
-                    </div>
-
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-amber-700 shadow-sm">
-                      {faultCorrections.length} fault{faultCorrections.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full min-w-[820px] border-collapse bg-white text-sm">
-                      <thead>
-                        <tr className="border-y border-amber-100 bg-amber-50">
-                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
-                            Flagged fault
-                          </th>
-                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
-                            Prestart comment
-                          </th>
-                          <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-amber-700">
-                            Mechanic correction
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {faultCorrections.map((row, index) => (
-                          <tr key={row.id} className="border-b border-amber-50">
-                            <td className="w-[24%] px-3 py-3 align-top font-bold text-slate-950">
-                              {row.fault}
-                            </td>
-                            <td className="w-[32%] px-3 py-3 align-top text-slate-600">
-                              {row.prestart_comment}
-                            </td>
-                            <td className="px-3 py-3 align-top">
-                              <textarea
-                                value={row.correction}
-                                onChange={(event) =>
-                                  setFaultCorrections((current) =>
-                                    current.map((item, currentIndex) =>
-                                      currentIndex === index
-                                        ? { ...item, correction: event.target.value }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                                rows={3}
-                                placeholder="Example: Replaced globe and tested OK..."
-                                className="w-full border border-amber-200 bg-white px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-amber-500"
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <FaultCorrectionTable
+                    corrections={faultCorrections}
+                    editable
+                    onChange={setFaultCorrections}
+                    title="Final Fault Corrections"
+                    description="Every row must have a correction before the job can be closed."
+                  />
                 </section>
               ) : null}
 
@@ -2388,14 +2082,8 @@ export default function FleetJobDetailPage() {
                 disabled={saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <CheckCircle2 size={16} />
-                )}
-                {assetHistoryRecord
-                  ? "Save Close-out Changes"
-                  : "Complete Job & Save Asset History"}
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                {assetHistoryRecord ? "Save Close-out Changes" : "Complete Job & Save Asset History"}
               </button>
             </div>
           </div>
@@ -2405,42 +2093,183 @@ export default function FleetJobDetailPage() {
   );
 }
 
-function SummaryCard({
-  label,
-  value,
-  icon,
-  tone,
+function FaultCorrectionTable({
+  corrections,
+  editable,
+  onChange,
+  title,
+  description,
 }: {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-  tone: Tone;
+  corrections: FaultCorrection[];
+  editable: boolean;
+  onChange?: React.Dispatch<React.SetStateAction<FaultCorrection[]>>;
+  title: string;
+  description: string;
 }) {
-  const toneClass =
-    tone === "emerald"
-      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-      : tone === "amber"
-        ? "border-amber-100 bg-amber-50 text-amber-700"
-        : tone === "rose"
-          ? "border-rose-100 bg-rose-50 text-rose-700"
-          : tone === "blue"
-            ? "border-blue-100 bg-blue-50 text-blue-700"
-            : tone === "violet"
-              ? "border-violet-100 bg-violet-50 text-violet-700"
-              : "border-slate-200 bg-slate-50 text-slate-700";
+  if (corrections.length === 0) {
+    return (
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+        No flagged fault rows were found for this job.
+      </div>
+    );
+  }
 
   return (
-    <div className={`border p-4 shadow-sm ${toneClass}`}>
-      <div className="flex items-center gap-3">
-        <div className="bg-white/70 p-2">{icon}</div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide opacity-70">
-            {label}
-          </p>
-          <p className="mt-1 text-xl font-bold text-slate-950">{value}</p>
+    <div className={title ? "mt-5" : "mt-4"}>
+      {title ? (
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-amber-700">
+              {title}
+            </p>
+            {description ? (
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                {description}
+              </p>
+            ) : null}
+          </div>
+
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-amber-700 shadow-sm">
+            {corrections.length} fault{corrections.length === 1 ? "" : "s"}
+          </span>
         </div>
+      ) : null}
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px] border-collapse bg-white text-sm">
+          <thead>
+            <tr className="border-y border-slate-200 bg-slate-50">
+              <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                Flagged fault
+              </th>
+              <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                Prestart comment
+              </th>
+              <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                Mechanic correction
+              </th>
+              <th className="px-3 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                Status
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {corrections.map((row, index) => (
+              <tr key={row.id} className="border-b border-slate-100">
+                <td className="w-[24%] px-3 py-3 align-top font-bold text-slate-950">
+                  {row.fault}
+                </td>
+                <td className="w-[28%] px-3 py-3 align-top text-slate-600">
+                  {row.prestart_comment}
+                </td>
+                <td className="px-3 py-3 align-top">
+                  {editable ? (
+                    <textarea
+                      value={row.correction}
+                      onChange={(event) =>
+                        onChange?.((current) =>
+                          current.map((item, currentIndex) =>
+                            currentIndex === index
+                              ? { ...item, correction: event.target.value }
+                              : item,
+                          ),
+                        )
+                      }
+                      rows={3}
+                      placeholder="Example: Replaced globe and tested OK..."
+                      className="w-full border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                    />
+                  ) : (
+                    <p className="whitespace-pre-wrap font-semibold text-emerald-800">
+                      {row.correction || "No correction recorded."}
+                    </p>
+                  )}
+                </td>
+                <td className="w-[120px] px-3 py-3 align-top">
+                  {row.correction.trim() ? (
+                    <StatusBadge label="Corrected" tone="emerald" />
+                  ) : (
+                    <StatusBadge label="Open" tone="amber" />
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
+  );
+}
+
+function CondensedAssetCard({
+  assetTitle,
+  assetType,
+  assetHref,
+  job,
+  vehicle,
+  plant,
+}: {
+  assetTitle: string;
+  assetType: "Vehicle" | "Plant";
+  assetHref: string;
+  job: FleetJob;
+  vehicle: VehicleAsset | null;
+  plant: PlantAsset | null;
+}) {
+  return (
+    <section className="border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+            <Truck size={18} />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">Linked Asset</h2>
+            <p className="text-sm text-slate-600">{assetTitle}</p>
+          </div>
+        </div>
+
+        <Link
+          href={assetHref}
+          className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <ExternalLink size={16} />
+          Open Asset
+        </Link>
+      </div>
+
+      <DetailGrid
+        items={[
+          { label: "Asset Type", value: assetType },
+          {
+            label: assetType === "Vehicle" ? "Vehicle ID" : "Asset ID",
+            value:
+              assetType === "Vehicle"
+                ? vehicle?.vehicle_id || "N/A"
+                : plant?.asset_id || "N/A",
+          },
+          {
+            label: "Rego",
+            value:
+              assetType === "Vehicle"
+                ? vehicle?.vehicle_rego || "N/A"
+                : plant?.rego || "N/A",
+          },
+          {
+            label: "Project",
+            value: job.project || vehicle?.project || plant?.project || "N/A",
+          },
+          {
+            label: "Crew",
+            value: job.crew || vehicle?.crew || plant?.crew || "N/A",
+          },
+          { label: "Assigned To", value: job.assigned_to || "N/A" },
+          { label: "Vendor", value: job.vendor || "N/A" },
+          { label: "Updated", value: dateDisplay(job.updated_at) },
+        ]}
+      />
+    </section>
   );
 }
 
