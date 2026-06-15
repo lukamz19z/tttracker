@@ -623,9 +623,9 @@ export default function LiftingGearPage() {
 
         const { error } = await supabase
           .from("equipment_lifting_gear")
-          .upsert(payloads, {
-            onConflict: "serial_id",
-          });
+.upsert(payloads, {
+  onConflict: "serial_id,crew_label",
+});
 
         if (error) {
           alert(`CSV import failed: ${error.message}`);
