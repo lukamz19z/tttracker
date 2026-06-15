@@ -858,21 +858,24 @@ export default function LiftingGearPage() {
               return crew ? crewLabel(crew) : clean(item.crew_label) || "Unallocated";
             },
           },
-          {
-            label: "Status / Tag",
-            render: (item) => (
-              <div className="flex flex-wrap gap-2">
-                <Pill
-                  label={clean(item.status) || "Passed"}
-                  className={statusClass(item.status)}
-                />
-                <Pill
-                  label={clean(item.tag) || "No Tag"}
-                  className={tagClass(item.tag)}
-                />
-              </div>
-            ),
-          },
+{
+  label: "Status",
+  render: (item) => (
+    <Pill
+      label={clean(item.status) || "Passed"}
+      className={statusClass(item.status)}
+    />
+  ),
+},
+{
+  label: "Tag",
+  render: (item) => (
+    <Pill
+      label={clean(item.tag) || "No Tag"}
+      className={tagClass(item.tag)}
+    />
+  ),
+},
           {
             label: "Comment",
             render: (item) => clean(item.comment) || "—",
