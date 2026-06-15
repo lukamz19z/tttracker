@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   ExternalLink,
   Loader2,
@@ -462,6 +464,7 @@ export default function FleetJobDetailPage() {
     "open" | "closed" | null
   >(null);
   const [showCloseOutModal, setShowCloseOutModal] = useState(false);
+  const [showJobDetails, setShowJobDetails] = useState(false);
 
   const [status, setStatus] = useState("Open");
   const [priority, setPriority] = useState("Medium");
@@ -1434,196 +1437,209 @@ export default function FleetJobDetailPage() {
             </>
           ) : (
             <>
-              <section className="border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <section className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setShowJobDetails((current) => !current)}
+                  className="flex w-full items-start justify-between gap-4 p-5 text-left transition hover:bg-slate-50"
+                >
                   <div>
-                    <h2 className="text-lg font-bold text-slate-950">
-                      Job Details & Issues Raised
-                    </h2>
-                    <p className="text-sm text-slate-600">
-                      Job context, original comments and the issues needing
-                      action. Prestart issues are shown here instead of being
-                      repeated in a separate section.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <StatusBadge
-                      label={displayStatus}
-                      tone={toneForStatus(displayStatus)}
-                    />
-                    <StatusBadge
-                      label={job.priority || "Medium"}
-                      tone={toneForPriority(job.priority)}
-                    />
-                    {prestart?.severity ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-bold text-slate-950">
+                        Job Details & Issues Raised
+                      </h2>
                       <StatusBadge
-                        label={prestart.severity.toUpperCase()}
-                        tone={prestart.severity === "major" ? "rose" : "amber"}
+                        label={displayStatus}
+                        tone={toneForStatus(displayStatus)}
                       />
-                    ) : null}
-                  </div>
-                </div>
-
-                <DetailGrid
-                  items={[
-                    { label: "Job Number", value: job.job_number || "N/A" },
-                    { label: "Source", value: job.source || job.source_type || "N/A" },
-                    { label: "Reported", value: dateDisplay(job.reported_date || job.created_at) },
-                    { label: "Reported By", value: job.reported_by || "N/A" },
-                    { label: "Project", value: job.project || vehicle?.project || plant?.project || "N/A" },
-                    { label: "Crew", value: job.crew || vehicle?.crew || plant?.crew || "N/A" },
-                    { label: "Assigned To", value: job.assigned_to || "N/A" },
-                    { label: "Vendor", value: job.vendor || "N/A" },
-                  ]}
-                />
-
-                <div className="mt-5 grid gap-4 border-t border-slate-200 pt-5 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                      Issue Description
-                    </p>
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-                      {job.description || "No description provided."}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                      Prestart Context
-                    </p>
-                    <div className="mt-2 grid gap-2 text-sm text-slate-700">
-                      <InfoRow
-                        label="Prestart Date"
-                        value={dateDisplay(prestart?.prestart_date || prestart?.created_at)}
+                      <StatusBadge
+                        label={job.priority || "Medium"}
+                        tone={toneForPriority(job.priority)}
                       />
-                      <InfoRow
-                        label="Operator"
-                        value={prestart?.employee_name || prestart?.operator_name || job.reported_by || "N/A"}
-                      />
-                      <InfoRow
-                        label="Asset"
-                        value={prestart?.asset_label || job.asset_label || assetTitle}
-                      />
+                      {prestart?.severity ? (
+                        <StatusBadge
+                          label={prestart.severity.toUpperCase()}
+                          tone={prestart.severity === "major" ? "rose" : "amber"}
+                        />
+                      ) : null}
                     </div>
-                    {resolvedPrestartId ? (
-                      <Link
-                        href={prestartHref}
-                        className="mt-4 inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        <ExternalLink size={16} />
-                        Open Prestart
-                      </Link>
-                    ) : null}
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {showJobDetails
+                        ? "Hide the job context, original description and prestart source details."
+                        : "Collapsed to keep the correction workflow front and centre. Open this for the original issue details."}
+                    </p>
                   </div>
-                </div>
+
+                  <div className="mt-1 shrink-0 rounded-xl border border-slate-200 bg-white p-2 text-slate-500">
+                    {showJobDetails ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                  </div>
+                </button>
+
+                {showJobDetails ? (
+                  <div className="border-t border-slate-200 p-5">
+                    <DetailGrid
+                      items={[
+                        { label: "Job Number", value: job.job_number || "N/A" },
+                        { label: "Source", value: job.source || job.source_type || "N/A" },
+                        { label: "Reported", value: dateDisplay(job.reported_date || job.created_at) },
+                        { label: "Reported By", value: job.reported_by || "N/A" },
+                        { label: "Project", value: job.project || vehicle?.project || plant?.project || "N/A" },
+                        { label: "Crew", value: job.crew || vehicle?.crew || plant?.crew || "N/A" },
+                        { label: "Assigned To", value: job.assigned_to || "N/A" },
+                        { label: "Vendor", value: job.vendor || "N/A" },
+                      ]}
+                    />
+
+                    <div className="mt-5 grid gap-4 border-t border-slate-200 pt-5 md:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                          Issue Description
+                        </p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                          {job.description || "No description provided."}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                          Prestart Context
+                        </p>
+                        <div className="mt-2 grid gap-2 text-sm text-slate-700">
+                          <InfoRow
+                            label="Prestart Date"
+                            value={dateDisplay(prestart?.prestart_date || prestart?.created_at)}
+                          />
+                          <InfoRow
+                            label="Operator"
+                            value={prestart?.employee_name || prestart?.operator_name || job.reported_by || "N/A"}
+                          />
+                          <InfoRow
+                            label="Asset"
+                            value={prestart?.asset_label || job.asset_label || assetTitle}
+                          />
+                        </div>
+                        {resolvedPrestartId ? (
+                          <Link
+                            href={prestartHref}
+                            className="mt-4 inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            <ExternalLink size={16} />
+                            Open Prestart
+                          </Link>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
-              <section className="border border-amber-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+              <section className="border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <h2 className="text-lg font-bold text-slate-950">
                       Action & Fault Corrections
                     </h2>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      Manage the job status and reply directly to each flagged
-                      fault. Corrections can be saved progressively, then the job
-                      can be closed once the items are resolved.
+                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+                      Update ownership and reply directly to each fault. Corrections can be saved progressively, then the job can be closed once the outstanding items are resolved.
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge
                       label={displayStatus}
                       tone={toneForStatus(displayStatus)}
                     />
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-black text-slate-700">
                       {progress.done}/{progress.total} corrected
                     </span>
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-4 border-y border-slate-200 bg-slate-50 p-4 md:grid-cols-2 xl:grid-cols-5">
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Status
-                    <select
-                      value={status}
-                      onChange={(event) => setStatus(event.target.value)}
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    >
-                      {statuses
-                        .filter((item) => item !== "Completed" && item !== "Closed")
-                        .map((item) => (
+                <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                      Status
+                      <select
+                        value={status}
+                        onChange={(event) => setStatus(event.target.value)}
+                        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                      >
+                        {statuses
+                          .filter((item) => item !== "Completed" && item !== "Closed")
+                          .map((item) => (
+                            <option key={item}>{item}</option>
+                          ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                      Priority
+                      <select
+                        value={priority}
+                        onChange={(event) => setPriority(event.target.value)}
+                        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
+                      >
+                        {priorities.map((item) => (
                           <option key={item}>{item}</option>
                         ))}
-                    </select>
-                  </label>
+                      </select>
+                    </label>
 
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Priority
-                    <select
-                      value={priority}
-                      onChange={(event) => setPriority(event.target.value)}
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500"
-                    >
-                      {priorities.map((item) => (
-                        <option key={item}>{item}</option>
-                      ))}
-                    </select>
-                  </label>
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                      Assigned To
+                      <input
+                        value={assignedTo}
+                        onChange={(event) => setAssignedTo(event.target.value)}
+                        placeholder="Responsible person"
+                        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                      />
+                    </label>
 
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Assigned To
-                    <input
-                      value={assignedTo}
-                      onChange={(event) => setAssignedTo(event.target.value)}
-                      placeholder="Responsible person"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                    />
-                  </label>
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                      Vendor / Mechanic
+                      <input
+                        value={vendor}
+                        onChange={(event) => setVendor(event.target.value)}
+                        placeholder="Workshop or mechanic"
+                        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                      />
+                    </label>
 
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Vendor / Mechanic
-                    <input
-                      value={vendor}
-                      onChange={(event) => setVendor(event.target.value)}
-                      placeholder="Workshop or mechanic"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                    />
-                  </label>
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                      Cost Estimate / Cost
+                      <input
+                        type="number"
+                        value={cost}
+                        onChange={(event) => setCost(event.target.value)}
+                        placeholder="0.00"
+                        className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                      />
+                    </label>
 
-                  <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                    Cost Estimate / Cost
-                    <input
-                      type="number"
-                      value={cost}
-                      onChange={(event) => setCost(event.target.value)}
-                      placeholder="0.00"
-                      className="min-h-11 border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
-                    />
-                  </label>
+                    <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2 xl:col-span-1">
+                      Progress Note
+                      <textarea
+                        value={progressUpdate}
+                        onChange={(event) => setProgressUpdate(event.target.value)}
+                        rows={3}
+                        placeholder="Optional. Example: Two items corrected, waiting on part..."
+                        className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                      />
+                    </label>
+                  </div>
                 </div>
 
-                <FaultCorrectionTable
-                  corrections={faultCorrections}
-                  editable
-                  onChange={setFaultCorrections}
-                  title=""
-                  description=""
-                />
-
-                <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
-                  Progress Note
-                  <textarea
-                    value={progressUpdate}
-                    onChange={(event) => setProgressUpdate(event.target.value)}
-                    rows={3}
-                    placeholder="Optional. Example: Two items corrected, waiting on part for reverse alarm..."
-                    className="border border-slate-300 bg-white px-3 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500"
+                <div className="mt-5">
+                  <FaultCorrectionTable
+                    corrections={faultCorrections}
+                    editable
+                    onChange={setFaultCorrections}
+                    title="Fault Correction Table"
+                    description="Reply against each original fault so the correction record is easy to review."
                   />
-                </label>
+                </div>
 
-                <div className="mt-4 flex flex-wrap gap-3">
+                <div className="mt-5 flex flex-wrap gap-3 border-t border-slate-200 pt-4">
                   <button
                     type="button"
                     onClick={() => void saveProgressUpdate()}
@@ -1638,10 +1654,10 @@ export default function FleetJobDetailPage() {
                     type="button"
                     onClick={() => void saveFaultCorrections()}
                     disabled={saving || faultCorrections.length === 0}
-                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Save size={16} />
-                    Save Fault Corrections
+                    Save Corrections
                   </button>
 
                   <button
@@ -2074,7 +2090,7 @@ function FaultCorrectionTable({
       {title ? (
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-wide text-amber-700">
+            <p className="text-xs font-black uppercase tracking-wide text-slate-500">
               {title}
             </p>
             {description ? (
@@ -2084,7 +2100,7 @@ function FaultCorrectionTable({
             ) : null}
           </div>
 
-          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-amber-700 shadow-sm">
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-700 shadow-sm">
             {corrections.length} fault{corrections.length === 1 ? "" : "s"}
           </span>
         </div>
