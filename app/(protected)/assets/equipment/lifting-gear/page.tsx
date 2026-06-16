@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
-import { PageHeader, PageShell, RegisterList } from "../../components";
+import { PageHeader, PageShell } from "../../components";
 
 type Crew = {
   id: string;
@@ -57,7 +57,7 @@ type FormState = {
   tag: string;
 };
 
-type BulkTagState = {
+type InspectionUpdateState = {
   tag: string;
   inspected_on: string;
   next_inspection_due: string;
@@ -67,28 +67,6 @@ type BulkTagState = {
 };
 
 type CsvRow = Record<string, string | number | null | undefined>;
-
-const blankForm: FormState = {
-  serial_id: "",
-  equipment_type: "Round Sling",
-  description: "",
-  inspected_on: "",
-  next_inspection_due: "",
-  event_type: "Visual Inspection",
-  comment: "",
-  status: "Passed",
-  crew_id: "",
-  tag: "Blue",
-};
-
-const blankBulkTagForm: BulkTagState = {
-  tag: "Blue",
-  inspected_on: "",
-  next_inspection_due: "",
-  event_type: "Visual Inspection",
-  comment: "Quarterly tag change",
-  status: "Passed",
-};
 
 const equipmentTypeOptions = [
   "Round Sling",
@@ -120,6 +98,28 @@ const eventTypeOptions = [
 
 const statusOptions = ["Passed", "Failed", "Out of Service", "Missing", "Retired"];
 const tagOptions = ["Blue", "Red", "Yellow", "Green"];
+
+const blankForm: FormState = {
+  serial_id: "",
+  equipment_type: "Round Sling",
+  description: "",
+  inspected_on: "",
+  next_inspection_due: "",
+  event_type: "Visual Inspection",
+  comment: "",
+  status: "Passed",
+  crew_id: "",
+  tag: "Blue",
+};
+
+const blankInspectionUpdate: InspectionUpdateState = {
+  tag: "Blue",
+  inspected_on: "",
+  next_inspection_due: "",
+  event_type: "Visual Inspection",
+  comment: "Quarterly inspection / tag change",
+  status: "Passed",
+};
 
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
@@ -154,63 +154,12 @@ function parseCsvDate(value: string | number | null | undefined) {
   if (!raw) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
 
-  const match = raw.match(
-    /^(\d{1,2})[-/ ]([A-Za-z]{3,}|\d{1,2})[-/ ](\d{2,4})$/,
-  );
-
-  if (!match) {
-    const fallback = new Date(raw);
-    return Number.isNaN(fallback.getTime())
-      ? null
-      : fallback.toISOString().slice(0, 10);
+  const fallback = new Date(raw);
+  if (!Number.isNaN(fallback.getTime())) {
+    return fallback.toISOString().slice(0, 10);
   }
 
-  const day = Number(match[1]);
-  const monthRaw = match[2];
-  const yearRaw = Number(match[3]);
-
-  const monthNames: Record<string, number> = {
-    jan: 0,
-    january: 0,
-    feb: 1,
-    february: 1,
-    mar: 2,
-    march: 2,
-    apr: 3,
-    april: 3,
-    may: 4,
-    jun: 5,
-    june: 5,
-    jul: 6,
-    july: 6,
-    aug: 7,
-    august: 7,
-    sep: 8,
-    sept: 8,
-    september: 8,
-    oct: 9,
-    october: 9,
-    nov: 10,
-    november: 10,
-    dec: 11,
-    december: 11,
-  };
-
-  const month =
-    /^\d+$/.test(monthRaw)
-      ? Number(monthRaw) - 1
-      : monthNames[monthRaw.toLowerCase()];
-
-  const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
-
-  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
-    return null;
-  }
-
-  const date = new Date(year, month, day);
-  if (Number.isNaN(date.getTime())) return null;
-
-  return date.toISOString().slice(0, 10);
+  return null;
 }
 
 function getDueStatus(nextInspectionDue: string | null) {
@@ -304,10 +253,10 @@ export default function LiftingGearPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [bulkSaving, setBulkSaving] = useState(false);
+  const [inspectionSaving, setInspectionSaving] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
-  const [showBulkTagForm, setShowBulkTagForm] = useState(false);
+  const [showInspectionForm, setShowInspectionForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
@@ -318,7 +267,8 @@ export default function LiftingGearPage() {
   const [dueFilter, setDueFilter] = useState("All Due");
 
   const [form, setForm] = useState<FormState>(blankForm);
-  const [bulkForm, setBulkForm] = useState<BulkTagState>(blankBulkTagForm);
+  const [inspectionForm, setInspectionForm] =
+    useState<InspectionUpdateState>(blankInspectionUpdate);
 
   const crewById = useMemo(() => {
     return new Map(crews.map((crew) => [crew.id, crew]));
@@ -398,9 +348,7 @@ export default function LiftingGearPage() {
 
     return items.filter((item) => {
       const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-      const crewText = crew
-        ? crewLabel(crew)
-        : clean(item.crew_label) || "Unallocated";
+      const crewText = crew ? crewLabel(crew) : clean(item.crew_label) || "Unallocated";
       const dueStatus = getDueStatus(item.next_inspection_due).label;
 
       const searchable = [
@@ -424,8 +372,7 @@ export default function LiftingGearPage() {
         (equipmentTypeFilter === "All Types" ||
           clean(item.equipment_type) === equipmentTypeFilter) &&
         (crewFilter === "All Crews" || crewText === crewFilter) &&
-        (statusFilter === "All Statuses" ||
-          clean(item.status) === statusFilter) &&
+        (statusFilter === "All Statuses" || clean(item.status) === statusFilter) &&
         (tagFilter === "All Tags" || clean(item.tag) === tagFilter) &&
         (dueFilter === "All Due" || dueStatus === dueFilter)
       );
@@ -460,10 +407,6 @@ export default function LiftingGearPage() {
     .filter(Boolean)
     .join(" | ");
 
-  function printFilteredRegister() {
-    window.print();
-  }
-
   function openAddForm() {
     setEditingId(null);
     setForm(blankForm);
@@ -493,14 +436,18 @@ export default function LiftingGearPage() {
     setShowForm(false);
   }
 
-  function openBulkTagForm() {
-    setBulkForm(blankBulkTagForm);
-    setShowBulkTagForm(true);
+  function openInspectionForm() {
+    setInspectionForm(blankInspectionUpdate);
+    setShowInspectionForm(true);
   }
 
-  function closeBulkTagForm() {
-    setBulkForm(blankBulkTagForm);
-    setShowBulkTagForm(false);
+  function closeInspectionForm() {
+    setInspectionForm(blankInspectionUpdate);
+    setShowInspectionForm(false);
+  }
+
+  function printFilteredRegister() {
+    window.print();
   }
 
   async function handleSave() {
@@ -555,46 +502,44 @@ export default function LiftingGearPage() {
     setSaving(false);
   }
 
-  async function handleBulkTagChange() {
+  async function handleInspectionUpdate() {
     if (filteredItems.length === 0) {
       alert("No filtered items to update.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Apply ${bulkForm.tag} tag to ${filteredItems.length} filtered lifting gear item(s)?`,
+      `Update inspection details for ${filteredItems.length} filtered item(s)?`,
     );
 
     if (!confirmed) return;
 
-    setBulkSaving(true);
-
-    const payload = {
-      tag: clean(bulkForm.tag) || null,
-      inspected_on: clean(bulkForm.inspected_on) || null,
-      next_inspection_due: clean(bulkForm.next_inspection_due) || null,
-      event_type: clean(bulkForm.event_type) || "Visual Inspection",
-      comment: clean(bulkForm.comment) || null,
-      status: clean(bulkForm.status) || "Passed",
-      updated_at: new Date().toISOString(),
-    };
+    setInspectionSaving(true);
 
     const ids = filteredItems.map((item) => item.id);
 
     const { error } = await supabase
       .from("equipment_lifting_gear")
-      .update(payload)
+      .update({
+        tag: clean(inspectionForm.tag) || null,
+        inspected_on: clean(inspectionForm.inspected_on) || null,
+        next_inspection_due: clean(inspectionForm.next_inspection_due) || null,
+        event_type: clean(inspectionForm.event_type) || "Visual Inspection",
+        comment: clean(inspectionForm.comment) || null,
+        status: clean(inspectionForm.status) || "Passed",
+        updated_at: new Date().toISOString(),
+      })
       .in("id", ids);
 
     if (error) {
-      alert(`Bulk tag change failed: ${error.message}`);
-      setBulkSaving(false);
+      alert(`Inspection update failed: ${error.message}`);
+      setInspectionSaving(false);
       return;
     }
 
-    closeBulkTagForm();
+    closeInspectionForm();
     await loadData();
-    setBulkSaving(false);
+    setInspectionSaving(false);
   }
 
   async function handleDelete(item: LiftingGear) {
@@ -771,12 +716,12 @@ export default function LiftingGearPage() {
 
             <button
               type="button"
-              onClick={openBulkTagForm}
+              onClick={openInspectionForm}
               disabled={filteredItems.length === 0}
               className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Tags size={16} />
-              Bulk Tag Change
+              Inspection / Tag Update
             </button>
 
             <button
@@ -929,8 +874,111 @@ export default function LiftingGearPage() {
         </div>
       </section>
 
-      <div className="print-area">
-        <div className="hidden print:block">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm print:hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px] border-collapse text-left">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3">Serial ID</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Description</th>
+                <th className="px-4 py-3">Inspected</th>
+                <th className="px-4 py-3">Next Due</th>
+                <th className="px-4 py-3">Crew</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Tag</th>
+                <th className="px-4 py-3">Comment</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredItems.map((item) => {
+                const crew = item.crew_id ? crewById.get(item.crew_id) : null;
+                const due = getDueStatus(item.next_inspection_due);
+
+                return (
+                  <tr
+                    key={item.id}
+                    className="border-b border-slate-100 text-sm hover:bg-slate-50"
+                  >
+                    <td className="px-4 py-3 font-black text-slate-950">
+                      {item.serial_id}
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">
+                      {clean(item.equipment_type) || "—"}
+                    </td>
+                    <td className="max-w-md px-4 py-3 text-slate-700">
+                      {clean(item.description) || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatShortDate(item.inspected_on)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="space-y-1">
+                        <p className="font-semibold text-slate-800">
+                          {formatShortDate(item.next_inspection_due)}
+                        </p>
+                        <Pill label={due.label} className={due.className} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {crew ? crewLabel(crew) : clean(item.crew_label) || "Unallocated"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Pill
+                        label={clean(item.status) || "Passed"}
+                        className={statusClass(item.status)}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Pill
+                        label={clean(item.tag) || "No Tag"}
+                        className={tagClass(item.tag)}
+                      />
+                    </td>
+                    <td className="max-w-xs px-4 py-3 text-slate-600">
+                      {clean(item.comment) || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditForm(item)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                          <Edit size={14} />
+                          Edit
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handleDelete(item)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100"
+                        >
+                          <Trash2 size={14} />
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!loading && filteredItems.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
+                    No lifting gear found.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="print-area hidden">
+        <div className="mb-4">
           <h1 className="text-xl font-black text-slate-950">
             Lifting Gear Register
           </h1>
@@ -943,212 +991,425 @@ export default function LiftingGearPage() {
           </p>
         </div>
 
-        <RegisterList
-          title="Registered Lifting Gear"
-          description={
-            loading
-              ? "Loading lifting gear..."
-              : `${filteredItems.length} lifting gear items shown`
-          }
-          items={filteredItems}
-          getKey={(item) => item.id}
-          columns={[
-            {
-              label: "Serial ID",
-              render: (item) => (
-                <p className="font-black text-slate-950">{item.serial_id}</p>
-              ),
-            },
-            {
-              label: "Type / Description",
-              render: (item) => (
-                <div>
-                  <p className="font-bold text-slate-950">
-                    {clean(item.equipment_type) || "Equipment"}
-                  </p>
-                  <p className="mt-1 max-w-md whitespace-pre-wrap text-xs font-semibold text-slate-500">
-                    {clean(item.description) || "—"}
-                  </p>
-                </div>
-              ),
-            },
-            {
-              label: "Inspection",
-              render: (item) => {
-                const due = getDueStatus(item.next_inspection_due);
+        <table className="w-full border-collapse text-left text-[10px]">
+          <thead>
+            <tr>
+              <th>Serial ID</th>
+              <th>Type</th>
+              <th>Description</th>
+              <th>Inspected</th>
+              <th>Next Due</th>
+              <th>Status</th>
+              <th>Crew</th>
+              <th>Tag</th>
+            </tr>
+          </thead>
 
-                return (
-                  <div>
-                    <p className="font-semibold text-slate-950">
-                      Due: {formatShortDate(item.next_inspection_due)}
-                    </p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">
-                      Inspected: {formatShortDate(item.inspected_on)}
-                    </p>
-                    <div className="mt-1">
-                      <Pill label={due.label} className={due.className} />
-                    </div>
-                  </div>
-                );
-              },
-            },
-            {
-              label: "Crew",
-              render: (item) => {
-                const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-                return crew
-                  ? crewLabel(crew)
-                  : clean(item.crew_label) || "Unallocated";
-              },
-            },
-            {
-              label: "Status",
-              render: (item) => (
-                <Pill
-                  label={clean(item.status) || "Passed"}
-                  className={statusClass(item.status)}
-                />
-              ),
-            },
-            {
-              label: "Tag",
-              render: (item) => (
-                <Pill
-                  label={clean(item.tag) || "No Tag"}
-                  className={tagClass(item.tag)}
-                />
-              ),
-            },
-            {
-              label: "Comment",
-              render: (item) => clean(item.comment) || "—",
-            },
-            {
-              label: "Actions",
-              render: (item) => (
-                <div className="flex flex-wrap gap-2 print:hidden">
-                  <button
-                    type="button"
-                    onClick={() => openEditForm(item)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                  >
-                    <Edit size={14} />
-                    Edit
-                  </button>
+          <tbody>
+            {filteredItems.map((item) => {
+              const crew = item.crew_id ? crewById.get(item.crew_id) : null;
 
-                  <button
-                    type="button"
-                    onClick={() => void handleDelete(item)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100"
-                  >
-                    <Trash2 size={14} />
-                    Delete
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-          renderMobile={(item) => {
-            const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-            const due = getDueStatus(item.next_inspection_due);
+              return (
+                <tr key={item.id}>
+                  <td>{clean(item.serial_id) || "-"}</td>
+                  <td>{clean(item.equipment_type) || "-"}</td>
+                  <td>{clean(item.description) || "-"}</td>
+                  <td>{clean(item.inspected_on) || "-"}</td>
+                  <td>{clean(item.next_inspection_due) || "-"}</td>
+                  <td>{clean(item.status) || "Passed"}</td>
+                  <td>{crew ? crewLabel(crew) : clean(item.crew_label) || "-"}</td>
+                  <td>{clean(item.tag) || "-"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
 
-            return (
-              <div className="space-y-4 rounded-2xl border border-slate-100 bg-white p-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-black text-slate-950">{item.serial_id}</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-600">
-                      {clean(item.equipment_type) || "Equipment"}
-                    </p>
-                  </div>
-
-                  <Pill
-                    label={clean(item.status) || "Passed"}
-                    className={statusClass(item.status)}
-                  />
-                </div>
-
-                <p className="whitespace-pre-wrap text-sm font-semibold text-slate-700">
-                  {clean(item.description) || "—"}
-                </p>
-
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-xs font-bold uppercase text-slate-400">
-                      Due
-                    </p>
-                    <p className="font-semibold text-slate-800">
-                      {formatShortDate(item.next_inspection_due)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-bold uppercase text-slate-400">
-                      Due Status
-                    </p>
-                    <div className="mt-1">
-                      <Pill label={due.label} className={due.className} />
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-bold uppercase text-slate-400">
-                      Crew
-                    </p>
-                    <p className="font-semibold text-slate-800">
-                      {crew
-                        ? crewLabel(crew)
-                        : clean(item.crew_label) || "Unallocated"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-bold uppercase text-slate-400">
-                      Tag
-                    </p>
-                    <div className="mt-1">
-                      <Pill
-                        label={clean(item.tag) || "No Tag"}
-                        className={tagClass(item.tag)}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2 print:hidden">
-                  <button
-                    type="button"
-                    onClick={() => openEditForm(item)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-                  >
-                    <Edit size={14} />
-                    Edit
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleDelete(item)}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
-                  >
-                    <Trash2 size={14} />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            );
-          }}
-        />
-      </div>
-
-      {showBulkTagForm ? (
+      {showInspectionForm ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4 print:hidden">
-          {/* keep your existing bulk modal body here */}
+          <div className="mx-auto my-6 w-full max-w-2xl rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                  Inspection / Tag Update
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  Update Filtered Items
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  This will update{" "}
+                  <span className="font-black text-slate-950">
+                    {filteredItems.length}
+                  </span>{" "}
+                  item(s) currently shown.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeInspectionForm}
+                className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-5 p-5">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800">
+                Filter first by crew, equipment type, status or current tag. This lets
+                you update quarterly tags, inspection dates, due dates, and mark failed
+                items in one action.
+              </div>
+
+              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    New Tag Colour
+                    <select
+                      value={inspectionForm.tag}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          tag: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {tagOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Inspection Result / Status
+                    <select
+                      value={inspectionForm.status}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          status: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {statusOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Inspected On
+                    <input
+                      type="date"
+                      value={inspectionForm.inspected_on}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          inspected_on: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Next Inspection Due
+                    <input
+                      type="date"
+                      value={inspectionForm.next_inspection_due}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          next_inspection_due: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                    Event Type
+                    <select
+                      value={inspectionForm.event_type}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          event_type: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {eventTypeOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                    Comment
+                    <textarea
+                      value={inspectionForm.comment}
+                      onChange={(event) =>
+                        setInspectionForm((current) => ({
+                          ...current,
+                          comment: event.target.value,
+                        }))
+                      }
+                      rows={4}
+                      placeholder="e.g. Quarterly inspection completed. Failed items tagged out."
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 rounded-b-3xl border-t border-slate-200 bg-white p-5">
+              <button
+                type="button"
+                onClick={closeInspectionForm}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleInspectionUpdate()}
+                disabled={inspectionSaving || filteredItems.length === 0}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+              >
+                <Save size={16} />
+                {inspectionSaving
+                  ? "Updating..."
+                  : `Update ${filteredItems.length} Item(s)`}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
       {showForm ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4 print:hidden">
-          {/* keep your existing add/edit modal body here */}
+          <div className="mx-auto my-6 w-full max-w-4xl rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">
+                  {editingId ? "Edit Lifting Gear" : "New Lifting Gear"}
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  {editingId ? "Update Lifting Gear" : "Add Lifting Gear"}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeForm}
+                className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-5 p-5">
+              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Serial ID
+                    <input
+                      value={form.serial_id}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          serial_id: event.target.value,
+                        }))
+                      }
+                      placeholder="e.g. 17707931"
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Equipment Type
+                    <select
+                      value={form.equipment_type}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          equipment_type: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {equipmentTypeOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                    Description
+                    <textarea
+                      value={form.description}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          description: event.target.value,
+                        }))
+                      }
+                      rows={4}
+                      placeholder="e.g. LEGEND 3T (yellow) 6.0MT"
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Inspected On
+                    <input
+                      type="date"
+                      value={form.inspected_on}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          inspected_on: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Next Inspection Due
+                    <input
+                      type="date"
+                      value={form.next_inspection_due}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          next_inspection_due: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Event Type
+                    <select
+                      value={form.event_type}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          event_type: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {eventTypeOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Status
+                    <select
+                      value={form.status}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          status: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {statusOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Crew
+                    <select
+                      value={form.crew_id}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          crew_id: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      <option value="">Unallocated</option>
+                      {crews.map((crew) => (
+                        <option key={crew.id} value={crew.id}>
+                          {crewLabel(crew)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Tag Colour
+                    <select
+                      value={form.tag}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          tag: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    >
+                      {tagOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                    Comment
+                    <textarea
+                      value={form.comment}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          comment: event.target.value,
+                        }))
+                      }
+                      rows={4}
+                      placeholder="Optional comments..."
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none"
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 rounded-b-3xl border-t border-slate-200 bg-white p-5">
+              <button
+                type="button"
+                onClick={closeForm}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+              >
+                <Save size={16} />
+                {saving ? "Saving..." : editingId ? "Save Changes" : "Save Item"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -1164,23 +1425,73 @@ export default function LiftingGearPage() {
           }
 
           .print-area {
+            display: block !important;
             position: absolute;
             left: 0;
             top: 0;
             width: 100%;
-            padding: 16px;
+            padding: 12px;
             background: white;
           }
 
-          .print-area button,
-          .print-area [role="button"],
-          .print\\:hidden {
-            display: none !important;
+          .print-area table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+          }
+
+          .print-area th,
+          .print-area td {
+            border: 1px solid #cbd5e1;
+            padding: 4px 5px;
+            vertical-align: top;
+            line-height: 1.25;
+            word-break: break-word;
+          }
+
+          .print-area th {
+            background: #f1f5f9;
+            font-weight: 800;
+            text-transform: uppercase;
+          }
+
+          .print-area td:nth-child(3),
+          .print-area th:nth-child(3) {
+            width: 28%;
+          }
+
+          .print-area td:nth-child(1),
+          .print-area th:nth-child(1) {
+            width: 11%;
+          }
+
+          .print-area td:nth-child(2),
+          .print-area th:nth-child(2) {
+            width: 13%;
+          }
+
+          .print-area td:nth-child(4),
+          .print-area th:nth-child(4),
+          .print-area td:nth-child(5),
+          .print-area th:nth-child(5) {
+            width: 10%;
+          }
+
+          .print-area td:nth-child(6),
+          .print-area th:nth-child(6) {
+            width: 10%;
+          }
+
+          .print-area td:nth-child(7),
+          .print-area th:nth-child(7),
+          .print-area td:nth-child(8),
+          .print-area th:nth-child(8) {
+            width: 7%;
           }
 
           @page {
             size: landscape;
-            margin: 10mm;
+            margin: 8mm;
           }
         }
       `}</style>
