@@ -4,6 +4,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   Download,
   Edit,
   Plus,
@@ -34,6 +36,7 @@ type Generator = {
   current_hours: number | null;
   last_service_date: string | null;
   next_service_due_hours: number | null;
+  prestart_frequency: string | null;
   crew_id: string | null;
   status: string | null;
   notes: string | null;
@@ -42,35 +45,37 @@ type Generator = {
 };
 
 type FormState = {
+  last_service_date: string;
+  prestart_frequency: string;
+  crew_id: string;
+  status: string;
+  notes: string;
   make: string;
   model: string;
   serial_number: string;
   kva: string;
   fuel_type: string;
   current_hours: string;
-  last_service_date: string;
   next_service_due_hours: string;
-  crew_id: string;
-  status: string;
-  notes: string;
 };
 
 const blankForm: FormState = {
+  last_service_date: "",
+  prestart_frequency: "Weekly",
+  crew_id: "",
+  status: "Active",
+  notes: "",
   make: "",
   model: "",
   serial_number: "",
   kva: "",
   fuel_type: "Diesel",
   current_hours: "",
-  last_service_date: "",
   next_service_due_hours: "",
-  crew_id: "",
-  status: "Active",
-  notes: "",
 };
 
+const frequencyOptions = ["Weekly", "Monthly", "Not Required"];
 const fuelTypeOptions = ["Diesel", "Petrol", "Other"];
-
 const statusOptions = ["Active", "Out of Service", "Missing", "Retired"];
 
 function clean(value: string | number | null | undefined) {
@@ -98,9 +103,7 @@ function formatShortDate(value: string | null) {
 
 function toNumberOrNull(value: string) {
   const number = Number(value);
-
   if (!value || Number.isNaN(number)) return null;
-
   return number;
 }
 
@@ -116,45 +119,84 @@ function getNextGeneratorNumber(items: Generator[]) {
   return `GEN-${String(highest + 1).padStart(3, "0")}`;
 }
 
-function getServiceStatus(currentHours: number | null, nextServiceDueHours: number | null) {
-  if (currentHours === null || nextServiceDueHours === null) {
-    return {
-      label: "No Service Setup",
-      className: "border-slate-200 bg-slate-50 text-slate-700",
-    };
-  }
-
-  const hoursRemaining = nextServiceDueHours - currentHours;
-
-  if (hoursRemaining < 0) {
-    return {
-      label: "Overdue",
-      className: "border-rose-200 bg-rose-50 text-rose-700",
-    };
-  }
-
-  if (hoursRemaining <= 25) {
-    return {
-      label: "Due Soon",
-      className: "border-amber-200 bg-amber-50 text-amber-700",
-    };
-  }
-
-  return {
-    label: "Current",
-    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  };
-}
-
 function statusClass(status: string | null) {
   const value = clean(status).toLowerCase();
 
-  if (value === "active") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (value === "out of service") return "border-rose-200 bg-rose-50 text-rose-700";
-  if (value === "missing") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (value === "retired") return "border-slate-200 bg-slate-50 text-slate-700";
+  if (value === "active") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (value === "out of service") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (value === "missing") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  if (value === "retired") {
+    return "border-slate-200 bg-slate-50 text-slate-700";
+  }
 
   return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function frequencyClass(frequency: string | null) {
+  const value = clean(frequency).toLowerCase();
+
+  if (value === "weekly") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  if (value === "monthly") {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+
+  if (value === "not required") {
+    return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function serviceClass(lastServiceDate: string | null) {
+  if (!lastServiceDate) {
+    return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const lastService = new Date(`${lastServiceDate}T00:00:00`);
+  const diffDays = Math.floor(
+    (today.getTime() - lastService.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
+  if (diffDays > 180) {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+
+  if (diffDays > 90) {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function serviceLabel(lastServiceDate: string | null) {
+  if (!lastServiceDate) return "No service date";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const lastService = new Date(`${lastServiceDate}T00:00:00`);
+  const diffDays = Math.floor(
+    (today.getTime() - lastService.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
+  if (diffDays > 180) return "Review service";
+  if (diffDays > 90) return "Service ageing";
+  return "Recently serviced";
 }
 
 function Pill({ label, className }: { label: string; className: string }) {
@@ -177,13 +219,13 @@ export default function GeneratorsPage() {
   const [saving, setSaving] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [crewFilter, setCrewFilter] = useState("All Crews");
   const [statusFilter, setStatusFilter] = useState("All Statuses");
-  const [fuelFilter, setFuelFilter] = useState("All Fuel Types");
-  const [serviceFilter, setServiceFilter] = useState("All Service");
+  const [frequencyFilter, setFrequencyFilter] = useState("All Frequencies");
 
   const [form, setForm] = useState<FormState>(blankForm);
 
@@ -245,10 +287,6 @@ export default function GeneratorsPage() {
     return items.filter((item) => {
       const crew = item.crew_id ? crewById.get(item.crew_id) : null;
       const crewText = crew ? crewLabel(crew) : "Unallocated";
-      const serviceStatus = getServiceStatus(
-        item.current_hours,
-        item.next_service_due_hours,
-      ).label;
 
       const searchable = [
         item.generator_number,
@@ -258,11 +296,12 @@ export default function GeneratorsPage() {
         item.kva,
         item.fuel_type,
         item.current_hours,
+        item.last_service_date,
         item.next_service_due_hours,
+        item.prestart_frequency,
         item.status,
         item.notes,
         crewText,
-        serviceStatus,
       ]
         .join(" ")
         .toLowerCase();
@@ -271,29 +310,27 @@ export default function GeneratorsPage() {
         searchable.includes(term) &&
         (crewFilter === "All Crews" || crewText === crewFilter) &&
         (statusFilter === "All Statuses" || clean(item.status) === statusFilter) &&
-        (fuelFilter === "All Fuel Types" || clean(item.fuel_type) === fuelFilter) &&
-        (serviceFilter === "All Service" || serviceStatus === serviceFilter)
+        (frequencyFilter === "All Frequencies" ||
+          clean(item.prestart_frequency) === frequencyFilter)
       );
     });
-  }, [
-    items,
-    search,
-    crewFilter,
-    statusFilter,
-    fuelFilter,
-    serviceFilter,
-    crewById,
-  ]);
+  }, [items, search, crewFilter, statusFilter, frequencyFilter, crewById]);
 
   function openAddForm() {
     setEditingId(null);
     setForm(blankForm);
+    setMoreDetailsOpen(false);
     setShowForm(true);
   }
 
   function openEditForm(item: Generator) {
     setEditingId(item.id);
     setForm({
+      last_service_date: clean(item.last_service_date),
+      prestart_frequency: clean(item.prestart_frequency) || "Weekly",
+      crew_id: clean(item.crew_id),
+      status: clean(item.status) || "Active",
+      notes: clean(item.notes),
       make: clean(item.make),
       model: clean(item.model),
       serial_number: clean(item.serial_number),
@@ -303,22 +340,20 @@ export default function GeneratorsPage() {
         item.current_hours === null || item.current_hours === undefined
           ? ""
           : String(item.current_hours),
-      last_service_date: clean(item.last_service_date),
       next_service_due_hours:
         item.next_service_due_hours === null ||
         item.next_service_due_hours === undefined
           ? ""
           : String(item.next_service_due_hours),
-      crew_id: clean(item.crew_id),
-      status: clean(item.status) || "Active",
-      notes: clean(item.notes),
     });
+    setMoreDetailsOpen(false);
     setShowForm(true);
   }
 
   function closeForm() {
     setEditingId(null);
     setForm(blankForm);
+    setMoreDetailsOpen(false);
     setShowForm(false);
   }
 
@@ -326,17 +361,18 @@ export default function GeneratorsPage() {
     setSaving(true);
 
     const payload = {
+      last_service_date: clean(form.last_service_date) || null,
+      prestart_frequency: clean(form.prestart_frequency) || "Weekly",
+      crew_id: clean(form.crew_id) || null,
+      status: clean(form.status) || "Active",
+      notes: clean(form.notes) || null,
       make: clean(form.make) || null,
       model: clean(form.model) || null,
       serial_number: clean(form.serial_number) || null,
       kva: clean(form.kva) || null,
       fuel_type: clean(form.fuel_type) || null,
       current_hours: toNumberOrNull(form.current_hours),
-      last_service_date: clean(form.last_service_date) || null,
       next_service_due_hours: toNumberOrNull(form.next_service_due_hours),
-      crew_id: clean(form.crew_id) || null,
-      status: clean(form.status) || "Active",
-      notes: clean(form.notes) || null,
       updated_at: new Date().toISOString(),
     };
 
@@ -391,19 +427,19 @@ export default function GeneratorsPage() {
 
   function exportCsv() {
     const headers = [
-      "Generator Number",
+      "Asset ID",
+      "Last Service",
+      "Prestart Frequency",
+      "Crew",
+      "Status",
+      "Notes",
       "Make",
       "Model",
       "Serial Number",
       "kVA",
       "Fuel Type",
       "Current Hours",
-      "Last Service Date",
       "Next Service Due Hours",
-      "Service Status",
-      "Crew",
-      "Status",
-      "Notes",
     ];
 
     const rows = filteredItems.map((item) => {
@@ -411,18 +447,18 @@ export default function GeneratorsPage() {
 
       return [
         clean(item.generator_number),
+        clean(item.last_service_date),
+        clean(item.prestart_frequency),
+        crew ? crewLabel(crew) : "Unallocated",
+        clean(item.status) || "Active",
+        clean(item.notes),
         clean(item.make),
         clean(item.model),
         clean(item.serial_number),
         clean(item.kva),
         clean(item.fuel_type),
         clean(item.current_hours),
-        clean(item.last_service_date),
         clean(item.next_service_due_hours),
-        getServiceStatus(item.current_hours, item.next_service_due_hours).label,
-        crew ? crewLabel(crew) : "Unallocated",
-        clean(item.status) || "Active",
-        clean(item.notes),
       ];
     });
 
@@ -451,7 +487,7 @@ export default function GeneratorsPage() {
       <PageHeader
         eyebrow="Equipment Register"
         title="Generators"
-        description="Track generator IDs, serial numbers, kVA, fuel type, service hours and crew allocation."
+        description="Track generator asset IDs, last service, prestart frequency, crew allocation and status."
         actions={
           <div className="flex flex-wrap gap-2">
             <button
@@ -512,8 +548,8 @@ export default function GeneratorsPage() {
             </p>
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-5">
-            <div className="relative md:col-span-1">
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="relative">
               <Search
                 size={16}
                 className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
@@ -521,7 +557,7 @@ export default function GeneratorsPage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search GEN number, make, model..."
+                placeholder="Search GEN number, crew, notes..."
                 className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
               />
             </div>
@@ -548,26 +584,14 @@ export default function GeneratorsPage() {
             </select>
 
             <select
-              value={fuelFilter}
-              onChange={(event) => setFuelFilter(event.target.value)}
+              value={frequencyFilter}
+              onChange={(event) => setFrequencyFilter(event.target.value)}
               className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
             >
-              <option>All Fuel Types</option>
-              {fuelTypeOptions.map((option) => (
+              <option>All Frequencies</option>
+              {frequencyOptions.map((option) => (
                 <option key={option}>{option}</option>
               ))}
-            </select>
-
-            <select
-              value={serviceFilter}
-              onChange={(event) => setServiceFilter(event.target.value)}
-              className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-            >
-              <option>All Service</option>
-              <option>Current</option>
-              <option>Due Soon</option>
-              <option>Overdue</option>
-              <option>No Service Setup</option>
             </select>
           </div>
         </div>
@@ -584,61 +608,46 @@ export default function GeneratorsPage() {
         getKey={(item) => item.id}
         columns={[
           {
-            label: "Generator",
+            label: "Asset ID",
             render: (item) => (
               <div>
                 <p className="font-black text-slate-950">
                   {item.generator_number}
                 </p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {[clean(item.make), clean(item.model)].filter(Boolean).join(" ") ||
-                    "No make/model"}
-                </p>
+                {(clean(item.make) || clean(item.model) || clean(item.serial_number)) ? (
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {[clean(item.make), clean(item.model), clean(item.serial_number)]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                ) : null}
               </div>
             ),
           },
           {
-            label: "Serial / kVA",
+            label: "Last Service",
             render: (item) => (
               <div>
                 <p className="font-semibold text-slate-950">
-                  {clean(item.serial_number) || "No serial"}
+                  {formatShortDate(item.last_service_date)}
                 </p>
-                <p className="mt-1 text-xs font-semibold text-slate-500">
-                  {clean(item.kva) ? `${clean(item.kva)} kVA` : "No kVA"}
-                </p>
+                <div className="mt-1">
+                  <Pill
+                    label={serviceLabel(item.last_service_date)}
+                    className={serviceClass(item.last_service_date)}
+                  />
+                </div>
               </div>
             ),
           },
           {
-            label: "Fuel",
-            render: (item) => clean(item.fuel_type) || "—",
-          },
-          {
-            label: "Service",
-            render: (item) => {
-              const service = getServiceStatus(
-                item.current_hours,
-                item.next_service_due_hours,
-              );
-
-              return (
-                <div>
-                  <p className="font-semibold text-slate-950">
-                    {item.current_hours ?? "—"} hrs
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Due: {item.next_service_due_hours ?? "—"} hrs
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Last service: {formatShortDate(item.last_service_date)}
-                  </p>
-                  <div className="mt-1">
-                    <Pill label={service.label} className={service.className} />
-                  </div>
-                </div>
-              );
-            },
+            label: "Prestart Frequency",
+            render: (item) => (
+              <Pill
+                label={clean(item.prestart_frequency) || "Weekly"}
+                className={frequencyClass(item.prestart_frequency)}
+              />
+            ),
           },
           {
             label: "Crew",
@@ -687,10 +696,6 @@ export default function GeneratorsPage() {
         ]}
         renderMobile={(item) => {
           const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-          const service = getServiceStatus(
-            item.current_hours,
-            item.next_service_due_hours,
-          );
 
           return (
             <div className="space-y-4 rounded-2xl border border-slate-100 bg-white p-1">
@@ -700,8 +705,7 @@ export default function GeneratorsPage() {
                     {item.generator_number}
                   </p>
                   <p className="mt-1 text-sm font-semibold text-slate-600">
-                    {[clean(item.make), clean(item.model)].filter(Boolean).join(" ") ||
-                      "No make/model"}
+                    {crew ? crewLabel(crew) : "Unallocated"}
                   </p>
                 </div>
 
@@ -714,65 +718,32 @@ export default function GeneratorsPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Serial
+                    Last Service
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {clean(item.serial_number) || "—"}
+                    {formatShortDate(item.last_service_date)}
                   </p>
                 </div>
 
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    kVA
+                    Prestart
                   </p>
-                  <p className="font-semibold text-slate-800">
-                    {clean(item.kva) || "—"}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">
-                    Fuel
-                  </p>
-                  <p className="font-semibold text-slate-800">
-                    {clean(item.fuel_type) || "—"}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">
-                    Crew
-                  </p>
-                  <p className="font-semibold text-slate-800">
-                    {crew ? crewLabel(crew) : "Unallocated"}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">
-                    Current Hours
-                  </p>
-                  <p className="font-semibold text-slate-800">
-                    {item.current_hours ?? "—"}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">
-                    Service Due
-                  </p>
-                  <p className="font-semibold text-slate-800">
-                    {item.next_service_due_hours ?? "—"}
-                  </p>
+                  <div className="mt-1">
+                    <Pill
+                      label={clean(item.prestart_frequency) || "Weekly"}
+                      className={frequencyClass(item.prestart_frequency)}
+                    />
+                  </div>
                 </div>
 
                 <div className="col-span-2">
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Service Status
+                    Notes
                   </p>
-                  <div className="mt-1">
-                    <Pill label={service.label} className={service.className} />
-                  </div>
+                  <p className="font-semibold text-slate-800">
+                    {clean(item.notes) || "—"}
+                  </p>
                 </div>
               </div>
 
@@ -802,7 +773,7 @@ export default function GeneratorsPage() {
 
       {showForm ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 p-4">
-          <div className="mx-auto my-6 w-full max-w-4xl rounded-3xl bg-white shadow-2xl">
+          <div className="mx-auto my-6 w-full max-w-3xl rounded-3xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
               <div>
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">
@@ -813,7 +784,7 @@ export default function GeneratorsPage() {
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
                   {editingId
-                    ? "Update generator details, service hours and allocation."
+                    ? "Update generator service, prestart frequency and allocation."
                     : `Next asset ID will be ${nextNumber}.`}
                 </p>
               </div>
@@ -831,7 +802,7 @@ export default function GeneratorsPage() {
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Generator Number
+                    Asset ID
                     <input
                       value={
                         editingId
@@ -845,121 +816,7 @@ export default function GeneratorsPage() {
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Serial Number
-                    <input
-                      value={form.serial_number}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          serial_number: event.target.value,
-                        }))
-                      }
-                      placeholder="Enter serial number"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Make
-                    <input
-                      value={form.make}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          make: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. Honda"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Model
-                    <input
-                      value={form.model}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          model: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. EU70is"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    kVA
-                    <input
-                      value={form.kva}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          kva: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 7"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Fuel Type
-                    <select
-                      value={form.fuel_type}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          fuel_type: event.target.value,
-                        }))
-                      }
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    >
-                      {fuelTypeOptions.map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Current Hours
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={form.current_hours}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          current_hours: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 120.5"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Next Service Due Hours
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={form.next_service_due_hours}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          next_service_due_hours: event.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 250"
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Last Service Date
+                    Last Service
                     <input
                       type="date"
                       value={form.last_service_date}
@@ -971,6 +828,24 @@ export default function GeneratorsPage() {
                       }
                       className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                     />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Prestart Frequency
+                    <select
+                      value={form.prestart_frequency}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          prestart_frequency: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                    >
+                      {frequencyOptions.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
+                    </select>
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
@@ -1029,6 +904,147 @@ export default function GeneratorsPage() {
                   </label>
                 </div>
               </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  onClick={() => setMoreDetailsOpen((current) => !current)}
+                  className="flex w-full items-center justify-between gap-3 p-4 text-left"
+                >
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
+                      Optional Generator Details
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Make, model, serial number, kVA, fuel type and hours.
+                    </p>
+                  </div>
+
+                  {moreDetailsOpen ? (
+                    <ChevronUp size={18} />
+                  ) : (
+                    <ChevronDown size={18} />
+                  )}
+                </button>
+
+                {moreDetailsOpen ? (
+                  <div className="grid gap-4 border-t border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Make
+                      <input
+                        value={form.make}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            make: event.target.value,
+                          }))
+                        }
+                        placeholder="e.g. Honda"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Model
+                      <input
+                        value={form.model}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            model: event.target.value,
+                          }))
+                        }
+                        placeholder="e.g. EU70is"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Serial Number
+                      <input
+                        value={form.serial_number}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            serial_number: event.target.value,
+                          }))
+                        }
+                        placeholder="Enter serial number"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      kVA
+                      <input
+                        value={form.kva}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            kva: event.target.value,
+                          }))
+                        }
+                        placeholder="e.g. 7"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Fuel Type
+                      <select
+                        value={form.fuel_type}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            fuel_type: event.target.value,
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      >
+                        {fuelTypeOptions.map((option) => (
+                          <option key={option}>{option}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Current Hours
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={form.current_hours}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            current_hours: event.target.value,
+                          }))
+                        }
+                        placeholder="e.g. 120.5"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+
+                    <label className="grid gap-2 text-sm font-bold text-slate-700">
+                      Next Service Due Hours
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={form.next_service_due_hours}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            next_service_due_hours: event.target.value,
+                          }))
+                        }
+                        placeholder="e.g. 250"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+              </section>
             </div>
 
             <div className="flex flex-wrap justify-end gap-2 rounded-b-3xl border-t border-slate-200 bg-white p-5">
@@ -1047,7 +1063,11 @@ export default function GeneratorsPage() {
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
               >
                 <Save size={16} />
-                {saving ? "Saving..." : editingId ? "Save Changes" : "Save Generator"}
+                {saving
+                  ? "Saving..."
+                  : editingId
+                    ? "Save Changes"
+                    : "Save Generator"}
               </button>
             </div>
           </div>
