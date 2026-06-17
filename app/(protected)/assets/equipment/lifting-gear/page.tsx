@@ -159,7 +159,53 @@ function parseCsvDate(value: string | number | null | undefined) {
     return fallback.toISOString().slice(0, 10);
   }
 
-  return null;
+  const match = raw.match(/^(\d{1,2})[-/ ]([A-Za-z]{3,}|\d{1,2})[-/ ](\d{2,4})$/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const monthRaw = match[2];
+  const yearRaw = Number(match[3]);
+
+  const monthNames: Record<string, number> = {
+    jan: 0,
+    january: 0,
+    feb: 1,
+    february: 1,
+    mar: 2,
+    march: 2,
+    apr: 3,
+    april: 3,
+    may: 4,
+    jun: 5,
+    june: 5,
+    jul: 6,
+    july: 6,
+    aug: 7,
+    august: 7,
+    sep: 8,
+    sept: 8,
+    september: 8,
+    oct: 9,
+    october: 9,
+    nov: 10,
+    november: 10,
+    dec: 11,
+    december: 11,
+  };
+
+  const month = /^\d+$/.test(monthRaw)
+    ? Number(monthRaw) - 1
+    : monthNames[monthRaw.toLowerCase()];
+  const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
+    return null;
+  }
+
+  const date = new Date(year, month, day);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toISOString().slice(0, 10);
 }
 
 function getDueStatus(nextInspectionDue: string | null) {
@@ -258,6 +304,8 @@ export default function LiftingGearPage() {
   const [showForm, setShowForm] = useState(false);
   const [showInspectionForm, setShowInspectionForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedInspectionItem, setSelectedInspectionItem] =
+    useState<LiftingGear | null>(null);
 
   const [search, setSearch] = useState("");
   const [equipmentTypeFilter, setEquipmentTypeFilter] = useState("All Types");
@@ -436,13 +484,28 @@ export default function LiftingGearPage() {
     setShowForm(false);
   }
 
-  function openInspectionForm() {
+  function openBulkInspectionForm() {
+    setSelectedInspectionItem(null);
     setInspectionForm(blankInspectionUpdate);
+    setShowInspectionForm(true);
+  }
+
+  function openSingleInspectionForm(item: LiftingGear) {
+    setSelectedInspectionItem(item);
+    setInspectionForm({
+      tag: clean(item.tag) || "Blue",
+      inspected_on: clean(item.inspected_on),
+      next_inspection_due: clean(item.next_inspection_due),
+      event_type: clean(item.event_type) || "Visual Inspection",
+      comment: clean(item.comment),
+      status: clean(item.status) || "Passed",
+    });
     setShowInspectionForm(true);
   }
 
   function closeInspectionForm() {
     setInspectionForm(blankInspectionUpdate);
+    setSelectedInspectionItem(null);
     setShowInspectionForm(false);
   }
 
@@ -503,20 +566,24 @@ export default function LiftingGearPage() {
   }
 
   async function handleInspectionUpdate() {
-    if (filteredItems.length === 0) {
-      alert("No filtered items to update.");
+    const itemsToUpdate = selectedInspectionItem ? [selectedInspectionItem] : filteredItems;
+
+    if (itemsToUpdate.length === 0) {
+      alert("No items to update.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Update inspection details for ${filteredItems.length} filtered item(s)?`,
+      selectedInspectionItem
+        ? `Update inspection details for ${selectedInspectionItem.serial_id}?`
+        : `Update inspection details for ${itemsToUpdate.length} filtered item(s)?`,
     );
 
     if (!confirmed) return;
 
     setInspectionSaving(true);
 
-    const ids = filteredItems.map((item) => item.id);
+    const ids = itemsToUpdate.map((item) => item.id);
 
     const { error } = await supabase
       .from("equipment_lifting_gear")
@@ -655,14 +722,11 @@ export default function LiftingGearPage() {
               event_type:
                 normaliseText(getCsvValue(row, ["Event Type", "EventType"])) ||
                 "Visual Inspection",
-              comment:
-                normaliseText(getCsvValue(row, ["Comment", "Comments"])) || null,
+              comment: normaliseText(getCsvValue(row, ["Comment", "Comments"])) || null,
               status: normaliseText(getCsvValue(row, ["Status"])) || "Passed",
               crew_id: matchedCrew?.id || null,
               crew_label: matchedCrew ? crewLabel(matchedCrew) : crewValue || null,
-              tag:
-                normaliseText(getCsvValue(row, ["Tag", "Tag Colour", "Tag Color"])) ||
-                null,
+              tag: normaliseText(getCsvValue(row, ["Tag", "Tag Colour", "Tag Color"])) || null,
               updated_at: new Date().toISOString(),
             };
           })
@@ -716,12 +780,12 @@ export default function LiftingGearPage() {
 
             <button
               type="button"
-              onClick={openInspectionForm}
+              onClick={openBulkInspectionForm}
               disabled={filteredItems.length === 0}
               className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Tags size={16} />
-              Inspection / Tag Update
+              Bulk Inspection / Tag Update
             </button>
 
             <button
@@ -876,7 +940,7 @@ export default function LiftingGearPage() {
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm print:hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] border-collapse text-left">
+          <table className="w-full min-w-[1180px] border-collapse text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Serial ID</th>
@@ -942,6 +1006,15 @@ export default function LiftingGearPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openSingleInspectionForm(item)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                        >
+                          <Tags size={14} />
+                          Inspect
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => openEditForm(item)}
@@ -1032,17 +1105,25 @@ export default function LiftingGearPage() {
             <div className="flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
               <div>
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                  Inspection / Tag Update
+                  {selectedInspectionItem ? "Single Item Inspection" : "Bulk Inspection / Tag Update"}
                 </p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">
-                  Update Filtered Items
+                  {selectedInspectionItem
+                    ? `Inspect ${selectedInspectionItem.serial_id}`
+                    : "Update Filtered Items"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  This will update{" "}
-                  <span className="font-black text-slate-950">
-                    {filteredItems.length}
-                  </span>{" "}
-                  item(s) currently shown.
+                  {selectedInspectionItem ? (
+                    "This update applies only to the selected item."
+                  ) : (
+                    <>
+                      This will update{" "}
+                      <span className="font-black text-slate-950">
+                        {filteredItems.length}
+                      </span>{" "}
+                      filtered item(s) currently shown.
+                    </>
+                  )}
                 </p>
               </div>
 
@@ -1057,9 +1138,9 @@ export default function LiftingGearPage() {
 
             <div className="grid gap-5 p-5">
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800">
-                Filter first by crew, equipment type, status or current tag. This lets
-                you update quarterly tags, inspection dates, due dates, and mark failed
-                items in one action.
+                {selectedInspectionItem
+                  ? "Use this to inspect one item, change its tag, update dates, or mark it as failed, missing, out of service, or retired."
+                  : "Filter first by crew, equipment type, status or current tag. This lets you update quarterly tags, inspection dates, due dates, and mark failed items in one action."}
               </div>
 
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -1179,13 +1260,15 @@ export default function LiftingGearPage() {
               <button
                 type="button"
                 onClick={() => void handleInspectionUpdate()}
-                disabled={inspectionSaving || filteredItems.length === 0}
+                disabled={inspectionSaving || (!selectedInspectionItem && filteredItems.length === 0)}
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
               >
                 <Save size={16} />
                 {inspectionSaving
                   ? "Updating..."
-                  : `Update ${filteredItems.length} Item(s)`}
+                  : selectedInspectionItem
+                    ? "Update Item"
+                    : `Update ${filteredItems.length} Item(s)`}
               </button>
             </div>
           </div>
