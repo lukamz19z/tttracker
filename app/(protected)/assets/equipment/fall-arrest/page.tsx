@@ -68,7 +68,7 @@ type InspectionUpdateState = {
 
 type CsvRow = Record<string, string | number | null | undefined>;
 
-const equipmentTypeOptions = [
+const fallArrestTypes = [
   "Harness",
   "Pole Strap",
   "Cobra",
@@ -80,6 +80,8 @@ const equipmentTypeOptions = [
   "Fall Protection Other",
   "Other",
 ];
+
+const equipmentTypeOptions = fallArrestTypes;
 
 const eventTypeOptions = [
   "Visual Inspection",
@@ -252,6 +254,8 @@ export default function FallArrestPage() {
   const [showForm, setShowForm] = useState(false);
   const [showInspectionForm, setShowInspectionForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedInspectionItem, setSelectedInspectionItem] =
+    useState<FallArrest | null>(null);
 
   const [search, setSearch] = useState("");
   const [equipmentTypeFilter, setEquipmentTypeFilter] = useState("All Types");
@@ -273,8 +277,9 @@ export default function FallArrestPage() {
 
     const [gearResult, crewsResult] = await Promise.all([
       supabase
-        .from("equipment_fall_arrest")
+        .from("equipment_lifting_gear")
         .select("*")
+        .in("equipment_type", fallArrestTypes)
         .order("crew_label", { ascending: true })
         .order("equipment_type", { ascending: true })
         .order("serial_id", { ascending: true }),
@@ -430,13 +435,28 @@ export default function FallArrestPage() {
     setShowForm(false);
   }
 
-  function openInspectionForm() {
+  function openBulkInspectionForm() {
+    setSelectedInspectionItem(null);
     setInspectionForm(blankInspectionUpdate);
+    setShowInspectionForm(true);
+  }
+
+  function openSingleInspectionForm(item: FallArrest) {
+    setSelectedInspectionItem(item);
+    setInspectionForm({
+      tag: clean(item.tag) || "Blue",
+      inspected_on: clean(item.inspected_on),
+      next_inspection_due: clean(item.next_inspection_due),
+      event_type: clean(item.event_type) || "Visual Inspection",
+      comment: clean(item.comment),
+      status: clean(item.status) || "Passed",
+    });
     setShowInspectionForm(true);
   }
 
   function closeInspectionForm() {
     setInspectionForm(blankInspectionUpdate);
+    setSelectedInspectionItem(null);
     setShowInspectionForm(false);
   }
 
@@ -457,7 +477,7 @@ export default function FallArrestPage() {
 
     const payload = {
       serial_id: clean(form.serial_id),
-      equipment_type: clean(form.equipment_type) || null,
+      equipment_type: clean(form.equipment_type) || "Harness",
       description: clean(form.description) || null,
       inspected_on: clean(form.inspected_on) || null,
       next_inspection_due: clean(form.next_inspection_due) || null,
@@ -471,7 +491,7 @@ export default function FallArrestPage() {
     };
 
     if (!editingId) {
-      const { error } = await supabase.from("equipment_fall_arrest").insert(payload);
+      const { error } = await supabase.from("equipment_lifting_gear").insert(payload);
 
       if (error) {
         alert(`Failed to save fall arrest item: ${error.message}`);
@@ -480,7 +500,7 @@ export default function FallArrestPage() {
       }
     } else {
       const { error } = await supabase
-        .from("equipment_fall_arrest")
+        .from("equipment_lifting_gear")
         .update(payload)
         .eq("id", editingId);
 
@@ -497,23 +517,28 @@ export default function FallArrestPage() {
   }
 
   async function handleInspectionUpdate() {
-    if (filteredItems.length === 0) {
+    if (!selectedInspectionItem && filteredItems.length === 0) {
       alert("No filtered items to update.");
       return;
     }
 
+    const itemCount = selectedInspectionItem ? 1 : filteredItems.length;
     const confirmed = window.confirm(
-      `Update inspection details for ${filteredItems.length} filtered item(s)?`,
+      selectedInspectionItem
+        ? `Update inspection details for ${selectedInspectionItem.serial_id}?`
+        : `Update inspection details for ${itemCount} filtered item(s)?`,
     );
 
     if (!confirmed) return;
 
     setInspectionSaving(true);
 
-    const ids = filteredItems.map((item) => item.id);
+    const ids = selectedInspectionItem
+      ? [selectedInspectionItem.id]
+      : filteredItems.map((item) => item.id);
 
     const { error } = await supabase
-      .from("equipment_fall_arrest")
+      .from("equipment_lifting_gear")
       .update({
         tag: clean(inspectionForm.tag) || null,
         inspected_on: clean(inspectionForm.inspected_on) || null,
@@ -538,13 +563,13 @@ export default function FallArrestPage() {
 
   async function handleDelete(item: FallArrest) {
     const confirmed = window.confirm(
-      `Delete ${item.serial_id} from the fall arrest register?`,
+      `Delete ${item.serial_id} from the fall arrest register? This also removes it from the lifting gear table.`,
     );
 
     if (!confirmed) return;
 
     const { error } = await supabase
-      .from("equipment_fall_arrest")
+      .from("equipment_lifting_gear")
       .delete()
       .eq("id", item.id);
 
@@ -628,12 +653,18 @@ export default function FallArrestPage() {
               );
             });
 
+            const csvType =
+              normaliseText(
+                getCsvValue(row, ["Equipment Type", "EquipmentType", "Type"]),
+              ) || "Harness";
+
+            const equipmentType = fallArrestTypes.includes(csvType)
+              ? csvType
+              : "Harness";
+
             return {
               serial_id: serialId,
-              equipment_type:
-                normaliseText(
-                  getCsvValue(row, ["Equipment Type", "EquipmentType", "Type"]),
-                ) || null,
+              equipment_type: equipmentType,
               description:
                 normaliseText(getCsvValue(row, ["Description", "Desc"])) || null,
               inspected_on: parseCsvDate(
@@ -668,7 +699,7 @@ export default function FallArrestPage() {
         }
 
         const { error } = await supabase
-          .from("equipment_fall_arrest")
+          .from("equipment_lifting_gear")
           .upsert(payloads, {
             onConflict: "serial_id,crew_label",
           });
@@ -678,7 +709,7 @@ export default function FallArrestPage() {
           return;
         }
 
-        alert(`Imported ${payloads.length} fall arrest items.`);
+        alert(`Imported ${payloads.length} fall arrest items into the lifting gear table.`);
         await loadData();
 
         if (fileInputRef.current) {
@@ -696,7 +727,7 @@ export default function FallArrestPage() {
       <PageHeader
         eyebrow="Equipment Register"
         title="Fall Arrest"
-        description="Track harnesses, pole straps, cobras, descenders, lanyards and other fall arrest gear by serial ID, crew, inspection status and tag colour."
+        description="Filtered from the lifting gear table. Upload once, then harnesses, pole straps, cobras, descenders and related fall arrest gear appear here automatically."
         actions={
           <div className="flex flex-wrap gap-2 print:hidden">
             <button
@@ -710,12 +741,12 @@ export default function FallArrestPage() {
 
             <button
               type="button"
-              onClick={openInspectionForm}
+              onClick={openBulkInspectionForm}
               disabled={filteredItems.length === 0}
               className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Tags size={16} />
-              Inspection / Tag Update
+              Bulk Inspection / Tag Update
             </button>
 
             <button
@@ -779,7 +810,7 @@ export default function FallArrestPage() {
             {items.length}
           </p>
           <p className="mt-1 text-sm font-medium text-slate-500">
-            Registered fall arrest items.
+            Fall arrest items found in lifting gear.
           </p>
         </div>
       </section>
@@ -870,7 +901,7 @@ export default function FallArrestPage() {
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm print:hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] border-collapse text-left">
+          <table className="w-full min-w-[1120px] border-collapse text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3">Serial ID</th>
@@ -936,6 +967,15 @@ export default function FallArrestPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openSingleInspectionForm(item)}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                        >
+                          <Tags size={14} />
+                          Inspect
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => openEditForm(item)}
@@ -1026,17 +1066,17 @@ export default function FallArrestPage() {
             <div className="flex items-start justify-between gap-4 rounded-t-3xl border-b border-slate-200 bg-white p-5">
               <div>
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">
-                  Inspection / Tag Update
+                  {selectedInspectionItem ? "Single Item Inspection" : "Bulk Inspection / Tag Update"}
                 </p>
                 <h2 className="mt-1 text-2xl font-black text-slate-950">
-                  Update Filtered Items
+                  {selectedInspectionItem
+                    ? `Inspect ${selectedInspectionItem.serial_id}`
+                    : "Update Filtered Items"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  This will update{" "}
-                  <span className="font-black text-slate-950">
-                    {filteredItems.length}
-                  </span>{" "}
-                  item(s) currently shown.
+                  {selectedInspectionItem
+                    ? "This inspection update applies only to the selected item."
+                    : `This will update ${filteredItems.length} filtered item(s).`}
                 </p>
               </div>
 
@@ -1050,11 +1090,13 @@ export default function FallArrestPage() {
             </div>
 
             <div className="grid gap-5 p-5">
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800">
-                Filter first by crew, equipment type, status or current tag. This lets
-                you update quarterly tags, inspection dates, due dates, and mark failed
-                items in one action.
-              </div>
+              {!selectedInspectionItem ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800">
+                  Filter first by crew, equipment type, status or current tag. This lets
+                  you update quarterly tags, inspection dates, due dates, and mark failed
+                  items in one action.
+                </div>
+              ) : null}
 
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="grid gap-4 md:grid-cols-2">
@@ -1173,13 +1215,15 @@ export default function FallArrestPage() {
               <button
                 type="button"
                 onClick={() => void handleInspectionUpdate()}
-                disabled={inspectionSaving || filteredItems.length === 0}
+                disabled={inspectionSaving || (!selectedInspectionItem && filteredItems.length === 0)}
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
               >
                 <Save size={16} />
                 {inspectionSaving
                   ? "Updating..."
-                  : `Update ${filteredItems.length} Item(s)`}
+                  : selectedInspectionItem
+                    ? "Update Item"
+                    : `Update ${filteredItems.length} Item(s)`}
               </button>
             </div>
           </div>
@@ -1197,6 +1241,9 @@ export default function FallArrestPage() {
                 <h2 className="mt-1 text-2xl font-black text-slate-950">
                   {editingId ? "Update Fall Arrest" : "Add Fall Arrest"}
                 </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Saved into the lifting gear table and shown here because it is a fall arrest type.
+                </p>
               </div>
 
               <button
