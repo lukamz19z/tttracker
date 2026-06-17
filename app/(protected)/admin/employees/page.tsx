@@ -28,8 +28,17 @@ const shirtSizes = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
 const jacketSizes = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
 const gloveSizes = ["S", "M", "L", "XL", "2XL"];
 
+function clean(value: string | number | null | undefined) {
+  return String(value ?? "").trim();
+}
+
+function csvSafe(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 export default function EmployeesPage() {
-  const supabase = createSupabaseBrowser();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
@@ -48,6 +57,11 @@ export default function EmployeesPage() {
   const [jacketSize, setJacketSize] = useState("");
   const [gloveSize, setGloveSize] = useState("");
   const [pantsSize, setPantsSize] = useState("");
+
+  const [search, setSearch] = useState("");
+  const [crewFilter, setCrewFilter] = useState("All Crews");
+  const [statusFilter, setStatusFilter] = useState("All Statuses");
+  const [ppeFilter, setPpeFilter] = useState("All PPE Records");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -77,6 +91,98 @@ export default function EmployeesPage() {
     () => employees.filter((e) => e.active !== false).length,
     [employees],
   );
+
+const crewLabel = useCallback(
+  (crewIdValue: string | null) => {
+    if (!crewIdValue) return "Unassigned";
+
+    const crew = crews.find((c) => c.id === crewIdValue);
+    if (!crew) return "Unassigned";
+
+    return `${crew.crew_number}${
+      crew.crew_name ? ` - ${crew.crew_name}` : ""
+    }`;
+  },
+  [crews],
+);
+
+  function hasMissingPpe(employee: Employee) {
+    return (
+      !clean(employee.shirt_size) ||
+      !clean(employee.jacket_size) ||
+      !clean(employee.glove_size) ||
+      !clean(employee.pants_size)
+    );
+  }
+
+  const missingPpeCount = useMemo(
+    () => employees.filter((employee) => employee.active !== false && hasMissingPpe(employee)).length,
+    [employees],
+  );
+
+  const crewOptions = useMemo(() => {
+    return [
+      "All Crews",
+      ...Array.from(new Set(employees.map((employee) => crewLabel(employee.crew_id)))).sort(),
+    ];
+}, [employees, crewLabel]);
+
+  const filteredEmployees = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    return employees.filter((employee) => {
+      const crew = crewLabel(employee.crew_id);
+      const status = employee.active !== false ? "Active" : "Inactive";
+      const missingPpe = hasMissingPpe(employee);
+
+      const searchable = [
+        employee.full_name,
+        employee.role,
+        crew,
+        status,
+        employee.notes,
+        employee.shirt_size,
+        employee.jacket_size,
+        employee.glove_size,
+        employee.pants_size,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        searchable.includes(term) &&
+        (crewFilter === "All Crews" || crew === crewFilter) &&
+        (statusFilter === "All Statuses" || status === statusFilter) &&
+        (ppeFilter === "All PPE Records" ||
+          (ppeFilter === "Missing PPE Sizes" && missingPpe) ||
+          (ppeFilter === "Complete PPE Sizes" && !missingPpe))
+      );
+    });
+ }, [
+  employees,
+  search,
+  crewFilter,
+  statusFilter,
+  ppeFilter,
+  crewLabel,
+]);
+
+  const printedAt = new Date().toLocaleString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const printFilterSummary = [
+    search ? `Search: ${search}` : null,
+    crewFilter !== "All Crews" ? `Crew: ${crewFilter}` : null,
+    statusFilter !== "All Statuses" ? `Status: ${statusFilter}` : null,
+    ppeFilter !== "All PPE Records" ? `PPE: ${ppeFilter}` : null,
+  ]
+    .filter(Boolean)
+    .join(" | ");
 
   function resetForm() {
     setEditingId(null);
@@ -161,19 +267,58 @@ export default function EmployeesPage() {
     await loadData();
   }
 
-  function crewLabel(crewIdValue: string | null) {
-    if (!crewIdValue) return "Unassigned";
+  function exportCsv() {
+    const headers = [
+      "Worker",
+      "Role",
+      "Crew",
+      "Status",
+      "Shirt Size",
+      "Jacket Size",
+      "Glove Size",
+      "Pants Size",
+      "PPE Complete",
+      "Notes",
+    ];
 
-    const crew = crews.find((c) => c.id === crewIdValue);
-    if (!crew) return "Unassigned";
+    const rows = filteredEmployees.map((employee) => [
+      clean(employee.full_name),
+      clean(employee.role),
+      crewLabel(employee.crew_id),
+      employee.active !== false ? "Active" : "Inactive",
+      clean(employee.shirt_size),
+      clean(employee.jacket_size),
+      clean(employee.glove_size),
+      clean(employee.pants_size),
+      hasMissingPpe(employee) ? "No" : "Yes",
+      clean(employee.notes),
+    ]);
 
-    return `${crew.crew_number}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`;
+    const csv = [
+      headers.map(csvSafe).join(","),
+      ...rows.map((row) => row.map(csvSafe).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `worker-ppe-register-${date}.csv`;
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }
+
+  function printRegister() {
+    window.print();
   }
 
   return (
     <AppShell>
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4 print:hidden">
           <div>
             <Link
               href="/admin"
@@ -184,18 +329,18 @@ export default function EmployeesPage() {
 
             <h1 className="mt-4 text-3xl font-bold">Worker Profiles</h1>
             <p className="text-slate-500">
-              Worker profiles, crew allocation and PPE sizing for live inventory
-              minimums.
+              Worker profiles, crew allocation and PPE sizing for live inventory minimums.
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Metric label="Total Workers" value={String(employees.length)} />
             <Metric label="Active" value={String(activeCount)} />
+            <Metric label="Missing PPE" value={String(missingPpeCount)} />
           </div>
         </div>
 
-        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm">
+        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm print:hidden">
           <button
             type="button"
             onClick={() => setFormOpen((v) => !v)}
@@ -225,9 +370,7 @@ export default function EmployeesPage() {
                   <Input label="Role / Trade" value={role} onChange={setRole} />
 
                   <div>
-                    <label className="mb-1 block text-sm font-medium">
-                      Linked Crew
-                    </label>
+                    <label className="mb-1 block text-sm font-medium">Linked Crew</label>
                     <select
                       className="w-full rounded-xl border p-3"
                       value={crewId}
@@ -295,8 +438,8 @@ export default function EmployeesPage() {
                 </div>
 
                 <p className="mt-3 text-sm text-slate-500">
-                  These sizes can be used by Inventory to calculate live minimum
-                  stock for shirts, jackets, gloves and pants.
+                  These sizes can be used by Inventory to calculate live minimum stock for shirts,
+                  jackets, gloves and pants.
                 </p>
               </section>
 
@@ -323,7 +466,7 @@ export default function EmployeesPage() {
           )}
         </section>
 
-        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm">
+        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm print:hidden">
           <button
             type="button"
             onClick={() => setRegisterOpen((v) => !v)}
@@ -332,7 +475,7 @@ export default function EmployeesPage() {
             <div>
               <h2 className="text-xl font-bold">Worker Register</h2>
               <p className="text-sm text-slate-500">
-                View, edit or delete worker profiles and PPE sizing.
+                Filter, export or print worker PPE sizing sheets.
               </p>
             </div>
 
@@ -341,29 +484,92 @@ export default function EmployeesPage() {
 
           {registerOpen && (
             <div className="border-t">
+              <div className="grid gap-3 border-b bg-slate-50 p-5 md:grid-cols-5">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search worker, role, size..."
+                  className="rounded-xl border bg-white p-3 text-sm"
+                />
+
+                <select
+                  value={crewFilter}
+                  onChange={(e) => setCrewFilter(e.target.value)}
+                  className="rounded-xl border bg-white p-3 text-sm"
+                >
+                  {crewOptions.map((option) => (
+                    <option key={option}>{option}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="rounded-xl border bg-white p-3 text-sm"
+                >
+                  <option>All Statuses</option>
+                  <option>Active</option>
+                  <option>Inactive</option>
+                </select>
+
+                <select
+                  value={ppeFilter}
+                  onChange={(e) => setPpeFilter(e.target.value)}
+                  className="rounded-xl border bg-white p-3 text-sm"
+                >
+                  <option>All PPE Records</option>
+                  <option>Missing PPE Sizes</option>
+                  <option>Complete PPE Sizes</option>
+                </select>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={exportCsv}
+                    disabled={filteredEmployees.length === 0}
+                    className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold disabled:opacity-50"
+                  >
+                    Export CSV
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={printRegister}
+                    disabled={filteredEmployees.length === 0}
+                    className="rounded-xl border bg-white px-4 py-3 text-sm font-semibold disabled:opacity-50"
+                  >
+                    Print PDF
+                  </button>
+                </div>
+              </div>
+
               {loading ? (
                 <div className="p-5 text-slate-500">Loading...</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1000px] text-sm">
+                  <table className="w-full min-w-[1050px] text-sm">
                     <thead className="bg-slate-100 text-left">
                       <tr>
                         <th className="p-3">Worker</th>
                         <th className="p-3">Role</th>
                         <th className="p-3">Crew</th>
                         <th className="p-3">Status</th>
-                        <th className="p-3">PPE Sizes</th>
+                        <th className="p-3">Shirt</th>
+                        <th className="p-3">Jacket</th>
+                        <th className="p-3">Gloves</th>
+                        <th className="p-3">Pants</th>
                         <th className="p-3">Notes</th>
                         <th className="p-3 text-right">Actions</th>
                       </tr>
                     </thead>
 
                     <tbody>
-                      {employees.map((employee) => (
-                        <tr key={employee.id} className="border-t">
-                          <td className="p-3 font-semibold">
-                            {employee.full_name}
-                          </td>
+                      {filteredEmployees.map((employee) => (
+                        <tr
+                          key={employee.id}
+                          className={`border-t ${hasMissingPpe(employee) ? "bg-amber-50/50" : ""}`}
+                        >
+                          <td className="p-3 font-semibold">{employee.full_name}</td>
                           <td className="p-3">{employee.role || "—"}</td>
                           <td className="p-3">{crewLabel(employee.crew_id)}</td>
                           <td className="p-3">
@@ -377,26 +583,10 @@ export default function EmployeesPage() {
                               {employee.active !== false ? "Active" : "Inactive"}
                             </span>
                           </td>
-                          <td className="p-3">
-                            <div className="grid gap-1 text-xs text-slate-600">
-                              <span>
-                                <strong>Shirt:</strong>{" "}
-                                {employee.shirt_size || "—"}
-                              </span>
-                              <span>
-                                <strong>Jacket:</strong>{" "}
-                                {employee.jacket_size || "—"}
-                              </span>
-                              <span>
-                                <strong>Gloves:</strong>{" "}
-                                {employee.glove_size || "—"}
-                              </span>
-                              <span>
-                                <strong>Pants:</strong>{" "}
-                                {employee.pants_size || "—"}
-                              </span>
-                            </div>
-                          </td>
+                          <td className="p-3">{employee.shirt_size || "—"}</td>
+                          <td className="p-3">{employee.jacket_size || "—"}</td>
+                          <td className="p-3">{employee.glove_size || "—"}</td>
+                          <td className="p-3">{employee.pants_size || "—"}</td>
                           <td className="p-3">{employee.notes || "—"}</td>
                           <td className="p-3">
                             <div className="flex justify-end gap-2">
@@ -420,13 +610,10 @@ export default function EmployeesPage() {
                         </tr>
                       ))}
 
-                      {employees.length === 0 && (
+                      {filteredEmployees.length === 0 && (
                         <tr>
-                          <td
-                            colSpan={7}
-                            className="p-5 text-center text-slate-500"
-                          >
-                            No worker profiles created yet.
+                          <td colSpan={10} className="p-5 text-center text-slate-500">
+                            No worker profiles match the current filters.
                           </td>
                         </tr>
                       )}
@@ -437,6 +624,100 @@ export default function EmployeesPage() {
             </div>
           )}
         </section>
+
+        <section className="print-area hidden">
+          <div className="mb-4">
+            <h1 className="text-xl font-black text-slate-950">Worker PPE Register</h1>
+            <p className="mt-1 text-sm font-semibold text-slate-700">
+              {filteredEmployees.length} filtered worker(s)
+            </p>
+            <p className="mt-1 text-xs text-slate-500">Printed: {printedAt}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Filters: {printFilterSummary || "All workers"}
+            </p>
+          </div>
+
+          <table className="w-full border-collapse text-left text-[10px]">
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Role</th>
+                <th>Crew</th>
+                <th>Status</th>
+                <th>Shirt</th>
+                <th>Jacket</th>
+                <th>Gloves</th>
+                <th>Pants</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredEmployees.map((employee) => (
+                <tr key={employee.id}>
+                  <td>{employee.full_name}</td>
+                  <td>{employee.role || "-"}</td>
+                  <td>{crewLabel(employee.crew_id)}</td>
+                  <td>{employee.active !== false ? "Active" : "Inactive"}</td>
+                  <td>{employee.shirt_size || ""}</td>
+                  <td>{employee.jacket_size || ""}</td>
+                  <td>{employee.glove_size || ""}</td>
+                  <td>{employee.pants_size || ""}</td>
+                  <td>{employee.notes || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <style jsx global>{`
+          @media print {
+            body * {
+              visibility: hidden;
+            }
+
+            .print-area,
+            .print-area * {
+              visibility: visible;
+            }
+
+            .print-area {
+              display: block !important;
+              position: absolute;
+              left: 0;
+              top: 0;
+              width: 100%;
+              padding: 12px;
+              background: white;
+            }
+
+            .print-area table {
+              width: 100%;
+              border-collapse: collapse;
+              table-layout: fixed;
+            }
+
+            .print-area th,
+            .print-area td {
+              border: 1px solid #cbd5e1;
+              padding: 4px 5px;
+              vertical-align: top;
+              line-height: 1.25;
+              word-break: break-word;
+            }
+
+            .print-area th {
+              background: #f1f5f9;
+              font-weight: 800;
+              text-transform: uppercase;
+            }
+
+            @page {
+              size: landscape;
+              margin: 8mm;
+            }
+          }
+        `}</style>
       </div>
     </AppShell>
   );
