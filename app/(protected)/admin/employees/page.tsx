@@ -18,7 +18,15 @@ type Employee = {
   crew_id: string | null;
   active: boolean | null;
   notes: string | null;
+  shirt_size: string | null;
+  jacket_size: string | null;
+  glove_size: string | null;
+  pants_size: string | null;
 };
+
+const shirtSizes = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+const jacketSizes = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL"];
+const gloveSizes = ["S", "M", "L", "XL", "2XL"];
 
 export default function EmployeesPage() {
   const supabase = createSupabaseBrowser();
@@ -35,6 +43,11 @@ export default function EmployeesPage() {
   const [crewId, setCrewId] = useState("");
   const [active, setActive] = useState(true);
   const [notes, setNotes] = useState("");
+
+  const [shirtSize, setShirtSize] = useState("");
+  const [jacketSize, setJacketSize] = useState("");
+  const [gloveSize, setGloveSize] = useState("");
+  const [pantsSize, setPantsSize] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -62,7 +75,7 @@ export default function EmployeesPage() {
 
   const activeCount = useMemo(
     () => employees.filter((e) => e.active !== false).length,
-    [employees]
+    [employees],
   );
 
   function resetForm() {
@@ -72,6 +85,10 @@ export default function EmployeesPage() {
     setCrewId("");
     setActive(true);
     setNotes("");
+    setShirtSize("");
+    setJacketSize("");
+    setGloveSize("");
+    setPantsSize("");
   }
 
   function editEmployee(employee: Employee) {
@@ -81,6 +98,10 @@ export default function EmployeesPage() {
     setCrewId(employee.crew_id || "");
     setActive(employee.active !== false);
     setNotes(employee.notes || "");
+    setShirtSize(employee.shirt_size || "");
+    setJacketSize(employee.jacket_size || "");
+    setGloveSize(employee.glove_size || "");
+    setPantsSize(employee.pants_size || "");
     setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -94,7 +115,7 @@ export default function EmployeesPage() {
     const duplicate = employees.some(
       (e) =>
         e.id !== editingId &&
-        e.full_name.trim().toLowerCase() === fullName.trim().toLowerCase()
+        e.full_name.trim().toLowerCase() === fullName.trim().toLowerCase(),
     );
 
     if (duplicate) {
@@ -108,6 +129,10 @@ export default function EmployeesPage() {
       crew_id: crewId || null,
       active,
       notes: notes.trim() || null,
+      shirt_size: shirtSize || null,
+      jacket_size: jacketSize || null,
+      glove_size: gloveSize || null,
+      pants_size: pantsSize.trim() || null,
     };
 
     const res = editingId
@@ -147,19 +172,20 @@ export default function EmployeesPage() {
 
   return (
     <AppShell>
-      <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <Link
               href="/admin"
-              className="inline-flex items-center gap-2 rounded-2xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 transition"
+              className="inline-flex items-center gap-2 rounded-2xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm transition hover:bg-slate-50"
             >
               ← Back to Admin
             </Link>
 
-            <h1 className="text-3xl font-bold mt-4">Worker Profiles</h1>
+            <h1 className="mt-4 text-3xl font-bold">Worker Profiles</h1>
             <p className="text-slate-500">
-              Basic operational worker profiles used for crews and daily dockets.
+              Worker profiles, crew allocation and PPE sizing for live inventory
+              minimums.
             </p>
           </div>
 
@@ -169,18 +195,18 @@ export default function EmployeesPage() {
           </div>
         </div>
 
-        <section className="bg-white border rounded-3xl shadow-sm overflow-hidden">
+        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm">
           <button
             type="button"
             onClick={() => setFormOpen((v) => !v)}
-            className="w-full px-5 py-4 flex justify-between items-center text-left"
+            className="flex w-full items-center justify-between px-5 py-4 text-left"
           >
             <div>
               <h2 className="text-xl font-bold">
                 {editingId ? "Edit Worker Profile" : "Create Worker Profile"}
               </h2>
               <p className="text-sm text-slate-500">
-                Full name, role, linked crew and basic notes only.
+                Record crew details and PPE sizing for inventory forecasting.
               </p>
             </div>
 
@@ -188,50 +214,97 @@ export default function EmployeesPage() {
           </button>
 
           {formOpen && (
-            <div className="border-t p-5 space-y-4">
-              <div className="grid md:grid-cols-5 gap-3">
-                <Input label="Full Name" value={fullName} onChange={setFullName} />
-                <Input label="Role / Trade" value={role} onChange={setRole} />
+            <div className="space-y-5 border-t p-5">
+              <section>
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-400">
+                  Worker Details
+                </h3>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    Linked Crew
-                  </label>
-                  <select
-                    className="border rounded-xl p-3 w-full"
-                    value={crewId}
-                    onChange={(e) => setCrewId(e.target.value)}
-                  >
-                    <option value="">Unassigned</option>
-                    {crews.map((crew) => (
-                      <option key={crew.id} value={crew.id}>
-                        {crew.crew_number}
-                        {crew.crew_name ? ` - ${crew.crew_name}` : ""}
-                      </option>
-                    ))}
-                  </select>
+                <div className="grid gap-3 md:grid-cols-5">
+                  <Input label="Full Name" value={fullName} onChange={setFullName} />
+                  <Input label="Role / Trade" value={role} onChange={setRole} />
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      Linked Crew
+                    </label>
+                    <select
+                      className="w-full rounded-xl border p-3"
+                      value={crewId}
+                      onChange={(e) => setCrewId(e.target.value)}
+                    >
+                      <option value="">Unassigned</option>
+                      {crews.map((crew) => (
+                        <option key={crew.id} value={crew.id}>
+                          {crew.crew_number}
+                          {crew.crew_name ? ` - ${crew.crew_name}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">Status</label>
+                    <select
+                      className="w-full rounded-xl border p-3"
+                      value={active ? "active" : "inactive"}
+                      onChange={(e) => setActive(e.target.value === "active")}
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </div>
+
+                  <Input label="Notes" value={notes} onChange={setNotes} />
+                </div>
+              </section>
+
+              <section className="rounded-2xl border bg-slate-50 p-4">
+                <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-400">
+                  PPE Sizing
+                </h3>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <SelectInput
+                    label="Shirt Size"
+                    value={shirtSize}
+                    onChange={setShirtSize}
+                    options={shirtSizes}
+                  />
+
+                  <SelectInput
+                    label="Jacket Size"
+                    value={jacketSize}
+                    onChange={setJacketSize}
+                    options={jacketSizes}
+                  />
+
+                  <SelectInput
+                    label="Glove Size"
+                    value={gloveSize}
+                    onChange={setGloveSize}
+                    options={gloveSizes}
+                  />
+
+                  <Input
+                    label="Pants Size"
+                    value={pantsSize}
+                    onChange={setPantsSize}
+                    placeholder="e.g. 87R, 92, 97L"
+                  />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Status</label>
-                  <select
-                    className="border rounded-xl p-3 w-full"
-                    value={active ? "active" : "inactive"}
-                    onChange={(e) => setActive(e.target.value === "active")}
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
+                <p className="mt-3 text-sm text-slate-500">
+                  These sizes can be used by Inventory to calculate live minimum
+                  stock for shirts, jackets, gloves and pants.
+                </p>
+              </section>
 
-                <Input label="Notes" value={notes} onChange={setNotes} />
-              </div>
-
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={saveEmployee}
-                  className="bg-slate-900 text-white px-5 py-3 rounded-xl font-semibold"
+                  className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white"
                 >
                   {editingId ? "Update Worker" : "Create Worker"}
                 </button>
@@ -240,7 +313,7 @@ export default function EmployeesPage() {
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="border px-5 py-3 rounded-xl font-semibold"
+                    className="rounded-xl border px-5 py-3 font-semibold"
                   >
                     Cancel Edit
                   </button>
@@ -250,16 +323,16 @@ export default function EmployeesPage() {
           )}
         </section>
 
-        <section className="bg-white border rounded-3xl shadow-sm overflow-hidden">
+        <section className="overflow-hidden rounded-3xl border bg-white shadow-sm">
           <button
             type="button"
             onClick={() => setRegisterOpen((v) => !v)}
-            className="w-full px-5 py-4 flex justify-between items-center text-left"
+            className="flex w-full items-center justify-between px-5 py-4 text-left"
           >
             <div>
               <h2 className="text-xl font-bold">Worker Register</h2>
               <p className="text-sm text-slate-500">
-                View, edit or delete worker profiles.
+                View, edit or delete worker profiles and PPE sizing.
               </p>
             </div>
 
@@ -272,13 +345,14 @@ export default function EmployeesPage() {
                 <div className="p-5 text-slate-500">Loading...</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[1000px] text-sm">
                     <thead className="bg-slate-100 text-left">
                       <tr>
                         <th className="p-3">Worker</th>
                         <th className="p-3">Role</th>
                         <th className="p-3">Crew</th>
                         <th className="p-3">Status</th>
+                        <th className="p-3">PPE Sizes</th>
                         <th className="p-3">Notes</th>
                         <th className="p-3 text-right">Actions</th>
                       </tr>
@@ -287,12 +361,14 @@ export default function EmployeesPage() {
                     <tbody>
                       {employees.map((employee) => (
                         <tr key={employee.id} className="border-t">
-                          <td className="p-3 font-semibold">{employee.full_name}</td>
+                          <td className="p-3 font-semibold">
+                            {employee.full_name}
+                          </td>
                           <td className="p-3">{employee.role || "—"}</td>
                           <td className="p-3">{crewLabel(employee.crew_id)}</td>
                           <td className="p-3">
                             <span
-                              className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${
                                 employee.active !== false
                                   ? "bg-emerald-100 text-emerald-700"
                                   : "bg-slate-100 text-slate-500"
@@ -301,13 +377,33 @@ export default function EmployeesPage() {
                               {employee.active !== false ? "Active" : "Inactive"}
                             </span>
                           </td>
+                          <td className="p-3">
+                            <div className="grid gap-1 text-xs text-slate-600">
+                              <span>
+                                <strong>Shirt:</strong>{" "}
+                                {employee.shirt_size || "—"}
+                              </span>
+                              <span>
+                                <strong>Jacket:</strong>{" "}
+                                {employee.jacket_size || "—"}
+                              </span>
+                              <span>
+                                <strong>Gloves:</strong>{" "}
+                                {employee.glove_size || "—"}
+                              </span>
+                              <span>
+                                <strong>Pants:</strong>{" "}
+                                {employee.pants_size || "—"}
+                              </span>
+                            </div>
+                          </td>
                           <td className="p-3">{employee.notes || "—"}</td>
                           <td className="p-3">
                             <div className="flex justify-end gap-2">
                               <button
                                 type="button"
                                 onClick={() => editEmployee(employee)}
-                                className="border px-3 py-2 rounded-lg"
+                                className="rounded-lg border px-3 py-2"
                               >
                                 Edit
                               </button>
@@ -315,7 +411,7 @@ export default function EmployeesPage() {
                               <button
                                 type="button"
                                 onClick={() => deleteEmployee(employee.id)}
-                                className="border px-3 py-2 rounded-lg text-red-600"
+                                className="rounded-lg border px-3 py-2 text-red-600"
                               >
                                 Delete
                               </button>
@@ -326,7 +422,10 @@ export default function EmployeesPage() {
 
                       {employees.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="p-5 text-center text-slate-500">
+                          <td
+                            colSpan={7}
+                            className="p-5 text-center text-slate-500"
+                          >
                             No worker profiles created yet.
                           </td>
                         </tr>
@@ -347,26 +446,59 @@ function Input({
   label,
   value,
   onChange,
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
 }) {
   return (
     <div>
-      <label className="block text-sm font-medium mb-1">{label}</label>
+      <label className="mb-1 block text-sm font-medium">{label}</label>
       <input
-        className="border rounded-xl p-3 w-full"
+        className="w-full rounded-xl border p-3"
         value={value}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
   );
 }
 
+function SelectInput({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium">{label}</label>
+      <select
+        className="w-full rounded-xl border bg-white p-3"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Not recorded</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-white border rounded-2xl px-5 py-4 shadow-sm min-w-35">
+    <div className="min-w-35 rounded-2xl border bg-white px-5 py-4 shadow-sm">
       <p className="text-xs uppercase text-slate-400">{label}</p>
       <p className="text-3xl font-bold">{value}</p>
     </div>
