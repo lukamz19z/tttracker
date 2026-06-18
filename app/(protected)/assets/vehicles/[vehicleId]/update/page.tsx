@@ -499,6 +499,7 @@ export default function UpdateVehiclePage() {
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [assetPhotoFiles, setAssetPhotoFiles] = useState<File[]>([]);
   const [complianceFiles, setComplianceFiles] = useState<Record<ComplianceFileKey, File | null>>({
     rego: null,
     insurance: null,
@@ -736,6 +737,38 @@ export default function UpdateVehiclePage() {
     if (insertError) throw new Error(insertError.message);
   }
 
+  async function uploadAssetPhotos() {
+    if (assetPhotoFiles.length === 0) return;
+
+    for (const file of assetPhotoFiles) {
+      const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = `${vehicleId}/Photos/${Date.now()}-${safeFileName}`;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("vehicle_documents")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) throw new Error(uploadError.message);
+
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("vehicle_documents").getPublicUrl(uploadData.path);
+
+      const { error: insertError } = await supabase.from("vehicle_documents").insert({
+        vehicle_asset_id: vehicleId,
+        document_type: "Photo",
+        file_name: file.name,
+        file_url: publicUrl,
+        storage_path: uploadData.path,
+      });
+
+      if (insertError) throw new Error(insertError.message);
+    }
+  }
+
   async function uploadComplianceDocuments() {
     await uploadSupersedingVehicleDocument("Rego", complianceFiles.rego);
 
@@ -895,6 +928,7 @@ export default function UpdateVehiclePage() {
       if (error) throw new Error(error.message);
 
       await uploadComplianceDocuments();
+      await uploadAssetPhotos();
 
       router.push("/assets/vehicles");
       router.refresh();
@@ -1551,7 +1585,7 @@ export default function UpdateVehiclePage() {
 
             <Section
               title="Attach Invoice / Report"
-              description="Attach the invoice, service report, modification record or supporting photo. This goes into the service/update history only."
+              description="Attach the invoice, service report, modification record or supporting file. This goes into the service/update history only."
             >
               <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -1577,6 +1611,52 @@ export default function UpdateVehiclePage() {
                   />
                 </span>
               </label>
+            </Section>
+
+            <Section
+              title="Asset Photos"
+              description="Upload photos of the vehicle. These save as Photo documents and can later be selected as the header photo on the vehicle view page."
+            >
+              <label className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">
+                    {assetPhotoFiles.length > 0
+                      ? `${assetPhotoFiles.length} photo${assetPhotoFiles.length === 1 ? "" : "s"} selected`
+                      : "No photos selected"}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    JPG, PNG or WEBP. These do not replace existing photos.
+                  </p>
+                </div>
+
+                <span className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                  <FileUp size={14} />
+                  Add photos
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => {
+                      setAssetPhotoFiles(Array.from(event.target.files ?? []));
+                      event.target.value = "";
+                    }}
+                  />
+                </span>
+              </label>
+
+              {assetPhotoFiles.length > 0 ? (
+                <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {assetPhotoFiles.map((file) => (
+                    <div
+                      key={`${file.name}-${file.size}`}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    >
+                      {file.name}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </Section>
           </>
         )}

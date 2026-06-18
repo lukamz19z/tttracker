@@ -80,6 +80,20 @@ type FleetJobUpdate = {
   created_at: string | null;
 };
 
+type FaultCorrection = {
+  id: string;
+  fault: string;
+  prestart_comment: string;
+  correction: string;
+};
+
+type JobSummaryRow = {
+  id: string;
+  fault: string;
+  prestart_comment: string;
+  correction: string;
+};
+
 type AssetHistoryRecord = {
   id: string;
   fleet_job_id: string | null;
@@ -132,6 +146,9 @@ type EnhancedFleetJob = FleetJob & {
   status_note: string;
   displayed_date: string | null;
   displayed_date_label: "Due" | "Completed";
+  summary_title: "Issues Raised" | "Corrections Completed";
+  summary_rows: JobSummaryRow[];
+  close_out_comment: string;
 };
 
 type JobForm = {
@@ -281,6 +298,161 @@ function latestByDate(items: FleetJobUpdate[]) {
   })[0];
 }
 
+const faultCorrectionJsonStart = "[[FAULT_CORRECTIONS_JSON_START]]";
+const faultCorrectionJsonEnd = "[[FAULT_CORRECTIONS_JSON_END]]";
+
+function stripFaultCorrectionJson(value: string | null | undefined) {
+  if (!value) return "";
+
+  const startIndex = value.indexOf(faultCorrectionJsonStart);
+  const endIndex = value.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return value;
+  }
+
+  return `${value.slice(0, startIndex)}${value.slice(
+    endIndex + faultCorrectionJsonEnd.length,
+  )}`;
+}
+
+function parseFaultCorrectionsFromComment(
+  comment: string | null | undefined,
+): FaultCorrection[] {
+  if (!comment) return [];
+
+  const startIndex = comment.indexOf(faultCorrectionJsonStart);
+  const endIndex = comment.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return [];
+  }
+
+  const rawJson = comment
+    .slice(startIndex + faultCorrectionJsonStart.length, endIndex)
+    .trim();
+
+  try {
+    const parsed = JSON.parse(rawJson) as FaultCorrection[];
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((row, index) => ({
+        id: clean(row.id) || `fault-${index}`,
+        fault: clean(row.fault) || `Fault ${index + 1}`,
+        prestart_comment:
+          clean(row.prestart_comment) || "No additional prestart comment provided.",
+        correction: clean(row.correction),
+      }))
+      .filter((row) => clean(row.fault));
+  } catch {
+    return [];
+  }
+}
+
+function extractGeneralCloseOutComment(comment: string | null | undefined) {
+  const withoutJson = stripFaultCorrectionJson(comment);
+
+  return withoutJson
+    .replace(/\n?Fault Corrections:[\s\S]*$/, "")
+    .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+    .replace(/\n?Asset update record:[\s\S]*$/, "")
+    .trim();
+}
+
+function latestUpdateByType(
+  updates: FleetJobUpdate[],
+  match: (value: string) => boolean,
+) {
+  return latestByDate(
+    updates.filter((update) => match(clean(update.update_type).toLowerCase())),
+  );
+}
+
+function splitIssueText(value: string | null | undefined): JobSummaryRow[] {
+  const text = stripFaultCorrectionJson(value).trim();
+
+  if (!text) return [];
+
+  return text
+    .split(/\n|•|;/)
+    .map((item) => item.replace(/^[-*✓•\s]+/, "").trim())
+    .filter((item) => item.length > 2)
+    .slice(0, 8)
+    .map((item, index) => {
+      const [rawFault, ...commentParts] = item.split(" - ");
+      const fault = (rawFault || item)
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+        .trim();
+
+      return {
+        id: `issue-${index}`,
+        fault: fault || `Issue ${index + 1}`,
+        prestart_comment: commentParts.join(" - ").trim(),
+        correction: "",
+      };
+    });
+}
+
+function buildJobSummaryRows(
+  job: FleetJob,
+  updates: FleetJobUpdate[],
+  calculatedStatus: FleetJobStatus,
+): {
+  title: "Issues Raised" | "Corrections Completed";
+  rows: JobSummaryRow[];
+  closeOutComment: string;
+} {
+  const latestCloseOut = latestUpdateByType(
+    updates,
+    (type) => type === "close out" || type === "close out edited",
+  );
+  const latestFaultCorrection = latestUpdateByType(
+    updates,
+    (type) => type === "fault corrections",
+  );
+
+  const closeOutCorrections = parseFaultCorrectionsFromComment(
+    latestCloseOut?.comment,
+  );
+  const savedCorrections = parseFaultCorrectionsFromComment(
+    latestFaultCorrection?.comment,
+  );
+  const isClosed = isClosedStatus(calculatedStatus);
+
+  if (isClosed && closeOutCorrections.length > 0) {
+    return {
+      title: "Corrections Completed",
+      rows: closeOutCorrections,
+      closeOutComment: extractGeneralCloseOutComment(latestCloseOut?.comment),
+    };
+  }
+
+  if (savedCorrections.length > 0) {
+    return {
+      title: isClosed ? "Corrections Completed" : "Issues Raised",
+      rows: savedCorrections,
+      closeOutComment: extractGeneralCloseOutComment(latestCloseOut?.comment),
+    };
+  }
+
+  if (closeOutCorrections.length > 0) {
+    return {
+      title: isClosed ? "Corrections Completed" : "Issues Raised",
+      rows: closeOutCorrections,
+      closeOutComment: extractGeneralCloseOutComment(latestCloseOut?.comment),
+    };
+  }
+
+  return {
+    title: isClosed ? "Corrections Completed" : "Issues Raised",
+    rows: splitIssueText(job.description),
+    closeOutComment: extractGeneralCloseOutComment(latestCloseOut?.comment),
+  };
+}
+
 function statusFromUpdates(job: FleetJob, updates: FleetJobUpdate[], hasAssetHistory: boolean): FleetJobStatus {
   const jobStatus = toFleetJobStatus(job.status);
   const latestUpdate = latestByDate(updates);
@@ -382,6 +554,98 @@ function SectionTitle({
   );
 }
 
+function JobSummary({ job }: { job: EnhancedFleetJob }) {
+  const isCompleted = completedStatuses.includes(job.calculated_status);
+  const rows = job.summary_rows;
+
+  if (rows.length === 0) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+          {job.summary_title}
+        </p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {job.description || job.close_out_comment || "No issue summary recorded."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`mt-3 rounded-xl border p-3 ${
+        isCompleted
+          ? "border-emerald-100 bg-emerald-50/70"
+          : "border-amber-100 bg-amber-50/70"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p
+          className={`text-xs font-black uppercase tracking-wide ${
+            isCompleted ? "text-emerald-700" : "text-amber-700"
+          }`}
+        >
+          {job.summary_title}
+        </p>
+
+        <span
+          className={`rounded-full bg-white px-2.5 py-1 text-xs font-black shadow-sm ${
+            isCompleted ? "text-emerald-700" : "text-amber-700"
+          }`}
+        >
+          {rows.length} item{rows.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
+        {rows.slice(0, 4).map((row, index) => {
+          const primaryText = isCompleted
+            ? row.correction || row.fault
+            : row.fault;
+          const secondaryText = isCompleted
+            ? row.fault
+            : row.prestart_comment || row.correction;
+
+          return (
+            <li key={`${row.id}-${index}`} className="flex gap-2">
+              <span
+                className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${
+                  isCompleted ? "bg-emerald-500" : "bg-amber-500"
+                }`}
+              />
+              <span>
+                <span className="font-bold text-slate-950">
+                  {isCompleted ? "Corrected:" : "Issue:"}
+                </span>{" "}
+                {primaryText}
+                {secondaryText ? (
+                  <span className="block text-xs font-semibold text-slate-500">
+                    {isCompleted ? `Original fault: ${secondaryText}` : secondaryText}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+
+      {rows.length > 4 ? (
+        <p className="mt-2 text-xs font-semibold text-slate-500">
+          +{rows.length - 4} more item{rows.length - 4 === 1 ? "" : "s"}.
+          Open the job to view the full correction table.
+        </p>
+      ) : null}
+
+      {isCompleted && job.close_out_comment ? (
+        <div className="mt-3 rounded-lg border border-emerald-100 bg-white p-2 text-xs leading-5 text-slate-600">
+          <span className="font-black text-slate-700">Close-out:</span>{" "}
+          {job.close_out_comment}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function JobCard({ job }: { job: EnhancedFleetJob }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md">
@@ -394,9 +658,10 @@ function JobCard({ job }: { job: EnhancedFleetJob }) {
           </div>
 
           <h3 className="mt-2 text-base font-black text-slate-950">{job.title || "Untitled fleet job"}</h3>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">{job.description || "No description provided."}</p>
 
-          <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+          <JobSummary job={job} />
+
+          <div className="mt-4 grid gap-2 text-xs text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
             <p><span className="font-black text-slate-500">Asset:</span> {job.display_asset_label}</p>
             <p><span className="font-black text-slate-500">Allocation:</span> {job.asset_detail}</p>
             <p><span className="font-black text-slate-500">Source:</span> {job.calculated_source}</p>
@@ -611,6 +876,12 @@ export default function FleetJobsPage() {
         ? job.completed_date || jobAssetHistory[0]?.history_date || latestUpdate?.created_at || job.updated_at
         : job.due_date;
 
+      const jobSummary = buildJobSummaryRows(
+        job,
+        jobUpdates,
+        calculated_status,
+      );
+
       return {
         ...job,
         calculated_status,
@@ -630,6 +901,9 @@ export default function FleetJobsPage() {
         status_note: statusNoteForJob(job, calculated_status, latestUpdate, hasAssetHistory),
         displayed_date,
         displayed_date_label,
+        summary_title: jobSummary.title,
+        summary_rows: jobSummary.rows,
+        close_out_comment: jobSummary.closeOutComment,
       };
     });
   }, [jobs, vehicleMap, plantMap, updatesByJobId, assetHistoryByJobId]);
@@ -657,6 +931,10 @@ export default function FleetJobsPage() {
         job.source_type,
         job.asset_label,
         job.status_note,
+        job.close_out_comment,
+        job.summary_rows
+          .map((row) => [row.fault, row.prestart_comment, row.correction].join(" "))
+          .join(" "),
       ]
         .join(" ")
         .toLowerCase();
