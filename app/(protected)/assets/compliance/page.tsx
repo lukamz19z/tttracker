@@ -221,9 +221,19 @@ function isActiveStatus(status: string | null | undefined) {
   return !["retired", "sold", "inactive", "no longer hired", "superseded", "decommissioned"].includes(value);
 }
 
-function isClosedJob(status: string | null | undefined) {
-  const value = clean(status).toLowerCase();
-  return ["closed", "complete", "completed", "resolved"].includes(value);
+function isClosedJob(job: Pick<FleetJob, "status" | "closed_at" | "completed_date"> | string | null | undefined) {
+  if (typeof job === "string" || job === null || job === undefined) {
+    const value = clean(job).toLowerCase();
+    return ["closed", "complete", "completed", "resolved", "cancelled", "canceled", "actioned"].includes(value);
+  }
+
+  const status = clean(job.status).toLowerCase();
+
+  if (["closed", "complete", "completed", "resolved", "cancelled", "canceled", "actioned"].includes(status)) {
+    return true;
+  }
+
+  return Boolean(clean(job.closed_at) || clean(job.completed_date));
 }
 
 function isBadStatus(status: string | null | undefined) {
@@ -502,7 +512,7 @@ export default function CompliancePage() {
     }
 
     for (const job of data.fleetJobs) {
-      if (!isClosedJob(job.status)) {
+      if (!isClosedJob(job)) {
         const priority = clean(job.priority).toLowerCase();
         items.push({
           id: `fleet-job-${job.id}`,
@@ -687,7 +697,7 @@ export default function CompliancePage() {
     { label: "Critical", value: compliance.critical.length, icon: ShieldAlert, tone: "rose" as Tone, detail: "Expired, missing, failed, open or overdue" },
     { label: "Upcoming", value: compliance.upcoming.length, icon: CalendarClock, tone: "amber" as Tone, detail: "Due soon or ageing toward review" },
     { label: "Monitor", value: compliance.monitor.length, icon: FileWarning, tone: "slate" as Tone, detail: "Incomplete or worth checking" },
-    { label: "Open Fleet Jobs", value: data.fleetJobs.filter((job) => !isClosedJob(job.status)).length, icon: Wrench, tone: "blue" as Tone, detail: "Fleet defects and maintenance not closed" },
+    { label: "Open Fleet Jobs", value: data.fleetJobs.filter((job) => !isClosedJob(job)).length, icon: Wrench, tone: "blue" as Tone, detail: "Fleet defects and maintenance not closed" },
   ];
 
   const tabs = [

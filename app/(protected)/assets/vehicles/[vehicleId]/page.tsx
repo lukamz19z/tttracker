@@ -31,7 +31,7 @@ import {
   StatusBadge,
 } from "../../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue" | "slate" | "violet";
+type Tone = "emerald" | "amber" | "rose" | "blue" | "slate"| "violet" ;
 
 type VehicleAsset = {
   id: string;
