@@ -33,6 +33,10 @@ type PlantAsset = {
   last_service_date: string | null;
   last_service_hours: number | null;
   service_interval_hours: number | null;
+  next_service_due: string | null;
+  next_service_hours: number | null;
+  header_photo_url?: string | null;
+  header_photo_document_id?: string | null;
 };
 
 type CrewOption = {
@@ -60,6 +64,7 @@ type UpdateForm = {
   service_provider: string;
   service_type: string;
   service_interval_hours: string;
+  next_service_due: string;
 
   modification_date: string;
   modification_type: string;
@@ -90,6 +95,7 @@ const emptyForm: UpdateForm = {
   service_provider: "",
   service_type: "",
   service_interval_hours: "",
+  next_service_due: "",
 
   modification_date: "",
   modification_type: "",
@@ -387,6 +393,7 @@ export default function UpdatePlantPage() {
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [assetPhotoFile, setAssetPhotoFile] = useState<File | null>(null);
   const [complianceFiles, setComplianceFiles] = useState<
     Record<ComplianceFileKey, File | null>
   >({
@@ -438,6 +445,7 @@ export default function UpdatePlantPage() {
           data.service_interval_hours === null || data.service_interval_hours === undefined
             ? ""
             : String(data.service_interval_hours),
+        next_service_due: dateInput(data.next_service_due),
         status_after_update: clean(data.asset_status) || "Available",
         new_project: clean(data.project),
         new_crew: clean(data.crew),
@@ -542,6 +550,15 @@ export default function UpdatePlantPage() {
     };
   }
 
+  function calculatedNextServiceHours() {
+    const serviceHours = toNumber(form.service_hours);
+    const intervalHours = toNumber(form.service_interval_hours);
+
+    if (serviceHours === null || intervalHours === null) return null;
+
+    return serviceHours + intervalHours;
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -561,6 +578,10 @@ export default function UpdatePlantPage() {
 
       if (invoiceFile) {
         serviceDocument = await uploadInvoiceDocument();
+      }
+
+      if (assetPhotoFile) {
+        await uploadPlantDocument("Photo", assetPhotoFile);
       }
 
       const serviceDate =
@@ -638,6 +659,14 @@ export default function UpdatePlantPage() {
           form.update_type === "Service" && form.service_interval_hours
             ? Number(form.service_interval_hours)
             : asset.service_interval_hours,
+        next_service_due:
+          form.update_type === "Service" && form.next_service_due
+            ? form.next_service_due
+            : asset.next_service_due,
+        next_service_hours:
+          form.update_type === "Service"
+            ? calculatedNextServiceHours() ?? asset.next_service_hours
+            : asset.next_service_hours,
 
         asset_status: clean(form.status_after_update) || asset.asset_status,
 
@@ -677,7 +706,7 @@ export default function UpdatePlantPage() {
       <PageHeader
         eyebrow="Plant Update"
         title={loading ? "Update Asset" : `Update ${display(asset?.asset_id)}`}
-        description="Record services, modifications, compliance proof or project transfers for cranes and telehandlers."
+        description="Record services, modifications, compliance proof, photos or project transfers for cranes and telehandlers."
         actions={
           <Link
             href="/assets/plant"
@@ -884,6 +913,13 @@ export default function UpdatePlantPage() {
               />
 
               <Field
+                label="Next Service Due Date"
+                type="date"
+                value={form.next_service_due}
+                onChange={(value) => updateField("next_service_due", value)}
+              />
+
+              <Field
                 label="Invoice Number"
                 value={form.invoice_number}
                 onChange={(value) => updateField("invoice_number", value)}
@@ -1022,6 +1058,18 @@ export default function UpdatePlantPage() {
             </div>
           </Section>
         ) : null}
+
+        <Section
+          title="Asset Photo"
+          description="Upload a plant photo. It will appear in the plant view photo gallery where you can set it as the header photo."
+        >
+          <DocumentUploadField
+            label="Plant Photo"
+            helper="Attach a photo of the crane, telehandler or plant item."
+            file={assetPhotoFile}
+            onChange={setAssetPhotoFile}
+          />
+        </Section>
 
         <div className="flex justify-end gap-3">
           <Link
