@@ -415,6 +415,15 @@ function latestReopenForJob(
   );
 }
 
+function dateMillis(value: string | null | undefined) {
+  if (!value) return 0;
+
+  const date = new Date(value);
+  const time = date.getTime();
+
+  return Number.isNaN(time) ? 0 : time;
+}
+
 function isFleetJobActiveForVehicle(
   job: FleetJob,
   assetHistoryRows: AssetHistory[],
@@ -423,21 +432,38 @@ function isFleetJobActiveForVehicle(
   const closeOutUpdate = latestCloseOutForJob(updates, job.id);
   const reopenUpdate = latestReopenForJob(updates, job.id);
 
-  const hasLinkedAssetHistory = assetHistoryRows.some(
+  const linkedAssetHistoryRows = assetHistoryRows.filter(
     (record) => record.fleet_job_id === job.id,
   );
 
-  const reopenedAfterCloseOut = Boolean(
-    reopenUpdate?.created_at &&
-      closeOutUpdate?.created_at &&
-      new Date(reopenUpdate.created_at).getTime() >
-        new Date(closeOutUpdate.created_at).getTime(),
+  const latestAssetHistoryTime = Math.max(
+    0,
+    ...linkedAssetHistoryRows.map((record) =>
+      Math.max(dateMillis(record.history_date), dateMillis(record.created_at)),
+    ),
   );
 
-  if (reopenedAfterCloseOut) return true;
-  if (reopenUpdate && !isFleetJobClosed(job.status)) return true;
+  const latestCloseOutTime = dateMillis(closeOutUpdate?.created_at);
+  const latestReopenTime = dateMillis(reopenUpdate?.created_at);
+
+  const hasCloseOutProof =
+    Boolean(closeOutUpdate) || linkedAssetHistoryRows.length > 0;
+
+  const latestCloseOutProofTime = Math.max(
+    latestCloseOutTime,
+    latestAssetHistoryTime,
+  );
+
+  const reopenedAfterLatestCloseOut =
+    latestReopenTime > 0 &&
+    latestCloseOutProofTime > 0 &&
+    latestReopenTime > latestCloseOutProofTime;
+
   if (isFleetJobClosed(job.status)) return false;
-  if (closeOutUpdate || hasLinkedAssetHistory) return false;
+
+  if (reopenedAfterLatestCloseOut) return true;
+
+  if (hasCloseOutProof) return false;
 
   return true;
 }
