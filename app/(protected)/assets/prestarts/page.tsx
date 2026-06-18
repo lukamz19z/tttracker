@@ -1,5 +1,4 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-
 "use client";
 
 import Link from "next/link";
@@ -96,6 +95,7 @@ type ChecklistValue = {
 
 type PrestartRecord = {
   id: string;
+  docket_number: string | null;
   asset_type: AssetType | string | null;
   vehicle_asset_id: string | null;
   plant_asset_id: string | null;
@@ -117,9 +117,9 @@ type PrestartRecord = {
   created_at: string | null;
 };
 
-const checklistSections = [
+const vehicleChecklistSections = [
   {
-    title: "Vehicle / Plant Condition",
+    title: "Vehicle Condition",
     items: ["Tyres", "Doors", "Windows", "Mirrors", "Wipers"],
   },
   {
@@ -136,7 +136,7 @@ const checklistSections = [
     ],
   },
   {
-    title: "Operator Controls",
+    title: "Driver Controls",
     items: [
       "Steering",
       "Foot brake",
@@ -164,7 +164,65 @@ const checklistSections = [
   },
 ];
 
-const checklistItems = checklistSections.flatMap((section) => section.items);
+const plantChecklistSections = [
+  {
+    title: "Engine",
+    items: [
+      "Oil level",
+      "Coolant level",
+      "Fuel water drain",
+      "Brake fluid",
+      "Battery",
+      "Air filter",
+      "V belts",
+    ],
+  },
+  {
+    title: "Carrier",
+    items: [
+      "Tyres",
+      "Wheel nuts",
+      "Fuel level",
+      "Air tank drain",
+      "Steering function",
+      "Brake function",
+      "Carrier lubrication",
+      "Lights / horn / gauges",
+    ],
+  },
+  {
+    title: "Crane Functions",
+    items: [
+      "Slew",
+      "Boom raising and lowering",
+      "Boom extension and retraction",
+      "Winches",
+      "Wire ropes",
+      "Sheaves",
+      "Anti two block",
+      "Load indicator",
+      "Outriggers",
+      "Crane lubrication",
+      "Crane structural components",
+    ],
+  },
+  {
+    title: "Hydraulics",
+    items: [
+      "Hydraulic oil level",
+      "Hydraulic oil line leaks",
+      "Cylinder leaks",
+    ],
+  },
+];
+
+function getChecklistSections(assetType: AssetType) {
+  return assetType === "Plant" ? plantChecklistSections : vehicleChecklistSections;
+}
+
+function getChecklistItems(assetType: AssetType) {
+  return getChecklistSections(assetType).flatMap((section) => section.items);
+}
 
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
@@ -174,8 +232,8 @@ function checklistKey(label: string) {
   return label.toLowerCase().replaceAll(" ", "_").replaceAll("/", "_");
 }
 
-function defaultChecklist() {
-  return checklistItems.reduce<Record<string, ChecklistValue>>((acc, item) => {
+function defaultChecklist(assetType: AssetType = "Vehicle") {
+  return getChecklistItems(assetType).reduce<Record<string, ChecklistValue>>((acc, item) => {
     acc[checklistKey(item)] = {
       answer: "yes",
       severity: "minor",
@@ -205,18 +263,6 @@ function formatShortDate(value: string | null) {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  });
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "No date";
-
-  return new Date(value).toLocaleString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
   });
 }
 
@@ -690,7 +736,7 @@ export default function AssetPrestartsPage() {
     setSelectedProject("");
     setSelectedCrew("");
     setFormAssetType("Vehicle");
-    setChecklistValues(defaultChecklist());
+    setChecklistValues(defaultChecklist("Vehicle"));
     setShowForm(true);
   }
 
@@ -700,6 +746,7 @@ export default function AssetPrestartsPage() {
     setAssetSearch("");
     setSelectedProject("");
     setSelectedCrew("");
+    setChecklistValues(defaultChecklist(assetType));
   }
 
   function handleAssetChange(asset: PrestartAsset) {
@@ -788,6 +835,7 @@ export default function AssetPrestartsPage() {
       const assetType = clean(prestart.asset_type) === "Plant" ? "Plant" : "Vehicle";
 
       const searchable = [
+        prestart.docket_number,
         assetType,
         prestart.asset_label,
         prestart.vehicle_rego,
@@ -864,12 +912,14 @@ export default function AssetPrestartsPage() {
     }
 
     if (selectedAsset.assetType === "Plant" && !cabHours) {
-      alert("Please enter cab hours.");
+      alert("Please enter upper cab hours.");
       setSaving(false);
       return;
     }
 
-    const failedItems = checklistItems.filter((item) => {
+    const selectedChecklistItems = getChecklistItems(selectedAsset.assetType);
+
+    const failedItems = selectedChecklistItems.filter((item) => {
       const key = checklistKey(item);
       return checklistValues[key]?.answer === "no";
     });
@@ -917,11 +967,20 @@ export default function AssetPrestartsPage() {
         ? `${selectedAsset.assetType} prestart defect(s):\n\n${failedChecklistDetails.join("\n\n")}`
         : "",
       comments ? `General comments:\n${comments}` : "",
-      selectedAsset.assetType === "Plant" ? `Cab hours: ${cabHours}` : "",
+      selectedAsset.assetType === "Plant" ? `Upper cab hours: ${cabHours}` : "",
       selectedAsset.assetType === "Vehicle" ? `Kilometres: ${kilometres}` : "",
     ]
       .filter(Boolean)
       .join("\n\n");
+
+    const docketPrefix = selectedAsset.assetType === "Plant" ? "PPS" : "VPS";
+
+    const { count: prestartCount } = await supabase
+      .from("vehicle_prestarts")
+      .select("id", { count: "exact", head: true })
+      .eq("asset_type", selectedAsset.assetType);
+
+    const docketNumber = `${docketPrefix}-${String((prestartCount ?? 0) + 1).padStart(6, "0")}`;
 
     const assetLabel = [
       selectedAsset.assetId || selectedAsset.assetType,
@@ -931,6 +990,7 @@ export default function AssetPrestartsPage() {
       .join(" ");
 
     const insertPayload = {
+      docket_number: docketNumber,
       asset_type: selectedAsset.assetType,
       vehicle_asset_id: selectedAsset.assetType === "Vehicle" ? selectedAsset.id : null,
       plant_asset_id: selectedAsset.assetType === "Plant" ? selectedAsset.id : null,
@@ -1034,13 +1094,15 @@ export default function AssetPrestartsPage() {
     setEmployeeSearch("");
     setSelectedProject("");
     setSelectedCrew("");
-    setChecklistValues(defaultChecklist());
+    setFormAssetType("Vehicle");
+    setChecklistValues(defaultChecklist("Vehicle"));
     await loadData();
     setSaving(false);
   }
 
   function exportFilteredPrestarts() {
     const headers = [
+      "Docket",
       "Date",
       "Asset Type",
       "Asset",
@@ -1058,6 +1120,7 @@ export default function AssetPrestartsPage() {
     ];
 
     const rows = filteredPrestarts.map((prestart) => [
+      clean(prestart.docket_number),
       formatShortDate(prestartDateValue(prestart)),
       clean(prestart.asset_type) || "Vehicle",
       clean(prestart.asset_label),
@@ -1099,7 +1162,7 @@ export default function AssetPrestartsPage() {
       <PageHeader
         eyebrow="Asset Checks"
         title="Prestarts"
-        description="Submit, review and track vehicle and plant prestarts. Vehicle prestarts record kilometres; plant prestarts record cab hours for service tracking."
+        description="Submit, review and track vehicle and plant prestarts. Vehicle prestarts record kilometres; plant prestarts record upper cab hours for service tracking."
         actions={
           <div className="flex flex-wrap gap-2">
             <button
@@ -1257,7 +1320,7 @@ export default function AssetPrestartsPage() {
                       {getPrestartAssetLabel(prestart) || "Asset"}
                     </p>
                     <p className="mt-1 text-sm font-medium text-slate-600">
-                      {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
+                      {clean(prestart.docket_number) || "No docket"} · {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
                       {formatShortDate(prestartDateValue(prestart))}
                     </p>
                   </div>
@@ -1396,6 +1459,14 @@ export default function AssetPrestartsPage() {
           getKey={(prestart) => prestart.id}
           columns={[
             {
+              label: "Docket",
+              render: (prestart) => (
+                <span className="font-black text-slate-950">
+                  {clean(prestart.docket_number) || "-"}
+                </span>
+              ),
+            },
+            {
               label: "Date",
               render: (prestart) => formatShortDate(prestartDateValue(prestart)),
             },
@@ -1506,6 +1577,15 @@ export default function AssetPrestartsPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
+                    Docket
+                  </p>
+                  <p className="font-semibold text-slate-800">
+                    {clean(prestart.docket_number) || "-"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">
                     Prestart Date
                   </p>
                   <p className="font-semibold text-slate-800">
@@ -1568,7 +1648,7 @@ export default function AssetPrestartsPage() {
                     Add Prestart
                   </h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Select Vehicle or Plant. Vehicles record kilometres; plant records cab hours.
+                    Select Vehicle or Plant. Vehicles record kilometres; plant records upper cab hours.
                   </p>
                 </div>
 
@@ -1648,7 +1728,7 @@ export default function AssetPrestartsPage() {
 
                     {selectedAsset?.assetType === "Plant" ? (
                       <label className="grid gap-2 text-sm font-bold text-slate-700">
-                        Cab Hours
+                        Upper Cab Hours
                         <input
                           name="cab_hours"
                           type="number"
@@ -1749,7 +1829,7 @@ export default function AssetPrestartsPage() {
                   </div>
 
                   <div className="grid gap-5 p-4">
-                    {checklistSections.map((section) => (
+                    {getChecklistSections(formAssetType).map((section) => (
                       <div key={section.title}>
                         <div className="mb-3 border-b border-slate-200 pb-2">
                           <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
