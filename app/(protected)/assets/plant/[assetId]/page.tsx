@@ -783,17 +783,10 @@ export default function PlantViewPage() {
         .order("project_onboard_date", { ascending: false })
         .returns<ProjectHistory[]>(),
       supabase
-        .from("plant_prestarts")
+        .from("vehicle_prestarts")
         .select("*")
-        .or(
-          [
-            `plant_asset_id.eq.${assetId}`,
-            `asset_id.eq.${assetId}`,
-            loadedAsset.asset_id ? `asset_id.eq.${loadedAsset.asset_id}` : null,
-          ]
-            .filter(Boolean)
-            .join(","),
-        )
+        .eq("asset_type", "Plant")
+        .eq("plant_asset_id", assetId)
         .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
         .limit(3),
