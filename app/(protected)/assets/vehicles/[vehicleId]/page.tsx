@@ -31,7 +31,7 @@ import {
   StatusBadge,
 } from "../../components";
 
-type Tone = "emerald" | "amber" | "rose" | "blue" | "slate"| "violet" ;
+type Tone = "emerald" | "amber" | "rose" | "blue" | "slate" | "violet";
 
 type VehicleAsset = {
   id: string;
@@ -181,7 +181,25 @@ type FleetJob = {
   reported_by: string | null;
   assigned_to: string | null;
   due_date: string | null;
+  completed_date: string | null;
   created_at: string | null;
+  updated_at: string | null;
+};
+
+type FleetJobUpdate = {
+  id: string;
+  fleet_job_id: string;
+  update_type: string | null;
+  status: string | null;
+  comment: string | null;
+  created_at: string | null;
+};
+
+type FaultCorrection = {
+  id: string;
+  fault: string;
+  prestart_comment: string;
+  correction: string;
 };
 
 type EditHistoryForm = {
@@ -282,6 +300,148 @@ function historyTone(type: string | null | undefined): Tone {
 
   return "slate";
 }
+
+function fleetJobStatusTone(status: string | null | undefined): Tone {
+  const value = clean(status).toLowerCase();
+
+  if (["completed", "closed", "complete", "resolved"].includes(value)) {
+    return "emerald";
+  }
+
+  if (value.includes("waiting")) return "amber";
+  if (value.includes("progress") || value.includes("booked")) return "blue";
+  if (value.includes("open") || value.includes("reopened")) return "rose";
+
+  return "slate";
+}
+
+function isFleetJobClosed(status: string | null | undefined) {
+  return ["completed", "closed", "complete", "resolved"].includes(
+    clean(status).toLowerCase(),
+  );
+}
+
+const faultCorrectionJsonStart = "[[FAULT_CORRECTIONS_JSON_START]]";
+const faultCorrectionJsonEnd = "[[FAULT_CORRECTIONS_JSON_END]]";
+
+function stripFaultCorrectionJson(value: string | null | undefined) {
+  if (!value) return "";
+
+  const startIndex = value.indexOf(faultCorrectionJsonStart);
+  const endIndex = value.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return value;
+  }
+
+  return `${value.slice(0, startIndex)}${value.slice(
+    endIndex + faultCorrectionJsonEnd.length,
+  )}`;
+}
+
+function parseFaultCorrectionsFromComment(
+  comment: string | null | undefined,
+): FaultCorrection[] {
+  if (!comment) return [];
+
+  const startIndex = comment.indexOf(faultCorrectionJsonStart);
+  const endIndex = comment.indexOf(faultCorrectionJsonEnd);
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return [];
+  }
+
+  const rawJson = comment
+    .slice(startIndex + faultCorrectionJsonStart.length, endIndex)
+    .trim();
+
+  try {
+    const parsed = JSON.parse(rawJson) as FaultCorrection[];
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((row, index) => ({
+        id: row.id || `fault-${index}`,
+        fault: optional(row.fault) || `Fault ${index + 1}`,
+        prestart_comment:
+          optional(row.prestart_comment) ||
+          "No additional prestart comment provided.",
+        correction: optional(row.correction),
+      }))
+      .filter((row) => row.fault);
+  } catch {
+    return [];
+  }
+}
+
+function extractGeneralCloseOutComment(comment: string | null | undefined) {
+  const withoutJson = stripFaultCorrectionJson(comment);
+
+  return withoutJson
+    .replace(/\n?Fault Corrections:[\s\S]*$/, "")
+    .replace(/\n?Asset history recorded as:[\s\S]*$/, "")
+    .replace(/\n?Asset update record:[\s\S]*$/, "")
+    .trim();
+}
+
+function latestCloseOutForJob(
+  updates: FleetJobUpdate[],
+  fleetJobId: string | null | undefined,
+) {
+  if (!fleetJobId) return null;
+
+  return (
+    updates.find(
+      (update) =>
+        update.fleet_job_id === fleetJobId &&
+        (update.update_type === "Close Out" ||
+          update.update_type === "Close Out Edited"),
+    ) || null
+  );
+}
+
+function latestReopenForJob(
+  updates: FleetJobUpdate[],
+  fleetJobId: string | null | undefined,
+) {
+  if (!fleetJobId) return null;
+
+  return (
+    updates.find(
+      (update) =>
+        update.fleet_job_id === fleetJobId && update.update_type === "Reopened",
+    ) || null
+  );
+}
+
+function isFleetJobActiveForVehicle(
+  job: FleetJob,
+  assetHistoryRows: AssetHistory[],
+  updates: FleetJobUpdate[],
+) {
+  const closeOutUpdate = latestCloseOutForJob(updates, job.id);
+  const reopenUpdate = latestReopenForJob(updates, job.id);
+
+  const hasLinkedAssetHistory = assetHistoryRows.some(
+    (record) => record.fleet_job_id === job.id,
+  );
+
+  const reopenedAfterCloseOut = Boolean(
+    reopenUpdate?.created_at &&
+      closeOutUpdate?.created_at &&
+      new Date(reopenUpdate.created_at).getTime() >
+        new Date(closeOutUpdate.created_at).getTime(),
+  );
+
+  if (reopenedAfterCloseOut) return true;
+  if (reopenUpdate && !isFleetJobClosed(job.status)) return true;
+  if (isFleetJobClosed(job.status)) return false;
+  if (closeOutUpdate || hasLinkedAssetHistory) return false;
+
+  return true;
+}
+
 
 function makeModel(vehicle: VehicleAsset | null) {
   if (!vehicle) return "Vehicle Detail";
@@ -502,6 +662,8 @@ export default function VehicleDetailPage() {
   const [projectHistory, setProjectHistory] = useState<ProjectHistory[]>([]);
   const [prestartHistory, setPrestartHistory] = useState<PrestartRecord[]>([]);
   const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
+  const [allLinkedFleetJobs, setAllLinkedFleetJobs] = useState<FleetJob[]>([]);
+  const [fleetJobUpdates, setFleetJobUpdates] = useState<FleetJobUpdate[]>([]);
   const [showVehicleSetup, setShowVehicleSetup] = useState(false);
   const [serviceIntervalInput, setServiceIntervalInput] = useState("10000");
   const [savingServiceInterval, setSavingServiceInterval] = useState(false);
@@ -541,6 +703,8 @@ export default function VehicleDetailPage() {
       setProjectHistory([]);
       setPrestartHistory([]);
       setFleetJobs([]);
+      setAllLinkedFleetJobs([]);
+      setFleetJobUpdates([]);
       setErrorMessage(
         vehicleResult.error?.message || "Vehicle could not be loaded.",
       );
@@ -625,7 +789,7 @@ export default function VehicleDetailPage() {
       supabase
         .from("fleet_jobs")
         .select(
-          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+          "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, completed_date, created_at, updated_at",
         )
         .eq("vehicle_asset_id", vehicleId)
         .order("created_at", { ascending: false })
@@ -635,7 +799,7 @@ export default function VehicleDetailPage() {
         ? supabase
             .from("fleet_jobs")
             .select(
-              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, completed_date, created_at, updated_at",
             )
             .in("id", linkedFleetJobIds)
             .order("created_at", { ascending: false })
@@ -646,7 +810,7 @@ export default function VehicleDetailPage() {
         ? supabase
             .from("fleet_jobs")
             .select(
-              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, created_at",
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, completed_date, created_at, updated_at",
             )
             .in("source_id", linkedPrestartIds)
             .order("created_at", { ascending: false })
@@ -660,28 +824,66 @@ export default function VehicleDetailPage() {
       ...(sourceFleetJobsResult.data ?? []),
     ];
 
+    const assetHistoryRows = assetHistoryResult.error
+      ? []
+      : (assetHistoryResult.data ?? []);
+
+    const assetHistoryFleetJobIds = assetHistoryRows
+      .map((record) => record.fleet_job_id)
+      .filter((id): id is string => Boolean(id));
+
+    const assetHistoryFleetJobsResult =
+      assetHistoryFleetJobIds.length > 0
+        ? await supabase
+            .from("fleet_jobs")
+            .select(
+              "id, job_number, title, description, priority, status, project, crew, reported_by, assigned_to, due_date, completed_date, created_at, updated_at",
+            )
+            .in("id", assetHistoryFleetJobIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJob[]>()
+        : { data: [], error: null };
+
     const uniqueFleetJobs = Array.from(
-      new Map(allFleetJobs.map((job) => [job.id, job])).values(),
+      new Map(
+        [
+          ...allFleetJobs,
+          ...(assetHistoryFleetJobsResult.data ?? []),
+        ].map((job) => [job.id, job]),
+      ).values(),
     );
+
+    const uniqueFleetJobIds = uniqueFleetJobs.map((job) => job.id);
+
+    const fleetJobUpdatesResult =
+      uniqueFleetJobIds.length > 0
+        ? await supabase
+            .from("fleet_job_updates")
+            .select("id, fleet_job_id, update_type, status, comment, created_at")
+            .in("fleet_job_id", uniqueFleetJobIds)
+            .order("created_at", { ascending: false })
+            .returns<FleetJobUpdate[]>()
+        : { data: [], error: null };
 
     setDocuments(documentsResult.error ? [] : (documentsResult.data ?? []));
     setServiceHistory(
       serviceHistoryResult.error ? [] : (serviceHistoryResult.data ?? []),
     );
-    setAssetHistory(
-      assetHistoryResult.error ? [] : (assetHistoryResult.data ?? []),
-    );
+    setAssetHistory(assetHistoryRows);
     setProjectHistory(
       projectHistoryResult.error ? [] : (projectHistoryResult.data ?? []),
     );
     setPrestartHistory(loadedPrestarts);
+    const loadedFleetJobUpdates = fleetJobUpdatesResult.error
+      ? []
+      : (fleetJobUpdatesResult.data ?? []);
+
+    setAllLinkedFleetJobs(uniqueFleetJobs);
+    setFleetJobUpdates(loadedFleetJobUpdates);
     setFleetJobs(
-      uniqueFleetJobs.filter((job) => {
-        const status = clean(job.status).toLowerCase();
-        return !["closed", "complete", "completed", "resolved"].includes(
-          status,
-        );
-      }),
+      uniqueFleetJobs.filter((job) =>
+        isFleetJobActiveForVehicle(job, assetHistoryRows, loadedFleetJobUpdates),
+      ),
     );
 
     setLoading(false);
@@ -762,6 +964,21 @@ export default function VehicleDetailPage() {
     if (status.includes("progress") || status.includes("open")) return "amber";
     return "blue";
   };
+
+  const fleetJobById = useMemo(() => {
+    return new Map(allLinkedFleetJobs.map((job) => [job.id, job]));
+  }, [allLinkedFleetJobs]);
+
+  const fleetJobUpdatesById = useMemo(() => {
+    return fleetJobUpdates.reduce<Record<string, FleetJobUpdate[]>>(
+      (accumulator, update) => {
+        accumulator[update.fleet_job_id] = accumulator[update.fleet_job_id] || [];
+        accumulator[update.fleet_job_id].push(update);
+        return accumulator;
+      },
+      {},
+    );
+  }, [fleetJobUpdates]);
 
   const vehicleTitle =
     vehicle && clean(vehicle.vehicle_id) !== "N/A"
@@ -1151,6 +1368,47 @@ export default function VehicleDetailPage() {
 
   function AssetHistoryCard({ record }: { record: AssetHistory }) {
     const isExpanded = expandedAssetHistoryId === record.id;
+    const linkedFleetJob = record.fleet_job_id
+      ? fleetJobById.get(record.fleet_job_id) || null
+      : null;
+    const linkedUpdates = record.fleet_job_id
+      ? fleetJobUpdatesById[record.fleet_job_id] || []
+      : [];
+    const closeOutUpdate = latestCloseOutForJob(
+      linkedUpdates,
+      record.fleet_job_id,
+    );
+    const reopenUpdate = latestReopenForJob(linkedUpdates, record.fleet_job_id);
+    const correctionSource = closeOutUpdate?.comment || record.description;
+    const correctionRows = parseFaultCorrectionsFromComment(correctionSource);
+    const closeOutComment =
+      extractGeneralCloseOutComment(closeOutUpdate?.comment) ||
+      extractGeneralCloseOutComment(record.description);
+    const cleanHistoryDescription =
+      extractGeneralCloseOutComment(record.description) ||
+      stripFaultCorrectionJson(record.description);
+    const linkedStatus = linkedFleetJob?.status ||
+      (record.fleet_job_id ? "Unknown" : null);
+    const reopenedAfterCloseOut = Boolean(
+      reopenUpdate?.created_at &&
+        closeOutUpdate?.created_at &&
+        new Date(reopenUpdate.created_at).getTime() >
+          new Date(closeOutUpdate.created_at).getTime(),
+    );
+    const reopenedAfterAssetRecord = Boolean(
+      reopenUpdate?.created_at &&
+        record.created_at &&
+        new Date(reopenUpdate.created_at).getTime() >
+          new Date(record.created_at).getTime(),
+    );
+    const jobIsCurrentlyReopened = Boolean(
+      reopenUpdate && !isFleetJobClosed(linkedFleetJob?.status),
+    );
+    const shouldShowReopened =
+      reopenedAfterCloseOut || reopenedAfterAssetRecord || jobIsCurrentlyReopened;
+    const liveStatusLabel = shouldShowReopened
+      ? "Reopened"
+      : linkedStatus || "Asset History";
 
     return (
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -1164,6 +1422,16 @@ export default function VehicleDetailPage() {
                 label={clean(record.history_type)}
                 tone={historyTone(record.history_type)}
               />
+              {record.fleet_job_id ? (
+                <StatusBadge
+                  label={`Fleet Job: ${liveStatusLabel}`}
+                  tone={
+                    shouldShowReopened
+                      ? "amber"
+                      : fleetJobStatusTone(linkedFleetJob?.status)
+                  }
+                />
+              ) : null}
             </div>
             <p className="mt-1 text-xs text-slate-500">
               {formatDate(record.history_date || record.created_at)}
@@ -1181,9 +1449,41 @@ export default function VehicleDetailPage() {
           </button>
         </div>
 
+        {shouldShowReopened ? (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+            This linked fleet job has been reopened after this close-out record.
+            Check the Fleet Job before treating this repair as final.
+          </div>
+        ) : null}
+
         <p className="mt-3 line-clamp-2 text-sm text-slate-700">
-          {clean(record.description)}
+          {clean(closeOutComment || cleanHistoryDescription || record.description)}
         </p>
+
+        {correctionRows.length > 0 ? (
+          <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
+            <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+              Fault Corrections
+            </p>
+            <ul className="mt-2 space-y-2 text-sm text-slate-700">
+              {correctionRows.slice(0, isExpanded ? correctionRows.length : 3).map((row) => (
+                <li key={row.id} className="flex gap-2">
+                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                  <span>
+                    <span className="font-bold text-slate-950">{row.fault}:</span>{" "}
+                    {row.correction || "No correction recorded."}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {!isExpanded && correctionRows.length > 3 ? (
+              <p className="mt-2 text-xs font-semibold text-slate-500">
+                +{correctionRows.length - 3} more correction item
+                {correctionRows.length - 3 === 1 ? "" : "s"}. Open details to view all.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {isExpanded ? (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
@@ -1230,10 +1530,70 @@ export default function VehicleDetailPage() {
               </p>
             </div>
 
-            <p className="mt-4 text-sm text-slate-700">
-              <span className="font-bold">Description:</span>{" "}
-              {clean(record.description)}
-            </p>
+            {record.fleet_job_id ? (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-black text-slate-950">
+                      Linked Fleet Job
+                    </p>
+                    <p className="mt-1 text-slate-600">
+                      {clean(linkedFleetJob?.job_number)} · {clean(linkedFleetJob?.title)}
+                    </p>
+                  </div>
+                  <StatusBadge
+                    label={liveStatusLabel}
+                    tone={
+                      shouldShowReopened
+                        ? "amber"
+                        : fleetJobStatusTone(linkedFleetJob?.status)
+                    }
+                  />
+                </div>
+
+                {reopenUpdate ? (
+                  <p className="mt-3 text-xs font-semibold text-amber-700">
+                    Reopened: {formatDate(reopenUpdate.created_at)}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {correctionRows.length > 0 ? (
+              <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                  Correction Details
+                </p>
+                <div className="mt-3 space-y-3">
+                  {correctionRows.map((row) => (
+                    <div
+                      key={row.id}
+                      className="rounded-xl border border-emerald-100 bg-white p-3 text-sm"
+                    >
+                      <p className="font-black text-slate-950">{row.fault}</p>
+                      <p className="mt-1 text-slate-500">
+                        Prestart: {row.prestart_comment || "N/A"}
+                      </p>
+                      <p className="mt-2 text-emerald-800">
+                        <span className="font-bold">Correction:</span>{" "}
+                        {row.correction || "No correction recorded."}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <p>
+                <span className="font-bold">Close-out Comment:</span>{" "}
+                {clean(closeOutComment)}
+              </p>
+              <p>
+                <span className="font-bold">Asset History Description:</span>{" "}
+                {clean(cleanHistoryDescription || record.description)}
+              </p>
+            </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               {record.fleet_job_id ? (
