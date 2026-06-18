@@ -481,6 +481,26 @@ function prestartHours(record: PlantPrestart | null | undefined) {
   );
 }
 
+function prestartReadingDate(record: PlantPrestart | null | undefined) {
+  return record?.prestart_date || record?.created_at || null;
+}
+
+function addDays(date: Date, days: number) {
+  const projected = new Date(date);
+  projected.setDate(projected.getDate() + days);
+  return projected;
+}
+
+function formatProjectedDate(value: Date | null) {
+  if (!value) return "N/A";
+
+  return value.toLocaleDateString("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function expiryTone(value: string | null | undefined, today: Date): Tone {
   const days = daysBetween(value, today);
 
@@ -789,7 +809,7 @@ export default function PlantViewPage() {
         .eq("plant_asset_id", assetId)
         .order("prestart_date", { ascending: false })
         .order("created_at", { ascending: false })
-        .limit(3),
+        .limit(10),
     ]);
 
     if (optional(loadedAsset.superseded_by)) {
@@ -951,6 +971,62 @@ export default function PlantViewPage() {
     nextServiceDueHours !== undefined
       ? Number(nextServiceDueHours) - Number(currentCabHours)
       : null;
+
+  const projectionRows = prestartHistory
+    .filter((record) => {
+      const hours = prestartHours(record);
+      const date = prestartReadingDate(record);
+      return hours !== null && hours !== undefined && Boolean(date);
+    })
+    .slice()
+    .sort(
+      (a, b) =>
+        dateMillis(prestartReadingDate(a)) - dateMillis(prestartReadingDate(b)),
+    );
+
+  const firstProjectionPrestart = projectionRows[0] ?? null;
+  const latestProjectionPrestart =
+    projectionRows[projectionRows.length - 1] ?? null;
+  const firstProjectionHours = prestartHours(firstProjectionPrestart);
+  const latestProjectionHours = prestartHours(latestProjectionPrestart);
+  const projectionDaysElapsed =
+    firstProjectionPrestart && latestProjectionPrestart
+      ? Math.max(
+          0,
+          (dateMillis(prestartReadingDate(latestProjectionPrestart)) -
+            dateMillis(prestartReadingDate(firstProjectionPrestart))) /
+            86_400_000,
+        )
+      : 0;
+  const projectionHoursUsed =
+    firstProjectionHours !== null &&
+    firstProjectionHours !== undefined &&
+    latestProjectionHours !== null &&
+    latestProjectionHours !== undefined
+      ? Number(latestProjectionHours) - Number(firstProjectionHours)
+      : 0;
+  const averageHoursPerDay =
+    projectionRows.length >= 2 &&
+    projectionDaysElapsed > 0 &&
+    projectionHoursUsed > 0
+      ? projectionHoursUsed / projectionDaysElapsed
+      : null;
+  const projectedServiceDate =
+    averageHoursPerDay !== null &&
+    remainingHours !== null &&
+    remainingHours !== undefined &&
+    remainingHours > 0 &&
+    latestProjectionPrestart
+      ? addDays(
+          new Date(prestartReadingDate(latestProjectionPrestart) as string),
+          Math.ceil(Number(remainingHours) / averageHoursPerDay),
+        )
+      : null;
+  const projectedServiceDaysRemaining =
+    projectedServiceDate !== null
+      ? daysBetween(projectedServiceDate.toISOString(), today)
+      : null;
+
   const daysUntilService = asset?.next_service_due
     ? daysBetween(asset.next_service_due, today)
     : null;
@@ -966,7 +1042,9 @@ export default function PlantViewPage() {
     hasServiceTrigger &&
     !serviceOverdue &&
     ((remainingHours !== null && remainingHours <= 25) ||
-      (daysUntilService !== null && daysUntilService <= 30));
+      (daysUntilService !== null && daysUntilService <= 30) ||
+      (projectedServiceDaysRemaining !== null &&
+        projectedServiceDaysRemaining <= 30));
   const serviceStatusLabel = !hasServiceTrigger
     ? "Not Set"
     : serviceOverdue
@@ -1722,6 +1800,43 @@ export default function PlantViewPage() {
                 tone={expiryTone(asset.next_service_due, today)}
               />
 
+              <ImportantDateCard
+                label="Projected Service Date"
+                value={formatProjectedDate(projectedServiceDate)}
+                helper={
+                  averageHoursPerDay !== null
+                    ? `Based on ${averageHoursPerDay.toFixed(
+                        1,
+                      )} hrs/day from last ${projectionRows.length} prestarts`
+                    : "Needs at least 2 dated prestarts with increasing cab hours"
+                }
+                tone={
+                  projectedServiceDaysRemaining === null
+                    ? "slate"
+                    : projectedServiceDaysRemaining <= 0
+                      ? "rose"
+                      : projectedServiceDaysRemaining <= 30
+                        ? "amber"
+                        : "emerald"
+                }
+              />
+
+              <ImportantDateCard
+                label="Average Usage"
+                value={
+                  averageHoursPerDay !== null
+                    ? `${averageHoursPerDay.toFixed(1)} hrs/day`
+                    : "N/A"
+                }
+                helper={
+                  projectionRows.length >= 2
+                    ? `${Number(projectionHoursUsed).toLocaleString()} hrs across ${Math.ceil(
+                        projectionDaysElapsed,
+                      ).toLocaleString()} days`
+                    : "Based on recent plant prestarts"
+                }
+              />
+
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:col-span-2">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -1905,7 +2020,7 @@ export default function PlantViewPage() {
 
             {prestartHistory.length > 0 ? (
               <div className="space-y-3">
-                {prestartHistory.map((record) => (
+                {prestartHistory.slice(0, 3).map((record) => (
                   <Link
                     key={record.id}
                     href={`/assets/prestarts/${record.id}`}
