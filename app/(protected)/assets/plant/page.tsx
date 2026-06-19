@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
+  Trash2,
   Truck,
   Wrench,
 } from "lucide-react";
@@ -169,6 +170,7 @@ export default function PlantPage() {
   const [projectFilter, setProjectFilter] = useState("All Projects");
   const [statusFilter, setStatusFilter] = useState("All Statuses");
   const [manageAsset, setManageAsset] = useState<EnhancedPlant | null>(null);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
 
   const loadPlantAssets = useCallback(async () => {
     setLoading(true);
@@ -346,6 +348,56 @@ export default function PlantPage() {
     link.click();
 
     URL.revokeObjectURL(url);
+  }
+
+  async function deletePlantAsset(asset: EnhancedPlant) {
+    const assetLabel = clean(asset.asset_id) || getMakeModel(asset) || "this plant asset";
+
+    const confirmed = window.confirm(
+      `Delete ${assetLabel}?\n\nThis will permanently remove the plant asset from the register. Use this only for duplicate or test records.`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingAssetId(asset.id);
+
+    if (manageAsset?.id === asset.id) {
+      setManageAsset(null);
+    }
+
+    const relatedDeletes = [
+      supabase.from("plant_asset_documents").delete().eq("plant_asset_id", asset.id),
+      supabase.from("plant_service_history").delete().eq("plant_asset_id", asset.id),
+      supabase.from("plant_project_history").delete().eq("plant_asset_id", asset.id),
+      supabase.from("asset_history").delete().eq("plant_id", asset.id),
+      supabase.from("vehicle_prestarts").delete().eq("plant_asset_id", asset.id),
+      supabase.from("fleet_jobs").delete().eq("plant_id", asset.id),
+    ];
+
+    for (const deleteRequest of relatedDeletes) {
+      const { error } = await deleteRequest;
+
+      if (error && error.code !== "42P01" && error.code !== "42703") {
+        console.warn("Related plant record could not be deleted:", error.message);
+      }
+    }
+
+    const { error } = await supabase
+      .from("plant_assets")
+      .delete()
+      .eq("id", asset.id);
+
+    if (error) {
+      alert(`Could not delete plant asset: ${error.message}`);
+      setDeletingAssetId(null);
+      return;
+    }
+
+    setPlantAssets((current) =>
+      current.filter((plantAsset) => plantAsset.id !== asset.id),
+    );
+
+    setDeletingAssetId(null);
   }
 
   return (
@@ -552,6 +604,16 @@ export default function PlantPage() {
                   <Settings size={14} />
                   Manage
                 </button>
+
+                <button
+                  type="button"
+                  disabled={deletingAssetId === asset.id}
+                  onClick={() => void deletePlantAsset(asset)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <Trash2 size={14} />
+                  {deletingAssetId === asset.id ? "Deleting..." : "Delete"}
+                </button>
               </div>
             ),
           },
@@ -638,6 +700,16 @@ export default function PlantPage() {
                   <Settings size={14} />
                   Manage
                 </button>
+
+                <button
+                  type="button"
+                  disabled={deletingAssetId === asset.id}
+                  onClick={() => void deletePlantAsset(asset)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <Trash2 size={14} />
+                  {deletingAssetId === asset.id ? "Deleting..." : "Delete"}
+                </button>
               </div>
             </div>
           );
@@ -718,6 +790,24 @@ export default function PlantPage() {
                   </p>
                 </div>
               </Link>
+
+              <button
+                type="button"
+                disabled={deletingAssetId === manageAsset.id}
+                onClick={() => void deletePlantAsset(manageAsset)}
+                className="flex items-start gap-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-left hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+              >
+                <Trash2 size={20} className="mt-1 text-rose-700" />
+                <div>
+                  <p className="text-base font-black text-rose-800">
+                    Delete Asset
+                  </p>
+                  <p className="mt-1 text-sm text-rose-700">
+                    Permanently remove this plant asset from the register. Use
+                    this only for duplicate or test records.
+                  </p>
+                </div>
+              </button>
             </div>
           </div>
         </div>
