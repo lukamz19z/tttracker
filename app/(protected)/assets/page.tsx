@@ -2,215 +2,230 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  AlertTriangle,
   ArrowRight,
   CalendarClock,
-  CheckCircle2,
   ClipboardCheck,
   FileWarning,
   PackageCheck,
+  Plus,
   RefreshCw,
-  ShieldAlert,
   ShieldCheck,
   Truck,
   Wrench,
-  XCircle,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import {
+  ActionButton,
+  DetailGrid,
+  KpiCard,
+  PageHeader,
+  PageShell,
+  StatusBadge,
+} from "./components";
 
-type Tone = "rose" | "amber" | "emerald" | "slate" | "blue";
-type Severity = "Critical" | "Upcoming" | "Monitor" | "Compliant";
+type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
 
-type ComplianceItem = {
+type VehicleAsset = {
   id: string;
-  area: string;
-  title: string;
-  detail: string;
-  severity: Severity;
-  dueDate?: string | null;
-  href: string;
-  actionLabel: string;
+  vehicle_id: string | null;
+  vehicle_rego: string | null;
+  make: string | null;
+  model: string | null;
+  category: string | null;
+  project: string | null;
+  crew: string | null;
+  status: string | null;
+  rego_expiry: string | null;
+  insurance_expiry: string | null;
+  next_service_due: string | null;
+  next_service_km: number | null;
+  next_inspection_due: string | null;
+  created_at: string | null;
 };
 
-type Vehicle = {
+type PlantAsset = {
   id: string;
-  vehicle_id?: string | null;
-  asset_id?: string | null;
-  rego?: string | null;
-  registration?: string | null;
-  make?: string | null;
-  model?: string | null;
-  status?: string | null;
-  category?: string | null;
-  vehicle_type?: string | null;
-  rego_expiry?: string | null;
-  registration_expiry?: string | null;
-  insurance_expiry?: string | null;
-  risk_assessment_url?: string | null;
-  risk_assessment_file_url?: string | null;
-  user_manual_url?: string | null;
-  owners_manual_url?: string | null;
-  manual_url?: string | null;
-  spare_key?: boolean | null;
-  spare_key_location?: string | null;
-};
-
-type Plant = {
-  id: string;
+  asset_id: string | null;
   plant_id?: string | null;
-  asset_id?: string | null;
-  name?: string | null;
-  make?: string | null;
-  model?: string | null;
+  make: string | null;
+  model: string | null;
+  plant_type: string | null;
   category?: string | null;
-  plant_type?: string | null;
+  project: string | null;
+  crew: string | null;
+  asset_status: string | null;
   status?: string | null;
-  rego_expiry?: string | null;
-  registration_expiry?: string | null;
-  insurance_expiry?: string | null;
-  cranesafe_expiry?: string | null;
-  risk_assessment_url?: string | null;
-  risk_assessment_file_url?: string | null;
-  user_manual_url?: string | null;
-  owners_manual_url?: string | null;
-  manual_url?: string | null;
-  spare_key?: boolean | null;
-  spare_key_location?: string | null;
+  rego_expiry: string | null;
+  insurance_expiry: string | null;
+  cranesafe_expiry: string | null;
+  created_at: string | null;
 };
 
 type FleetJob = {
   id: string;
-  job_number?: string | null;
-  title?: string | null;
-  description?: string | null;
-  asset_label?: string | null;
-  asset_id?: string | null;
-  status?: string | null;
-  priority?: string | null;
-  created_at?: string | null;
-  completed_date?: string | null;
+  job_number: string | null;
+  title: string | null;
+  description: string | null;
+  asset_label: string | null;
+  asset_type: string | null;
+  vehicle_asset_id: string | null;
+  vehicle_id: string | null;
+  plant_id: string | null;
+  source_type: string | null;
+  source: string | null;
+  priority: string | null;
+  status: string | null;
+  project: string | null;
+  crew: string | null;
+  reported_by: string | null;
+  assigned_to: string | null;
+  vendor: string | null;
+  due_date: string | null;
+  completed_date: string | null;
   closed_at?: string | null;
-};
-
-type Prestart = {
-  id: string;
-  asset_id?: string | null;
-  vehicle_id?: string | null;
-  plant_id?: string | null;
-  asset_label?: string | null;
-  prestart_date?: string | null;
-  inspection_date?: string | null;
-  created_at?: string | null;
-};
-
-type LiftingGear = {
-  id: string;
-  serial_id?: string | null;
-  equipment_type?: string | null;
-  description?: string | null;
-  status?: string | null;
-  inspected_on?: string | null;
-  next_inspection_due?: string | null;
-  tag?: string | null;
-  crew_label?: string | null;
-};
-
-type TorqueWrench = {
-  id: string;
-  torque_wrench_number?: string | null;
-  serial_number?: string | null;
-  expiry_date?: string | null;
-  status?: string | null;
-};
-
-type Ladder = {
-  id: string;
-  ladder_number?: string | null;
-  make?: string | null;
-  ladder_type?: string | null;
-  status?: string | null;
-  last_internal_inspection?: string | null;
-};
-
-type Generator = {
-  id: string;
-  generator_number?: string | null;
-  status?: string | null;
-  last_service_date?: string | null;
-  prestart_frequency?: string | null;
-};
-
-type PpeStock = {
-  id: string;
-  item_name?: string | null;
-  variant?: string | null;
-  current_stock?: number | null;
-  minimum_stock?: number | null;
-  location?: string | null;
-};
-
-type InventoryKit = {
-  id: string;
-  kit_number?: string | null;
-  kit_category?: string | null;
-  kit_type?: string | null;
-  assigned_asset_id?: string | null;
-  assigned_location?: string | null;
-  last_inspection_date?: string | null;
-  status?: string | null;
-};
-
-type KitInspectionItem = {
-  id: string;
-  kit_id?: string | null;
-  item_name?: string | null;
-  required_qty?: number | null;
-  actual_qty?: number | null;
-  status?: string | null;
-  expiry_date?: string | null;
-};
-
-type AssetHistory = {
-  id: string;
-  fleet_job_id?: string | null;
-  history_type?: string | null;
-  history_date?: string | null;
-  title?: string | null;
-  created_at?: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 type FleetJobUpdate = {
   id: string;
   fleet_job_id: string;
-  update_type?: string | null;
+  update_type: string | null;
+  status: string | null;
+  comment: string | null;
+  created_at: string | null;
+};
+
+type AssetHistory = {
+  id: string;
+  fleet_job_id: string | null;
+  history_type: string | null;
+  history_date: string | null;
+  title: string | null;
+  created_at: string | null;
+};
+
+type PrestartRecord = {
+  id: string;
+  vehicle_asset_id: string | null;
+  asset_label: string | null;
+  vehicle_rego: string | null;
+  kilometres?: number | null;
+  inspected_by_name: string | null;
+  employee_name?: string | null;
+  overall_condition: string | null;
+  result: string | null;
+  severity: string | null;
+  comments: string | null;
+  fleet_job_id: string | null;
+  prestart_date: string | null;
+  created_at: string | null;
+};
+
+type LiftingGear = {
+  id: string;
+  serial_id: string | null;
+  equipment_type: string | null;
+  description: string | null;
+  status: string | null;
+  next_inspection_due: string | null;
+  crew_label?: string | null;
+  crew?: string | null;
+};
+
+type TorqueWrench = {
+  id: string;
+  tool_id?: string | null;
+  serial_number: string | null;
+  status: string | null;
+  expiry_date?: string | null;
+  calibration_due?: string | null;
+  crew?: string | null;
+};
+
+type Ladder = {
+  id: string;
+  ladder_id?: string | null;
+  type?: string | null;
+  size?: string | null;
+  status: string | null;
+  next_inspection_due?: string | null;
+  crew?: string | null;
+};
+
+type Generator = {
+  id: string;
+  generator_id?: string | null;
+  make?: string | null;
+  model?: string | null;
+  serial_number?: string | null;
+  status: string | null;
+  next_service_due?: string | null;
+  crew?: string | null;
+};
+
+type PpeStock = {
+  id: string;
+  item_name?: string | null;
+  name?: string | null;
+  stock_on_hand?: number | null;
+  quantity?: number | null;
+  minimum_stock?: number | null;
+  min_stock?: number | null;
+};
+
+type InventoryKit = {
+  id: string;
+  kit_type?: string | null;
+  name?: string | null;
+  asset_label?: string | null;
+  expiry_date?: string | null;
+  next_inspection_due?: string | null;
   status?: string | null;
-  comment?: string | null;
-  created_at?: string | null;
+};
+
+type Reminder = {
+  id: string;
+  title: string;
+  detail: string;
+  dueDate: string | null;
+  href: string;
+  tone: Tone;
+};
+
+type ActionItem = {
+  id: string;
+  title: string;
+  detail: string;
+  href: string;
+  badge: string;
+  tone: Tone;
+  date?: string | null;
 };
 
 type DataState = {
-  vehicles: Vehicle[];
-  plant: Plant[];
+  vehicles: VehicleAsset[];
+  plant: PlantAsset[];
   fleetJobs: FleetJob[];
-  assetHistory: AssetHistory[];
   fleetJobUpdates: FleetJobUpdate[];
-  prestarts: Prestart[];
+  assetHistory: AssetHistory[];
+  prestarts: PrestartRecord[];
   liftingGear: LiftingGear[];
   torqueWrenches: TorqueWrench[];
   ladders: Ladder[];
   generators: Generator[];
   ppeStock: PpeStock[];
   kits: InventoryKit[];
-  kitItems: KitInspectionItem[];
 };
 
 const blankData: DataState = {
   vehicles: [],
   plant: [],
   fleetJobs: [],
-  assetHistory: [],
   fleetJobUpdates: [],
+  assetHistory: [],
   prestarts: [],
   liftingGear: [],
   torqueWrenches: [],
@@ -218,727 +233,915 @@ const blankData: DataState = {
   generators: [],
   ppeStock: [],
   kits: [],
-  kitItems: [],
 };
 
-const fallArrestTypes = [
-  "Harness",
-  "Pole Strap",
-  "Cobra",
-  "Descender",
-  "Lanyard",
-  "Rope Grab",
-  "Anchor Strap",
-  "Rescue Kit",
-  "Fall Protection Other",
-  "Other",
-];
-
-function clean(value: string | number | boolean | null | undefined) {
-  return String(value ?? "").trim();
+function clean(value: string | null | undefined) {
+  return value?.trim() || "N/A";
 }
 
-function isActiveStatus(status: string | null | undefined) {
-  const value = clean(status).toLowerCase();
-  return !["retired", "sold", "inactive", "no longer hired", "superseded", "decommissioned"].includes(value);
+function optional(value: string | null | undefined) {
+  return value?.trim() || "";
 }
 
-function latestCloseOutForJob(
-  updates: FleetJobUpdate[],
-  fleetJobId: string | null | undefined,
-) {
-  if (!fleetJobId) return null;
+function formatDate(value: string | null | undefined) {
+  if (!value) return "N/A";
 
-  return (
-    updates.find(
-      (update) =>
-        update.fleet_job_id === fleetJobId &&
-        (update.update_type === "Close Out" ||
-          update.update_type === "Close Out Edited"),
-    ) || null
-  );
-}
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
 
-function latestReopenForJob(
-  updates: FleetJobUpdate[],
-  fleetJobId: string | null | undefined,
-) {
-  if (!fleetJobId) return null;
-
-  return (
-    updates.find(
-      (update) =>
-        update.fleet_job_id === fleetJobId && update.update_type === "Reopened",
-    ) || null
-  );
-}
-
-function isClosedJob(
-  job: FleetJob,
-  assetHistory: AssetHistory[] = [],
-  updates: FleetJobUpdate[] = [],
-) {
-  const status = clean(job.status).toLowerCase();
-
-  const statusClosed = [
-    "closed",
-    "complete",
-    "completed",
-    "resolved",
-    "cancelled",
-    "canceled",
-    "actioned",
-  ].includes(status);
-
-  const hasAssetHistoryCloseOut = assetHistory.some(
-    (record) => record.fleet_job_id === job.id,
-  );
-
-  const closeOutUpdate = latestCloseOutForJob(updates, job.id);
-  const reopenUpdate = latestReopenForJob(updates, job.id);
-
-  const reopenedAfterCloseOut = Boolean(
-    reopenUpdate?.created_at &&
-      closeOutUpdate?.created_at &&
-      new Date(reopenUpdate.created_at).getTime() >
-        new Date(closeOutUpdate.created_at).getTime(),
-  );
-
-  if (reopenedAfterCloseOut && !statusClosed) return false;
-  if (reopenUpdate && !closeOutUpdate && !statusClosed) return false;
-  if (statusClosed) return true;
-  if (clean(job.closed_at) || clean(job.completed_date)) return true;
-  if (closeOutUpdate || hasAssetHistoryCloseOut) return true;
-
-  return false;
-}
-
-function isBadStatus(status: string | null | undefined) {
-  const value = clean(status).toLowerCase();
-  return ["failed", "out of service", "missing", "expired", "retired"].includes(value);
-}
-
-function formatDate(date: string | null | undefined) {
-  if (!date) return "No date";
-  const parsed = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return clean(date);
-  return parsed.toLocaleDateString("en-AU", {
+  return date.toLocaleDateString("en-AU", {
     day: "2-digit",
     month: "short",
     year: "numeric",
   });
 }
 
-function daysUntil(date: string | null | undefined, todayIso: string) {
-  if (!date) return null;
-  const today = new Date(`${todayIso}T00:00:00`);
-  const due = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(due.getTime())) return null;
-  return Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+function daysUntil(value: string | null | undefined) {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  return Math.ceil((end.getTime() - start.getTime()) / 86_400_000);
 }
 
-function daysSince(date: string | null | undefined, todayIso: string) {
-  if (!date) return null;
-  const today = new Date(`${todayIso}T00:00:00`);
-  const past = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(past.getTime())) return null;
-  return Math.floor((today.getTime() - past.getTime()) / (1000 * 60 * 60 * 24));
+function assetStatusIsActive(status: string | null | undefined) {
+  const value = clean(status).toLowerCase();
+
+  return ![
+    "inactive",
+    "retired",
+    "superseded",
+    "off hire",
+    "no longer hired",
+    "not hired",
+    "disposed",
+  ].includes(value);
 }
 
-function assetLabel(asset: Vehicle | Plant) {
-  const v = asset as Vehicle;
-  const p = asset as Plant;
-  return (
-    clean(v.vehicle_id) ||
-    clean(v.asset_id) ||
-    clean(v.rego) ||
-    clean(v.registration) ||
-    clean(p.plant_id) ||
-    clean(p.asset_id) ||
-    clean(p.name) ||
-    "Unknown asset"
+function assetStatusIsUnavailable(status: string | null | undefined) {
+  const value = clean(status).toLowerCase();
+
+  return [
+    "out of service",
+    "under maintenance",
+    "maintenance",
+    "off hire",
+    "inactive",
+    "retired",
+    "superseded",
+    "no longer hired",
+    "not hired",
+    "failed",
+  ].includes(value);
+}
+
+function isClosedStatus(status: string | null | undefined) {
+  return ["closed", "complete", "completed", "resolved", "cancelled", "canceled", "actioned"].includes(
+    clean(status).toLowerCase(),
   );
 }
 
-function vehicleLabel(vehicle: Vehicle) {
-  return [assetLabel(vehicle), clean(vehicle.rego || vehicle.registration), clean(vehicle.make), clean(vehicle.model)]
-    .filter(Boolean)
-    .join(" · ");
+function latestUpdateForJob(
+  updates: FleetJobUpdate[],
+  jobId: string,
+  types: string[],
+) {
+  return updates.find(
+    (update) =>
+      update.fleet_job_id === jobId &&
+      types.includes(clean(update.update_type)),
+  );
 }
 
-function plantLabel(plant: Plant) {
-  return [assetLabel(plant), clean(plant.make), clean(plant.model)].filter(Boolean).join(" · ");
+function isFleetJobActive(
+  job: FleetJob,
+  assetHistory: AssetHistory[],
+  updates: FleetJobUpdate[],
+) {
+  const latestCloseOut = latestUpdateForJob(updates, job.id, [
+    "Close Out",
+    "Close Out Edited",
+  ]);
+  const latestReopen = latestUpdateForJob(updates, job.id, ["Reopened"]);
+  const hasAssetHistoryCloseOut = assetHistory.some(
+    (record) => record.fleet_job_id === job.id,
+  );
+
+  const reopenedAfterCloseOut = Boolean(
+    latestReopen?.created_at &&
+      latestCloseOut?.created_at &&
+      new Date(latestReopen.created_at).getTime() >
+        new Date(latestCloseOut.created_at).getTime(),
+  );
+
+  if (reopenedAfterCloseOut) return true;
+  if (latestReopen && !isClosedStatus(job.status)) return true;
+  if (isClosedStatus(job.status)) return false;
+  if (job.completed_date || job.closed_at) return false;
+  if (latestCloseOut || hasAssetHistoryCloseOut) return false;
+
+  return true;
 }
 
-function hasDocument(row: Record<string, unknown>, fields: string[]) {
-  return fields.some((field) => Boolean(clean(row[field] as string | null | undefined)));
-}
+function statusTone(status: string | null | undefined): Tone {
+  const value = clean(status).toLowerCase();
 
-function getTone(severity: Severity): Tone {
-  if (severity === "Critical") return "rose";
-  if (severity === "Upcoming") return "amber";
-  if (severity === "Compliant") return "emerald";
+  if (["completed", "closed", "resolved", "compliant", "available", "active"].includes(value)) {
+    return "emerald";
+  }
+
+  if (["in progress", "booked", "in use", "on hire"].includes(value)) return "blue";
+  if (value.includes("waiting") || value.includes("due soon") || value.includes("review")) return "amber";
+  if (value.includes("open") || value.includes("failed") || value.includes("expired") || value.includes("critical")) return "rose";
+
   return "slate";
 }
 
-function toneClasses(tone: Tone) {
-  const classes = {
-    rose: "border-rose-200 bg-rose-50 text-rose-700",
-    amber: "border-amber-200 bg-amber-50 text-amber-700",
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    slate: "border-slate-200 bg-slate-50 text-slate-700",
-    blue: "border-blue-200 bg-blue-50 text-blue-700",
-  };
-
-  return classes[tone];
+function priorityTone(priority: string | null | undefined): Tone {
+  const value = clean(priority).toLowerCase();
+  if (["critical", "urgent", "high"].includes(value)) return "rose";
+  if (["medium", "moderate"].includes(value)) return "amber";
+  if (["low"].includes(value)) return "blue";
+  return "slate";
 }
 
-function Pill({ children, tone }: { children: React.ReactNode; tone: Tone }) {
-  return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${toneClasses(tone)}`}>
-      {children}
-    </span>
-  );
+function dueTone(value: string | null | undefined): Tone {
+  const days = daysUntil(value);
+  if (days === null) return "slate";
+  if (days < 0) return "rose";
+  if (days <= 30) return "amber";
+  return "emerald";
 }
 
-function SectionHeader({ title, description, href }: { title: string; description: string; href?: string }) {
-  return (
-    <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-start sm:justify-between">
-      <div>
-        <h2 className="text-lg font-black text-slate-950">{title}</h2>
-        <p className="mt-1 text-sm text-slate-600">{description}</p>
-      </div>
-      {href ? (
-        <Link href={href} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
-          Open register <ArrowRight size={14} />
-        </Link>
-      ) : null}
-    </div>
-  );
+function vehicleLabel(vehicle: VehicleAsset) {
+  const id = optional(vehicle.vehicle_id);
+  const rego = optional(vehicle.vehicle_rego);
+  const makeModel = [vehicle.make, vehicle.model]
+    .map(optional)
+    .filter(Boolean)
+    .join(" ");
+
+  if (id && makeModel) return `${id} - ${makeModel}`;
+  if (id) return id;
+  if (rego) return rego;
+  if (makeModel) return makeModel;
+  return "Vehicle";
 }
 
-function IssueList({ items, emptyText }: { items: ComplianceItem[]; emptyText: string }) {
-  if (items.length === 0) {
-    return <div className="p-5 text-sm font-semibold text-slate-500">{emptyText}</div>;
-  }
+function plantLabel(asset: PlantAsset) {
+  const id = optional(asset.asset_id || asset.plant_id);
+  const makeModel = [asset.make, asset.model]
+    .map(optional)
+    .filter(Boolean)
+    .join(" ");
 
-  return (
-    <div className="divide-y divide-slate-100">
-      {items.map((item) => (
-        <div key={item.id} className="flex flex-col gap-3 p-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Pill tone={getTone(item.severity)}>{item.severity}</Pill>
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">{item.area}</span>
-            </div>
-            <p className="mt-2 font-black text-slate-950">{item.title}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-600">{item.detail}</p>
-            {item.dueDate ? <p className="mt-1 text-xs font-bold text-slate-500">Date: {formatDate(item.dueDate)}</p> : null}
-          </div>
-          <Link href={item.href} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800">
-            {item.actionLabel} <ArrowRight size={14} />
-          </Link>
-        </div>
-      ))}
-    </div>
-  );
+  if (id && makeModel) return `${id} - ${makeModel}`;
+  if (id) return id;
+  if (makeModel) return makeModel;
+  return "Plant";
 }
 
-async function safeSelect<T>(query: PromiseLike<{ data: unknown[] | null; error: unknown }>) {
+function equipmentStatusCount(items: Array<{ status: string | null | undefined }>, status: string) {
+  return items.filter((item) => clean(item.status).toLowerCase() === status.toLowerCase()).length;
+}
+
+async function safeSelect<T>(query: PromiseLike<{ data: unknown; error: unknown }>) {
   const result = await query;
   if (result.error) return [] as T[];
-  return (result.data ?? []) as T[];
+  return ((result.data as T[] | null) ?? []) as T[];
 }
 
-export default function CompliancePage() {
- const supabase = useMemo(() => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+function Panel({
+  title,
+  description,
+  count,
+  children,
+}: {
+  title: string;
+  description: string;
+  count?: number;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-slate-950">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+        </div>
+        {count !== undefined ? <StatusBadge label={String(count)} tone="slate" /> : null}
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Missing Supabase environment variables.");
-  }
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+      {text}
+    </div>
+  );
+}
 
-  return createClient(supabaseUrl, supabaseAnonKey);
-}, []);
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+function ActionRow({ item }: { item: ActionItem }) {
+  return (
+    <Link
+      href={item.href}
+      className="block border border-slate-200 bg-slate-50 p-4 transition hover:border-slate-300 hover:bg-white"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge label={item.badge} tone={item.tone} />
+            {item.date ? (
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                {formatDate(item.date)}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 font-bold text-slate-950">{item.title}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{item.detail}</p>
+        </div>
+        <ArrowRight size={16} className="mt-1 shrink-0 text-slate-400" />
+      </div>
+    </Link>
+  );
+}
 
-  const [loading, setLoading] = useState(true);
+function ReminderRow({ reminder }: { reminder: Reminder }) {
+  const days = daysUntil(reminder.dueDate);
+  const label = days === null ? "Review" : days < 0 ? "Expired" : days <= 30 ? "Due Soon" : "Upcoming";
+
+  return (
+    <Link
+      href={reminder.href}
+      className="block border border-slate-200 bg-slate-50 p-4 transition hover:bg-white"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-bold text-slate-950">{reminder.title}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{reminder.detail}</p>
+          <p className="mt-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+            {formatDate(reminder.dueDate)}
+          </p>
+        </div>
+        <StatusBadge label={label} tone={reminder.tone} />
+      </div>
+    </Link>
+  );
+}
+
+export default function AssetsDashboardPage() {
+  const supabase = useMemo(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error("Missing Supabase environment variables.");
+    }
+
+    return createClient(supabaseUrl, supabaseAnonKey);
+  }, []);
+
   const [data, setData] = useState<DataState>(blankData);
-  const [activeTab, setActiveTab] = useState("Priority");
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const loadData = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     setLoading(true);
+    setErrorMessage("");
 
-    const [
-      vehicles,
-      plant,
-      fleetJobs,
-      assetHistory,
-      fleetJobUpdates,
-      prestarts,
-      liftingGear,
-      torqueWrenches,
-      ladders,
-      generators,
-      ppeStock,
-      kits,
-      kitItems,
-    ] = await Promise.all([
-      safeSelect<Vehicle>(supabase.from("vehicles").select("*")),
-      safeSelect<Plant>(supabase.from("plant_assets").select("*")),
-      safeSelect<FleetJob>(supabase.from("fleet_jobs").select("*")),
-      safeSelect<AssetHistory>(
-        supabase
-          .from("asset_history")
-          .select("id, fleet_job_id, history_type, history_date, title, created_at")
-          .not("fleet_job_id", "is", null),
-      ),
-      safeSelect<FleetJobUpdate>(
-        supabase
-          .from("fleet_job_updates")
-          .select("id, fleet_job_id, update_type, status, comment, created_at")
-          .order("created_at", { ascending: false }),
-      ),
-      safeSelect<Prestart>(supabase.from("asset_prestarts").select("*")),
-      safeSelect<LiftingGear>(supabase.from("equipment_lifting_gear").select("*")),
-      safeSelect<TorqueWrench>(supabase.from("equipment_torque_wrenches").select("*")),
-      safeSelect<Ladder>(supabase.from("equipment_ladders").select("*")),
-      safeSelect<Generator>(supabase.from("equipment_generators").select("*")),
-      safeSelect<PpeStock>(supabase.from("inventory_ppe_stock").select("*")),
-      safeSelect<InventoryKit>(supabase.from("inventory_kits").select("*")),
-      safeSelect<KitInspectionItem>(supabase.from("inventory_kit_inspection_items").select("*")),
-    ]);
+    try {
+      const [
+        vehicles,
+        plant,
+        fleetJobs,
+        assetHistory,
+        fleetJobUpdates,
+        prestarts,
+        liftingGear,
+        torqueWrenches,
+        ladders,
+        generators,
+        ppeStock,
+        kits,
+      ] = await Promise.all([
+        safeSelect<VehicleAsset>(supabase.from("vehicle_assets").select("*")),
+        safeSelect<PlantAsset>(supabase.from("plant_assets").select("*")),
+        safeSelect<FleetJob>(supabase.from("fleet_jobs").select("*")),
+        safeSelect<AssetHistory>(
+          supabase
+            .from("asset_history")
+            .select("id, fleet_job_id, history_type, history_date, title, created_at")
+            .not("fleet_job_id", "is", null),
+        ),
+        safeSelect<FleetJobUpdate>(
+          supabase
+            .from("fleet_job_updates")
+            .select("id, fleet_job_id, update_type, status, comment, created_at")
+            .order("created_at", { ascending: false }),
+        ),
+        safeSelect<PrestartRecord>(
+          supabase
+            .from("vehicle_prestarts")
+            .select("*")
+            .order("prestart_date", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(20),
+        ),
+        safeSelect<LiftingGear>(supabase.from("equipment_lifting_gear").select("*")),
+        safeSelect<TorqueWrench>(supabase.from("equipment_torque_wrenches").select("*")),
+        safeSelect<Ladder>(supabase.from("equipment_ladders").select("*")),
+        safeSelect<Generator>(supabase.from("equipment_generators").select("*")),
+        safeSelect<PpeStock>(supabase.from("inventory_ppe_stock").select("*")),
+        safeSelect<InventoryKit>(supabase.from("inventory_kits").select("*")),
+      ]);
 
-    setData({
-      vehicles,
-      plant,
-      fleetJobs,
-      assetHistory,
-      fleetJobUpdates,
-      prestarts,
-      liftingGear,
-      torqueWrenches,
-      ladders,
-      generators,
-      ppeStock,
-      kits,
-      kitItems,
-    });
+      setData({
+        vehicles,
+        plant,
+        fleetJobs,
+        assetHistory,
+        fleetJobUpdates,
+        prestarts,
+        liftingGear,
+        torqueWrenches,
+        ladders,
+        generators,
+        ppeStock,
+        kits,
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "The asset dashboard could not be loaded.",
+      );
+    }
 
     setLoading(false);
   }, [supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadData();
+      void loadDashboard();
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [loadData]);
+  }, [loadDashboard]);
 
-  const compliance = useMemo(() => {
-    const items: ComplianceItem[] = [];
+  const dashboard = useMemo(() => {
+    const activeVehicles = data.vehicles.filter((vehicle) => assetStatusIsActive(vehicle.status));
+    const activePlant = data.plant.filter((asset) => assetStatusIsActive(asset.asset_status || asset.status));
+    const activeFleetJobs = data.fleetJobs.filter((job) =>
+      isFleetJobActive(job, data.assetHistory, data.fleetJobUpdates),
+    );
 
-    const activeVehicles = data.vehicles.filter((vehicle) => isActiveStatus(vehicle.status));
-    const activePlant = data.plant.filter((plant) => isActiveStatus(plant.status));
+    const waitingParts = activeFleetJobs.filter((job) =>
+      clean(job.status).toLowerCase().includes("waiting"),
+    );
+
+    const highPriorityJobs = activeFleetJobs.filter((job) =>
+      ["critical", "urgent", "high"].includes(clean(job.priority).toLowerCase()),
+    );
+
+    const prestartFlags = data.prestarts.filter((record) => {
+      const text = [record.result, record.severity, record.overall_condition, record.comments]
+        .map(clean)
+        .join(" ")
+        .toLowerCase();
+
+      return ["fail", "failed", "fault", "defect", "minor", "major", "critical", "no"].some((word) =>
+        text.includes(word),
+      );
+    });
+
+    const unavailableAssets =
+      data.vehicles.filter((vehicle) => assetStatusIsUnavailable(vehicle.status)).length +
+      data.plant.filter((asset) => assetStatusIsUnavailable(asset.asset_status || asset.status)).length +
+      data.liftingGear.filter((item) => assetStatusIsUnavailable(item.status)).length +
+      data.torqueWrenches.filter((item) => assetStatusIsUnavailable(item.status)).length +
+      data.ladders.filter((item) => assetStatusIsUnavailable(item.status)).length +
+      data.generators.filter((item) => assetStatusIsUnavailable(item.status)).length;
+
+    const reminders: Reminder[] = [];
 
     for (const vehicle of activeVehicles) {
       const label = vehicleLabel(vehicle);
       const href = `/assets/vehicles/${vehicle.id}`;
       const updateHref = `/assets/vehicles/${vehicle.id}/update`;
-      const isTrailer = clean(vehicle.category || vehicle.vehicle_type).toLowerCase().includes("trailer");
 
-      if (!hasDocument(vehicle as unknown as Record<string, unknown>, ["risk_assessment_url", "risk_assessment_file_url"])) {
-        items.push({ id: `vehicle-risk-${vehicle.id}`, area: "Vehicles", title: `${label} missing risk assessment`, detail: "Every active vehicle should have a risk assessment attached before use on project.", severity: "Critical", href, actionLabel: "View vehicle" });
-      }
-
-      if (!hasDocument(vehicle as unknown as Record<string, unknown>, ["user_manual_url", "owners_manual_url", "manual_url"])) {
-        items.push({ id: `vehicle-manual-${vehicle.id}`, area: "Vehicles", title: `${label} missing user manual`, detail: "Attach a user manual or owner manual for compliance and operator reference.", severity: "Monitor", href, actionLabel: "View vehicle" });
-      }
-
-      const regoDate = vehicle.rego_expiry || vehicle.registration_expiry;
-      const regoDays = daysUntil(regoDate, todayIso);
-      if (regoDays === null) {
-        items.push({ id: `vehicle-rego-missing-${vehicle.id}`, area: "Vehicles", title: `${label} missing rego expiry`, detail: "No registration expiry date recorded.", severity: "Critical", href: updateHref, actionLabel: "Update asset" });
-      } else if (regoDays < 0) {
-        items.push({ id: `vehicle-rego-expired-${vehicle.id}`, area: "Vehicles", title: `${label} registration expired`, detail: `Registration expired ${Math.abs(regoDays)} day(s) ago.`, severity: "Critical", dueDate: regoDate, href: updateHref, actionLabel: "Update asset" });
-      } else if (regoDays <= 30) {
-        items.push({ id: `vehicle-rego-soon-${vehicle.id}`, area: "Vehicles", title: `${label} registration due soon`, detail: `Registration expires in ${regoDays} day(s).`, severity: "Upcoming", dueDate: regoDate, href: updateHref, actionLabel: "Update asset" });
-      }
-
-      if (!isTrailer) {
-        const insuranceDays = daysUntil(vehicle.insurance_expiry, todayIso);
-        if (insuranceDays === null) {
-          items.push({ id: `vehicle-insurance-missing-${vehicle.id}`, area: "Vehicles", title: `${label} missing insurance expiry`, detail: "No insurance expiry date recorded.", severity: "Critical", href: updateHref, actionLabel: "Update asset" });
-        } else if (insuranceDays < 0) {
-          items.push({ id: `vehicle-insurance-expired-${vehicle.id}`, area: "Vehicles", title: `${label} insurance expired`, detail: `Insurance expired ${Math.abs(insuranceDays)} day(s) ago.`, severity: "Critical", dueDate: vehicle.insurance_expiry, href: updateHref, actionLabel: "Update asset" });
-        } else if (insuranceDays <= 30) {
-          items.push({ id: `vehicle-insurance-soon-${vehicle.id}`, area: "Vehicles", title: `${label} insurance due soon`, detail: `Insurance expires in ${insuranceDays} day(s).`, severity: "Upcoming", dueDate: vehicle.insurance_expiry, href: updateHref, actionLabel: "Update asset" });
+      [
+        { key: "rego", title: `${label} rego`, date: vehicle.rego_expiry, detail: "Registration needs renewal", href: updateHref },
+        { key: "insurance", title: `${label} insurance`, date: vehicle.insurance_expiry, detail: "Insurance expiry needs review", href: updateHref },
+        { key: "service", title: `${label} service`, date: vehicle.next_service_due, detail: "Vehicle service date trigger", href },
+        { key: "inspection", title: `${label} inspection`, date: vehicle.next_inspection_due, detail: "Vehicle inspection due", href: updateHref },
+      ].forEach((item) => {
+        const days = daysUntil(item.date);
+        if (days !== null && days <= 45) {
+          reminders.push({
+            id: `vehicle-${item.key}-${vehicle.id}`,
+            title: item.title,
+            detail: item.detail,
+            dueDate: item.date,
+            href: item.href,
+            tone: dueTone(item.date),
+          });
         }
-      }
+      });
     }
 
-    for (const plant of activePlant) {
-      const label = plantLabel(plant);
-      const href = `/assets/plant/${plant.id}`;
-      const updateHref = `/assets/plant/${plant.id}/update`;
-      const plantType = clean(plant.category || plant.plant_type).toLowerCase();
-      const isCrane = plantType.includes("crane");
+    for (const asset of activePlant) {
+      const label = plantLabel(asset);
+      const href = `/assets/plant/${asset.id}`;
+      const updateHref = `/assets/plant/${asset.id}/update`;
 
-      if (!hasDocument(plant as unknown as Record<string, unknown>, ["risk_assessment_url", "risk_assessment_file_url"])) {
-        items.push({ id: `plant-risk-${plant.id}`, area: "Plant", title: `${label} missing risk assessment`, detail: "All active plant should have a risk assessment attached.", severity: "Critical", href, actionLabel: "View plant" });
-      }
-
-      if (!hasDocument(plant as unknown as Record<string, unknown>, ["user_manual_url", "owners_manual_url", "manual_url"])) {
-        items.push({ id: `plant-manual-${plant.id}`, area: "Plant", title: `${label} missing user manual`, detail: "Attach user manual or operator manual for the asset.", severity: "Monitor", href, actionLabel: "View plant" });
-      }
-
-      const insuranceDays = daysUntil(plant.insurance_expiry, todayIso);
-      if (insuranceDays !== null && insuranceDays < 0) {
-        items.push({ id: `plant-insurance-expired-${plant.id}`, area: "Plant", title: `${label} insurance expired`, detail: `Insurance expired ${Math.abs(insuranceDays)} day(s) ago.`, severity: "Critical", dueDate: plant.insurance_expiry, href: updateHref, actionLabel: "Update plant" });
-      } else if (insuranceDays !== null && insuranceDays <= 30) {
-        items.push({ id: `plant-insurance-soon-${plant.id}`, area: "Plant", title: `${label} insurance due soon`, detail: `Insurance expires in ${insuranceDays} day(s).`, severity: "Upcoming", dueDate: plant.insurance_expiry, href: updateHref, actionLabel: "Update plant" });
-      }
-
-      if (isCrane) {
-        const cranesafeDays = daysUntil(plant.cranesafe_expiry, todayIso);
-        if (cranesafeDays === null) {
-          items.push({ id: `crane-cranesafe-missing-${plant.id}`, area: "Cranes", title: `${label} missing CraneSafe expiry`, detail: "CraneSafe expiry date is required for crane compliance tracking.", severity: "Critical", href: updateHref, actionLabel: "Update crane" });
-        } else if (cranesafeDays < 0) {
-          items.push({ id: `crane-cranesafe-expired-${plant.id}`, area: "Cranes", title: `${label} CraneSafe expired`, detail: `CraneSafe expired ${Math.abs(cranesafeDays)} day(s) ago.`, severity: "Critical", dueDate: plant.cranesafe_expiry, href: updateHref, actionLabel: "Update crane" });
-        } else if (cranesafeDays <= 45) {
-          items.push({ id: `crane-cranesafe-soon-${plant.id}`, area: "Cranes", title: `${label} CraneSafe due soon`, detail: `CraneSafe expires in ${cranesafeDays} day(s).`, severity: "Upcoming", dueDate: plant.cranesafe_expiry, href: updateHref, actionLabel: "Update crane" });
+      [
+        { key: "rego", title: `${label} rego`, date: asset.rego_expiry, detail: "Plant registration needs renewal", href: updateHref },
+        { key: "insurance", title: `${label} insurance`, date: asset.insurance_expiry, detail: "Plant insurance expiry needs review", href: updateHref },
+        { key: "cranesafe", title: `${label} CraneSafe`, date: asset.cranesafe_expiry, detail: "CraneSafe certificate due", href },
+      ].forEach((item) => {
+        const days = daysUntil(item.date);
+        if (days !== null && days <= 45) {
+          reminders.push({
+            id: `plant-${item.key}-${asset.id}`,
+            title: item.title,
+            detail: item.detail,
+            dueDate: item.date,
+            href: item.href,
+            tone: dueTone(item.date),
+          });
         }
-      }
+      });
     }
 
-    for (const job of data.fleetJobs) {
-      if (!isClosedJob(job, data.assetHistory, data.fleetJobUpdates)) {
-        const priority = clean(job.priority).toLowerCase();
-        items.push({
-          id: `fleet-job-${job.id}`,
-          area: "Fleet Jobs",
-          title: `${clean(job.job_number) || "Fleet job"} is open`,
-          detail: `${clean(job.title || job.description || job.asset_label || job.asset_id) || "Open fleet defect / maintenance job requires close-out."}${priority ? ` Priority: ${job.priority}.` : ""}`,
-          severity: priority.includes("high") || priority.includes("critical") ? "Critical" : "Monitor",
-          href: `/assets/fleet-jobs/${job.id}`,
-          actionLabel: "View job",
+    for (const item of data.liftingGear) {
+      const days = daysUntil(item.next_inspection_due);
+      if (days !== null && days <= 45) {
+        reminders.push({
+          id: `lifting-${item.id}`,
+          title: `${clean(item.serial_id)} ${clean(item.equipment_type)}`,
+          detail: "Lifting gear inspection due",
+          dueDate: item.next_inspection_due,
+          href: "/assets/equipment/lifting-gear",
+          tone: dueTone(item.next_inspection_due),
         });
       }
     }
 
-    const prestartsByAsset = new Map<string, Prestart[]>();
-    for (const prestart of data.prestarts) {
-      const key = clean(prestart.vehicle_id || prestart.plant_id || prestart.asset_id || prestart.asset_label);
-      if (!key) continue;
-      const existing = prestartsByAsset.get(key) ?? [];
-      existing.push(prestart);
-      prestartsByAsset.set(key, existing);
-    }
-
-    for (const vehicle of activeVehicles) {
-      const isTrailer = clean(vehicle.category || vehicle.vehicle_type).toLowerCase().includes("trailer");
-      if (isTrailer) continue;
-      const keys = [vehicle.id, clean(vehicle.vehicle_id), clean(vehicle.asset_id), clean(vehicle.rego), clean(vehicle.registration)].filter(Boolean);
-      const related = keys.flatMap((key) => prestartsByAsset.get(key) ?? []);
-      const latest = related
-        .map((item) => item.prestart_date || item.inspection_date || item.created_at?.slice(0, 10) || null)
-        .filter(Boolean)
-        .sort()
-        .at(-1);
-      const age = daysSince(latest, todayIso);
-      if (age === null) {
-        items.push({ id: `vehicle-prestart-none-${vehicle.id}`, area: "Prestarts", title: `${vehicleLabel(vehicle)} has no recent prestart`, detail: "No prestart record found for this active vehicle.", severity: "Critical", href: "/assets/prestarts", actionLabel: "View prestarts" });
-      } else if (age > 30) {
-        items.push({ id: `vehicle-prestart-old-${vehicle.id}`, area: "Prestarts", title: `${vehicleLabel(vehicle)} not prestarted in a month`, detail: `Last prestart was ${age} day(s) ago.`, severity: "Critical", dueDate: latest, href: "/assets/prestarts", actionLabel: "View prestarts" });
-      } else if (age > 21) {
-        items.push({ id: `vehicle-prestart-aging-${vehicle.id}`, area: "Prestarts", title: `${vehicleLabel(vehicle)} prestart ageing`, detail: `Last prestart was ${age} day(s) ago.`, severity: "Upcoming", dueDate: latest, href: "/assets/prestarts", actionLabel: "View prestarts" });
-      }
-    }
-
-    for (const gear of data.liftingGear) {
-      const label = `${clean(gear.serial_id) || "Gear item"} · ${clean(gear.equipment_type) || "Equipment"}`;
-      const isFall = fallArrestTypes.includes(clean(gear.equipment_type));
-      const href = isFall ? "/assets/equipment/fall-arrest" : "/assets/equipment/lifting-gear";
-
-      if (isBadStatus(gear.status)) {
-        items.push({ id: `gear-status-${gear.id}`, area: isFall ? "Fall Arrest" : "Lifting Gear", title: `${label} is ${clean(gear.status)}`, detail: clean(gear.description) || "Item has a non-compliant status.", severity: "Critical", href, actionLabel: "Open register" });
-      }
-
-      const dueDays = daysUntil(gear.next_inspection_due, todayIso);
-      if (dueDays === null) {
-        items.push({ id: `gear-due-missing-${gear.id}`, area: isFall ? "Fall Arrest" : "Lifting Gear", title: `${label} missing next inspection date`, detail: "Inspection due date is not recorded.", severity: "Critical", href, actionLabel: "Open register" });
-      } else if (dueDays < 0) {
-        items.push({ id: `gear-overdue-${gear.id}`, area: isFall ? "Fall Arrest" : "Lifting Gear", title: `${label} inspection overdue`, detail: `Inspection overdue by ${Math.abs(dueDays)} day(s).`, severity: "Critical", dueDate: gear.next_inspection_due, href, actionLabel: "Open register" });
-      } else if (dueDays <= 30) {
-        items.push({ id: `gear-due-soon-${gear.id}`, area: isFall ? "Fall Arrest" : "Lifting Gear", title: `${label} inspection due soon`, detail: `Inspection due in ${dueDays} day(s).`, severity: "Upcoming", dueDate: gear.next_inspection_due, href, actionLabel: "Open register" });
-      }
-    }
-
-    for (const wrench of data.torqueWrenches) {
-      const label = clean(wrench.torque_wrench_number) || clean(wrench.serial_number) || "Torque wrench";
-      const expiryDays = daysUntil(wrench.expiry_date, todayIso);
-      if (isBadStatus(wrench.status)) {
-        items.push({ id: `tw-status-${wrench.id}`, area: "Torque Wrenches", title: `${label} is ${clean(wrench.status)}`, detail: "Torque wrench status requires review.", severity: "Critical", href: "/assets/equipment/torque-wrenches", actionLabel: "Open register" });
-      }
-      if (expiryDays === null) {
-        items.push({ id: `tw-expiry-missing-${wrench.id}`, area: "Torque Wrenches", title: `${label} missing expiry date`, detail: "Calibration / expiry date is not recorded.", severity: "Critical", href: "/assets/equipment/torque-wrenches", actionLabel: "Open register" });
-      } else if (expiryDays < 0) {
-        items.push({ id: `tw-expired-${wrench.id}`, area: "Torque Wrenches", title: `${label} expired`, detail: `Expiry date passed ${Math.abs(expiryDays)} day(s) ago.`, severity: "Critical", dueDate: wrench.expiry_date, href: "/assets/equipment/torque-wrenches", actionLabel: "Open register" });
-      } else if (expiryDays <= 30) {
-        items.push({ id: `tw-due-${wrench.id}`, area: "Torque Wrenches", title: `${label} due soon`, detail: `Expiry due in ${expiryDays} day(s).`, severity: "Upcoming", dueDate: wrench.expiry_date, href: "/assets/equipment/torque-wrenches", actionLabel: "Open register" });
-      }
-    }
-
-    for (const ladder of data.ladders) {
-      const label = clean(ladder.ladder_number) || clean(ladder.make) || "Ladder";
-      const age = daysSince(ladder.last_internal_inspection, todayIso);
-      if (isBadStatus(ladder.status)) {
-        items.push({ id: `ladder-status-${ladder.id}`, area: "Ladders", title: `${label} is ${clean(ladder.status)}`, detail: "Ladder status requires review.", severity: "Critical", href: "/assets/equipment/ladders", actionLabel: "Open register" });
-      }
-      if (age === null) {
-        items.push({ id: `ladder-missing-${ladder.id}`, area: "Ladders", title: `${label} missing internal inspection`, detail: "No internal inspection date recorded.", severity: "Critical", href: "/assets/equipment/ladders", actionLabel: "Open register" });
-      } else if (age > 90) {
-        items.push({ id: `ladder-old-${ladder.id}`, area: "Ladders", title: `${label} inspection review required`, detail: `Last internal inspection was ${age} day(s) ago.`, severity: "Critical", dueDate: ladder.last_internal_inspection, href: "/assets/equipment/ladders", actionLabel: "Open register" });
-      } else if (age > 60) {
-        items.push({ id: `ladder-soon-${ladder.id}`, area: "Ladders", title: `${label} inspection ageing`, detail: `Last internal inspection was ${age} day(s) ago.`, severity: "Upcoming", dueDate: ladder.last_internal_inspection, href: "/assets/equipment/ladders", actionLabel: "Open register" });
-      }
-    }
-
-    for (const generator of data.generators) {
-      const label = clean(generator.generator_number) || "Generator";
-      const age = daysSince(generator.last_service_date, todayIso);
-      if (isBadStatus(generator.status)) {
-        items.push({ id: `generator-status-${generator.id}`, area: "Generators", title: `${label} is ${clean(generator.status)}`, detail: "Generator status requires review.", severity: "Critical", href: "/assets/equipment/generators", actionLabel: "Open register" });
-      }
-      if (age === null) {
-        items.push({ id: `generator-service-missing-${generator.id}`, area: "Generators", title: `${label} missing last service date`, detail: "No last service date recorded.", severity: "Monitor", href: "/assets/equipment/generators", actionLabel: "Open register" });
-      } else if (age > 180) {
-        items.push({ id: `generator-service-old-${generator.id}`, area: "Generators", title: `${label} service review required`, detail: `Last service was ${age} day(s) ago.`, severity: "Critical", dueDate: generator.last_service_date, href: "/assets/equipment/generators", actionLabel: "Open register" });
-      } else if (age > 90) {
-        items.push({ id: `generator-service-soon-${generator.id}`, area: "Generators", title: `${label} service ageing`, detail: `Last service was ${age} day(s) ago.`, severity: "Upcoming", dueDate: generator.last_service_date, href: "/assets/equipment/generators", actionLabel: "Open register" });
-      }
-    }
-
-    for (const stock of data.ppeStock) {
-      const current = Number(stock.current_stock ?? 0);
-      const minimum = Number(stock.minimum_stock ?? 0);
-      if (minimum > 0 && current < minimum) {
-        items.push({ id: `ppe-low-${stock.id}`, area: "PPE Stock", title: `${clean(stock.item_name) || "PPE item"} below minimum`, detail: `${clean(stock.variant) ? `${stock.variant} · ` : ""}${current} in stock, minimum is ${minimum}. Location: ${clean(stock.location) || "Not recorded"}.`, severity: "Critical", href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      }
-    }
-
-    const kitItemByKit = new Map<string, KitInspectionItem[]>();
-    for (const item of data.kitItems) {
-      const key = clean(item.kit_id);
-      if (!key) continue;
-      const existing = kitItemByKit.get(key) ?? [];
-      existing.push(item);
-      kitItemByKit.set(key, existing);
-    }
-
     for (const kit of data.kits) {
-      const label = `${clean(kit.kit_number) || "Kit"} · ${clean(kit.kit_type || kit.kit_category) || "Inventory kit"}`;
-      const category = clean(kit.kit_category).toLowerCase().includes("snake") ? "Snake Bite Kits" : "First Aid Kits";
-      const age = daysSince(kit.last_inspection_date, todayIso);
-      const kitItems = kitItemByKit.get(kit.id) ?? [];
-      const missing = kitItems.filter((item) => {
-        const required = Number(item.required_qty ?? 0);
-        const actual = Number(item.actual_qty ?? 0);
-        return clean(item.status).toLowerCase() === "missing" || actual < required;
-      });
-      const expired = kitItems.filter((item) => {
-        const expiryDays = daysUntil(item.expiry_date, todayIso);
-        return expiryDays !== null && expiryDays < 0;
-      });
-      const expiring = kitItems.filter((item) => {
-        const expiryDays = daysUntil(item.expiry_date, todayIso);
-        return expiryDays !== null && expiryDays >= 0 && expiryDays <= 30;
-      });
-
-      if (missing.length > 0) {
-        items.push({ id: `kit-missing-${kit.id}`, area: category, title: `${label} missing contents`, detail: `${missing.length} expected content item(s) missing or under quantity.`, severity: "Critical", href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      }
-      if (expired.length > 0) {
-        items.push({ id: `kit-expired-${kit.id}`, area: category, title: `${label} has expired contents`, detail: `${expired.length} content item(s) expired.`, severity: "Critical", href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      }
-      if (expiring.length > 0) {
-        items.push({ id: `kit-expiring-${kit.id}`, area: category, title: `${label} contents expiring soon`, detail: `${expiring.length} content item(s) expire within 30 days.`, severity: "Upcoming", href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      }
-      if (age === null) {
-        items.push({ id: `kit-not-inspected-${kit.id}`, area: category, title: `${label} not inspected`, detail: "No inspection date recorded for this kit.", severity: "Monitor", href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      } else if (age > 90) {
-        items.push({ id: `kit-old-${kit.id}`, area: category, title: `${label} inspection overdue`, detail: `Last kit inspection was ${age} day(s) ago.`, severity: "Critical", dueDate: kit.last_inspection_date, href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
-      } else if (age > 60) {
-        items.push({ id: `kit-soon-${kit.id}`, area: category, title: `${label} inspection ageing`, detail: `Last kit inspection was ${age} day(s) ago.`, severity: "Upcoming", dueDate: kit.last_inspection_date, href: "/assets/equipment/inventory", actionLabel: "Open inventory" });
+      const dueDate = kit.expiry_date || kit.next_inspection_due || null;
+      const days = daysUntil(dueDate);
+      if (days !== null && days <= 45) {
+        reminders.push({
+          id: `kit-${kit.id}`,
+          title: clean(kit.asset_label || kit.name || kit.kit_type),
+          detail: "First aid / snake bite kit expiry or inspection due",
+          dueDate,
+          href: "/assets/equipment/inventory",
+          tone: dueTone(dueDate),
+        });
       }
     }
 
-    const priority = items.sort((a, b) => {
-      const rank: Record<Severity, number> = { Critical: 0, Upcoming: 1, Monitor: 2, Compliant: 3 };
-      return rank[a.severity] - rank[b.severity];
+    const lowStock = data.ppeStock.filter((item) => {
+      const stock = item.stock_on_hand ?? item.quantity ?? 0;
+      const min = item.minimum_stock ?? item.min_stock ?? 0;
+      return stock <= min;
     });
 
-    const byArea = (area: string) => priority.filter((item) => item.area === area || item.area.includes(area));
+    const actionItems: ActionItem[] = [
+      ...highPriorityJobs.map((job) => ({
+        id: `job-${job.id}`,
+        title: `${clean(job.job_number)} · ${clean(job.title)}`,
+        detail: `${clean(job.asset_label)} — ${clean(job.description)}`,
+        href: `/assets/fleet-jobs/${job.id}`,
+        badge: clean(job.priority),
+        tone: priorityTone(job.priority),
+        date: job.created_at,
+      })),
+      ...waitingParts.map((job) => ({
+        id: `parts-${job.id}`,
+        title: `${clean(job.job_number)} waiting for parts`,
+        detail: `${clean(job.asset_label)} — follow up supplier / mechanic status.`,
+        href: `/assets/fleet-jobs/${job.id}`,
+        badge: "Waiting Parts",
+        tone: "amber" as Tone,
+        date: job.updated_at || job.created_at,
+      })),
+      ...reminders
+        .filter((item) => item.tone === "rose" || item.tone === "amber")
+        .map((item) => ({
+          id: `reminder-${item.id}`,
+          title: item.title,
+          detail: item.detail,
+          href: item.href,
+          badge: item.tone === "rose" ? "Expired" : "Due Soon",
+          tone: item.tone,
+          date: item.dueDate,
+        })),
+      ...lowStock.map((item) => ({
+        id: `stock-${item.id}`,
+        title: `${clean(item.item_name || item.name)} stock low`,
+        detail: `Current stock: ${item.stock_on_hand ?? item.quantity ?? 0}. Minimum: ${item.minimum_stock ?? item.min_stock ?? 0}.`,
+        href: "/assets/equipment/inventory",
+        badge: "Low Stock",
+        tone: "amber" as Tone,
+      })),
+    ];
+
+    const recentActivity = [
+      ...data.prestarts.slice(0, 6).map((record) => ({
+        id: `prestart-${record.id}`,
+        title: `Prestart · ${clean(record.asset_label || record.vehicle_rego)}`,
+        detail: `${clean(record.result)} ${record.comments ? `— ${record.comments}` : ""}`,
+        href: `/assets/prestarts/${record.id}`,
+        date: record.prestart_date || record.created_at,
+        tone: statusTone(record.severity || record.result),
+      })),
+      ...data.assetHistory.slice(0, 6).map((record) => ({
+        id: `history-${record.id}`,
+        title: `${clean(record.history_type)} · ${clean(record.title)}`,
+        detail: record.fleet_job_id ? "Fleet Job close-out recorded against asset history" : "Asset history updated",
+        href: record.fleet_job_id ? `/assets/fleet-jobs/${record.fleet_job_id}` : "/assets",
+        date: record.history_date || record.created_at,
+        tone: "emerald" as Tone,
+      })),
+    ]
+      .sort((a, b) => new Date(b.date || "").getTime() - new Date(a.date || "").getTime())
+      .slice(0, 6);
+
+    const totalAssets =
+      data.vehicles.length +
+      data.plant.length +
+      data.liftingGear.length +
+      data.torqueWrenches.length +
+      data.ladders.length +
+      data.generators.length;
+
+    const availableAssets =
+      data.vehicles.filter((vehicle) => clean(vehicle.status).toLowerCase() === "available").length +
+      data.plant.filter((asset) => clean(asset.asset_status || asset.status).toLowerCase() === "available").length;
 
     return {
-      all: priority,
-      critical: priority.filter((item) => item.severity === "Critical"),
-      upcoming: priority.filter((item) => item.severity === "Upcoming"),
-      monitor: priority.filter((item) => item.severity === "Monitor"),
-      vehicles: priority.filter((item) => ["Vehicles", "Prestarts"].includes(item.area)),
-      plant: priority.filter((item) => ["Plant", "Cranes"].includes(item.area)),
-      fleetJobs: byArea("Fleet Jobs"),
-      equipment: priority.filter((item) => ["Lifting Gear", "Fall Arrest", "Torque Wrenches", "Ladders", "Generators"].includes(item.area)),
-      inventory: priority.filter((item) => ["PPE Stock", "First Aid Kits", "Snake Bite Kits"].includes(item.area)),
+      activeFleetJobs,
+      prestartFlags,
+      reminders: reminders
+        .sort((a, b) => (daysUntil(a.dueDate) ?? 9999) - (daysUntil(b.dueDate) ?? 9999))
+        .slice(0, 8),
+      actionItems: actionItems
+        .sort((a, b) => {
+          const order: Record<Tone, number> = { rose: 0, amber: 1, blue: 2, violet: 3, slate: 4, emerald: 5 };
+          return order[a.tone] - order[b.tone];
+        })
+        .slice(0, 8),
+      recentActivity,
+      totalAssets,
+      availableAssets,
+      unavailableAssets,
+      lowStock,
+      failedEquipment:
+        equipmentStatusCount(data.liftingGear, "Failed") +
+        equipmentStatusCount(data.torqueWrenches, "Failed") +
+        equipmentStatusCount(data.ladders, "Failed") +
+        equipmentStatusCount(data.generators, "Failed"),
     };
-  }, [data, todayIso]);
-
-  const kpis = [
-    { label: "Critical", value: compliance.critical.length, icon: ShieldAlert, tone: "rose" as Tone, detail: "Expired, missing, failed, open or overdue" },
-    { label: "Upcoming", value: compliance.upcoming.length, icon: CalendarClock, tone: "amber" as Tone, detail: "Due soon or ageing toward review" },
-    { label: "Monitor", value: compliance.monitor.length, icon: FileWarning, tone: "slate" as Tone, detail: "Incomplete or worth checking" },
-{ label: "Open Fleet Jobs", value: data.fleetJobs.filter((job) => !isClosedJob(job, data.assetHistory, data.fleetJobUpdates)).length, icon: Wrench, tone: "blue" as Tone, detail: "Fleet defects and maintenance still open or reopened" },
-  ];
-
-  const tabs = [
-    { label: "Priority", items: compliance.all },
-    { label: "Vehicles", items: compliance.vehicles },
-    { label: "Plant", items: compliance.plant },
-    { label: "Fleet Jobs", items: compliance.fleetJobs },
-    { label: "Equipment", items: compliance.equipment },
-    { label: "Inventory", items: compliance.inventory },
-  ];
-
-  const activeItems = tabs.find((tab) => tab.label === activeTab)?.items ?? compliance.all;
+  }, [data]);
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <div className="mx-auto max-w-7xl px-6 py-8">
-        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-slate-400">Asset Manager</p>
-            <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Compliance Centre</h1>
-            <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-              Read-only compliance dashboard across vehicles, plant, cranes, fleet jobs, prestarts, lifting gear, fall arrest, torque wrenches, ladders, generators, PPE stock and first aid / snake bite kits.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => void loadData()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+    <PageShell>
+      <PageHeader
+        eyebrow="Fleet Assets"
+        title="Asset Dashboard"
+        description="A live summary dashboard showing what needs attention, where to action it, and the current state of the fleet. Closed Fleet Jobs are excluded unless they have been reopened."
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => void loadDashboard()}
+              className="inline-flex min-h-10 items-center gap-2 border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
               <RefreshCw size={16} />
               Refresh
             </button>
-            <Link href="/assets/fleet-jobs" className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-slate-800">
-              <Wrench size={16} />
+            <ActionButton href="/assets/fleet-jobs" icon={<Wrench size={16} />}>
               Fleet Jobs
-            </Link>
-          </div>
+            </ActionButton>
+            <ActionButton href="/assets/prestarts" variant="secondary" icon={<ClipboardCheck size={16} />}>
+              Prestarts
+            </ActionButton>
+          </>
+        }
+      />
+
+      {errorMessage ? (
+        <div className="border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+          {errorMessage}
         </div>
+      ) : null}
 
-        <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {kpis.map((kpi) => {
-            const Icon = kpi.icon;
-            return (
-              <div key={kpi.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{kpi.label}</p>
-                    <p className="mt-2 text-3xl font-black text-slate-950">{loading ? "…" : kpi.value}</p>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <KpiCard
+          label="Total Assets"
+          value={loading ? "..." : String(dashboard.totalAssets)}
+          detail="vehicles, plant and equipment"
+          tone="blue"
+        />
+        <KpiCard
+          label="Action Items"
+          value={loading ? "..." : String(dashboard.actionItems.length)}
+          detail="things needing review"
+          tone={dashboard.actionItems.length > 0 ? "rose" : "emerald"}
+        />
+        <KpiCard
+          label="Open Fleet Jobs"
+          value={loading ? "..." : String(dashboard.activeFleetJobs.length)}
+          detail="not closed or reopened"
+          tone={dashboard.activeFleetJobs.length > 0 ? "amber" : "emerald"}
+        />
+        <KpiCard
+          label="Prestart Flags"
+          value={loading ? "..." : String(dashboard.prestartFlags.length)}
+          detail="recent flagged checks"
+          tone={dashboard.prestartFlags.length > 0 ? "amber" : "emerald"}
+        />
+        <KpiCard
+          label="Unavailable"
+          value={loading ? "..." : String(dashboard.unavailableAssets)}
+          detail="failed / maintenance / inactive"
+          tone={dashboard.unavailableAssets > 0 ? "rose" : "emerald"}
+        />
+        <KpiCard
+          label="Upcoming"
+          value={loading ? "..." : String(dashboard.reminders.length)}
+          detail="expiries and inspections"
+          tone={dashboard.reminders.length > 0 ? "amber" : "emerald"}
+        />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <Panel
+          title="Needs Attention"
+          description="The highest priority items from Fleet Jobs, expiries, failed equipment and low stock. Click through to action at the source."
+          count={dashboard.actionItems.length}
+        >
+          {loading ? (
+            <EmptyState text="Loading action items..." />
+          ) : dashboard.actionItems.length > 0 ? (
+            <div className="space-y-3">
+              {dashboard.actionItems.map((item) => (
+                <ActionRow key={item.id} item={item} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No urgent action items. The dashboard is clear for now." />
+          )}
+        </Panel>
+
+        <Panel
+          title="Quick Actions"
+          description="Common actions for the fleet and asset workflow."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ActionButton href="/assets/vehicles/new" variant="secondary" icon={<Plus size={16} />}>
+              Add Vehicle
+            </ActionButton>
+            <ActionButton href="/assets/plant/new" variant="secondary" icon={<Plus size={16} />}>
+              Add Plant
+            </ActionButton>
+            <ActionButton href="/assets/fleet-jobs/new" variant="secondary" icon={<Wrench size={16} />}>
+              Log Fleet Job
+            </ActionButton>
+            <ActionButton href="/assets/prestarts/new" variant="secondary" icon={<ClipboardCheck size={16} />}>
+              Submit Prestart
+            </ActionButton>
+            <ActionButton href="/assets/compliance" variant="secondary" icon={<ShieldCheck size={16} />}>
+              Compliance Centre
+            </ActionButton>
+            <ActionButton href="/assets/equipment/inventory" variant="secondary" icon={<PackageCheck size={16} />}>
+              Inventory
+            </ActionButton>
+          </div>
+
+          <div className="mt-5 border border-slate-200 bg-slate-50 p-4">
+            <DetailGrid
+              items={[
+                { label: "Vehicles", value: String(data.vehicles.length) },
+                { label: "Plant", value: String(data.plant.length) },
+                { label: "Gear", value: String(data.liftingGear.length) },
+                { label: "Available", value: String(dashboard.availableAssets) },
+              ]}
+            />
+          </div>
+        </Panel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+        <Panel
+          title="Open Fleet Jobs"
+          description="Only jobs still active. Completed close-outs are hidden unless the job was reopened."
+          count={dashboard.activeFleetJobs.length}
+        >
+          {loading ? (
+            <EmptyState text="Loading Fleet Jobs..." />
+          ) : dashboard.activeFleetJobs.length > 0 ? (
+            <div className="space-y-3">
+              {dashboard.activeFleetJobs.slice(0, 6).map((job) => (
+                <Link
+                  key={job.id}
+                  href={`/assets/fleet-jobs/${job.id}`}
+                  className="block border border-slate-200 bg-slate-50 p-4 transition hover:border-amber-300 hover:bg-amber-50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-bold text-slate-950">
+                          {clean(job.job_number)} · {clean(job.title)}
+                        </p>
+                        <StatusBadge label={clean(job.status)} tone={statusTone(job.status)} />
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-600">
+                        {clean(job.description)}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-slate-500">
+                        {clean(job.asset_label)} · Assigned {clean(job.assigned_to)} · Created {formatDate(job.created_at)}
+                      </p>
+                    </div>
+                    <StatusBadge label={clean(job.priority)} tone={priorityTone(job.priority)} />
                   </div>
-                  <div className={`rounded-2xl border p-3 ${toneClasses(kpi.tone)}`}>
-                    <Icon size={20} />
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No open Fleet Jobs. Closed jobs are no longer shown here." />
+          )}
+        </Panel>
+
+        <Panel
+          title="Upcoming Renewals & Inspections"
+          description="Expiries, service dates, inspections and kit checks due within 45 days."
+          count={dashboard.reminders.length}
+        >
+          {loading ? (
+            <EmptyState text="Loading reminders..." />
+          ) : dashboard.reminders.length > 0 ? (
+            <div className="space-y-3">
+              {dashboard.reminders.map((reminder) => (
+                <ReminderRow key={reminder.id} reminder={reminder} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No renewals or inspections due within 45 days." />
+          )}
+        </Panel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <Panel
+          title="Prestart Flags"
+          description="Recent prestarts that contain failed, defect, minor, major or critical results."
+          count={dashboard.prestartFlags.length}
+        >
+          {loading ? (
+            <EmptyState text="Loading prestarts..." />
+          ) : dashboard.prestartFlags.length > 0 ? (
+            <div className="space-y-3">
+              {dashboard.prestartFlags.slice(0, 6).map((record) => (
+                <Link
+                  key={record.id}
+                  href={`/assets/prestarts/${record.id}`}
+                  className="block border border-slate-200 bg-slate-50 p-4 transition hover:border-sky-300 hover:bg-sky-50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">
+                        {clean(record.asset_label || record.vehicle_rego)}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {clean(record.comments || record.result || record.overall_condition)}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-slate-500">
+                        {formatDate(record.prestart_date || record.created_at)} · {clean(record.inspected_by_name || record.employee_name)}
+                      </p>
+                    </div>
+                    <StatusBadge label={clean(record.severity || record.result)} tone={statusTone(record.severity || record.result)} />
                   </div>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No recent prestart flags." />
+          )}
+        </Panel>
+
+        <Panel
+          title="Recent Activity"
+          description="Latest prestarts and asset history close-outs."
+          count={dashboard.recentActivity.length}
+        >
+          {loading ? (
+            <EmptyState text="Loading recent activity..." />
+          ) : dashboard.recentActivity.length > 0 ? (
+            <div className="space-y-3">
+              {dashboard.recentActivity.map((item) => (
+                <Link
+                  key={item.id}
+                  href={item.href}
+                  className="block border border-slate-200 bg-slate-50 p-4 transition hover:bg-white"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">{item.title}</p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">{item.detail}</p>
+                      <p className="mt-2 text-xs font-semibold text-slate-500">{formatDate(item.date)}</p>
+                    </div>
+                    <StatusBadge label="Activity" tone={item.tone} />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="No recent asset activity found." />
+          )}
+        </Panel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+        <Panel
+          title="Asset Register Overview"
+          description="A simple split of what is currently being managed inside Assets."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <Truck size={18} className="text-slate-500" />
+              <p className="mt-3 text-sm font-bold text-slate-950">Vehicles</p>
+              <p className="mt-1 text-2xl font-black text-slate-950">{data.vehicles.length}</p>
+            </div>
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <Wrench size={18} className="text-slate-500" />
+              <p className="mt-3 text-sm font-bold text-slate-950">Plant</p>
+              <p className="mt-1 text-2xl font-black text-slate-950">{data.plant.length}</p>
+            </div>
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <ShieldCheck size={18} className="text-slate-500" />
+              <p className="mt-3 text-sm font-bold text-slate-950">Lifting Gear</p>
+              <p className="mt-1 text-2xl font-black text-slate-950">{data.liftingGear.length}</p>
+            </div>
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <CalendarClock size={18} className="text-slate-500" />
+              <p className="mt-3 text-sm font-bold text-slate-950">Failed Equipment</p>
+              <p className="mt-1 text-2xl font-black text-slate-950">{dashboard.failedEquipment}</p>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel
+          title="How To Action Items"
+          description="This dashboard tells you where the problem is. The source page is where you update it."
+        >
+          <div className="space-y-3">
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <FileWarning size={18} className="mt-0.5 shrink-0 text-amber-600" />
+                <div>
+                  <p className="font-bold text-slate-950">Fleet Job issue?</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Open the Fleet Job to assign it, add corrections, or close it out. The asset history updates from the close-out workflow.
+                  </p>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-slate-500">{kpi.detail}</p>
               </div>
-            );
-          })}
-        </section>
-
-        <section className="mt-6 grid gap-4 lg:grid-cols-4">
-          <Link href="/assets/vehicles" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:bg-slate-50">
-            <Truck className="h-5 w-5 text-slate-700" />
-            <p className="mt-3 font-black text-slate-950">Vehicles</p>
-            <p className="mt-1 text-sm text-slate-500">Docs, expiry dates and prestarts.</p>
-          </Link>
-          <Link href="/assets/plant" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:bg-slate-50">
-            <ClipboardCheck className="h-5 w-5 text-slate-700" />
-            <p className="mt-3 font-black text-slate-950">Plant / Cranes</p>
-            <p className="mt-1 text-sm text-slate-500">Risk assessments, manuals and CraneSafe.</p>
-          </Link>
-          <Link href="/assets/equipment/lifting-gear" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:bg-slate-50">
-            <ShieldCheck className="h-5 w-5 text-slate-700" />
-            <p className="mt-3 font-black text-slate-950">Lifting / Fall Arrest</p>
-            <p className="mt-1 text-sm text-slate-500">Inspection, tag and failed status checks.</p>
-          </Link>
-          <Link href="/assets/equipment/inventory" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:bg-slate-50">
-            <PackageCheck className="h-5 w-5 text-slate-700" />
-            <p className="mt-3 font-black text-slate-950">Inventory</p>
-            <p className="mt-1 text-sm text-slate-500">PPE, first aid, snake bite and spare keys.</p>
-          </Link>
-        </section>
-
-        <section className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <SectionHeader title="Compliance Issues" description="Prioritised list of items pulled from other registers. No editing occurs here; use the links to update the source page." />
-
-          <div className="flex flex-wrap gap-2 border-b border-slate-200 p-4">
-            {tabs.map((tab) => (
-              <button
-                key={tab.label}
-                type="button"
-                onClick={() => setActiveTab(tab.label)}
-                className={`rounded-xl px-4 py-2 text-sm font-bold transition ${
-                  activeTab === tab.label ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                {tab.label} ({loading ? "…" : tab.items.length})
-              </button>
-            ))}
+            </div>
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <CalendarClock size={18} className="mt-0.5 shrink-0 text-blue-600" />
+                <div>
+                  <p className="font-bold text-slate-950">Expiry or service due?</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Use the asset update page to record the renewed date, service details, document or inspection history.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <PackageCheck size={18} className="mt-0.5 shrink-0 text-emerald-600" />
+                <div>
+                  <p className="font-bold text-slate-950">Stock or equipment issue?</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Go to Equipment or Inventory to update counts, failed items, inspections and replacement status.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-
-          <IssueList items={activeItems} emptyText={loading ? "Loading compliance checks..." : "No issues found for this section."} />
-        </section>
-
-        <section className="mt-6 grid gap-4 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <SectionHeader title="Upcoming Renewals" description="Renewals and inspections due soon across all registers." />
-            <IssueList items={compliance.upcoming.slice(0, 10)} emptyText="No upcoming renewals found." />
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <SectionHeader title="Critical Close-Out" description="Expired, failed, missing, open or overdue items that need attention first." />
-            <IssueList items={compliance.critical.slice(0, 10)} emptyText="No critical compliance items found." />
-          </div>
-        </section>
-
-        <section className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <SectionHeader title="Register Health Snapshot" description="Quick source counts to confirm the compliance centre is reading the connected registers." />
-          <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
-            <Snapshot label="Vehicles" value={data.vehicles.length} href="/assets/vehicles" />
-            <Snapshot label="Plant" value={data.plant.length} href="/assets/plant" />
-            <Snapshot label="Fleet Jobs" value={data.fleetJobs.length} href="/assets/fleet-jobs" />
-            <Snapshot label="Prestarts" value={data.prestarts.length} href="/assets/prestarts" />
-            <Snapshot label="Lifting Gear" value={data.liftingGear.filter((item) => !fallArrestTypes.includes(clean(item.equipment_type))).length} href="/assets/equipment/lifting-gear" />
-            <Snapshot label="Fall Arrest" value={data.liftingGear.filter((item) => fallArrestTypes.includes(clean(item.equipment_type))).length} href="/assets/equipment/fall-arrest" />
-            <Snapshot label="Torque Wrenches" value={data.torqueWrenches.length} href="/assets/equipment/torque-wrenches" />
-            <Snapshot label="Inventory Kits" value={data.kits.length} href="/assets/equipment/inventory" />
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function Snapshot({ label, value, href }: { label: string; value: number; href: string }) {
-  return (
-    <Link href={href} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 hover:bg-white hover:shadow-sm">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
-      <p className="mt-1 inline-flex items-center gap-1 text-xs font-bold text-slate-600">
-        Open source <ArrowRight size={12} />
-      </p>
-    </Link>
+        </Panel>
+      </section>
+    </PageShell>
   );
 }
