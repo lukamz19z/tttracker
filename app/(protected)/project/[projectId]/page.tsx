@@ -113,13 +113,38 @@ type CrewProductionSummary = {
 type ForecastRow = {
   towerId: string;
   towerName: string;
+  towerType: string;
   progress: number;
   weight: number | null;
   remainingTonnes: number | null;
+  benchmarkLabel: string;
   benchmarkMhPerTonne: number | null;
   forecastRawHours: number | null;
   forecastDays: number | null;
   benchmarkDailyRawHours: number | null;
+  oldProjectAverageRawHours: number | null;
+  oldProjectAverageDays: number | null;
+  confidence: "High" | "Medium" | "Low";
+};
+
+type TowerTypeBenchmark = {
+  typeName: string;
+  towerCount: number;
+  docketCount: number;
+  rawHours: number;
+  productionHours: number;
+  productionTonnes: number;
+  rawMhPerTonne: number | null;
+  productionMhPerTonne: number | null;
+  dailyRawHours: number | null;
+};
+
+type DocketLookupRow = {
+  docket: DocketRow;
+  tower: TowerProductionSummary | null;
+  rawHours: number;
+  productionHours: number;
+  progress: number;
 };
 
 type TrendRow = {
@@ -132,7 +157,7 @@ type TrendRow = {
   docketCount: number;
 };
 
-type QuickActionType = "docket" | "delivery" | "materials" | null;
+type QuickActionType = "docket" | "delivery" | "materials" | "docket_lookup" | null;
 type AnalyticsView = "tower_performance" | "crew_performance" | "mh_per_tonne" | "production_mh_per_tonne" | "completed_towers";
 type SortDirection = "best" | "worst";
 type RowsToShow = "10" | "25" | "50" | "all";
@@ -235,6 +260,51 @@ function getTowerWeightFromExtraData(extraData?: Record<string, unknown> | null)
   if (genericWeightEntry) return extractNumericValue(genericWeightEntry[1]);
 
   return null;
+}
+
+function getTowerTypeFromExtraData(tower: Tower) {
+  const extraData = tower.extra_data;
+  const displayName = getTowerDisplayName(tower);
+
+  if (extraData) {
+    const entries = Object.entries(extraData);
+    const exactTypeEntry = entries.find(([key]) => {
+      const k = key.trim().toLowerCase();
+      return (
+        k === "tower type" ||
+        k === "tower_type" ||
+        k === "structure type" ||
+        k === "structure_type" ||
+        k === "type" ||
+        k === "tower model" ||
+        k === "tower_model"
+      );
+    });
+
+    if (exactTypeEntry) {
+      const value = safeString(exactTypeEntry[1]).trim();
+      if (value) return value.toUpperCase();
+    }
+
+    const typeLikeEntry = entries.find(([key]) => {
+      const k = key.trim().toLowerCase();
+      return (k.includes("tower") || k.includes("structure")) && k.includes("type");
+    });
+
+    if (typeLikeEntry) {
+      const value = safeString(typeLikeEntry[1]).trim();
+      if (value) return value.toUpperCase();
+    }
+  }
+
+  const text = [displayName, safeString(tower.name), safeString(tower.structure_number), safeString(tower.tower_number)]
+    .join(" ")
+    .toUpperCase();
+
+  const knownTypeMatch = text.match(/\b\d+[A-Z]{2}\b/);
+  if (knownTypeMatch) return knownTypeMatch[0];
+
+  return "UNKNOWN";
 }
 
 function getTowerDisplayName(tower: Tower) {
@@ -741,13 +811,16 @@ export default function ProjectDashboard() {
   const [analyticsSortDirection, setAnalyticsSortDirection] = useState<SortDirection>("best");
   const [analyticsSearch, setAnalyticsSearch] = useState("");
   const [analyticsRowsToShow, setAnalyticsRowsToShow] = useState<RowsToShow>("25");
-  const [forecastBenchmark, setForecastBenchmark] = useState("project_average");
+  const [forecastBenchmark, setForecastBenchmark] = useState("tower_type");
   const [forecastSearch, setForecastSearch] = useState("");
   const [forecastRowsToShow, setForecastRowsToShow] = useState<RowsToShow>("25");
   const [trendCrewFilter, setTrendCrewFilter] = useState("all");
   const [trendStartDate, setTrendStartDate] = useState("");
   const [trendEndDate, setTrendEndDate] = useState("");
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("both");
+  const [docketLookupDate, setDocketLookupDate] = useState("");
+  const [docketLookupCrewFilter, setDocketLookupCrewFilter] = useState("all");
+  const [docketLookupSearch, setDocketLookupSearch] = useState("");
   const [role, setRole] = useState<UserRole>(null);
 
   const [editingProject, setEditingProject] = useState(false);
@@ -1255,12 +1328,161 @@ export default function ProjectDashboard() {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
   }, [dockets, docketHoursById]);
 
+  const recentProjectDockets = useMemo(() => {
+    const dated = dockets
+      .filter((docket) => docket.docket_date)
+      .sort((a, b) => new Date(b.docket_date || "").getTime() - new Date(a.docket_date || "").getTime());
+
+    const latest = dated[0]?.docket_date;
+    if (!latest) return [];
+
+    const latestTime = new Date(latest).getTime();
+    const cutoff = new Date(latestTime);
+    cutoff.setDate(cutoff.getDate() - 28);
+    const cutoffKey = cutoff.toISOString().slice(0, 10);
+
+    return dated.filter((docket) => docket.docket_date && docket.docket_date >= cutoffKey);
+  }, [dockets]);
+
+  const recentProjectBenchmark = useMemo(() => {
+    const towerById = new Map<string, TowerProductionSummary>();
+    towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
+
+    const byTower = new Map<string, DocketRow[]>();
+    recentProjectDockets.forEach((docket) => {
+      if (!docket.tower_id) return;
+      const arr = byTower.get(docket.tower_id) || [];
+      arr.push(docket);
+      byTower.set(docket.tower_id, arr);
+    });
+
+    let rawHours = 0;
+    let productionHours = 0;
+    let productionTonnes = 0;
+    const rawByDate = new Map<string, number>();
+
+    byTower.forEach((towerDockets, towerId) => {
+      const tower = towerById.get(towerId);
+      const towerWeight = safeNumber(tower?.computedWeight, 0);
+      let previousProgress = 0;
+
+      towerDockets
+        .sort((a, b) => new Date(a.docket_date || "").getTime() - new Date(b.docket_date || "").getTime())
+        .forEach((docket) => {
+          if (!docket.docket_date) return;
+
+          const currentProgress = getDocketProgress(docket);
+          const progressDelta = Math.max(0, currentProgress - previousProgress);
+          const tonnes = towerWeight > 0 ? towerWeight * (progressDelta / 100) : 0;
+          const raw = docketHoursById.get(docket.id) || 0;
+          const production = docketProductionHoursById.get(docket.id) || raw;
+
+          rawHours += raw;
+          productionHours += production;
+          productionTonnes += tonnes;
+          rawByDate.set(docket.docket_date, (rawByDate.get(docket.docket_date) || 0) + raw);
+          previousProgress = Math.max(previousProgress, currentProgress);
+        });
+    });
+
+    const dailyValues = Array.from(rawByDate.values());
+    const dailyRawHours = dailyValues.length > 0 ? dailyValues.reduce((sum, value) => sum + value, 0) / dailyValues.length : null;
+
+    return {
+      label: "Recent project actuals",
+      docketCount: recentProjectDockets.length,
+      rawHours,
+      productionHours,
+      productionTonnes,
+      rawMhPerTonne: productionTonnes > 0 ? rawHours / productionTonnes : null,
+      productionMhPerTonne: productionTonnes > 0 ? productionHours / productionTonnes : null,
+      dailyRawHours,
+    };
+  }, [recentProjectDockets, towerProductionSummaries, docketHoursById, docketProductionHoursById]);
+
+  const towerTypeBenchmarks = useMemo(() => {
+    const towerById = new Map<string, TowerProductionSummary>();
+    towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
+
+    const sortedDocketsByTower = new Map<string, DocketRow[]>();
+    dockets.forEach((docket) => {
+      if (!docket.tower_id) return;
+      const arr = sortedDocketsByTower.get(docket.tower_id) || [];
+      arr.push(docket);
+      sortedDocketsByTower.set(docket.tower_id, arr);
+    });
+
+    const rows = new Map<string, TowerTypeBenchmark & { towerIds: Set<string>; rawByDate: Map<string, number> }>();
+
+    sortedDocketsByTower.forEach((towerDockets, towerId) => {
+      const tower = towerById.get(towerId);
+      if (!tower) return;
+
+      const typeName = getTowerTypeFromExtraData(tower);
+      const towerWeight = safeNumber(tower.computedWeight, 0);
+      let previousProgress = 0;
+
+      towerDockets
+        .sort((a, b) => new Date(a.docket_date || "").getTime() - new Date(b.docket_date || "").getTime())
+        .forEach((docket) => {
+          const currentProgress = getDocketProgress(docket);
+          const progressDelta = Math.max(0, currentProgress - previousProgress);
+          const tonnes = towerWeight > 0 ? towerWeight * (progressDelta / 100) : 0;
+          const raw = docketHoursById.get(docket.id) || 0;
+          const production = docketProductionHoursById.get(docket.id) || raw;
+
+          const existing = rows.get(typeName) || {
+            typeName,
+            towerCount: 0,
+            docketCount: 0,
+            rawHours: 0,
+            productionHours: 0,
+            productionTonnes: 0,
+            rawMhPerTonne: null,
+            productionMhPerTonne: null,
+            dailyRawHours: null,
+            towerIds: new Set<string>(),
+            rawByDate: new Map<string, number>(),
+          };
+
+          existing.towerIds.add(towerId);
+          existing.docketCount += 1;
+          existing.rawHours += raw;
+          existing.productionHours += production;
+          existing.productionTonnes += tonnes;
+          if (docket.docket_date) {
+            existing.rawByDate.set(docket.docket_date, (existing.rawByDate.get(docket.docket_date) || 0) + raw);
+          }
+
+          rows.set(typeName, existing);
+          previousProgress = Math.max(previousProgress, currentProgress);
+        });
+    });
+
+    return Array.from(rows.values()).map((row) => {
+      const dailyValues = Array.from(row.rawByDate.values());
+      return {
+        typeName: row.typeName,
+        towerCount: row.towerIds.size,
+        docketCount: row.docketCount,
+        rawHours: row.rawHours,
+        productionHours: row.productionHours,
+        productionTonnes: row.productionTonnes,
+        rawMhPerTonne: row.productionTonnes > 0 ? row.rawHours / row.productionTonnes : null,
+        productionMhPerTonne: row.productionTonnes > 0 ? row.productionHours / row.productionTonnes : null,
+        dailyRawHours: dailyValues.length > 0 ? dailyValues.reduce((sum, value) => sum + value, 0) / dailyValues.length : null,
+      };
+    });
+  }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById]);
+
   const bestBenchmarkCrew = useMemo(() => {
     return crewProduction.find((crew) => crew.rawMhPerTonne !== null && crew.productionTonnes > 0) || null;
   }, [crewProduction]);
 
   const forecastBenchmarkOptions = useMemo(() => {
     return [
+      { value: "tower_type", label: "Tower type benchmark (recommended)" },
+      { value: "recent_project", label: "Recent project actuals (last 28 days)" },
       { value: "project_average", label: "Project average" },
       { value: "best_crew", label: bestBenchmarkCrew ? `Best crew (${bestBenchmarkCrew.crewName})` : "Best crew" },
       ...crewProduction
@@ -1270,6 +1492,14 @@ export default function ProjectDashboard() {
   }, [crewProduction, bestBenchmarkCrew]);
 
   const selectedForecastBenchmark = useMemo(() => {
+    if (forecastBenchmark === "recent_project") {
+      return {
+        label: "Recent project actuals",
+        mhPerTonne: recentProjectBenchmark.rawMhPerTonne,
+        dailyRawHours: recentProjectBenchmark.dailyRawHours || projectAverageDailyRawHours,
+      };
+    }
+
     if (forecastBenchmark === "best_crew" && bestBenchmarkCrew) {
       const dailyRawHours =
         bestBenchmarkCrew.docketCount > 0 ? bestBenchmarkCrew.totalHours / bestBenchmarkCrew.docketCount : null;
@@ -1294,27 +1524,54 @@ export default function ProjectDashboard() {
     }
 
     return {
-      label: "Project average",
+      label: forecastBenchmark === "tower_type" ? "Tower type benchmark" : "Project average",
       mhPerTonne: stats.manhoursPerTonne,
       dailyRawHours: projectAverageDailyRawHours,
     };
-  }, [forecastBenchmark, bestBenchmarkCrew, crewProduction, stats.manhoursPerTonne, projectAverageDailyRawHours]);
+  }, [forecastBenchmark, bestBenchmarkCrew, crewProduction, stats.manhoursPerTonne, projectAverageDailyRawHours, recentProjectBenchmark]);
 
   const forecastRows = useMemo<ForecastRow[]>(() => {
-    const benchmarkMhPerTonne = selectedForecastBenchmark.mhPerTonne;
-    const benchmarkDailyRawHours = selectedForecastBenchmark.dailyRawHours;
     const q = forecastSearch.trim().toLowerCase();
+    const towerTypeMap = new Map(towerTypeBenchmarks.map((benchmark) => [benchmark.typeName, benchmark]));
 
     return towerProductionSummaries
       .filter((tower) => tower.computedProgress < 100)
       .filter((tower) => {
         if (!q) return true;
-        return [getTowerDisplayName(tower), safeString(tower.line), safeString(tower.status)]
+        return [getTowerDisplayName(tower), getTowerTypeFromExtraData(tower), safeString(tower.line), safeString(tower.status)]
           .join(" ")
           .toLowerCase()
           .includes(q);
       })
       .map((tower) => {
+        const towerType = getTowerTypeFromExtraData(tower);
+        const typeBenchmark = towerTypeMap.get(towerType);
+        const useTowerType = forecastBenchmark === "tower_type";
+
+        const benchmarkLabel =
+          useTowerType && typeBenchmark?.rawMhPerTonne
+            ? `${towerType} type actuals`
+            : useTowerType && recentProjectBenchmark.rawMhPerTonne
+            ? "Recent project fallback"
+            : selectedForecastBenchmark.label;
+
+        const benchmarkMhPerTonne =
+          useTowerType
+            ? typeBenchmark?.rawMhPerTonne || recentProjectBenchmark.rawMhPerTonne || stats.manhoursPerTonne
+            : selectedForecastBenchmark.mhPerTonne;
+
+        const benchmarkDailyRawHours =
+          useTowerType
+            ? typeBenchmark?.dailyRawHours || recentProjectBenchmark.dailyRawHours || projectAverageDailyRawHours
+            : selectedForecastBenchmark.dailyRawHours;
+
+        const confidence: ForecastRow["confidence"] =
+          useTowerType && typeBenchmark?.rawMhPerTonne && typeBenchmark.docketCount >= 5 && typeBenchmark.towerCount >= 2
+            ? "High"
+            : benchmarkMhPerTonne && benchmarkDailyRawHours
+            ? "Medium"
+            : "Low";
+
         const weight = tower.computedWeight;
         const remainingTonnes =
           weight !== null && weight > 0 ? weight * ((100 - tower.computedProgress) / 100) : null;
@@ -1325,20 +1582,41 @@ export default function ProjectDashboard() {
             ? forecastRawHours / benchmarkDailyRawHours
             : null;
 
+        const oldProjectAverageRawHours =
+          remainingTonnes !== null && stats.manhoursPerTonne !== null ? remainingTonnes * stats.manhoursPerTonne : null;
+        const oldProjectAverageDays =
+          oldProjectAverageRawHours !== null && projectAverageDailyRawHours !== null && projectAverageDailyRawHours > 0
+            ? oldProjectAverageRawHours / projectAverageDailyRawHours
+            : null;
+
         return {
           towerId: tower.id,
           towerName: getTowerDisplayName(tower),
+          towerType,
           progress: tower.computedProgress,
           weight,
           remainingTonnes,
+          benchmarkLabel,
           benchmarkMhPerTonne,
           forecastRawHours,
           forecastDays,
           benchmarkDailyRawHours,
+          oldProjectAverageRawHours,
+          oldProjectAverageDays,
+          confidence,
         };
       })
       .sort((a, b) => safeNumber(a.forecastDays, 999999) - safeNumber(b.forecastDays, 999999) || naturalSortText(a.towerName, b.towerName));
-  }, [towerProductionSummaries, selectedForecastBenchmark, forecastSearch]);
+  }, [
+    towerProductionSummaries,
+    selectedForecastBenchmark,
+    forecastSearch,
+    forecastBenchmark,
+    towerTypeBenchmarks,
+    recentProjectBenchmark,
+    stats.manhoursPerTonne,
+    projectAverageDailyRawHours,
+  ]);
 
   const visibleForecastRows = useMemo(() => {
     return limitRows(forecastRows, forecastRowsToShow);
@@ -1414,6 +1692,82 @@ export default function ProjectDashboard() {
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [towerProductionSummaries, dockets, docketHoursById, docketProductionHoursById, trendCrewFilter, trendStartDate, trendEndDate]);
 
+  const trendPeriodSummary = useMemo(() => {
+    const rawHours = trendRows.reduce((sum, row) => sum + row.rawHours, 0);
+    const productionHours = trendRows.reduce((sum, row) => sum + row.productionHours, 0);
+    const productionTonnes = trendRows.reduce((sum, row) => sum + row.productionTonnes, 0);
+    const docketCount = trendRows.reduce((sum, row) => sum + row.docketCount, 0);
+
+    return {
+      rawHours,
+      productionHours,
+      productionTonnes,
+      docketCount,
+      rawMhPerTonne: productionTonnes > 0 ? rawHours / productionTonnes : null,
+      productionMhPerTonne: productionTonnes > 0 ? productionHours / productionTonnes : null,
+    };
+  }, [trendRows]);
+
+  const docketLookupCrewOptions = useMemo(() => {
+    return ["all", ...crewProduction.map((crew) => crew.crewName)];
+  }, [crewProduction]);
+
+  const docketLookupRows = useMemo<DocketLookupRow[]>(() => {
+    const towerById = new Map<string, TowerProductionSummary>();
+    towerProductionSummaries.forEach((tower) => towerById.set(tower.id, tower));
+
+    const q = docketLookupSearch.trim().toLowerCase();
+
+    return dockets
+      .filter((docket) => {
+        if (docketLookupDate && docket.docket_date !== docketLookupDate) return false;
+
+        const crewName = safeString(docket.crew || docket.leading_hand || "Unassigned Crew", "Unassigned Crew").trim() || "Unassigned Crew";
+        if (docketLookupCrewFilter !== "all" && crewName !== docketLookupCrewFilter) return false;
+
+        const tower = docket.tower_id ? towerById.get(docket.tower_id) || null : null;
+        if (!q) return true;
+
+        return [
+          docket.docket_date,
+          crewName,
+          safeString(docket.leading_hand),
+          tower ? getTowerDisplayName(tower) : "",
+          tower ? getTowerTypeFromExtraData(tower) : "",
+          tower ? safeString(tower.line) : "",
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      })
+      .map((docket) => {
+        const tower = docket.tower_id ? towerById.get(docket.tower_id) || null : null;
+        const rawHours = docketHoursById.get(docket.id) || 0;
+        const productionHours = docketProductionHoursById.get(docket.id) || rawHours;
+
+        return {
+          docket,
+          tower,
+          rawHours,
+          productionHours,
+          progress: getDocketProgress(docket),
+        };
+      })
+      .sort((a, b) => {
+        const ad = a.docket.docket_date ? new Date(a.docket.docket_date).getTime() : 0;
+        const bd = b.docket.docket_date ? new Date(b.docket.docket_date).getTime() : 0;
+        return bd - ad || naturalSortText(a.tower ? getTowerDisplayName(a.tower) : "", b.tower ? getTowerDisplayName(b.tower) : "");
+      });
+  }, [
+    dockets,
+    docketLookupDate,
+    docketLookupCrewFilter,
+    docketLookupSearch,
+    towerProductionSummaries,
+    docketHoursById,
+    docketProductionHoursById,
+  ]);
+
   const filteredTowers = useMemo(() => {
     const q = towerSearch.trim().toLowerCase();
     const sorted = [...towers].sort(naturalTowerSort);
@@ -1428,11 +1782,16 @@ export default function ProjectDashboard() {
   function openAction(type: QuickActionType) {
     setActionType(type);
     setTowerSearch("");
+
+    if (type === "docket_lookup" && !docketLookupDate && stats.latestDocketDate) {
+      setDocketLookupDate(stats.latestDocketDate);
+    }
   }
 
   function closeAction() {
     setActionType(null);
     setTowerSearch("");
+    setDocketLookupSearch("");
   }
 
   function startEditingProject() {
@@ -1495,10 +1854,16 @@ export default function ProjectDashboard() {
     if (actionType === "materials") router.push(`/project/${projectId}/tower/${towerId}/materials`);
   }
 
+  function goToDocket(row: DocketLookupRow) {
+    if (!row.docket.tower_id) return;
+    router.push(`/project/${projectId}/tower/${row.docket.tower_id}/dockets`);
+  }
+
   function getActionTitle(type: QuickActionType) {
     if (type === "docket") return "Select tower for Daily Docket";
     if (type === "delivery") return "Select tower for Delivery";
     if (type === "materials") return "Select tower for Materials";
+    if (type === "docket_lookup") return "Docket Lookup";
     return "Select Tower";
   }
 
@@ -1506,6 +1871,7 @@ export default function ProjectDashboard() {
     if (type === "docket") return "Choose a tower, then open its Daily Dockets page.";
     if (type === "delivery") return "Choose a tower, then open its Deliveries page.";
     if (type === "materials") return "Choose a tower, then open its Materials page.";
+    if (type === "docket_lookup") return "Search a date, crew or tower and open the associated docket register.";
     return "";
   }
 
@@ -1603,8 +1969,9 @@ export default function ProjectDashboard() {
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader title="Quick Actions" subtitle="Jump straight into common project tasks by selecting a tower." />
 
-        <div className="mt-6 grid md:grid-cols-3 gap-6">
+        <div className="mt-6 grid md:grid-cols-2 xl:grid-cols-4 gap-6">
           <QuickActionCard title="Add Daily Docket" description="Choose a tower and jump into its Daily Dockets page." accent="blue" onClick={() => openAction("docket")} />
+          <QuickActionCard title="Docket Lookup" description="Search by date, crew or tower and open the matching docket register." accent="amber" onClick={() => openAction("docket_lookup")} />
           <QuickActionCard title="Add Delivery" description="Choose a tower and jump into its Deliveries page." accent="emerald" onClick={() => openAction("delivery")} />
           <QuickActionCard title="Search Materials" description="Choose a tower and jump into its Materials page." accent="purple" onClick={() => openAction("materials")} />
         </div>
@@ -1902,13 +2269,21 @@ export default function ProjectDashboard() {
           </div>
         </div>
 
+        <div className="mt-6 grid md:grid-cols-5 gap-4">
+          <MetricTile title="Period Raw MH/t" value={formatDecimal(trendPeriodSummary.rawMhPerTonne, 2)} subtitle={`${formatDecimal(trendPeriodSummary.rawHours, 1)} raw hrs`} accent="blue" />
+          <MetricTile title="Period Prod MH/t" value={formatDecimal(trendPeriodSummary.productionMhPerTonne, 2)} subtitle={`${formatDecimal(trendPeriodSummary.productionHours, 1)} production hrs`} accent="purple" />
+          <MetricTile title="Period Tonnes" value={formatDecimal(trendPeriodSummary.productionTonnes, 2)} subtitle="calculated from progress movement" accent="emerald" />
+          <MetricTile title="Dockets" value={String(trendPeriodSummary.docketCount)} subtitle="within selected range" accent="slate" />
+          <MetricTile title="Crew Filter" value={trendCrewFilter === "all" ? "All" : trendCrewFilter} subtitle={trendStartDate || trendEndDate ? `${trendStartDate || "start"} to ${trendEndDate || "latest"}` : "all dates"} accent="amber" />
+        </div>
+
         <TrendBarChart rows={trendRows} metric={trendMetric} />
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <SectionHeader
           title="Forecasting"
-          subtitle="Forecast only — based on remaining tower weight, current progress, raw MH/t and average raw hrs/day."
+          subtitle="Forecast only — recommended mode uses tower type actuals, then falls back to recent project actuals and project average where data is thin."
           action={
             <div className="w-full sm:w-auto">
               <label className="block text-xs font-medium text-slate-500 mb-1">Forecast benchmark</label>
@@ -1929,13 +2304,13 @@ export default function ProjectDashboard() {
           <MetricTile
             title="Benchmark"
             value={selectedForecastBenchmark.label}
-            subtitle={`${formatDecimal(selectedForecastBenchmark.mhPerTonne, 2)} raw MH/t`}
+            subtitle={forecastBenchmark === "tower_type" ? `${towerTypeBenchmarks.length} tower type benchmarks` : `${formatDecimal(selectedForecastBenchmark.mhPerTonne, 2)} raw MH/t`}
             accent="purple"
           />
           <MetricTile
-            title="Daily Raw Hours"
-            value={formatDecimal(selectedForecastBenchmark.dailyRawHours, 1)}
-            subtitle="average raw hrs/day"
+            title="Recent Daily Raw Hours"
+            value={formatDecimal(recentProjectBenchmark.dailyRawHours || selectedForecastBenchmark.dailyRawHours, 1)}
+            subtitle="recent/project avg hrs/day"
             accent="blue"
           />
           <div>
@@ -1974,11 +2349,13 @@ export default function ProjectDashboard() {
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
                     <th className="py-3 pr-4 font-medium">Tower</th>
+                    <th className="py-3 pr-4 font-medium">Type</th>
                     <th className="py-3 pr-4 font-medium">Progress</th>
-                    <th className="py-3 pr-4 font-medium">Weight</th>
                     <th className="py-3 pr-4 font-medium">Remaining t</th>
+                    <th className="py-3 pr-4 font-medium">Benchmark</th>
                     <th className="py-3 pr-4 font-medium">Forecast raw hrs</th>
                     <th className="py-3 pr-4 font-medium">Forecast duration</th>
+                    <th className="py-3 pr-4 font-medium">Old method</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1987,11 +2364,16 @@ export default function ProjectDashboard() {
                       <td className="py-3 pr-4 font-semibold text-slate-900">
                         <Link href={`/project/${projectId}/tower/${row.towerId}`} className="hover:underline">{row.towerName}</Link>
                       </td>
+                      <td className="py-3 pr-4 text-slate-600">{row.towerType}</td>
                       <td className="py-3 pr-4 text-slate-600">{row.progress}%</td>
-                      <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.weight, 2)}</td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.remainingTonnes, 2)}</td>
+                      <td className="py-3 pr-4 text-slate-600">
+                        <div className="font-semibold text-slate-900">{row.benchmarkLabel}</div>
+                        <div className="text-xs text-slate-500">{formatDecimal(row.benchmarkMhPerTonne, 2)} MH/t • {row.confidence} confidence</div>
+                      </td>
                       <td className="py-3 pr-4 text-slate-600">{formatDecimal(row.forecastRawHours, 1)}</td>
                       <td className="py-3 pr-4"><ForecastBadge value={row.forecastDays} /></td>
+                      <td className="py-3 pr-4 text-slate-500">{formatDecimal(row.oldProjectAverageDays, 1)} days</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2005,10 +2387,10 @@ export default function ProjectDashboard() {
                     <div>
                       <div className="font-semibold text-slate-900">{row.towerName}</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {row.progress}% progress • {formatDecimal(row.remainingTonnes, 2)} t remaining
+                        {row.progress}% progress • {row.towerType} • {formatDecimal(row.remainingTonnes, 2)} t remaining
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
-                        {formatDecimal(row.forecastRawHours, 1)} forecast raw hrs
+                        {formatDecimal(row.forecastRawHours, 1)} forecast raw hrs • {row.benchmarkLabel}
                       </div>
                     </div>
                     <ForecastBadge value={row.forecastDays} />
@@ -2089,13 +2471,59 @@ export default function ProjectDashboard() {
                 </button>
               </div>
 
-              <div className="mt-4">
-                <input value={towerSearch} onChange={(e) => setTowerSearch(e.target.value)} placeholder="Search tower name, line or status..." className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
+              {actionType === "docket_lookup" ? (
+                <div className="mt-4 grid md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Docket date</label>
+                    <input type="date" value={docketLookupDate} onChange={(e) => setDocketLookupDate(e.target.value)} className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Crew</label>
+                    <select value={docketLookupCrewFilter} onChange={(e) => setDocketLookupCrewFilter(e.target.value)} className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                      {docketLookupCrewOptions.map((crew) => <option key={crew} value={crew}>{crew === "all" ? "All crews" : crew}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Search</label>
+                    <input value={docketLookupSearch} onChange={(e) => setDocketLookupSearch(e.target.value)} placeholder="Tower, type, LH..." className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <input value={towerSearch} onChange={(e) => setTowerSearch(e.target.value)} placeholder="Search tower name, line or status..." className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              )}
             </div>
 
             <div className="p-6 max-h-[60vh] overflow-auto">
-              {filteredTowers.length === 0 ? (
+              {actionType === "docket_lookup" ? (
+                docketLookupRows.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">No dockets match that lookup.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {docketLookupRows.map((row) => (
+                      <button key={row.docket.id} onClick={() => goToDocket(row)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="font-semibold text-slate-900">{row.tower ? getTowerDisplayName(row.tower) : "Tower not linked"}</div>
+                            <div className="mt-1 text-sm text-slate-500">
+                              {formatDate(row.docket.docket_date)} • {row.docket.crew || row.docket.leading_hand || "Unassigned Crew"} • LH {row.docket.leading_hand || "-"}
+                            </div>
+                            <div className="mt-2 text-xs text-slate-500">
+                              Raw {formatDecimal(row.rawHours, 1)} hrs • Production {formatDecimal(row.productionHours, 1)} hrs • Progress {row.progress}%
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <div className="text-xs uppercase tracking-wide text-slate-500">Open</div>
+                            <div className="mt-1 text-sm font-semibold text-blue-600">Dockets</div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : filteredTowers.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">No towers match your search.</div>
               ) : (
                 <div className="space-y-3">
