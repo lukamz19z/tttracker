@@ -52,6 +52,20 @@ type ProjectOption = {
   name: string;
 };
 
+type PlantPrestart = {
+  id: string;
+  plant_asset_id: string | null;
+  asset_id: string | null;
+  asset_type: string | null;
+  asset_label: string | null;
+  cab_hours: number | null;
+  hour_meter?: number | null;
+  engine_hours?: number | null;
+  hours?: number | null;
+  prestart_date: string | null;
+  created_at: string | null;
+};
+
 type UpdateForm = {
   update_type: UpdateType;
 
@@ -389,6 +403,7 @@ export default function UpdatePlantPage() {
   }, []);
 
   const [asset, setAsset] = useState<PlantAsset | null>(null);
+  const [latestPlantPrestart, setLatestPlantPrestart] = useState<PlantPrestart | null>(null);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [crews, setCrews] = useState<CrewOption[]>([]);
   const [form, setForm] = useState<UpdateForm>(emptyForm);
@@ -414,7 +429,7 @@ export default function UpdatePlantPage() {
   const loadPageData = useCallback(async () => {
     setLoading(true);
 
-    const [assetResult, projectResult, crewResult] = await Promise.all([
+    const [assetResult, projectResult, crewResult, prestartResult] = await Promise.all([
       supabase
         .from("plant_assets")
         .select("*")
@@ -427,23 +442,52 @@ export default function UpdatePlantPage() {
         .from("crews")
         .select("id, crew_number, crew_name, leading_hand, active")
         .order("crew_number", { ascending: true }),
+      supabase
+        .from("vehicle_prestarts")
+        .select(
+          "id, plant_asset_id, asset_type, asset_label, cab_hours, prestart_date, created_at",
+        )
+        .eq("plant_asset_id", assetId)
+        .order("prestart_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<PlantPrestart>(),
     ]);
 
     if (assetResult.error || !assetResult.data) {
       setErrorMessage(assetResult.error?.message || "Plant asset could not be loaded.");
       setAsset(null);
+      setLatestPlantPrestart(null);
     } else {
       const data = assetResult.data;
       setAsset(data);
+
+      const latestPrestart =
+        prestartResult.error || !prestartResult.data ? null : prestartResult.data;
+      setLatestPlantPrestart(latestPrestart);
+
+      const latestCabHours =
+        latestPrestart?.cab_hours ??
+        latestPrestart?.hour_meter ??
+        latestPrestart?.engine_hours ??
+        latestPrestart?.hours ??
+        null;
 
       setForm((current) => ({
         ...current,
         insurance_expiry: dateInput(data.insurance_expiry),
         rego_expiry: dateInput(data.rego_expiry),
         cranesafe_expiry: dateInput(data.cranesafe_expiry),
+        service_hours:
+          current.service_hours ||
+          (latestCabHours === null || latestCabHours === undefined
+            ? data.last_service_hours === null || data.last_service_hours === undefined
+              ? ""
+              : String(data.last_service_hours)
+            : String(latestCabHours)),
         service_interval_hours:
           data.service_interval_hours === null || data.service_interval_hours === undefined
-            ? ""
+            ? "500"
             : String(data.service_interval_hours),
         next_service_due: dateInput(data.next_service_due),
         status_after_update: clean(data.asset_status) || "Available",
@@ -550,14 +594,39 @@ export default function UpdatePlantPage() {
     };
   }
 
-  function calculatedNextServiceHours() {
-    const serviceHours = toNumber(form.service_hours);
-    const intervalHours = toNumber(form.service_interval_hours);
-
-    if (serviceHours === null || intervalHours === null) return null;
-
-    return serviceHours + intervalHours;
+  function latestPrestartCabHours() {
+    return (
+      latestPlantPrestart?.cab_hours ??
+      latestPlantPrestart?.hour_meter ??
+      latestPlantPrestart?.engine_hours ??
+      latestPlantPrestart?.hours ??
+      null
+    );
   }
+
+  function serviceBaseHours() {
+    return (
+      toNumber(form.service_hours) ??
+      latestPrestartCabHours() ??
+      asset?.last_service_hours ??
+      null
+    );
+  }
+
+  function serviceIntervalHoursValue() {
+    return toNumber(form.service_interval_hours) ?? asset?.service_interval_hours ?? 500;
+  }
+
+  function calculatedNextServiceHours() {
+    const baseHours = serviceBaseHours();
+    const intervalHours = serviceIntervalHoursValue();
+
+    if (baseHours === null || intervalHours === null) return null;
+
+    return baseHours + intervalHours;
+  }
+
+  const nextServiceHoursPreview = calculatedNextServiceHours();
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -609,12 +678,10 @@ export default function UpdatePlantPage() {
           .insert({
             plant_asset_id: assetId,
             service_date: clean(serviceDate) || null,
-            hour_meter: form.service_hours ? Number(form.service_hours) : null,
+            hour_meter: serviceBaseHours(),
             service_provider: clean(form.service_provider),
             service_type: serviceType,
-            next_service_interval_hours: form.service_interval_hours
-              ? Number(form.service_interval_hours)
-              : null,
+            next_service_interval_hours: serviceIntervalHoursValue(),
             work_completed: workCompleted,
             defects_or_recommendations: clean(form.mechanic_recommendations),
             invoice_number: clean(form.invoice_number),
@@ -652,12 +719,12 @@ export default function UpdatePlantPage() {
             ? form.service_date
             : asset.last_service_date,
         last_service_hours:
-          form.update_type === "Service" && form.service_hours
-            ? Number(form.service_hours)
+          form.update_type === "Service"
+            ? serviceBaseHours()
             : asset.last_service_hours,
         service_interval_hours:
-          form.update_type === "Service" && form.service_interval_hours
-            ? Number(form.service_interval_hours)
+          form.update_type === "Service"
+            ? serviceIntervalHoursValue()
             : asset.service_interval_hours,
         next_service_due:
           form.update_type === "Service" && form.next_service_due
@@ -918,6 +985,20 @@ export default function UpdatePlantPage() {
                 value={form.next_service_due}
                 onChange={(value) => updateField("next_service_due", value)}
               />
+
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm">
+                <p className="text-xs font-black uppercase tracking-wide text-blue-700">
+                  Next Service Hours
+                </p>
+                <p className="mt-1 text-lg font-black text-slate-950">
+                  {nextServiceHoursPreview !== null
+                    ? `${nextServiceHoursPreview.toLocaleString()} hrs`
+                    : "N/A"}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-blue-700">
+                  Calculated from hour meter + interval.
+                </p>
+              </div>
 
               <Field
                 label="Invoice Number"
