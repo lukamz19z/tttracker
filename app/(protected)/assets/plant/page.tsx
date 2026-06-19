@@ -165,6 +165,7 @@ export default function PlantPage() {
 
   const [plantAssets, setPlantAssets] = useState<PlantAsset[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All Plant Types");
   const [projectFilter, setProjectFilter] = useState("All Projects");
@@ -351,58 +352,150 @@ export default function PlantPage() {
   }
 
   async function deletePlantAsset(asset: EnhancedPlant) {
-    const assetLabel = clean(asset.asset_id) || getMakeModel(asset) || "this plant asset";
+    const assetLabel =
+      clean(asset.asset_id) || getMakeModel(asset) || "this plant asset";
 
     const confirmed = window.confirm(
-      `Delete ${assetLabel}?\n\nThis will permanently remove the plant asset from the register. Use this only for duplicate or test records.`,
+      `Delete ${assetLabel}?\n\nThis permanently removes the plant asset and linked test records from the register, including plant documents, service history, project history, asset history, plant prestarts and directly linked fleet jobs.\n\nUse this only for duplicate or test records.`,
     );
 
     if (!confirmed) return;
 
+    const secondConfirmed = window.confirm(
+      `Final check: are you sure you want to delete ${assetLabel}? This cannot be undone.`,
+    );
+
+    if (!secondConfirmed) return;
+
     setDeletingAssetId(asset.id);
+    setErrorMessage("");
 
     if (manageAsset?.id === asset.id) {
       setManageAsset(null);
     }
 
-    const relatedDeletes = [
-      supabase.from("plant_asset_documents").delete().eq("plant_asset_id", asset.id),
-      supabase.from("plant_service_history").delete().eq("plant_asset_id", asset.id),
-      supabase.from("plant_project_history").delete().eq("plant_asset_id", asset.id),
-      supabase.from("asset_history").delete().eq("plant_id", asset.id),
-      supabase.from("vehicle_prestarts").delete().eq("plant_asset_id", asset.id),
-      supabase.from("fleet_jobs").delete().eq("plant_id", asset.id),
-    ];
+    async function ignoreMissingTableOrColumn(
+      action: PromiseLike<{ error: { code?: string; message: string } | null }>,
+      label: string,
+    ) {
+      const { error } = await action;
 
-    for (const deleteRequest of relatedDeletes) {
-      const { error } = await deleteRequest;
+      if (!error) return;
 
-      if (error && error.code !== "42P01" && error.code !== "42703") {
-        console.warn("Related plant record could not be deleted:", error.message);
+      if (error.code === "42P01" || error.code === "42703") {
+        console.warn(`${label} skipped:`, error.message);
+        return;
       }
+
+      throw new Error(`${label}: ${error.message}`);
     }
 
-    const { error } = await supabase
-      .from("plant_assets")
-      .delete()
-      .eq("id", asset.id);
+    try {
+      const { data: linkedPrestarts, error: linkedPrestartsError } =
+        await supabase
+          .from("vehicle_prestarts")
+          .select("id, fleet_job_id")
+          .eq("plant_asset_id", asset.id);
 
-    if (error) {
-      alert(`Could not delete plant asset: ${error.message}`);
+      if (
+        linkedPrestartsError &&
+        linkedPrestartsError.code !== "42P01" &&
+        linkedPrestartsError.code !== "42703"
+      ) {
+        throw new Error(`Linked prestarts: ${linkedPrestartsError.message}`);
+      }
+
+      const linkedFleetJobIds = new Set<string>();
+
+      ((linkedPrestarts ?? []) as Array<{ id: string; fleet_job_id: string | null }>).forEach(
+        (prestart) => {
+          if (prestart.fleet_job_id) linkedFleetJobIds.add(prestart.fleet_job_id);
+        },
+      );
+
+      const fleetJobLookups = await Promise.all([
+        supabase.from("fleet_jobs").select("id").eq("plant_id", asset.id),
+        supabase.from("fleet_jobs").select("id").eq("plant_asset_id", asset.id),
+      ]);
+
+      fleetJobLookups.forEach((result) => {
+        if (result.error) {
+          if (result.error.code !== "42P01" && result.error.code !== "42703") {
+            throw new Error(`Linked fleet jobs: ${result.error.message}`);
+          }
+          return;
+        }
+
+        ((result.data ?? []) as Array<{ id: string }>).forEach((job) => {
+          if (job.id) linkedFleetJobIds.add(job.id);
+        });
+      });
+
+      const fleetJobIds = Array.from(linkedFleetJobIds);
+
+      if (fleetJobIds.length > 0) {
+        await ignoreMissingTableOrColumn(
+          supabase.from("fleet_job_updates").delete().in("fleet_job_id", fleetJobIds),
+          "Fleet job updates delete",
+        );
+
+        await ignoreMissingTableOrColumn(
+          supabase.from("fleet_jobs").delete().in("id", fleetJobIds),
+          "Fleet jobs delete",
+        );
+      }
+
+      await ignoreMissingTableOrColumn(
+        supabase.from("plant_asset_documents").delete().eq("plant_asset_id", asset.id),
+        "Plant documents delete",
+      );
+
+      await ignoreMissingTableOrColumn(
+        supabase.from("plant_service_history").delete().eq("plant_asset_id", asset.id),
+        "Plant service history delete",
+      );
+
+      await ignoreMissingTableOrColumn(
+        supabase.from("plant_project_history").delete().eq("plant_asset_id", asset.id),
+        "Plant project history delete",
+      );
+
+      await ignoreMissingTableOrColumn(
+        supabase.from("asset_history").delete().eq("plant_id", asset.id),
+        "Asset history delete",
+      );
+
+      await ignoreMissingTableOrColumn(
+        supabase.from("vehicle_prestarts").delete().eq("plant_asset_id", asset.id),
+        "Plant prestarts delete",
+      );
+
+      const { error } = await supabase
+        .from("plant_assets")
+        .delete()
+        .eq("id", asset.id);
+
+      if (error) {
+        throw new Error(`Plant asset delete: ${error.message}`);
+      }
+
+      setPlantAssets((current) =>
+        current.filter((plantAsset) => plantAsset.id !== asset.id),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown delete error.";
+      setErrorMessage(message);
+      alert(`Could not delete plant asset: ${message}`);
+    } finally {
       setDeletingAssetId(null);
-      return;
     }
-
-    setPlantAssets((current) =>
-      current.filter((plantAsset) => plantAsset.id !== asset.id),
-    );
-
-    setDeletingAssetId(null);
   }
 
   return (
     <PageShell>
       <PageHeader
+      
         eyebrow="Asset Register"
         title="Plant"
         description="Track cranes, telehandlers and other major plant. Keep the register simple here, then open the view page for full detail."
@@ -437,7 +530,11 @@ export default function PlantPage() {
           </div>
         }
       />
-
+      {errorMessage ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm">
+          {errorMessage}
+        </div>
+      ) : null}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total Plant"
