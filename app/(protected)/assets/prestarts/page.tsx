@@ -16,6 +16,8 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -113,6 +115,7 @@ type PrestartRecord = {
   severity: string | null;
   result: string | null;
   fleet_job_id: string | null;
+  fleet_job_number: string | null;
   prestart_date: string | null;
   created_at: string | null;
 };
@@ -164,7 +167,7 @@ const vehicleChecklistSections = [
   },
 ];
 
-const plantChecklistSections = [
+const craneChecklistSections = [
   {
     title: "Engine",
     items: [
@@ -216,31 +219,98 @@ const plantChecklistSections = [
   },
 ];
 
-function getChecklistSections(assetType: AssetType) {
-  return assetType === "Plant" ? plantChecklistSections : vehicleChecklistSections;
-}
-
-function getChecklistItems(assetType: AssetType) {
-  return getChecklistSections(assetType).flatMap((section) => section.items);
-}
+const telehandlerChecklistSections = [
+  {
+    title: "Engine",
+    items: [
+      "Oil level",
+      "Coolant level",
+      "Fuel water drain",
+      "Brake fluid",
+      "Battery",
+      "Air filter",
+      "V belts",
+    ],
+  },
+  {
+    title: "Carrier",
+    items: [
+      "Tyres",
+      "Wheel nuts",
+      "Fuel level",
+      "Air tank drain",
+      "Steering function",
+      "Brake function",
+      "Carrier lubrication",
+      "Lights / horn / gauges",
+    ],
+  },
+  {
+    title: "Telehandler Functions",
+    items: [
+      "Boom raising and lowering",
+      "Boom extension and retraction",
+      "Forks / attachment condition",
+      "Attachment locking pins",
+      "Load indicator",
+      "Outriggers / stabilisers",
+      "Boom structural components",
+    ],
+  },
+  {
+    title: "Hydraulics",
+    items: [
+      "Hydraulic oil level",
+      "Hydraulic oil line leaks",
+      "Cylinder leaks",
+    ],
+  },
+];
 
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
+}
+
+function isTelehandlerCategory(value: string | null | undefined) {
+  const category = clean(value).toLowerCase();
+  return (
+    category.includes("tele") ||
+    category.includes("franna") === false && category.includes("handler")
+  );
+}
+
+function isCraneCategory(value: string | null | undefined) {
+  return clean(value).toLowerCase().includes("crane");
+}
+
+function getChecklistSections(assetType: AssetType, category?: string | null) {
+  if (assetType === "Vehicle") return vehicleChecklistSections;
+  if (isTelehandlerCategory(category)) return telehandlerChecklistSections;
+  return craneChecklistSections;
+}
+
+function getChecklistItems(assetType: AssetType, category?: string | null) {
+  return getChecklistSections(assetType, category).flatMap(
+    (section) => section.items,
+  );
 }
 
 function checklistKey(label: string) {
   return label.toLowerCase().replaceAll(" ", "_").replaceAll("/", "_");
 }
 
-function defaultChecklist(assetType: AssetType = "Vehicle") {
-  return getChecklistItems(assetType).reduce<Record<string, ChecklistValue>>((acc, item) => {
-    acc[checklistKey(item)] = {
-      answer: "yes",
-      severity: "minor",
-      comment: "",
-    };
-    return acc;
-  }, {});
+function defaultChecklist(assetType: AssetType = "Vehicle", category?: string | null) {
+  return getChecklistItems(assetType, category).reduce<Record<string, ChecklistValue>>(
+    (acc, item) => {
+      acc[checklistKey(item)] = {
+        answer: "yes",
+        severity: "minor",
+        comment: "",
+      };
+      return acc;
+    },
+    {},
+  );
 }
 
 function todayDate() {
@@ -266,14 +336,14 @@ function formatShortDate(value: string | null) {
   });
 }
 
-function daysSince(value: string | null) {
+function daysSince(value: string | null, todayMs: number) {
   if (!value) return null;
 
   const date = new Date(value).getTime();
 
   if (Number.isNaN(date)) return null;
 
-  return Math.floor((Date.now() - date) / (1000 * 60 * 60 * 24));
+  return Math.floor((todayMs - date) / (1000 * 60 * 60 * 24));
 }
 
 function severityLabel(severity: string | null) {
@@ -476,7 +546,9 @@ function SearchPicker<T>({
   const displayValue = open ? search : value || search;
 
   const filteredItems = items
-    .filter((item) => getLabel(item).toLowerCase().includes(search.toLowerCase()))
+    .filter((item) =>
+      getLabel(item).toLowerCase().includes(search.toLowerCase()),
+    )
     .slice(0, 12);
 
   return (
@@ -565,6 +637,7 @@ function StatCard({
 
 export default function AssetPrestartsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const [todayMs] = useState(() => Date.now());
 
   const [assets, setAssets] = useState<PrestartAsset[]>([]);
   const [prestarts, setPrestarts] = useState<PrestartRecord[]>([]);
@@ -574,11 +647,15 @@ export default function AssetPrestartsPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(true);
 
-  const [assetTypeFilter, setAssetTypeFilter] = useState<"All Assets" | AssetType>("All Assets");
+  const [assetTypeFilter, setAssetTypeFilter] = useState<
+    "All Assets" | AssetType
+  >("All Assets");
   const [formAssetType, setFormAssetType] = useState<AssetType>("Vehicle");
 
   const [search, setSearch] = useState("");
@@ -606,22 +683,39 @@ export default function AssetPrestartsPage() {
     return assets.filter((asset) => asset.assetType === formAssetType);
   }, [assets, formAssetType]);
 
+  const formChecklistSections = useMemo(() => {
+    return getChecklistSections(formAssetType, selectedAsset?.category);
+  }, [formAssetType, selectedAsset?.category]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
+    setErrorMessage("");
 
-    const [vehiclesResult, plantResult, prestartsResult, employeesResult, projectsResult, crewsResult] =
-      await Promise.all([
-        supabase.from("vehicle_assets").select("*").order("vehicle_id", { ascending: true }),
-        supabase.from("plant_assets").select("*").order("asset_id", { ascending: true }),
-        supabase
-          .from("vehicle_prestarts")
-          .select("*")
-          .order("prestart_date", { ascending: false })
-          .order("created_at", { ascending: false }),
-        supabase.from("employees").select("*").order("full_name", { ascending: true }),
-        supabase.from("projects").select("id, name").order("name", { ascending: true }),
-        supabase.from("crews").select("id, crew_number, crew_name").order("crew_number", { ascending: true }),
-      ]);
+    const [
+      vehiclesResult,
+      plantResult,
+      prestartsResult,
+      employeesResult,
+      projectsResult,
+      crewsResult,
+    ] = await Promise.all([
+      supabase
+        .from("vehicle_assets")
+        .select("*")
+        .order("vehicle_id", { ascending: true }),
+      supabase
+        .from("plant_assets")
+        .select("*")
+        .order("asset_id", { ascending: true }),
+      supabase
+        .from("vehicle_prestarts")
+        .select("*")
+        .order("prestart_date", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase.from("employees").select("*").order("full_name", { ascending: true }),
+      supabase.from("projects").select("id, name").order("name", { ascending: true }),
+      supabase.from("crews").select("id, crew_number, crew_name").order("crew_number", { ascending: true }),
+    ]);
 
     const vehicleAssets =
       vehiclesResult.error || !vehiclesResult.data
@@ -670,7 +764,6 @@ export default function AssetPrestartsPage() {
 
     setProjects(projectsResult.error ? [] : (projectsResult.data ?? []));
     setCrews(crewsResult.error ? [] : ((crewsResult.data ?? []) as Crew[]));
-
     setLoading(false);
   }, [supabase]);
 
@@ -753,6 +846,24 @@ export default function AssetPrestartsPage() {
     setSelectedAssetKey(`${asset.assetType}:${asset.id}`);
     setSelectedProject(clean(asset.project));
     setSelectedCrew(matchCrewOption(asset.crew));
+    setChecklistValues(defaultChecklist(asset.assetType, asset.category));
+  }
+
+  async function generateDocketNumber(assetType: AssetType) {
+    const prefix = assetType === "Plant" ? "PPS" : "VPS";
+
+    const { data, error } = await supabase.rpc("next_prestart_docket_number", {
+      p_asset_type: assetType,
+    });
+
+    if (!error && typeof data === "string" && data) return data;
+
+    const { count } = await supabase
+      .from("vehicle_prestarts")
+      .select("id", { count: "exact", head: true })
+      .eq("asset_type", assetType);
+
+    return `${prefix}-${String((count ?? 0) + 1).padStart(6, "0")}`;
   }
 
   const latestByAsset = useMemo(() => {
@@ -785,31 +896,41 @@ export default function AssetPrestartsPage() {
   const overdue7Days = useMemo(() => {
     return assets.filter((asset) => {
       const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
-      const days = latest ? daysSince(prestartDateValue(latest)) : null;
+      const days = latest ? daysSince(prestartDateValue(latest), todayMs) : null;
       return days === null || days >= 7;
     });
-  }, [assets, latestByAsset]);
+  }, [assets, latestByAsset, todayMs]);
 
   const overdue21Days = useMemo(() => {
     return assets.filter((asset) => {
       const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
-      const days = latest ? daysSince(prestartDateValue(latest)) : null;
+      const days = latest ? daysSince(prestartDateValue(latest), todayMs) : null;
       return days === null || days >= 21;
     });
-  }, [assets, latestByAsset]);
+  }, [assets, latestByAsset, todayMs]);
+
+  const vehicleOverdue = useMemo(
+    () => overdue7Days.filter((asset) => asset.assetType === "Vehicle"),
+    [overdue7Days],
+  );
+
+  const plantOverdue = useMemo(
+    () => overdue7Days.filter((asset) => asset.assetType === "Plant"),
+    [overdue7Days],
+  );
 
   const submittedThisWeek = useMemo(() => {
     return prestarts.filter((prestart) => {
-      const days = daysSince(prestartDateValue(prestart));
+      const days = daysSince(prestartDateValue(prestart), todayMs);
       return days !== null && days <= 7;
     }).length;
-  }, [prestarts]);
+  }, [prestarts, todayMs]);
 
   const assetsCheckedThisWeek = useMemo(() => {
     return new Set(
       prestarts
         .filter((prestart) => {
-          const days = daysSince(prestartDateValue(prestart));
+          const days = daysSince(prestartDateValue(prestart), todayMs);
           return days !== null && days <= 7;
         })
         .map((prestart) => {
@@ -822,7 +943,7 @@ export default function AssetPrestartsPage() {
         })
         .filter(Boolean),
     ).size;
-  }, [prestarts]);
+  }, [prestarts, todayMs]);
 
   const issuesRaised = useMemo(() => {
     return prestarts.filter((prestart) => clean(prestart.severity) !== "none").length;
@@ -836,6 +957,7 @@ export default function AssetPrestartsPage() {
 
       const searchable = [
         prestart.docket_number,
+        prestart.fleet_job_number,
         assetType,
         prestart.asset_label,
         prestart.vehicle_rego,
@@ -871,8 +993,49 @@ export default function AssetPrestartsPage() {
     inspectorFilter,
   ]);
 
+  async function deletePrestart(prestart: PrestartRecord) {
+    const linkedJobLabel = clean(prestart.fleet_job_number) || clean(prestart.fleet_job_id);
+    const deleteLinkedJob =
+      prestart.fleet_job_id &&
+      window.confirm(
+        `Delete ${clean(prestart.docket_number) || "this prestart"} and the linked Fleet Job ${linkedJobLabel}? Press OK to delete both, or Cancel to delete the prestart only.`,
+      );
+
+    if (!deleteLinkedJob) {
+      const confirmed = window.confirm(
+        `Delete ${clean(prestart.docket_number) || "this prestart"}? This cannot be undone.`,
+      );
+
+      if (!confirmed) return;
+    }
+
+    setErrorMessage("");
+
+    if (deleteLinkedJob && prestart.fleet_job_id) {
+      await supabase
+        .from("fleet_job_updates")
+        .delete()
+        .eq("fleet_job_id", prestart.fleet_job_id);
+
+      await supabase.from("fleet_jobs").delete().eq("id", prestart.fleet_job_id);
+    }
+
+    const { error } = await supabase
+      .from("vehicle_prestarts")
+      .delete()
+      .eq("id", prestart.id);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    await loadData();
+  }
+
   async function handleCreatePrestart(formData: FormData) {
     setSaving(true);
+    setErrorMessage("");
 
     if (!selectedAsset) {
       alert("Please select an asset.");
@@ -917,7 +1080,10 @@ export default function AssetPrestartsPage() {
       return;
     }
 
-    const selectedChecklistItems = getChecklistItems(selectedAsset.assetType);
+    const selectedChecklistItems = getChecklistItems(
+      selectedAsset.assetType,
+      selectedAsset.category,
+    );
 
     const failedItems = selectedChecklistItems.filter((item) => {
       const key = checklistKey(item);
@@ -973,14 +1139,7 @@ export default function AssetPrestartsPage() {
       .filter(Boolean)
       .join("\n\n");
 
-    const docketPrefix = selectedAsset.assetType === "Plant" ? "PPS" : "VPS";
-
-    const { count: prestartCount } = await supabase
-      .from("vehicle_prestarts")
-      .select("id", { count: "exact", head: true })
-      .eq("asset_type", selectedAsset.assetType);
-
-    const docketNumber = `${docketPrefix}-${String((prestartCount ?? 0) + 1).padStart(6, "0")}`;
+    const docketNumber = await generateDocketNumber(selectedAsset.assetType);
 
     const assetLabel = [
       selectedAsset.assetId || selectedAsset.assetType,
@@ -1021,6 +1180,20 @@ export default function AssetPrestartsPage() {
       alert(`Failed to save prestart: ${error.message}`);
       setSaving(false);
       return;
+    }
+
+    if (selectedAsset.assetType === "Plant" && cabHours !== null) {
+      const { error: plantHoursError } = await supabase
+        .from("plant_assets")
+        .update({
+          cab_hours: cabHours,
+          current_hours: cabHours,
+        })
+        .eq("id", selectedAsset.id);
+
+      if (plantHoursError) {
+        console.warn("Prestart saved, but plant hours were not updated:", plantHoursError.message);
+      }
     }
 
     if (newPrestart && severity !== "none") {
@@ -1067,15 +1240,18 @@ export default function AssetPrestartsPage() {
           completed_date: null,
 
           cost: null,
-          notes: `Created automatically from ${selectedAsset.assetType.toLowerCase()} prestart on ${prestartDate}.`,
+          notes: `Created automatically from ${selectedAsset.assetType.toLowerCase()} prestart ${docketNumber} on ${prestartDate}.`,
         })
-        .select("id")
+        .select("id, job_number")
         .single();
 
       if (!fleetJobError && fleetJob?.id) {
         await supabase
           .from("vehicle_prestarts")
-          .update({ fleet_job_id: fleetJob.id })
+          .update({
+            fleet_job_id: fleetJob.id,
+            fleet_job_number: fleetJob.job_number || jobNumber,
+          })
           .eq("id", newPrestart.id);
       }
 
@@ -1116,6 +1292,7 @@ export default function AssetPrestartsPage() {
       "Result",
       "Severity",
       "Fleet Job",
+      "Fleet Job Number",
       "Comments",
     ];
 
@@ -1134,6 +1311,7 @@ export default function AssetPrestartsPage() {
       clean(prestart.result),
       severityLabel(prestart.severity),
       clean(prestart.fleet_job_id),
+      clean(prestart.fleet_job_number),
       clean(prestart.comments),
     ]);
 
@@ -1186,6 +1364,19 @@ export default function AssetPrestartsPage() {
 
             <button
               type="button"
+              onClick={() => setDeleteMode((current) => !current)}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold shadow-sm ${
+                deleteMode
+                  ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <Trash2 size={16} />
+              {deleteMode ? "Delete Mode On" : "Delete Mode"}
+            </button>
+
+            <button
+              type="button"
               onClick={openForm}
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-slate-800"
             >
@@ -1195,6 +1386,12 @@ export default function AssetPrestartsPage() {
           </div>
         }
       />
+
+      {errorMessage ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 shadow-sm">
+          {errorMessage}
+        </div>
+      ) : null}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -1235,27 +1432,27 @@ export default function AssetPrestartsPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-black text-slate-950">
-                Prestart Notice Board
+                Vehicle Notice Board
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Vehicles and plant not checked recently are shown here. Trailers are excluded.
+                Vehicles not checked recently. Trailers are excluded.
               </p>
             </div>
             <StatusPill
-              label={`${overdue21Days.length} critical`}
-              tone={overdue21Days.length > 0 ? "rose" : "emerald"}
+              label={`${vehicleOverdue.length} overdue`}
+              tone={vehicleOverdue.length > 0 ? "amber" : "emerald"}
             />
           </div>
 
           <div className="mt-4 grid gap-3">
-            {overdue7Days.length === 0 ? (
+            {vehicleOverdue.length === 0 ? (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
-                All required assets have a recent prestart.
+                All vehicles have a recent prestart.
               </div>
             ) : (
-              overdue7Days.slice(0, 8).map((asset) => {
+              vehicleOverdue.slice(0, 6).map((asset) => {
                 const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
-                const days = latest ? daysSince(prestartDateValue(latest)) : null;
+                const days = latest ? daysSince(prestartDateValue(latest), todayMs) : null;
                 const critical = days === null || days >= 21;
 
                 return (
@@ -1279,13 +1476,10 @@ export default function AssetPrestartsPage() {
                         </p>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
-                        <StatusPill label={asset.assetType} tone="blue" />
-                        <StatusPill
-                          label={critical ? "3+ Weeks" : "7+ Days"}
-                          tone={critical ? "rose" : "amber"}
-                        />
-                      </div>
+                      <StatusPill
+                        label={critical ? "3+ Weeks" : "7+ Days"}
+                        tone={critical ? "rose" : "amber"}
+                      />
                     </div>
                   </div>
                 );
@@ -1298,53 +1492,114 @@ export default function AssetPrestartsPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-black text-slate-950">
-                Latest Prestarts
+                Plant Notice Board
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Most recent asset checks submitted.
+                Cranes and telehandlers not checked recently.
               </p>
             </div>
-            <CheckCircle2 size={22} className="text-emerald-600" />
+            <StatusPill
+              label={`${plantOverdue.length} overdue`}
+              tone={plantOverdue.length > 0 ? "amber" : "emerald"}
+            />
           </div>
 
           <div className="mt-4 grid gap-3">
-            {prestarts.slice(0, 5).map((prestart) => (
-              <Link
-                key={prestart.id}
-                href={`/assets/prestarts/${prestart.id}`}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 hover:bg-white"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="font-black text-slate-950">
-                      {getPrestartAssetLabel(prestart) || "Asset"}
-                    </p>
-                    <p className="mt-1 text-sm font-medium text-slate-600">
-                      {clean(prestart.docket_number) || "No docket"} · {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
-                      {formatShortDate(prestartDateValue(prestart))}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <StatusPill
-                      label={clean(prestart.asset_type) || "Vehicle"}
-                      tone="blue"
-                    />
-                    <StatusPill
-                      label={severityLabel(prestart.severity)}
-                      tone={severityTone(prestart.severity)}
-                    />
-                  </div>
-                </div>
-              </Link>
-            ))}
-
-            {!loading && prestarts.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm font-bold text-slate-500">
-                No prestarts submitted yet.
+            {plantOverdue.length === 0 ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
+                All plant has a recent prestart.
               </div>
-            ) : null}
+            ) : (
+              plantOverdue.slice(0, 6).map((asset) => {
+                const latest = latestByAsset.get(`${asset.assetType}:${asset.id}`);
+                const days = latest ? daysSince(prestartDateValue(latest), todayMs) : null;
+                const critical = days === null || days >= 21;
+
+                return (
+                  <div
+                    key={`${asset.assetType}:${asset.id}`}
+                    className={`rounded-2xl border p-4 ${
+                      critical
+                        ? "border-rose-200 bg-rose-50"
+                        : "border-amber-200 bg-amber-50"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-slate-950">
+                          {getAssetLabel(asset)}
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-slate-700">
+                          {days === null
+                            ? "No prestart record found."
+                            : `Last prestart was ${days} days ago.`}
+                        </p>
+                      </div>
+
+                      <StatusPill
+                        label={critical ? "3+ Weeks" : "7+ Days"}
+                        tone={critical ? "rose" : "amber"}
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">
+              Latest Prestarts
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Most recent asset checks submitted.
+            </p>
+          </div>
+          <CheckCircle2 size={22} className="text-emerald-600" />
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {prestarts.slice(0, 6).map((prestart) => (
+            <Link
+              key={prestart.id}
+              href={`/assets/prestarts/${prestart.id}`}
+              className="rounded-2xl border border-slate-200 bg-slate-50 p-4 hover:bg-white"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-black text-slate-950">
+                    {getPrestartAssetLabel(prestart) || "Asset"}
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-slate-600">
+                    {clean(prestart.docket_number) || "No docket"} ·{" "}
+                    {clean(prestart.inspected_by_name) || "Unknown"} ·{" "}
+                    {formatShortDate(prestartDateValue(prestart))}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <StatusPill
+                    label={clean(prestart.asset_type) || "Vehicle"}
+                    tone="blue"
+                  />
+                  <StatusPill
+                    label={severityLabel(prestart.severity)}
+                    tone={severityTone(prestart.severity)}
+                  />
+                </div>
+              </div>
+            </Link>
+          ))}
+
+          {!loading && prestarts.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm font-bold text-slate-500 md:col-span-2 xl:col-span-3">
+              No prestarts submitted yet.
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -1379,7 +1634,7 @@ export default function AssetPrestartsPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search asset, inspector, comments..."
+                  placeholder="Search docket, asset, inspector, fleet job..."
                   className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                 />
               </div>
@@ -1475,7 +1730,11 @@ export default function AssetPrestartsPage() {
               render: (prestart) => (
                 <div className="flex items-center gap-3">
                   <div className="hidden rounded-xl bg-slate-100 p-2 text-slate-600 sm:flex">
-                    <Car size={16} />
+                    {clean(prestart.asset_type) === "Plant" ? (
+                      <Wrench size={16} />
+                    ) : (
+                      <Car size={16} />
+                    )}
                   </div>
 
                   <div>
@@ -1492,7 +1751,7 @@ export default function AssetPrestartsPage() {
               ),
             },
             {
-              label: "Inspected By",
+              label: "Inspector",
               render: (prestart) => clean(prestart.inspected_by_name) || "N/A",
             },
             {
@@ -1503,19 +1762,6 @@ export default function AssetPrestartsPage() {
                   : `${clean(prestart.kilometres) || "-"} km`,
             },
             {
-              label: "Allocation",
-              render: (prestart) => (
-                <div>
-                  <p className="font-semibold text-slate-950">
-                    {clean(prestart.project) || "Unallocated project"}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    {clean(prestart.crew) || "Unallocated crew"}
-                  </p>
-                </div>
-              ),
-            },
-            {
               label: "Severity",
               render: (prestart) => (
                 <StatusPill
@@ -1523,6 +1769,20 @@ export default function AssetPrestartsPage() {
                   tone={severityTone(prestart.severity)}
                 />
               ),
+            },
+            {
+              label: "Fleet Job",
+              render: (prestart) =>
+                prestart.fleet_job_id ? (
+                  <Link
+                    href={`/assets/fleet-jobs/${prestart.fleet_job_id}`}
+                    className="font-bold text-amber-700 hover:underline"
+                  >
+                    {clean(prestart.fleet_job_number) || "Open Job"}
+                  </Link>
+                ) : (
+                  <span className="text-slate-400">-</span>
+                ),
             },
             {
               label: "Actions",
@@ -1536,13 +1796,15 @@ export default function AssetPrestartsPage() {
                     View
                   </Link>
 
-                  {prestart.fleet_job_id ? (
-                    <Link
-                      href={`/assets/fleet-jobs/${prestart.fleet_job_id}`}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 shadow-sm hover:bg-amber-100"
+                  {deleteMode ? (
+                    <button
+                      type="button"
+                      onClick={() => void deletePrestart(prestart)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100"
                     >
-                      Fleet Job
-                    </Link>
+                      <Trash2 size={14} />
+                      Delete
+                    </button>
                   ) : null}
                 </div>
               ),
@@ -1553,7 +1815,11 @@ export default function AssetPrestartsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
                   <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
-                    <Car size={16} />
+                    {clean(prestart.asset_type) === "Plant" ? (
+                      <Wrench size={16} />
+                    ) : (
+                      <Car size={16} />
+                    )}
                   </div>
 
                   <div>
@@ -1604,15 +1870,6 @@ export default function AssetPrestartsPage() {
 
                 <div>
                   <p className="text-xs font-bold uppercase text-slate-400">
-                    Project
-                  </p>
-                  <p className="font-semibold text-slate-800">
-                    {clean(prestart.project) || "Unallocated"}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase text-slate-400">
                     Reading
                   </p>
                   <p className="font-semibold text-slate-800">
@@ -1621,15 +1878,37 @@ export default function AssetPrestartsPage() {
                       : `${clean(prestart.kilometres) || "-"} km`}
                   </p>
                 </div>
+
+                <div>
+                  <p className="text-xs font-bold uppercase text-slate-400">
+                    Fleet Job
+                  </p>
+                  <p className="font-semibold text-slate-800">
+                    {clean(prestart.fleet_job_number) || "-"}
+                  </p>
+                </div>
               </div>
 
-              <Link
-                href={`/assets/prestarts/${prestart.id}`}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-              >
-                <Eye size={14} />
-                View
-              </Link>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/prestarts/${prestart.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
+                >
+                  <Eye size={14} />
+                  View
+                </Link>
+
+                {deleteMode ? (
+                  <button
+                    type="button"
+                    onClick={() => void deletePrestart(prestart)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                  >
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
+                ) : null}
+              </div>
             </div>
           )}
         />
@@ -1829,7 +2108,7 @@ export default function AssetPrestartsPage() {
                   </div>
 
                   <div className="grid gap-5 p-4">
-                    {getChecklistSections(formAssetType).map((section) => (
+                    {formChecklistSections.map((section) => (
                       <div key={section.title}>
                         <div className="mb-3 border-b border-slate-200 pb-2">
                           <h3 className="text-sm font-black uppercase tracking-wide text-slate-500">
