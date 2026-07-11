@@ -69,7 +69,7 @@ type AdminUser = {
   created_at: string | null;
   last_sign_in_at: string | null;
   employee: Employee | null;
-  project_access: ProjectAccess[];
+  project_access?: ProjectAccess[];
 };
 
 type UsersResponse = {
@@ -161,40 +161,59 @@ export default function AdminUsersPage() {
     [supabase],
   );
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
-    setMessage("");
+const loadAll = useCallback(async () => {
+  setLoading(true);
+  setMessage("");
 
-    try {
-      const response = await apiFetch("/api/admin/users");
+  try {
+    const response = await apiFetch("/api/admin/users");
 
-      const payload = (await response.json()) as UsersResponse & {
-        error?: string;
-      };
+    const payload = (await response.json()) as UsersResponse & {
+      error?: string;
+    };
 
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to load users.");
+    if (!response.ok) {
+      throw new Error(
+        payload.error ?? "Failed to load users.",
+      );
+    }
+
+    const normalisedUsers = (payload.users ?? []).map(
+      (user) => ({
+        ...user,
+        project_access: Array.isArray(user.project_access)
+          ? user.project_access
+          : [],
+      }),
+    );
+
+    setUsers(normalisedUsers);
+    setEmployees(payload.employees ?? []);
+    setCrews(payload.crews ?? []);
+    setProjects(payload.projects ?? []);
+
+    setSelectedUserId((current) => {
+      if (
+        current &&
+        normalisedUsers.some(
+          (user) => user.user_id === current,
+        )
+      ) {
+        return current;
       }
 
-      setUsers(payload.users ?? []);
-      setEmployees(payload.employees ?? []);
-      setCrews(payload.crews ?? []);
-      setProjects(payload.projects ?? []);
-
-      setSelectedUserId((current) => {
-        if (current && payload.users.some((user) => user.user_id === current)) {
-          return current;
-        }
-        return payload.users[0]?.user_id ?? null;
-      });
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Failed to load user data.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [apiFetch]);
+      return normalisedUsers[0]?.user_id ?? null;
+    });
+  } catch (error) {
+    setMessage(
+      error instanceof Error
+        ? error.message
+        : "Failed to load user data.",
+    );
+  } finally {
+    setLoading(false);
+  }
+}, [apiFetch]);
 
   const checkRoleAndLoad = useCallback(async () => {
     setCheckingRole(true);
@@ -239,7 +258,9 @@ export default function AdminUsersPage() {
     setEditEmployeeId(selectedUser.employee?.id ?? "");
     setEditCrewId(selectedUser.employee?.crew_id ?? "");
     setEditProjectIds(
-      selectedUser.project_access.map((access) => access.project_id),
+     (selectedUser.project_access ?? []).map(
+  (access) => access.project_id,
+)
     );
     setNewPassword("");
   }, [selectedUser]);
@@ -654,7 +675,7 @@ export default function AdminUsersPage() {
                         <RolePill kind="website" role={user.website_role} />
                         <RolePill kind="mobile" role={user.mobile_role} />
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                          {user.project_access.length} projects
+                          {(user.project_access ?? []).length} projects
                         </span>
                       </div>
                     </button>
