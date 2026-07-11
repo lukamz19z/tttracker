@@ -52,94 +52,139 @@ export async function POST(request: NextRequest) {
 
     if (!userId) {
       return NextResponse.json(
-        {
-          error: "User ID is required.",
-        },
-        {
-          status: 400,
-        },
+        { error: "User ID is required." },
+        { status: 400 },
       );
     }
 
     if (!WEBSITE_ROLES.has(websiteRole)) {
       return NextResponse.json(
-        {
-          error: "Invalid website role.",
-        },
-        {
-          status: 400,
-        },
+        { error: "Invalid website role." },
+        { status: 400 },
       );
     }
 
     if (!MOBILE_ROLES.has(mobileRole)) {
       return NextResponse.json(
-        {
-          error: "Invalid mobile role.",
-        },
-        {
-          status: 400,
-        },
+        { error: "Invalid mobile role." },
+        { status: 400 },
       );
     }
 
-    const { error: websiteRoleError } = await supabaseAdmin
-      .from("user_roles")
-      .upsert(
-        {
+    /*
+     * WEBSITE ROLE
+     *
+     * Delete and insert instead of relying on an ON CONFLICT
+     * constraint that may not exist on the older user_roles table.
+     */
+    const { error: deleteWebsiteRoleError } =
+      await supabaseAdmin
+        .from("user_roles")
+        .delete()
+        .eq("user_id", userId);
+
+    if (deleteWebsiteRoleError) {
+      throw new Error(
+        `Unable to clear website role: ${deleteWebsiteRoleError.message}`,
+      );
+    }
+
+    const { error: insertWebsiteRoleError } =
+      await supabaseAdmin
+        .from("user_roles")
+        .insert({
           user_id: userId,
           role: websiteRole,
-        },
-        {
-          onConflict: "user_id",
-        },
-      );
+        });
 
-    if (websiteRoleError) {
-      throw websiteRoleError;
+    if (insertWebsiteRoleError) {
+      throw new Error(
+        `Unable to save website role: ${insertWebsiteRoleError.message}`,
+      );
     }
 
-    const { error: mobileRoleError } = await supabaseAdmin
-      .from("user_mobile_roles")
-      .upsert(
-        {
+    /*
+     * MOBILE ROLE
+     */
+    const { error: deleteMobileRoleError } =
+      await supabaseAdmin
+        .from("user_mobile_roles")
+        .delete()
+        .eq("user_id", userId);
+
+    if (deleteMobileRoleError) {
+      throw new Error(
+        `Unable to clear mobile role: ${deleteMobileRoleError.message}`,
+      );
+    }
+
+    const { error: insertMobileRoleError } =
+      await supabaseAdmin
+        .from("user_mobile_roles")
+        .insert({
           user_id: userId,
           role: mobileRole,
-        },
-        {
-          onConflict: "user_id",
-        },
-      );
+        });
 
-    if (mobileRoleError) {
-      throw mobileRoleError;
+    if (insertMobileRoleError) {
+      throw new Error(
+        `Unable to save mobile role: ${insertMobileRoleError.message}`,
+      );
     }
 
-    const { error: clearEmployeeError } = await supabaseAdmin
-      .from("employees")
-      .update({
-        user_id: null,
-      })
-      .eq("user_id", userId);
+    /*
+     * EMPLOYEE LINK
+     */
+    const { error: clearEmployeeError } =
+      await supabaseAdmin
+        .from("employees")
+        .update({
+          user_id: null,
+        })
+        .eq("user_id", userId);
 
     if (clearEmployeeError) {
-      throw clearEmployeeError;
+      throw new Error(
+        `Unable to clear employee link: ${clearEmployeeError.message}`,
+      );
     }
 
     if (body.employee_id) {
-      const { error: employeeError } = await supabaseAdmin
-        .from("employees")
-        .update({
-          user_id: userId,
-          crew_id: body.crew_id || null,
-        })
-        .eq("id", body.employee_id);
+      const { data: conflictingEmployee } =
+        await supabaseAdmin
+          .from("employees")
+          .select("id,full_name,user_id")
+          .eq("id", body.employee_id)
+          .maybeSingle();
+
+      if (
+        conflictingEmployee?.user_id &&
+        conflictingEmployee.user_id !== userId
+      ) {
+        throw new Error(
+          `${conflictingEmployee.full_name} is already linked to another login.`,
+        );
+      }
+
+      const { error: employeeError } =
+        await supabaseAdmin
+          .from("employees")
+          .update({
+            user_id: userId,
+            crew_id: body.crew_id || null,
+          })
+          .eq("id", body.employee_id);
 
       if (employeeError) {
-        throw employeeError;
+        throw new Error(
+          `Unable to link employee: ${employeeError.message}`,
+        );
       }
     }
 
+    /*
+     * PROJECT ACCESS
+     */
     const { error: deleteProjectAccessError } =
       await supabaseAdmin
         .from("project_access")
@@ -147,7 +192,9 @@ export async function POST(request: NextRequest) {
         .eq("user_id", userId);
 
     if (deleteProjectAccessError) {
-      throw deleteProjectAccessError;
+      throw new Error(
+        `Unable to clear project access: ${deleteProjectAccessError.message}`,
+      );
     }
 
     if (projectIds.length > 0) {
@@ -163,7 +210,9 @@ export async function POST(request: NextRequest) {
           .insert(projectRows);
 
       if (projectAccessError) {
-        throw projectAccessError;
+        throw new Error(
+          `Unable to save project access: ${projectAccessError.message}`,
+        );
       }
     }
 
