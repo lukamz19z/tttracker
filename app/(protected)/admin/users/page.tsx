@@ -64,8 +64,8 @@ type ProjectAccess = {
 type AdminUser = {
   user_id: string;
   email: string;
-  website_role: WebsiteRole;
-  mobile_role: MobileRole;
+  website_role?: WebsiteRole;
+  mobile_role?: MobileRole;
   created_at: string | null;
   last_sign_in_at: string | null;
   employee: Employee | null;
@@ -106,8 +106,12 @@ function formatDate(value?: string | null) {
   return date.toLocaleString();
 }
 
-function roleLabel(role: WebsiteRole | MobileRole) {
-  return role.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+function roleLabel(role?: WebsiteRole | MobileRole | null) {
+  if (!role) return "Not assigned";
+
+  return String(role)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export default function AdminUsersPage() {
@@ -253,8 +257,13 @@ const loadAll = useCallback(async () => {
   useEffect(() => {
     if (!selectedUser) return;
 
-    setEditWebsiteRole(selectedUser.website_role);
-    setEditMobileRole(selectedUser.mobile_role);
+setEditWebsiteRole(
+  selectedUser.website_role ?? "viewer",
+);
+
+setEditMobileRole(
+  selectedUser.mobile_role ?? "crew",
+);
     setEditEmployeeId(selectedUser.employee?.id ?? "");
     setEditCrewId(selectedUser.employee?.crew_id ?? "");
     setEditProjectIds(
@@ -672,8 +681,14 @@ const loadAll = useCallback(async () => {
                         {user.email}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <RolePill kind="website" role={user.website_role} />
-                        <RolePill kind="mobile" role={user.mobile_role} />
+<RolePill
+  kind="website"
+  role={user.website_role ?? "viewer"}
+/>
+<RolePill
+  kind="mobile"
+  role={user.mobile_role ?? "crew"}
+/>
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                           {(user.project_access ?? []).length} projects
                         </span>
@@ -1016,7 +1031,7 @@ function RolePill({
   role,
 }: {
   kind: "website" | "mobile";
-  role: WebsiteRole | MobileRole;
+  role?: WebsiteRole | MobileRole | null;
 }) {
   const classes =
     kind === "website"
@@ -1027,7 +1042,8 @@ function RolePill({
     <span
       className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${classes}`}
     >
-      {kind === "website" ? "Web" : "App"} · {roleLabel(role)}
+      {kind === "website" ? "Web" : "App"} ·{" "}
+      {roleLabel(role)}
     </span>
   );
 }
