@@ -24,13 +24,20 @@ const assetNav = [
       { label: "Lifting Gear", href: "/assets/equipment/lifting-gear" },
       { label: "Generators", href: "/assets/equipment/generators" },
       { label: "Ladders", href: "/assets/equipment/ladders" },
-      { label: "Torque Wrenches", href: "/assets/equipment/torque-wrenches" },
+      {
+        label: "Torque Wrenches",
+        href: "/assets/equipment/torque-wrenches",
+      },
       { label: "Fall Arrest", href: "/assets/equipment/fall-arrest" },
     ],
   },
   { label: "Prestarts", href: "/assets/prestarts" },
-  { label: "Compliance", href: "/assets/compliance" },
   { label: "Inspections", href: "/assets/inspections" },
+  {
+    label: "Risk Assessments",
+    href: "/assets/risk-assessments",
+  },
+  { label: "Compliance", href: "/assets/compliance" },
 ];
 
 export default function AssetsLayout({
@@ -101,14 +108,16 @@ export default function AssetsLayout({
             </h2>
 
             <p className="mt-2 text-sm text-slate-500">
-              Plant, vehicles, equipment, prestarts, inspections and Fleet Jobs.
+              Plant, vehicles, equipment, prestarts, inspections, risk
+              assessments and Fleet Jobs.
             </p>
           </div>
 
-          <nav className="mt-8 flex h-[calc(100vh-260px)] flex-col">
+          <nav className="mt-8 flex h-[calc(100vh-260px)] flex-col overflow-y-auto">
             <div className="space-y-2">
               {assetNav.map((item) => {
                 const hasChildren = "children" in item && item.children;
+
                 const active =
                   pathname === item.href ||
                   (item.href !== "/assets" && pathname.startsWith(item.href));
