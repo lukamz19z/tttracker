@@ -17,42 +17,63 @@ export type MobileRole =
   | "mechanic"
   | "admin";
 
+export type AvailableProject = {
+  id: string;
+  name: string;
+  projectNumber: string | null;
+  status: string | null;
+};
+
 export type MobileProfile = {
   userId: string;
   email: string;
+
   employeeId: string | null;
   fullName: string;
   employeeRole: string | null;
+
   mobileRole: MobileRole;
+
   crewId: string | null;
   crewNumber: string | null;
   crewName: string | null;
+
   projectId: string | null;
   projectName: string | null;
   projectNumber: string | null;
   projectStatus: string | null;
-  availableProjects: Array<{
-    id: string;
-    name: string;
-    projectNumber: string | null;
-    status: string | null;
-  }>;
+
+  availableProjects: AvailableProject[];
 };
 
 type AuthContextValue = {
   session: Session | null;
   loading: boolean;
+
   profile: MobileProfile | null;
   profileLoading: boolean;
   profileError: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
+
+  signIn: (
+    email: string,
+    password: string,
+  ) => Promise<void>;
+
   signOut: () => Promise<void>;
+
   refreshProfile: () => Promise<void>;
+
+  setCurrentProject: (
+    projectId: string,
+  ) => Promise<void>;
 };
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const AuthContext =
+  createContext<AuthContextValue | undefined>(undefined);
 
-function isMobileRole(value: unknown): value is MobileRole {
+function isMobileRole(
+  value: unknown,
+): value is MobileRole {
   return (
     value === "crew" ||
     value === "leading_hand" ||
@@ -62,22 +83,37 @@ function isMobileRole(value: unknown): value is MobileRole {
 }
 
 function fallbackName(session: Session): string {
-  const metadataName = session.user.user_metadata?.full_name;
+  const metadataName =
+    session.user.user_metadata?.full_name;
 
-  if (typeof metadataName === "string" && metadataName.trim()) {
+  if (
+    typeof metadataName === "string" &&
+    metadataName.trim()
+  ) {
     return metadataName.trim();
   }
 
-  return session.user.email?.split("@")[0] ?? "User";
+  return (
+    session.user.email?.split("@")[0] ?? "User"
+  );
 }
 
-export function AuthProvider({ children }: PropsWithChildren) {
-  const [session, setSession] = useState<Session | null>(null);
+export function AuthProvider({
+  children,
+}: PropsWithChildren) {
+  const [session, setSession] =
+    useState<Session | null>(null);
+
   const [loading, setLoading] = useState(true);
 
-  const [profile, setProfile] = useState<MobileProfile | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profile, setProfile] =
+    useState<MobileProfile | null>(null);
+
+  const [profileLoading, setProfileLoading] =
+    useState(false);
+
+  const [profileError, setProfileError] =
+    useState<string | null>(null);
 
   const clearProfile = useCallback(() => {
     setProfile(null);
@@ -85,158 +121,303 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setProfileLoading(false);
   }, []);
 
-  const loadProfile = useCallback(async (currentSession: Session) => {
-    setProfileLoading(true);
-    setProfileError(null);
+  const loadProfile = useCallback(
+    async (
+      currentSession: Session,
+    ): Promise<void> => {
+      setProfileLoading(true);
+      setProfileError(null);
 
-    try {
-      const userId = currentSession.user.id;
-      const email = currentSession.user.email ?? "";
+      try {
+        const userId = currentSession.user.id;
+        const email =
+          currentSession.user.email ?? "";
 
-      const [
-        mobileRoleResult,
-        employeeResult,
-        projectAccessResult,
-      ] = await Promise.all([
-        supabase
-          .from("user_mobile_roles")
-          .select("role")
-          .eq("user_id", userId)
-          .maybeSingle(),
+        const [
+          mobileRoleResult,
+          employeeResult,
+          projectAccessResult,
+        ] = await Promise.all([
+          supabase
+            .from("user_mobile_roles")
+            .select("role")
+            .eq("user_id", userId)
+            .maybeSingle(),
 
-        supabase
-          .from("employees")
-          .select(`
-            id,
-            full_name,
-            role,
-            crew_id,
-            crews (
+          supabase
+            .from("employees")
+            .select(`
               id,
-              crew_number,
-              crew_name
-            )
-          `)
-          .eq("user_id", userId)
-          .maybeSingle(),
+              full_name,
+              role,
+              crew_id,
+              current_project_id,
+              crews (
+                id,
+                crew_number,
+                crew_name
+              )
+            `)
+            .eq("user_id", userId)
+            .maybeSingle(),
 
-        supabase
-          .from("project_access")
-          .select(`
-            project_id,
-            projects (
-              id,
-              name,
-              project_number,
-              status
-            )
-          `)
-          .eq("user_id", userId),
-      ]);
+          supabase
+            .from("project_access")
+            .select(`
+              project_id,
+              projects (
+                id,
+                name,
+                project_number,
+                status
+              )
+            `)
+            .eq("user_id", userId),
+        ]);
 
-      if (mobileRoleResult.error) {
-        throw mobileRoleResult.error;
+        if (mobileRoleResult.error) {
+          throw mobileRoleResult.error;
+        }
+
+        if (employeeResult.error) {
+          throw employeeResult.error;
+        }
+
+        if (projectAccessResult.error) {
+          throw projectAccessResult.error;
+        }
+
+        const rawRole =
+          mobileRoleResult.data?.role;
+
+        const mobileRole: MobileRole =
+          isMobileRole(rawRole)
+            ? rawRole
+            : "crew";
+
+        const employee =
+          employeeResult.data;
+
+        const crewRelation =
+          employee?.crews;
+
+        const crew = Array.isArray(
+          crewRelation,
+        )
+          ? crewRelation[0] ?? null
+          : crewRelation ?? null;
+
+        const availableProjects: AvailableProject[] =
+          (
+            projectAccessResult.data ?? []
+          )
+            .map((access) => {
+              const projectRelation =
+                access.projects;
+
+              const project =
+                Array.isArray(
+                  projectRelation,
+                )
+                  ? projectRelation[0] ??
+                    null
+                  : projectRelation ?? null;
+
+              if (!project) {
+                return null;
+              }
+
+              return {
+                id: project.id,
+                name: project.name,
+                projectNumber:
+                  project.project_number,
+                status: project.status,
+              };
+            })
+            .filter(
+              (
+                project,
+              ): project is AvailableProject =>
+                project !== null,
+            );
+
+        const savedProjectId =
+          employee?.current_project_id ??
+          null;
+
+        const selectedProject =
+          availableProjects.find(
+            (project) =>
+              project.id === savedProjectId,
+          ) ??
+          availableProjects.find(
+            (project) =>
+              project.status
+                ?.trim()
+                .toLowerCase() ===
+              "active",
+          ) ??
+          availableProjects[0] ??
+          null;
+
+        setProfile({
+          userId,
+          email,
+
+          employeeId:
+            employee?.id ?? null,
+
+          fullName:
+            employee?.full_name?.trim() ||
+            fallbackName(
+              currentSession,
+            ),
+
+          employeeRole:
+            employee?.role ?? null,
+
+          mobileRole,
+
+          crewId:
+            crew?.id ??
+            employee?.crew_id ??
+            null,
+
+          crewNumber:
+            crew?.crew_number ?? null,
+
+          crewName:
+            crew?.crew_name ?? null,
+
+          projectId:
+            selectedProject?.id ?? null,
+
+          projectName:
+            selectedProject?.name ?? null,
+
+          projectNumber:
+            selectedProject?.projectNumber ??
+            null,
+
+          projectStatus:
+            selectedProject?.status ?? null,
+
+          availableProjects,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unable to load your TTTracker profile.";
+
+        console.error(
+          "Unable to load profile:",
+          error,
+        );
+
+        setProfile(null);
+        setProfileError(message);
+      } finally {
+        setProfileLoading(false);
+      }
+    },
+    [],
+  );
+
+  const refreshProfile =
+    useCallback(async () => {
+      if (!session) {
+        clearProfile();
+        return;
       }
 
-      if (employeeResult.error) {
-        throw employeeResult.error;
-      }
+      await loadProfile(session);
+    }, [
+      clearProfile,
+      loadProfile,
+      session,
+    ]);
 
-      if (projectAccessResult.error) {
-        throw projectAccessResult.error;
-      }
+  const setCurrentProject =
+    useCallback(
+      async (
+        projectId: string,
+      ): Promise<void> => {
+        if (!session) {
+          throw new Error(
+            "You are not signed in.",
+          );
+        }
 
-      const rawRole = mobileRoleResult.data?.role;
-      const mobileRole: MobileRole = isMobileRole(rawRole)
-        ? rawRole
-        : "crew";
+        if (!profile) {
+          throw new Error(
+            "Your profile has not loaded.",
+          );
+        }
 
-      const employee = employeeResult.data;
+        const selectedProject =
+          profile.availableProjects.find(
+            (project) =>
+              project.id === projectId,
+          );
 
-      const crewRelation = employee?.crews;
-      const crew = Array.isArray(crewRelation)
-        ? crewRelation[0] ?? null
-        : crewRelation ?? null;
+        if (!selectedProject) {
+          throw new Error(
+            "You do not have access to that project.",
+          );
+        }
 
-      const availableProjects =
-        projectAccessResult.data
-          ?.map((access) => {
-            const projectRelation = access.projects;
-            const project = Array.isArray(projectRelation)
-              ? projectRelation[0] ?? null
-              : projectRelation ?? null;
+        const previousProfile = profile;
 
-            if (!project) {
-              return null;
-            }
+        setProfile((current) => {
+          if (!current) {
+            return current;
+          }
 
-            return {
-              id: project.id,
-              name: project.name,
-              projectNumber: project.project_number,
-              status: project.status,
-            };
-          })
-          .filter(
-            (
-              project,
-            ): project is {
-              id: string;
-              name: string;
-              projectNumber: string | null;
-              status: string | null;
-            } => project !== null,
-          ) ?? [];
+          return {
+            ...current,
 
-      const selectedProject =
-        availableProjects.find(
-          (project) =>
-            project.status?.toLowerCase() === "active",
-        ) ??
-        availableProjects[0] ??
-        null;
+            projectId:
+              selectedProject.id,
 
-      setProfile({
-        userId,
-        email,
-        employeeId: employee?.id ?? null,
-        fullName:
-          employee?.full_name?.trim() ||
-          fallbackName(currentSession),
-        employeeRole: employee?.role ?? null,
-        mobileRole,
-        crewId: crew?.id ?? employee?.crew_id ?? null,
-        crewNumber: crew?.crew_number ?? null,
-        crewName: crew?.crew_name ?? null,
-        projectId: selectedProject?.id ?? null,
-        projectName: selectedProject?.name ?? null,
-        projectNumber: selectedProject?.projectNumber ?? null,
-        projectStatus: selectedProject?.status ?? null,
-        availableProjects,
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to load your TTTracker profile.";
+            projectName:
+              selectedProject.name,
 
-      console.error("Unable to load profile:", message);
+            projectNumber:
+              selectedProject.projectNumber,
 
-      setProfile(null);
-      setProfileError(message);
-    } finally {
-      setProfileLoading(false);
-    }
-  }, []);
+            projectStatus:
+              selectedProject.status,
+          };
+        });
 
-  const refreshProfile = useCallback(async () => {
-    if (!session) {
-      clearProfile();
-      return;
-    }
+        try {
+          const { error } =
+            await supabase.rpc(
+              "set_my_current_project",
+              {
+                selected_project_id:
+                  projectId,
+              },
+            );
 
-    await loadProfile(session);
-  }, [clearProfile, loadProfile, session]);
+          if (error) {
+            throw error;
+          }
+
+          await loadProfile(session);
+        } catch (error) {
+          setProfile(previousProfile);
+          throw error;
+        }
+      },
+      [
+        loadProfile,
+        profile,
+        session,
+      ],
+    );
 
   useEffect(() => {
     let active = true;
@@ -244,9 +425,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
     async function initialise() {
       try {
         const {
-          data: { session: existingSession },
+          data: {
+            session:
+              existingSession,
+          },
           error,
-        } = await supabase.auth.getSession();
+        } =
+          await supabase.auth.getSession();
 
         if (error) {
           throw error;
@@ -259,7 +444,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setSession(existingSession);
 
         if (existingSession) {
-          await loadProfile(existingSession);
+          await loadProfile(
+            existingSession,
+          );
         } else {
           clearProfile();
         }
@@ -284,47 +471,68 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!active) {
-        return;
-      }
+    } =
+      supabase.auth.onAuthStateChange(
+        (
+          _event,
+          nextSession,
+        ) => {
+          if (!active) {
+            return;
+          }
 
-      setSession(nextSession);
-      setLoading(false);
+          setSession(nextSession);
+          setLoading(false);
 
-      setTimeout(() => {
-        if (!active) {
-          return;
-        }
+          setTimeout(() => {
+            if (!active) {
+              return;
+            }
 
-        if (nextSession) {
-          void loadProfile(nextSession);
-        } else {
-          clearProfile();
-        }
-      }, 0);
-    });
+            if (nextSession) {
+              void loadProfile(
+                nextSession,
+              );
+            } else {
+              clearProfile();
+            }
+          }, 0);
+        },
+      );
 
     return () => {
       active = false;
       subscription.unsubscribe();
     };
-  }, [clearProfile, loadProfile]);
+  }, [
+    clearProfile,
+    loadProfile,
+  ]);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
-      const cleanEmail = email.trim().toLowerCase();
+    async (
+      email: string,
+      password: string,
+    ) => {
+      const cleanEmail =
+        email.trim().toLowerCase();
 
-      if (!cleanEmail || !password) {
+      if (
+        !cleanEmail ||
+        !password
+      ) {
         throw new Error(
           "Enter your email address and password.",
         );
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password,
-      });
+      const { error } =
+        await supabase.auth.signInWithPassword(
+          {
+            email: cleanEmail,
+            password,
+          },
+        );
 
       if (error) {
         throw error;
@@ -333,49 +541,63 @@ export function AuthProvider({ children }: PropsWithChildren) {
     [],
   );
 
-  const signOut = useCallback(async () => {
-    const { error } = await supabase.auth.signOut();
+  const signOut =
+    useCallback(async () => {
+      const { error } =
+        await supabase.auth.signOut();
 
-    if (error) {
-      throw error;
-    }
+      if (error) {
+        throw error;
+      }
 
-    setSession(null);
-    clearProfile();
-  }, [clearProfile]);
+      setSession(null);
+      clearProfile();
+    }, [clearProfile]);
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      session,
-      loading,
-      profile,
-      profileLoading,
-      profileError,
-      signIn,
-      signOut,
-      refreshProfile,
-    }),
-    [
-      session,
-      loading,
-      profile,
-      profileLoading,
-      profileError,
-      signIn,
-      signOut,
-      refreshProfile,
-    ],
-  );
+  const value =
+    useMemo<AuthContextValue>(
+      () => ({
+        session,
+        loading,
+
+        profile,
+        profileLoading,
+        profileError,
+
+        signIn,
+        signOut,
+
+        refreshProfile,
+        setCurrentProject,
+      }),
+      [
+        session,
+        loading,
+
+        profile,
+        profileLoading,
+        profileError,
+
+        signIn,
+        signOut,
+
+        refreshProfile,
+        setCurrentProject,
+      ],
+    );
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider
+      value={value}
+    >
       {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth(): AuthContextValue {
-  const context = useContext(AuthContext);
+  const context =
+    useContext(AuthContext);
 
   if (!context) {
     throw new Error(

@@ -22,9 +22,9 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  if (!loading && session) {
-    return <Redirect href="/(tabs)" />;
-  }
+if (!loading && session) {
+  return <Redirect href="/" />;
+}
 
   async function handleSignIn() {
     if (!email.trim() || !password) {
