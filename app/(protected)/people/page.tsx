@@ -11,11 +11,13 @@ import {
   ExternalLink,
   HardHat,
   Loader2,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
   Shirt,
   UserCheck,
+  UserMinus,
   UserRoundX,
   Users,
   UsersRound,
@@ -191,6 +193,8 @@ export default function PeoplePage() {
   const [editingEmployee, setEditingEmployee] =
     useState<Employee | null>(null);
   const [form, setForm] = useState<EmployeeForm>(EMPTY_FORM);
+  const [statusEmployee, setStatusEmployee] = useState<Employee | null>(null);
+  const [statusSaving, setStatusSaving] = useState(false);
 
   const [message, setMessage] = useState<{
     tone: "success" | "error";
@@ -525,37 +529,42 @@ export default function PeoplePage() {
     }
   }
 
-  async function toggleEmployeeStatus(employee: Employee) {
-    const nextActive = employee.active === false;
+  async function confirmEmployeeStatusChange() {
+    if (!statusEmployee) return;
 
-    if (
-      !nextActive &&
-      !window.confirm(
-        `Deactivate ${employee.full_name}? They will be removed from active operational lists but their history will remain.`,
-      )
-    ) {
-      return;
-    }
-
+    const nextActive = statusEmployee.active === false;
+    setStatusSaving(true);
     setMessage(null);
 
-    const { error } = await supabase
-      .from("employees")
-      .update({ active: nextActive })
-      .eq("id", employee.id);
+    try {
+      const { error } = await supabase
+        .from("employees")
+        .update({ active: nextActive })
+        .eq("id", statusEmployee.id);
 
-    if (error) {
-      setMessage({ tone: "error", text: error.message });
-      return;
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      await loadData();
+      setStatusEmployee(null);
+      setMessage({
+        tone: "success",
+        text: `${statusEmployee.full_name} is now ${
+          nextActive ? "active" : "inactive"
+        }.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to update the employee status.",
+      });
+    } finally {
+      setStatusSaving(false);
     }
-
-    await loadData();
-    setMessage({
-      tone: "success",
-      text: `${employee.full_name} is now ${
-        nextActive ? "active" : "inactive"
-      }.`,
-    });
   }
 
   function exportRegister() {
@@ -728,12 +737,13 @@ export default function PeoplePage() {
             href="/people/crews"
             label="Open crews"
           />
-          <NavigationCard
-            icon={<HardHat size={20} />}
-            title="Training Register"
-            description="Certificates, licences, VOC records and SharePoint documents will be added next."
-            disabled
-          />
+<NavigationCard
+  icon={<HardHat size={20} />}
+  title="Training Register"
+  description="Manage licences, VOCs, certificates, inductions, competencies and expiry tracking."
+  href="/people/training"
+  label="Open training register"
+/>
           <NavigationCard
             icon={<Shirt size={20} />}
             title="PPE Register"
@@ -852,7 +862,7 @@ export default function PeoplePage() {
                       : undefined
                   }
                   onEdit={() => openEdit(employee)}
-                  onToggleStatus={() => void toggleEmployeeStatus(employee)}
+                  onRequestStatusChange={() => setStatusEmployee(employee)}
                 />
               ))}
             </div>
@@ -872,6 +882,17 @@ export default function PeoplePage() {
           onSave={() => void saveEmployee()}
         />
       ) : null}
+
+      {statusEmployee ? (
+        <StatusConfirmationModal
+          employee={statusEmployee}
+          saving={statusSaving}
+          onClose={() => {
+            if (!statusSaving) setStatusEmployee(null);
+          }}
+          onConfirm={() => void confirmEmployeeStatusChange()}
+        />
+      ) : null}
     </AppShell>
   );
 }
@@ -881,16 +902,17 @@ function EmployeeRow({
   crew,
   login,
   onEdit,
-  onToggleStatus,
+  onRequestStatusChange,
 }: {
   employee: Employee;
   crew: Crew | undefined;
   login: LoginAccount | undefined;
   onEdit: () => void;
-  onToggleStatus: () => void;
+  onRequestStatusChange: () => void;
 }) {
   const active = employee.active !== false;
   const ppeComplete = hasCompletePpe(employee);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_auto] xl:items-center">
@@ -902,9 +924,15 @@ function EmployeeRow({
           <h3 className="truncate font-bold text-slate-950 group-hover:text-blue-700">
             {employee.full_name}
           </h3>
-          <ExternalLink size={14} className="shrink-0 text-slate-300 group-hover:text-blue-600" />
+          <ExternalLink
+            size={14}
+            className="shrink-0 text-slate-300 group-hover:text-blue-600"
+          />
         </Link>
-        <div className="mt-1"><StatusBadge active={active} /></div>
+
+        <div className="mt-1">
+          <StatusBadge active={active} />
+        </div>
 
         <p className="mt-1 text-sm text-slate-500">
           {employee.role || "Position not set"}
@@ -958,10 +986,10 @@ function EmployeeRow({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 xl:justify-end">
+      <div className="flex flex-wrap items-center gap-2 xl:justify-end">
         <Link
           href={`/people/${employee.id}`}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
         >
           View Profile
           <ArrowRight size={15} />
@@ -969,24 +997,76 @@ function EmployeeRow({
 
         <button
           type="button"
-          onClick={onToggleStatus}
-          className={`rounded-xl border px-3 py-2 text-sm font-semibold ${
-            active
-              ? "border-slate-200 text-slate-600 hover:bg-slate-50"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-          }`}
-        >
-          {active ? "Deactivate" : "Reactivate"}
-        </button>
-
-        <button
-          type="button"
           onClick={onEdit}
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
         >
           <Edit3 size={15} />
           Quick Edit
         </button>
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((current) => !current)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            aria-label={`More actions for ${employee.full_name}`}
+            aria-expanded={menuOpen}
+          >
+            <MoreHorizontal size={18} />
+          </button>
+
+          {menuOpen ? (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-30 cursor-default"
+                aria-label="Close actions menu"
+                onClick={() => setMenuOpen(false)}
+              />
+
+              <div className="absolute right-0 z-40 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                <Link
+                  href={`/people/${employee.id}`}
+                  className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  View full profile
+                  <ArrowRight size={15} />
+                </Link>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onEdit();
+                  }}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Quick edit
+                  <Edit3 size={15} />
+                </button>
+
+                <div className="my-1 border-t border-slate-100" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onRequestStatusChange();
+                  }}
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold ${
+                    active
+                      ? "text-rose-700 hover:bg-rose-50"
+                      : "text-emerald-700 hover:bg-emerald-50"
+                  }`}
+                >
+                  {active ? "Deactivate person" : "Reactivate person"}
+                  {active ? <UserMinus size={15} /> : <UserCheck size={15} />}
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1251,6 +1331,109 @@ function EmployeeModal({
             >
               {saving ? <Loader2 size={16} className="animate-spin" /> : null}
               {employee ? "Save Changes" : "Add Person"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusConfirmationModal({
+  employee,
+  saving,
+  onClose,
+  onConfirm,
+}: {
+  employee: Employee;
+  saving: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const active = employee.active !== false;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
+      <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <div
+              className={`inline-flex rounded-2xl p-3 ${
+                active
+                  ? "bg-rose-100 text-rose-700"
+                  : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {active ? <UserMinus size={22} /> : <UserCheck size={22} />}
+            </div>
+
+            <h2 className="mt-4 text-xl font-bold text-slate-950">
+              {active ? "Deactivate" : "Reactivate"} {employee.full_name}?
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              {active
+                ? "This person will be removed from active operational selections, but their historical records will remain."
+                : "This person will become available again in active operational selections."}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-6">
+          {active ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <ul className="space-y-2 text-sm text-slate-600">
+                <li>• Removed from active crew and personnel selectors.</li>
+                <li>• Excluded from future training and compliance reminders.</li>
+                <li>• Historical dockets, prestarts and records are preserved.</li>
+                <li>• The person can be reactivated later.</li>
+              </ul>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-800">
+              Reactivating restores the person to active lists and operational
+              workflows. Their existing crew and login links remain unchanged.
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={saving}
+              className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60 ${
+                active
+                  ? "bg-rose-700 hover:bg-rose-800"
+                  : "bg-emerald-700 hover:bg-emerald-800"
+              }`}
+            >
+              {saving ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : active ? (
+                <UserMinus size={16} />
+              ) : (
+                <UserCheck size={16} />
+              )}
+              {active ? "Deactivate Person" : "Reactivate Person"}
             </button>
           </div>
         </div>

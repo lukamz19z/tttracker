@@ -16,7 +16,7 @@ import {
   Settings,
   X,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
 import { PageHeader, PageShell } from "../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
@@ -714,7 +714,7 @@ export default function FleetJobsPage() {
       throw new Error("Missing Supabase environment variables.");
     }
 
-    return createClient(supabaseUrl, supabaseAnonKey);
+    return createBrowserClient(supabaseUrl, supabaseAnonKey);
   }, []);
 
   const [jobs, setJobs] = useState<FleetJob[]>([]);
@@ -1022,60 +1022,145 @@ export default function FleetJobsPage() {
 
     setSaving(true);
 
-    const selectedVehicle = form.asset_type === "Vehicle" ? vehicleMap.get(form.vehicle_id) : null;
-    const selectedPlant = form.asset_type === "Plant" ? plantMap.get(form.plant_id) : null;
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    const assetLabel =
-      form.asset_type === "Vehicle"
-        ? [selectedVehicle?.vehicle_id, selectedVehicle?.vehicle_rego, selectedVehicle?.make, selectedVehicle?.model]
-            .map(clean)
-            .filter(Boolean)
-            .join(" · ")
-        : [selectedPlant?.asset_id, selectedPlant?.rego, selectedPlant?.make, selectedPlant?.model]
-            .map(clean)
-            .filter(Boolean)
-            .join(" · ");
+      if (userError) {
+        throw new Error(`Could not verify your login: ${userError.message}`);
+      }
 
-    const { error } = await supabase.from("fleet_jobs").insert({
-      asset_type: form.asset_type,
-      vehicle_id: form.asset_type === "Vehicle" ? form.vehicle_id || null : null,
-      vehicle_asset_id: form.asset_type === "Vehicle" ? form.vehicle_id || null : null,
-      plant_id: form.asset_type === "Plant" ? form.plant_id || null : null,
-      asset_label: assetLabel || null,
-      title: form.title.trim(),
-      description: form.description.trim() || null,
-      source: form.source,
-      source_type: form.source,
-      priority: form.priority,
-      status: form.status,
-      project:
-        form.project.trim() ||
-        (form.asset_type === "Vehicle" ? selectedVehicle?.project : selectedPlant?.project) ||
-        null,
-      crew:
-        form.crew.trim() ||
-        (form.asset_type === "Vehicle" ? selectedVehicle?.crew : selectedPlant?.crew) ||
-        null,
-      reported_by: form.reported_by.trim() || null,
-      assigned_to: form.assigned_to.trim() || null,
-      vendor: form.vendor.trim() || null,
-      reported_date: form.reported_date || new Date().toISOString().slice(0, 10),
-      due_date: form.due_date || null,
-      completed_date: form.completed_date || null,
-      cost: form.cost ? Number(form.cost) : null,
-      notes: form.notes.trim() || null,
-    });
+      if (!user) {
+        throw new Error(
+          "Your login session is not available on this page. Please sign out, sign back in and try again.",
+        );
+      }
 
-    if (error) {
-      console.error("Failed to create fleet job:", error.message);
-      alert(error.message);
-    } else {
+      const selectedVehicle =
+        form.asset_type === "Vehicle"
+          ? vehicleMap.get(form.vehicle_id)
+          : null;
+
+      const selectedPlant =
+        form.asset_type === "Plant"
+          ? plantMap.get(form.plant_id)
+          : null;
+
+      const assetLabel =
+        form.asset_type === "Vehicle"
+          ? [
+              selectedVehicle?.vehicle_id,
+              selectedVehicle?.vehicle_rego,
+              selectedVehicle?.make,
+              selectedVehicle?.model,
+            ]
+              .map(clean)
+              .filter(Boolean)
+              .join(" · ")
+          : [
+              selectedPlant?.asset_id,
+              selectedPlant?.rego,
+              selectedPlant?.make,
+              selectedPlant?.model,
+            ]
+              .map(clean)
+              .filter(Boolean)
+              .join(" · ");
+
+      const reportedBy =
+        form.reported_by.trim() ||
+        clean(user.user_metadata?.full_name) ||
+        clean(user.user_metadata?.name) ||
+        user.email ||
+        "TTTracker user";
+
+      const payload = {
+        asset_type: form.asset_type,
+        vehicle_id:
+          form.asset_type === "Vehicle"
+            ? form.vehicle_id || null
+            : null,
+        vehicle_asset_id:
+          form.asset_type === "Vehicle"
+            ? form.vehicle_id || null
+            : null,
+        plant_id:
+          form.asset_type === "Plant"
+            ? form.plant_id || null
+            : null,
+        asset_label: assetLabel || null,
+        title: form.title.trim(),
+        description: form.description.trim() || null,
+        source: form.source,
+        source_type: form.source,
+        priority: form.priority,
+        status: form.status,
+        project:
+          form.project.trim() ||
+          (form.asset_type === "Vehicle"
+            ? selectedVehicle?.project
+            : selectedPlant?.project) ||
+          null,
+        crew:
+          form.crew.trim() ||
+          (form.asset_type === "Vehicle"
+            ? selectedVehicle?.crew
+            : selectedPlant?.crew) ||
+          null,
+        reported_by: reportedBy,
+        assigned_to: form.assigned_to.trim() || null,
+        vendor: form.vendor.trim() || null,
+        reported_date:
+          form.reported_date ||
+          new Date().toISOString().slice(0, 10),
+        due_date: form.due_date || null,
+        completed_date: form.completed_date || null,
+        cost:
+          form.cost.trim() === ""
+            ? null
+            : Number(form.cost),
+        notes: form.notes.trim() || null,
+      };
+
+      const { error } = await supabase
+        .from("fleet_jobs")
+        .insert(payload);
+
+      if (error) {
+        console.error("Full fleet job insert error:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+          userId: user.id,
+          userRole: user.role,
+        });
+
+        throw new Error(
+          `${error.message}${error.details ? ` — ${error.details}` : ""}`,
+        );
+      }
+
       setShowCreate(false);
-      setForm({ ...emptyForm, reported_date: new Date().toISOString().slice(0, 10) });
-      await loadData();
-    }
+      setForm({
+        ...emptyForm,
+        reported_date: new Date().toISOString().slice(0, 10),
+      });
 
-    setSaving(false);
+      await loadData();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to create fleet job.";
+
+      console.error("Failed to create fleet job:", error);
+      alert(message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
