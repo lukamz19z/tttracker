@@ -17,6 +17,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Truck,
+  UserCog,
   Users,
   Wrench,
 } from "lucide-react";
@@ -52,6 +53,9 @@ function normaliseRole(role: string | null): string {
   const value = role.trim().toLowerCase();
 
   if (["admin", "administrator"].includes(value)) return "admin";
+  if (["site_admin", "site admin", "site-administrator"].includes(value)) {
+    return "site_admin";
+  }
   if (["safety_manager", "safety manager", "safety"].includes(value)) {
     return "safety_manager";
   }
@@ -165,10 +169,18 @@ function getModulesForRole(role: string): ModuleCard[] {
         {
           title: "People",
           description:
-            "Manage employees, PPE sizing, crews, login accounts and project access.",
-          href: "/admin/people",
+            "Manage operational employee profiles, crews, PPE sizing and workforce records.",
+          href: "/people",
           icon: <Users size={21} />,
           accent: "violet",
+        },
+        {
+          title: "Admin",
+          description:
+            "Create login accounts, manage website and mobile roles, permissions and passwords.",
+          href: "/admin",
+          icon: <UserCog size={21} />,
+          accent: "slate",
           badge: "Admin",
         },
         {
@@ -205,6 +217,42 @@ function getModulesForRole(role: string): ModuleCard[] {
         },
       ];
 
+    case "site_admin":
+      return [
+        {
+          title: "People",
+          description:
+            "Manage employee profiles, crew allocation, PPE sizing and operational workforce records.",
+          href: "/people",
+          icon: <Users size={21} />,
+          accent: "violet",
+        },
+        {
+          title: "Crews",
+          description:
+            "Create crews and allocate active workers to operational crew structures.",
+          href: "/people/crews",
+          icon: <Users size={21} />,
+          accent: "blue",
+        },
+        {
+          title: "My Projects",
+          description:
+            "Open assigned projects, towers, daily dockets and delivery information.",
+          href: "/",
+          icon: <FolderKanban size={21} />,
+          accent: "emerald",
+        },
+        {
+          title: "Safety",
+          description:
+            "Open safety systems, training compliance and site controls.",
+          href: "/safety",
+          icon: <ShieldCheck size={21} />,
+          accent: "amber",
+        },
+      ];
+
     case "safety_manager":
       return [
         {
@@ -230,6 +278,14 @@ function getModulesForRole(role: string): ModuleCard[] {
           href: "/lessons-learnt",
           icon: <Gauge size={21} />,
           accent: "amber",
+        },
+        {
+          title: "People",
+          description:
+            "Review operational personnel, crews, PPE and training records.",
+          href: "/people",
+          icon: <Users size={21} />,
+          accent: "violet",
         },
         {
           title: "My Projects",
@@ -589,10 +645,10 @@ export default function ProjectsPage() {
 
                 {normalisedRole === "admin" ? (
                   <Link
-                    href="/admin/people"
+                    href="/admin"
                     className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white"
                   >
-                    Manage People Access
+                    Manage User Access
                     <ArrowRight size={16} />
                   </Link>
                 ) : null}

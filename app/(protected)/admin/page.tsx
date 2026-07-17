@@ -1,127 +1,1401 @@
-import Link from "next/link";
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowRight,
-  LayoutDashboard,
+  CheckCircle2,
+  ChevronDown,
+  KeyRound,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
   ShieldCheck,
+  UserCog,
   Users,
-  UsersRound,
+  X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 
+type WebsiteRole =
+  | "admin"
+  | "site_admin"
+  | "safety_manager"
+  | "asset_manager"
+  | "commercial"
+  | "crew"
+  | "viewer";
+
+type MobileRole =
+  | "admin"
+  | "mechanic"
+  | "leading_hand"
+  | "crew"
+  | "viewer";
+
+type Project = {
+  id: string;
+  name: string;
+  project_number?: string | null;
+};
+
+type AdminUser = {
+  id: string;
+  email: string;
+  website_role: WebsiteRole;
+  mobile_role: MobileRole;
+  is_active: boolean;
+  created_at?: string | null;
+  last_sign_in_at?: string | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  project_ids: string[];
+};
+
+type UserPayload = {
+  id?: string;
+  email?: string;
+  website_role?: string | null;
+  role?: string | null;
+  mobile_role?: string | null;
+  is_active?: boolean | null;
+  active?: boolean | null;
+  created_at?: string | null;
+  last_sign_in_at?: string | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  full_name?: string | null;
+  project_ids?: string[] | null;
+  projects?: Array<{ id?: string | null }> | null;
+};
+
+type CreateUserForm = {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  websiteRole: WebsiteRole;
+  mobileRole: MobileRole;
+  isActive: boolean;
+  projectIds: string[];
+};
+
+type EditUserForm = {
+  websiteRole: WebsiteRole;
+  mobileRole: MobileRole;
+  isActive: boolean;
+  projectIds: string[];
+};
+
+const WEBSITE_ROLE_OPTIONS: Array<{
+  value: WebsiteRole;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "admin",
+    label: "Administrator",
+    description: "Full system access, including user accounts and permissions.",
+  },
+  {
+    value: "site_admin",
+    label: "Site Admin",
+    description: "Operational administration without security administration.",
+  },
+  {
+    value: "safety_manager",
+    label: "Safety Manager",
+    description: "Safety, training and compliance access.",
+  },
+  {
+    value: "asset_manager",
+    label: "Asset Manager",
+    description: "Fleet, plant, equipment and maintenance access.",
+  },
+  {
+    value: "commercial",
+    label: "Commercial",
+    description: "Commercial reporting and project performance access.",
+  },
+  {
+    value: "crew",
+    label: "Crew / Field",
+    description: "Field workflows and assigned project access.",
+  },
+  {
+    value: "viewer",
+    label: "Viewer",
+    description: "Read-only access to assigned areas.",
+  },
+];
+
+const MOBILE_ROLE_OPTIONS: Array<{
+  value: MobileRole;
+  label: string;
+}> = [
+  { value: "admin", label: "Admin" },
+  { value: "mechanic", label: "Mechanic" },
+  { value: "leading_hand", label: "Leading Hand" },
+  { value: "crew", label: "Crew" },
+  { value: "viewer", label: "Viewer" },
+];
+
+const EMPTY_CREATE_FORM: CreateUserForm = {
+  email: "",
+  password: "",
+  confirmPassword: "",
+  websiteRole: "viewer",
+  mobileRole: "viewer",
+  isActive: true,
+  projectIds: [],
+};
+
+function normaliseWebsiteRole(value?: string | null): WebsiteRole {
+  const role = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_");
+
+  if (role === "administrator") return "admin";
+  if (role === "safety") return "safety_manager";
+  if (role === "assets") return "asset_manager";
+  if (role === "commercial_manager") return "commercial";
+  if (role === "leading_hand" || role === "editor" || role === "field") {
+    return "crew";
+  }
+
+  if (
+    [
+      "admin",
+      "site_admin",
+      "safety_manager",
+      "asset_manager",
+      "commercial",
+      "crew",
+      "viewer",
+    ].includes(role)
+  ) {
+    return role as WebsiteRole;
+  }
+
+  return "viewer";
+}
+
+function normaliseMobileRole(value?: string | null): MobileRole {
+  const role = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_");
+
+  if (
+    ["admin", "mechanic", "leading_hand", "crew", "viewer"].includes(role)
+  ) {
+    return role as MobileRole;
+  }
+
+  return "viewer";
+}
+
+function roleLabel(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "Never";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function getProjectIds(user: UserPayload): string[] {
+  if (Array.isArray(user.project_ids)) {
+    return user.project_ids.filter(Boolean);
+  }
+
+  if (Array.isArray(user.projects)) {
+    return user.projects
+      .map((project) => project.id)
+      .filter((id): id is string => Boolean(id));
+  }
+
+  return [];
+}
+
+function mapUser(user: UserPayload): AdminUser {
+  return {
+    id: String(user.id ?? ""),
+    email: String(user.email ?? ""),
+    website_role: normaliseWebsiteRole(user.website_role ?? user.role),
+    mobile_role: normaliseMobileRole(user.mobile_role),
+    is_active: user.is_active ?? user.active ?? true,
+    created_at: user.created_at ?? null,
+    last_sign_in_at: user.last_sign_in_at ?? null,
+    employee_id: user.employee_id ?? null,
+    employee_name: user.employee_name ?? user.full_name ?? null,
+    project_ids: getProjectIds(user),
+  };
+}
+
+async function readError(response: Response) {
+  try {
+    const payload = (await response.json()) as {
+      error?: string;
+      message?: string;
+    };
+
+    return payload.error || payload.message || "The request failed.";
+  } catch {
+    return "The request failed.";
+  }
+}
+
 export default function AdminPage() {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "active" | "inactive"
+  >("all");
+  const [websiteRoleFilter, setWebsiteRoleFilter] = useState<
+    "all" | WebsiteRole
+  >("all");
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] =
+    useState<CreateUserForm>(EMPTY_CREATE_FORM);
+  const [createSaving, setCreateSaving] = useState(false);
+
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [editForm, setEditForm] = useState<EditUserForm | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+
+  const [passwordUser, setPasswordUser] = useState<AdminUser | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+
+  const [message, setMessage] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  const loadAdminData = useCallback(async () => {
+    setMessage(null);
+
+    const response = await fetch("/api/admin/users", {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+
+    const payload = (await response.json()) as
+      | UserPayload[]
+      | {
+          users?: UserPayload[];
+          projects?: Project[];
+        };
+
+    const loadedUsers = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.users)
+        ? payload.users
+        : [];
+
+    const loadedProjects = Array.isArray(payload)
+      ? []
+      : Array.isArray(payload.projects)
+        ? payload.projects
+        : [];
+
+    setUsers(
+      loadedUsers
+        .map(mapUser)
+        .filter((user) => Boolean(user.id))
+        .sort((a, b) => a.email.localeCompare(b.email)),
+    );
+    setProjects(
+      loadedProjects
+        .filter((project) => Boolean(project.id))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    );
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await loadAdminData();
+        } catch (error) {
+          setMessage({
+            tone: "error",
+            text:
+              error instanceof Error
+                ? error.message
+                : "Unable to load users and access.",
+          });
+        } finally {
+          setLoading(false);
+        }
+      })();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [loadAdminData]);
+
+  async function refreshData() {
+    setRefreshing(true);
+
+    try {
+      await loadAdminData();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to refresh users and access.",
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const filteredUsers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return users.filter((user) => {
+      if (statusFilter === "active" && !user.is_active) return false;
+      if (statusFilter === "inactive" && user.is_active) return false;
+
+      if (
+        websiteRoleFilter !== "all" &&
+        user.website_role !== websiteRoleFilter
+      ) {
+        return false;
+      }
+
+      if (!query) return true;
+
+      return [
+        user.email,
+        user.employee_name ?? "",
+        roleLabel(user.website_role),
+        roleLabel(user.mobile_role),
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+  }, [search, statusFilter, users, websiteRoleFilter]);
+
+  const activeUsers = users.filter((user) => user.is_active).length;
+  const inactiveUsers = users.length - activeUsers;
+  const unlinkedUsers = users.filter((user) => !user.employee_id).length;
+  const adminUsers = users.filter(
+    (user) => user.website_role === "admin",
+  ).length;
+
+  function openEdit(user: AdminUser) {
+    setEditingUser(user);
+    setEditForm({
+      websiteRole: user.website_role,
+      mobileRole: user.mobile_role,
+      isActive: user.is_active,
+      projectIds: [...user.project_ids],
+    });
+  }
+
+  async function createUser() {
+    setMessage(null);
+
+    const email = createForm.email.trim().toLowerCase();
+
+    if (!email) {
+      setMessage({ tone: "error", text: "Enter an email address." });
+      return;
+    }
+
+    if (createForm.password.length < 8) {
+      setMessage({
+        tone: "error",
+        text: "The temporary password must be at least 8 characters.",
+      });
+      return;
+    }
+
+    if (createForm.password !== createForm.confirmPassword) {
+      setMessage({ tone: "error", text: "The passwords do not match." });
+      return;
+    }
+
+    setCreateSaving(true);
+
+    try {
+      const response = await fetch("/api/admin/create-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: createForm.password,
+          website_role: createForm.websiteRole,
+          role: createForm.websiteRole,
+          mobile_role: createForm.mobileRole,
+          is_active: createForm.isActive,
+          project_ids: createForm.projectIds,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      await loadAdminData();
+      setCreateForm(EMPTY_CREATE_FORM);
+      setCreateOpen(false);
+      setMessage({
+        tone: "success",
+        text: "The login account was created successfully.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to create the login account.",
+      });
+    } finally {
+      setCreateSaving(false);
+    }
+  }
+
+  async function saveUserAccess() {
+    if (!editingUser || !editForm) return;
+
+    setEditSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/update-user-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: editingUser.id,
+          id: editingUser.id,
+          website_role: editForm.websiteRole,
+          role: editForm.websiteRole,
+          mobile_role: editForm.mobileRole,
+          is_active: editForm.isActive,
+          project_ids: editForm.projectIds,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      await loadAdminData();
+      setEditingUser(null);
+      setEditForm(null);
+      setMessage({
+        tone: "success",
+        text: `Access was updated for ${editingUser.email}.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to update user access.",
+      });
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function resetPassword() {
+    if (!passwordUser) return;
+
+    if (newPassword.length < 8) {
+      setMessage({
+        tone: "error",
+        text: "The new password must be at least 8 characters.",
+      });
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setMessage({ tone: "error", text: "The passwords do not match." });
+      return;
+    }
+
+    setPasswordSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/admin/update-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: passwordUser.id,
+          id: passwordUser.id,
+          password: newPassword,
+          new_password: newPassword,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      setPasswordUser(null);
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setMessage({
+        tone: "success",
+        text: `Password updated for ${passwordUser.email}.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to update the password.",
+      });
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
+
   return (
     <AppShell>
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-semibold uppercase tracking-wider text-slate-400">
-            Admin
-          </p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight">
-            Admin Centre
-          </h1>
-          <p className="mt-2 max-w-2xl text-slate-500">
-            Manage people, crews, permissions and core system access from one
-            place.
-          </p>
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-slate-400">
+                <ShieldCheck size={18} />
+                <p className="text-sm font-semibold uppercase tracking-wider">
+                  Admin
+                </p>
+              </div>
+
+              <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+                Users & Access
+              </h1>
+
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                Create login accounts, assign website and mobile roles, manage
+                project access, enable or disable accounts and reset passwords.
+                Employee details, crews, PPE and training are managed separately
+                through People.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void refreshData()}
+                disabled={refreshing}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+              >
+                <RefreshCw
+                  size={16}
+                  className={refreshing ? "animate-spin" : ""}
+                />
+                Refresh
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateForm(EMPTY_CREATE_FORM);
+                  setCreateOpen(true);
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+              >
+                <Plus size={16} />
+                Create User
+              </button>
+            </div>
+          </div>
         </section>
 
-        <section className="grid gap-5 md:grid-cols-2">
-          <AdminCard
-            icon={<Users size={23} />}
-            title="People"
-            description="Employee profiles, PPE sizing, login accounts, website and mobile roles, crew allocation and project access."
-            href="/admin/people"
-            primary
-          />
+        {message ? (
+          <section
+            className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
+              message.tone === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-rose-200 bg-rose-50 text-rose-800"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {message.tone === "success" ? (
+                <CheckCircle2 size={17} />
+              ) : (
+                <X size={17} />
+              )}
+              {message.text}
+            </div>
+          </section>
+        ) : null}
 
-          <AdminCard
-            icon={<UsersRound size={23} />}
-            title="Crews"
-            description="Create crews, assign leading hands and manage active crew structures."
-            href="/admin/crews"
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            label="Login accounts"
+            value={String(users.length)}
+            detail="All system accounts"
+            icon={<Users size={20} />}
           />
-
-          <AdminCard
-            icon={<ShieldCheck size={23} />}
-            title="Roles & Access"
-            description="Review system permissions, project access and elevated administrative roles."
-            href="/admin/people"
+          <KpiCard
+            label="Active"
+            value={String(activeUsers)}
+            detail={`${inactiveUsers} inactive`}
+            icon={<CheckCircle2 size={20} />}
           />
-
-          <AdminCard
-            icon={<LayoutDashboard size={23} />}
-            title="System Overview"
-            description="Return to the main TTTracker dashboard and review operational activity."
-            href="/"
+          <KpiCard
+            label="Administrators"
+            value={String(adminUsers)}
+            detail="Full system access"
+            icon={<ShieldCheck size={20} />}
+          />
+          <KpiCard
+            label="Not linked"
+            value={String(unlinkedUsers)}
+            detail="No employee profile"
+            icon={<UserCog size={20} />}
           />
         </section>
 
-        <section className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
-          <h2 className="font-bold text-blue-950">People is now the source of truth</h2>
-          <p className="mt-1 text-sm leading-6 text-blue-800">
-            Users and Employees have been combined. New staff should be created
-            through People so their profile, PPE sizes, crew, mobile access and
-            website permissions stay linked.
-          </p>
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_190px_220px]">
+            <label className="relative block">
+              <Search
+                size={17}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search email, employee or role..."
+                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
+              />
+            </label>
+
+            <SelectField
+              value={statusFilter}
+              onChange={(value) =>
+                setStatusFilter(value as "all" | "active" | "inactive")
+              }
+              options={[
+                { value: "all", label: "All accounts" },
+                { value: "active", label: "Active accounts" },
+                { value: "inactive", label: "Inactive accounts" },
+              ]}
+            />
+
+            <SelectField
+              value={websiteRoleFilter}
+              onChange={(value) =>
+                setWebsiteRoleFilter(value as "all" | WebsiteRole)
+              }
+              options={[
+                { value: "all", label: "All website roles" },
+                ...WEBSITE_ROLE_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                })),
+              ]}
+            />
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-lg font-bold text-slate-950">
+              Login Accounts
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {filteredUsers.length} account
+              {filteredUsers.length === 1 ? "" : "s"} shown
+            </p>
+          </div>
+
+          {loading ? (
+            <div className="flex min-h-64 items-center justify-center">
+              <Loader2 size={26} className="animate-spin text-slate-400" />
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="p-10 text-center">
+              <Users size={30} className="mx-auto text-slate-300" />
+              <h3 className="mt-4 text-lg font-bold text-slate-900">
+                No accounts found
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Adjust the filters or create a new login account.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {filteredUsers.map((user) => (
+                <UserRow
+                  key={user.id}
+                  user={user}
+                  projects={projects}
+                  onEdit={() => openEdit(user)}
+                  onPassword={() => {
+                    setPasswordUser(user);
+                    setNewPassword("");
+                    setConfirmNewPassword("");
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </section>
       </div>
+
+      {createOpen ? (
+        <ModalShell
+          title="Create Login Account"
+          description="Create the system login first. Link it to an employee later from the People page."
+          onClose={() => setCreateOpen(false)}
+        >
+          <div className="space-y-5">
+            <Field label="Email address">
+              <input
+                type="email"
+                value={createForm.email}
+                onChange={(event) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    email: event.target.value,
+                  }))
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+              />
+            </Field>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Temporary password">
+                <input
+                  type="password"
+                  value={createForm.password}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      password: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </Field>
+
+              <Field label="Confirm password">
+                <input
+                  type="password"
+                  value={createForm.confirmPassword}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      confirmPassword: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Website role">
+                <SelectField
+                  value={createForm.websiteRole}
+                  onChange={(value) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      websiteRole: value as WebsiteRole,
+                    }))
+                  }
+                  options={WEBSITE_ROLE_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                />
+              </Field>
+
+              <Field label="Mobile role">
+                <SelectField
+                  value={createForm.mobileRole}
+                  onChange={(value) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      mobileRole: value as MobileRole,
+                    }))
+                  }
+                  options={MOBILE_ROLE_OPTIONS}
+                />
+              </Field>
+            </div>
+
+            <ToggleRow
+              checked={createForm.isActive}
+              onChange={(checked) =>
+                setCreateForm((current) => ({
+                  ...current,
+                  isActive: checked,
+                }))
+              }
+              title="Active account"
+              description="The person can sign in after the account is created."
+            />
+
+            <ProjectAccessSelector
+              projects={projects}
+              selectedIds={createForm.projectIds}
+              onChange={(projectIds) =>
+                setCreateForm((current) => ({
+                  ...current,
+                  projectIds,
+                }))
+              }
+            />
+
+            <ModalActions
+              onCancel={() => setCreateOpen(false)}
+              onSave={() => void createUser()}
+              saving={createSaving}
+              saveLabel="Create User"
+            />
+          </div>
+        </ModalShell>
+      ) : null}
+
+      {editingUser && editForm ? (
+        <ModalShell
+          title="Edit User Access"
+          description={editingUser.email}
+          onClose={() => {
+            setEditingUser(null);
+            setEditForm(null);
+          }}
+        >
+          <div className="space-y-5">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-bold text-slate-900">
+                Employee profile
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                {editingUser.employee_name
+                  ? `Linked to ${editingUser.employee_name}`
+                  : "No employee profile linked. Assign this login from People."}
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Website role">
+                <SelectField
+                  value={editForm.websiteRole}
+                  onChange={(value) =>
+                    setEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            websiteRole: value as WebsiteRole,
+                          }
+                        : current,
+                    )
+                  }
+                  options={WEBSITE_ROLE_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                />
+              </Field>
+
+              <Field label="Mobile role">
+                <SelectField
+                  value={editForm.mobileRole}
+                  onChange={(value) =>
+                    setEditForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            mobileRole: value as MobileRole,
+                          }
+                        : current,
+                    )
+                  }
+                  options={MOBILE_ROLE_OPTIONS}
+                />
+              </Field>
+            </div>
+
+            <ToggleRow
+              checked={editForm.isActive}
+              onChange={(checked) =>
+                setEditForm((current) =>
+                  current ? { ...current, isActive: checked } : current,
+                )
+              }
+              title="Active account"
+              description="Inactive accounts cannot sign in but remain in the system."
+            />
+
+            <ProjectAccessSelector
+              projects={projects}
+              selectedIds={editForm.projectIds}
+              onChange={(projectIds) =>
+                setEditForm((current) =>
+                  current ? { ...current, projectIds } : current,
+                )
+              }
+            />
+
+            <ModalActions
+              onCancel={() => {
+                setEditingUser(null);
+                setEditForm(null);
+              }}
+              onSave={() => void saveUserAccess()}
+              saving={editSaving}
+              saveLabel="Save Access"
+            />
+          </div>
+        </ModalShell>
+      ) : null}
+
+      {passwordUser ? (
+        <ModalShell
+          title="Reset Password"
+          description={`Set a new password for ${passwordUser.email}.`}
+          onClose={() => setPasswordUser(null)}
+        >
+          <div className="space-y-5">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+              Give the temporary password to the user securely. Passwords must
+              contain at least 8 characters.
+            </div>
+
+            <Field label="New password">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+              />
+            </Field>
+
+            <Field label="Confirm new password">
+              <input
+                type="password"
+                value={confirmNewPassword}
+                onChange={(event) =>
+                  setConfirmNewPassword(event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+              />
+            </Field>
+
+            <ModalActions
+              onCancel={() => setPasswordUser(null)}
+              onSave={() => void resetPassword()}
+              saving={passwordSaving}
+              saveLabel="Update Password"
+            />
+          </div>
+        </ModalShell>
+      ) : null}
     </AppShell>
   );
 }
 
-function AdminCard({
-  icon,
-  title,
-  description,
-  href,
-  primary = false,
+function UserRow({
+  user,
+  projects,
+  onEdit,
+  onPassword,
 }: {
+  user: AdminUser;
+  projects: Project[];
+  onEdit: () => void;
+  onPassword: () => void;
+}) {
+  const projectNames = user.project_ids
+    .map((projectId) => projects.find((project) => project.id === projectId))
+    .filter((project): project is Project => Boolean(project))
+    .map((project) => project.project_number || project.name);
+
+  return (
+    <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-center">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="truncate font-bold text-slate-950">{user.email}</h3>
+          <StatusBadge active={user.is_active} />
+        </div>
+
+        <p className="mt-1 text-sm text-slate-500">
+          {user.employee_name
+            ? `Linked to ${user.employee_name}`
+            : "No employee profile linked"}
+        </p>
+
+        <p className="mt-1 text-xs text-slate-400">
+          Last sign-in: {formatDate(user.last_sign_in_at)}
+        </p>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Roles
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <RoleBadge label={roleLabel(user.website_role)} tone="slate" />
+          <RoleBadge label={roleLabel(user.mobile_role)} tone="blue" />
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Project access
+        </div>
+        <p className="mt-2 text-sm text-slate-600">
+          {projectNames.length > 0
+            ? projectNames.slice(0, 3).join(", ")
+            : "No projects assigned"}
+          {projectNames.length > 3
+            ? ` +${projectNames.length - 3} more`
+            : ""}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2 lg:justify-end">
+        <button
+          type="button"
+          onClick={onPassword}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <KeyRound size={15} />
+          Password
+        </button>
+
+        <button
+          type="button"
+          onClick={onEdit}
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          <UserCog size={15} />
+          Access
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProjectAccessSelector({
+  projects,
+  selectedIds,
+  onChange,
+}: {
+  projects: Project[];
+  selectedIds: string[];
+  onChange: (projectIds: string[]) => void;
+}) {
+  function toggleProject(projectId: string) {
+    if (selectedIds.includes(projectId)) {
+      onChange(selectedIds.filter((id) => id !== projectId));
+    } else {
+      onChange([...selectedIds, projectId]);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold text-slate-900">Project access</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Select the projects this login can open.
+          </div>
+        </div>
+
+        {projects.length > 0 ? (
+          <button
+            type="button"
+            onClick={() =>
+              onChange(
+                selectedIds.length === projects.length
+                  ? []
+                  : projects.map((project) => project.id),
+              )
+            }
+            className="text-xs font-semibold text-slate-600 hover:text-slate-950"
+          >
+            {selectedIds.length === projects.length
+              ? "Clear all"
+              : "Select all"}
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-3 max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-slate-200 p-3">
+        {projects.length === 0 ? (
+          <p className="py-4 text-center text-sm text-slate-500">
+            No projects were returned by the users API.
+          </p>
+        ) : (
+          projects.map((project) => {
+            const checked = selectedIds.includes(project.id);
+
+            return (
+              <label
+                key={project.id}
+                className="flex cursor-pointer items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-slate-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleProject(project.id)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800">
+                    {project.name}
+                  </span>
+                  {project.project_number ? (
+                    <span className="block text-xs text-slate-400">
+                      {project.project_number}
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  detail,
+  icon,
+}: {
+  label: string;
+  value: string;
+  detail: string;
   icon: React.ReactNode;
-  title: string;
-  description: string;
-  href: string;
-  primary?: boolean;
 }) {
   return (
-    <Link
-      href={href}
-      className={`group block rounded-3xl border p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-        primary
-          ? "border-slate-900 bg-slate-900 text-white"
-          : "border-slate-200 bg-white text-slate-900"
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-500">{label}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+            {value}
+          </div>
+          <div className="mt-1 text-xs text-slate-400">{detail}</div>
+        </div>
+
+        <div className="rounded-xl bg-slate-100 p-2.5 text-slate-700">
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-800">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function SelectField({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <label className="relative block">
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-9 text-sm font-medium text-slate-700 outline-none ring-slate-200 focus:ring-2"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+
+      <ChevronDown
+        size={16}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+      />
+    </label>
+  );
+}
+
+function ToggleRow({
+  checked,
+  onChange,
+  title,
+  description,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  title: string;
+  description: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-slate-200 p-4">
+      <span>
+        <span className="block text-sm font-bold text-slate-900">{title}</span>
+        <span className="mt-1 block text-xs leading-5 text-slate-500">
+          {description}
+        </span>
+      </span>
+
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-1 h-5 w-5 rounded border-slate-300"
+      />
+    </label>
+  );
+}
+
+function ModalShell({
+  title,
+  description,
+  onClose,
+  children,
+}: {
+  title: string;
+  description: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
+      <div className="my-auto w-full max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-950">{title}</h2>
+            <p className="mt-1 text-sm text-slate-500">{description}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function ModalActions({
+  onCancel,
+  onSave,
+  saving,
+  saveLabel,
+}: {
+  onCancel: () => void;
+  onSave: () => void;
+  saving: boolean;
+  saveLabel: string;
+}) {
+  return (
+    <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={saving}
+        className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+      >
+        Cancel
+      </button>
+
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={saving}
+        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+      >
+        {saving ? <Loader2 size={16} className="animate-spin" /> : null}
+        {saveLabel}
+      </button>
+    </div>
+  );
+}
+
+function StatusBadge({ active }: { active: boolean }) {
+  return (
+    <span
+      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+        active
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-slate-100 text-slate-500"
       }`}
     >
-      <div
-        className={`inline-flex rounded-2xl p-3 ${
-          primary
-            ? "bg-white/10 text-white"
-            : "bg-slate-100 text-slate-700"
-        }`}
-      >
-        {icon}
-      </div>
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
 
-      <h2 className="mt-5 text-xl font-bold">{title}</h2>
-      <p
-        className={`mt-2 text-sm leading-6 ${
-          primary ? "text-slate-300" : "text-slate-500"
-        }`}
-      >
-        {description}
-      </p>
-
-      <div
-        className={`mt-6 inline-flex items-center gap-2 text-sm font-semibold ${
-          primary ? "text-white" : "text-slate-900"
-        }`}
-      >
-        Open
-        <ArrowRight
-          size={16}
-          className="transition-transform group-hover:translate-x-1"
-        />
-      </div>
-    </Link>
+function RoleBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "slate" | "blue";
+}) {
+  return (
+    <span
+      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+        tone === "blue"
+          ? "bg-blue-100 text-blue-700"
+          : "bg-slate-100 text-slate-700"
+      }`}
+    >
+      {label}
+    </span>
   );
 }
