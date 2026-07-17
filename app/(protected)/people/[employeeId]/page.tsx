@@ -37,7 +37,6 @@ type Employee = {
   glove_size: string | null;
   pants_size: string | null;
   created_at?: string | null;
-  updated_at?: string | null;
 };
 
 type Crew = {
@@ -188,7 +187,7 @@ export default function EmployeeProfilePage() {
     const employeeResult = await supabase
       .from("employees")
       .select(
-        "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at, updated_at",
+        "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
       )
       .eq("id", employeeId)
       .single();
@@ -318,7 +317,6 @@ export default function EmployeeProfilePage() {
       jacket_size: form.jacketSize || null,
       glove_size: form.gloveSize || null,
       pants_size: form.pantsSize.trim() || null,
-      updated_at: new Date().toISOString(),
     };
 
     try {
@@ -919,10 +917,6 @@ function HistoryTab({ employee }: { employee: Employee }) {
       <HistoryRow
         label="Profile created"
         value={formatDate(employee.created_at)}
-      />
-      <HistoryRow
-        label="Last updated"
-        value={formatDate(employee.updated_at)}
       />
       <HistoryRow
         label="Current status"

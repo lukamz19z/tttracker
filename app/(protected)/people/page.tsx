@@ -38,7 +38,6 @@ type Employee = {
   glove_size: string | null;
   pants_size: string | null;
   created_at?: string | null;
-  updated_at?: string | null;
 };
 
 type Crew = {
@@ -247,7 +246,7 @@ export default function PeoplePage() {
       supabase
         .from("employees")
         .select(
-          "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at, updated_at",
+          "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
         )
         .order("full_name", { ascending: true }),
       supabase
@@ -489,7 +488,6 @@ export default function PeoplePage() {
       glove_size: form.gloveSize || null,
       pants_size: form.pantsSize.trim() || null,
       user_id: form.userId || null,
-      updated_at: new Date().toISOString(),
     };
 
     try {
