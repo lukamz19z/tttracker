@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   Download,
   Edit3,
+  ExternalLink,
   HardHat,
   Loader2,
   Plus,
@@ -47,6 +49,27 @@ type Crew = {
   active: boolean | null;
 };
 
+type ApiUser = {
+  user_id?: string | null;
+  id?: string | null;
+  email?: string | null;
+  employee?: { id?: string | null; full_name?: string | null } | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+};
+
+type UsersResponse = {
+  users?: ApiUser[];
+  error?: string;
+};
+
+type LoginAccount = {
+  userId: string;
+  email: string;
+  linkedEmployeeId: string | null;
+  linkedEmployeeName: string | null;
+};
+
 type EmployeeForm = {
   fullName: string;
   role: string;
@@ -57,6 +80,7 @@ type EmployeeForm = {
   jacketSize: string;
   gloveSize: string;
   pantsSize: string;
+  userId: string;
 };
 
 const EMPTY_FORM: EmployeeForm = {
@@ -69,6 +93,7 @@ const EMPTY_FORM: EmployeeForm = {
   jacketSize: "",
   gloveSize: "",
   pantsSize: "",
+  userId: "",
 };
 
 const SHIRT_SIZES = [
@@ -127,11 +152,26 @@ function hasCompletePpe(employee: Employee) {
   );
 }
 
+function mapApiUser(user: ApiUser): LoginAccount | null {
+  const userId = clean(user.user_id ?? user.id);
+  if (!userId) return null;
+
+  return {
+    userId,
+    email: clean(user.email) || "Email not available",
+    linkedEmployeeId:
+      clean(user.employee?.id) || clean(user.employee_id) || null,
+    linkedEmployeeName:
+      clean(user.employee?.full_name) || clean(user.employee_name) || null,
+  };
+}
+
 export default function PeoplePage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
+  const [loginAccounts, setLoginAccounts] = useState<LoginAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -163,6 +203,45 @@ export default function PeoplePage() {
     [crews],
   );
 
+  const loginByUserId = useMemo(
+    () => new Map(loginAccounts.map((account) => [account.userId, account])),
+    [loginAccounts],
+  );
+
+  const apiFetch = useCallback(
+    async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+
+      return fetch(input, { ...init, headers, cache: "no-store" });
+    },
+    [supabase],
+  );
+
+  const loadLoginAccounts = useCallback(async () => {
+    const response = await apiFetch("/api/admin/users");
+    const payload = (await response.json()) as UsersResponse;
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? "Unable to load login accounts.");
+    }
+
+    setLoginAccounts(
+      (payload.users ?? [])
+        .map(mapApiUser)
+        .filter((account): account is LoginAccount => Boolean(account))
+        .sort((a, b) => a.email.localeCompare(b.email)),
+    );
+  }, [apiFetch]);
+
   const loadData = useCallback(async () => {
     const [employeesResult, crewsResult] = await Promise.all([
       supabase
@@ -187,7 +266,14 @@ export default function PeoplePage() {
 
     setEmployees((employeesResult.data ?? []) as Employee[]);
     setCrews((crewsResult.data ?? []) as Crew[]);
-  }, [supabase]);
+
+    try {
+      await loadLoginAccounts();
+    } catch (error) {
+      console.warn("Login accounts could not be loaded", error);
+      setLoginAccounts([]);
+    }
+  }, [loadLoginAccounts, supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -235,6 +321,9 @@ export default function PeoplePage() {
 
     return employees.filter((employee) => {
       const crew = crewById.get(clean(employee.crew_id));
+      const login = employee.user_id
+        ? loginByUserId.get(employee.user_id)
+        : null;
       const active = employee.active !== false;
       const ppeComplete = hasCompletePpe(employee);
       const linked = Boolean(employee.user_id);
@@ -268,6 +357,7 @@ export default function PeoplePage() {
         employee.glove_size,
         employee.pants_size,
         crewLabel(crew),
+        login?.email,
         active ? "active" : "inactive",
         linked ? "linked login" : "no login",
       ]
@@ -280,6 +370,7 @@ export default function PeoplePage() {
   }, [
     crewById,
     crewFilter,
+    loginByUserId,
     employees,
     loginFilter,
     ppeFilter,
@@ -302,6 +393,13 @@ export default function PeoplePage() {
       employee.active !== false && !hasCompletePpe(employee),
   ).length;
 
+  const availableLoginAccounts = useMemo(() => {
+    return loginAccounts.filter((account) => {
+      if (account.userId === editingEmployee?.user_id) return true;
+      return !account.linkedEmployeeId;
+    });
+  }, [editingEmployee?.user_id, loginAccounts]);
+
   function openCreate() {
     setEditingEmployee(null);
     setForm(EMPTY_FORM);
@@ -321,6 +419,7 @@ export default function PeoplePage() {
       jacketSize: clean(employee.jacket_size),
       gloveSize: clean(employee.glove_size),
       pantsSize: clean(employee.pants_size),
+      userId: clean(employee.user_id),
     });
     setFormOpen(true);
     setMessage(null);
@@ -361,6 +460,22 @@ export default function PeoplePage() {
       return;
     }
 
+    if (form.userId) {
+      const linkedToAnotherEmployee = employees.find(
+        (employee) =>
+          employee.id !== editingEmployee?.id &&
+          employee.user_id === form.userId,
+      );
+
+      if (linkedToAnotherEmployee) {
+        setMessage({
+          tone: "error",
+          text: `That login is already linked to ${linkedToAnotherEmployee.full_name}.`,
+        });
+        return;
+      }
+    }
+
     setSaving(true);
 
     const payload = {
@@ -373,6 +488,8 @@ export default function PeoplePage() {
       jacket_size: form.jacketSize || null,
       glove_size: form.gloveSize || null,
       pants_size: form.pantsSize.trim() || null,
+      user_id: form.userId || null,
+      updated_at: new Date().toISOString(),
     };
 
     try {
@@ -450,6 +567,7 @@ export default function PeoplePage() {
       "Crew",
       "Status",
       "Login Linked",
+      "Login Email",
       "Shirt Size",
       "Jacket Size",
       "Glove Size",
@@ -464,6 +582,7 @@ export default function PeoplePage() {
       crewLabel(crewById.get(clean(employee.crew_id))),
       employee.active !== false ? "Active" : "Inactive",
       employee.user_id ? "Yes" : "No",
+      employee.user_id ? loginByUserId.get(employee.user_id)?.email ?? "" : "",
       employee.shirt_size,
       employee.jacket_size,
       employee.glove_size,
@@ -510,9 +629,8 @@ export default function PeoplePage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Manage operational employee profiles, crew allocation, login
-                links and PPE sizing. No private HR, medical, payroll or personal
-                identification information is stored here.
+                Manage employee profiles, crew allocation, linked login accounts
+                and PPE sizing. Open a person to manage their detailed profile.
               </p>
             </div>
 
@@ -593,7 +711,7 @@ export default function PeoplePage() {
           <KpiCard
             label="No login"
             value={String(noLoginCount)}
-            detail="Can be linked later"
+            detail="Assign from employee profile"
             icon={<UserRoundX size={20} />}
           />
           <KpiCard
@@ -608,9 +726,9 @@ export default function PeoplePage() {
           <NavigationCard
             icon={<UsersRound size={20} />}
             title="Crews"
-            description="Crew structures remain in the existing page for now and will be moved into People next."
+            description="Build crews and allocate active employees to one crew at a time."
             href="/people/crews"
-            label="Open current crews"
+            label="Open crews"
           />
           <NavigationCard
             icon={<HardHat size={20} />}
@@ -636,7 +754,7 @@ export default function PeoplePage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search name, trade, crew or PPE size..."
+                placeholder="Search name, login email, trade, crew or PPE size..."
                 className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
               />
             </label>
@@ -705,7 +823,7 @@ export default function PeoplePage() {
             </div>
 
             <div className="text-xs font-medium text-slate-400">
-              Inactive people remain available for historical records.
+              Select View Profile to open the employee record.
             </div>
           </div>
 
@@ -730,6 +848,11 @@ export default function PeoplePage() {
                   key={employee.id}
                   employee={employee}
                   crew={crewById.get(clean(employee.crew_id))}
+                  login={
+                    employee.user_id
+                      ? loginByUserId.get(employee.user_id)
+                      : undefined
+                  }
                   onEdit={() => openEdit(employee)}
                   onToggleStatus={() => void toggleEmployeeStatus(employee)}
                 />
@@ -745,6 +868,7 @@ export default function PeoplePage() {
           setForm={setForm}
           employee={editingEmployee}
           crews={crews}
+          availableLoginAccounts={availableLoginAccounts}
           saving={saving}
           onClose={closeForm}
           onSave={() => void saveEmployee()}
@@ -757,11 +881,13 @@ export default function PeoplePage() {
 function EmployeeRow({
   employee,
   crew,
+  login,
   onEdit,
   onToggleStatus,
 }: {
   employee: Employee;
   crew: Crew | undefined;
+  login: LoginAccount | undefined;
   onEdit: () => void;
   onToggleStatus: () => void;
 }) {
@@ -771,12 +897,16 @@ function EmployeeRow({
   return (
     <div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_auto] xl:items-center">
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="truncate font-bold text-slate-950">
+        <Link
+          href={`/people/${employee.id}`}
+          className="group inline-flex min-w-0 items-center gap-2"
+        >
+          <h3 className="truncate font-bold text-slate-950 group-hover:text-blue-700">
             {employee.full_name}
           </h3>
-          <StatusBadge active={active} />
-        </div>
+          <ExternalLink size={14} className="shrink-0 text-slate-300 group-hover:text-blue-600" />
+        </Link>
+        <div className="mt-1"><StatusBadge active={active} /></div>
 
         <p className="mt-1 text-sm text-slate-500">
           {employee.role || "Position not set"}
@@ -807,6 +937,11 @@ function EmployeeRow({
             label={employee.user_id ? "Linked" : "Not linked"}
             tone={employee.user_id ? "emerald" : "slate"}
           />
+          {login?.email ? (
+            <div className="mt-1 truncate text-xs text-slate-500">
+              {login.email}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -826,6 +961,14 @@ function EmployeeRow({
       </div>
 
       <div className="flex flex-wrap gap-2 xl:justify-end">
+        <Link
+          href={`/people/${employee.id}`}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          View Profile
+          <ArrowRight size={15} />
+        </Link>
+
         <button
           type="button"
           onClick={onToggleStatus}
@@ -844,7 +987,7 @@ function EmployeeRow({
           className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
         >
           <Edit3 size={15} />
-          Edit
+          Quick Edit
         </button>
       </div>
     </div>
@@ -856,6 +999,7 @@ function EmployeeModal({
   setForm,
   employee,
   crews,
+  availableLoginAccounts,
   saving,
   onClose,
   onSave,
@@ -864,6 +1008,7 @@ function EmployeeModal({
   setForm: React.Dispatch<React.SetStateAction<EmployeeForm>>;
   employee: Employee | null;
   crews: Crew[];
+  availableLoginAccounts: LoginAccount[];
   saving: boolean;
   onClose: () => void;
   onSave: () => void;
@@ -877,8 +1022,8 @@ function EmployeeModal({
               {employee ? "Edit Person" : "Add Person"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Operational details only. Do not enter private HR, medical,
-              payroll or identification information.
+              Manage the operational profile and optionally assign an existing
+              login account created in Admin.
             </p>
           </div>
 
@@ -962,6 +1107,31 @@ function EmployeeModal({
                     { value: "inactive", label: "Inactive" },
                   ]}
                 />
+              </Field>
+            </div>
+
+            <div className="mt-4">
+              <Field label="Linked login account">
+                <SelectField
+                  value={form.userId}
+                  onChange={(value) =>
+                    setForm((current) => ({
+                      ...current,
+                      userId: value,
+                    }))
+                  }
+                  options={[
+                    { value: "", label: "No login assigned" },
+                    ...availableLoginAccounts.map((account) => ({
+                      value: account.userId,
+                      label: account.email,
+                    })),
+                  ]}
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Only unassigned login accounts are shown. Create new accounts
+                  and manage roles or passwords from Admin.
+                </p>
               </Field>
             </div>
 
