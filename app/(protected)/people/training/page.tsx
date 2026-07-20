@@ -14,11 +14,14 @@ import {
   FileText,
   Filter,
   HardHat,
+  Library,
   Loader2,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
+  ToggleLeft,
+  ToggleRight,
   Upload,
   Users,
   X,
@@ -51,6 +54,8 @@ type TrainingType = {
   default_expiry_months: number | null;
   does_not_expire: boolean | null;
   active: boolean | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 type TrainingRecord = {
@@ -71,8 +76,10 @@ type TrainingRecord = {
   sharepoint_web_url: string | null;
   sharepoint_file_name: string | null;
   status: string | null;
+  supersedes_record_id: string | null;
   superseded_at: string | null;
   created_at: string | null;
+  updated_at: string | null;
   uploaded_by: string | null;
 };
 
@@ -92,7 +99,15 @@ type RecordForm = {
   sharepointFileName: string;
 };
 
-const EMPTY_FORM: RecordForm = {
+type TrainingTypeForm = {
+  name: string;
+  category: string;
+  defaultExpiryMonths: string;
+  doesNotExpire: boolean;
+  active: boolean;
+};
+
+const EMPTY_RECORD_FORM: RecordForm = {
   employeeId: "",
   trainingTypeId: "",
   trainingName: "",
@@ -108,6 +123,14 @@ const EMPTY_FORM: RecordForm = {
   sharepointFileName: "",
 };
 
+const EMPTY_TYPE_FORM: TrainingTypeForm = {
+  name: "",
+  category: "",
+  defaultExpiryMonths: "",
+  doesNotExpire: false,
+  active: true,
+};
+
 const DEFAULT_CATEGORIES = [
   "High Risk Licence",
   "VOC",
@@ -116,6 +139,8 @@ const DEFAULT_CATEGORIES = [
   "Client Requirement",
   "Internal Competency",
   "Driver Licence",
+  "Plant / Equipment",
+  "Site Induction",
   "Other",
 ];
 
@@ -142,7 +167,6 @@ function crewLabel(crew: Crew | null | undefined) {
 
 function parseDate(value?: string | null) {
   if (!value) return null;
-
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? null : date;
 }
@@ -173,12 +197,9 @@ function calculateStatus(record: TrainingRecord): TrainingStatus {
     return record.sharepoint_web_url ? "current" : "missing";
   }
 
-  if (!record.expiry_date) {
-    return "missing";
-  }
+  if (!record.expiry_date) return "missing";
 
   const days = daysUntil(record.expiry_date);
-
   if (days === null) return "missing";
   if (days < 0) return "expired";
   if (days <= 60) return "expiring";
@@ -197,15 +218,12 @@ function statusClasses(status: TrainingStatus) {
   if (status === "current") {
     return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
-
   if (status === "expiring") {
     return "border-amber-200 bg-amber-50 text-amber-800";
   }
-
   if (status === "expired") {
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
-
   return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
@@ -214,6 +232,16 @@ function classCodesArray(value: string) {
     .split(/[,;\n]+/)
     .map((item) => item.trim().toUpperCase())
     .filter(Boolean);
+}
+
+function addMonthsToDate(dateValue: string, months: number | null) {
+  if (!dateValue || !months || months <= 0) return "";
+
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+
+  date.setMonth(date.getMonth() + months);
+  return date.toISOString().slice(0, 10);
 }
 
 export default function TrainingRegisterPage() {
@@ -226,12 +254,12 @@ export default function TrainingRegisterPage() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [savingType, setSavingType] = useState(false);
+  const [togglingTypeId, setTogglingTypeId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | TrainingStatus
-  >("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | TrainingStatus>("all");
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [crewFilter, setCrewFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -239,10 +267,20 @@ export default function TrainingRegisterPage() {
     "all" | "attached" | "missing"
   >("all");
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingRecord, setEditingRecord] =
-    useState<TrainingRecord | null>(null);
-  const [form, setForm] = useState<RecordForm>(EMPTY_FORM);
+  const [recordModalOpen, setRecordModalOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<TrainingRecord | null>(null);
+  const [recordForm, setRecordForm] =
+    useState<RecordForm>(EMPTY_RECORD_FORM);
+
+  const [typeManagerOpen, setTypeManagerOpen] = useState(false);
+  const [typeEditorOpen, setTypeEditorOpen] = useState(false);
+  const [editingType, setEditingType] = useState<TrainingType | null>(null);
+  const [typeForm, setTypeForm] =
+    useState<TrainingTypeForm>(EMPTY_TYPE_FORM);
+  const [typeSearch, setTypeSearch] = useState("");
+  const [typeStatusFilter, setTypeStatusFilter] = useState<
+    "all" | "active" | "inactive"
+  >("all");
 
   const [message, setMessage] = useState<{
     tone: "success" | "error";
@@ -273,34 +311,23 @@ export default function TrainingRegisterPage() {
         supabase
           .from("training_types")
           .select(
-            "id, name, category, default_expiry_months, does_not_expire, active",
+            "id, name, category, default_expiry_months, does_not_expire, active, created_at, updated_at",
           )
           .order("category")
           .order("name"),
         supabase
           .from("employee_training_records")
           .select(
-            "id, employee_id, training_type_id, training_name, category, certificate_number, class_codes, provider, issue_date, expiry_date, does_not_expire, notes, sharepoint_item_id, sharepoint_drive_id, sharepoint_web_url, sharepoint_file_name, status, superseded_at, created_at, uploaded_by",
+            "id, employee_id, training_type_id, training_name, category, certificate_number, class_codes, provider, issue_date, expiry_date, does_not_expire, notes, sharepoint_item_id, sharepoint_drive_id, sharepoint_web_url, sharepoint_file_name, status, supersedes_record_id, superseded_at, created_at, updated_at, uploaded_by",
           )
           .is("superseded_at", null)
           .order("expiry_date", { ascending: true, nullsFirst: false }),
       ]);
 
-    if (employeeResult.error) {
-      throw new Error(employeeResult.error.message);
-    }
-
-    if (crewResult.error) {
-      throw new Error(crewResult.error.message);
-    }
-
-    if (typeResult.error) {
-      throw new Error(typeResult.error.message);
-    }
-
-    if (recordResult.error) {
-      throw new Error(recordResult.error.message);
-    }
+    if (employeeResult.error) throw new Error(employeeResult.error.message);
+    if (crewResult.error) throw new Error(crewResult.error.message);
+    if (typeResult.error) throw new Error(typeResult.error.message);
+    if (recordResult.error) throw new Error(recordResult.error.message);
 
     setEmployees((employeeResult.data ?? []) as Employee[]);
     setCrews((crewResult.data ?? []) as Crew[]);
@@ -382,10 +409,7 @@ export default function TrainingRegisterPage() {
       const hasDocument = Boolean(record.sharepoint_web_url);
 
       if (statusFilter !== "all" && status !== statusFilter) return false;
-      if (
-        employeeFilter !== "all" &&
-        record.employee_id !== employeeFilter
-      ) {
+      if (employeeFilter !== "all" && record.employee_id !== employeeFilter) {
         return false;
       }
 
@@ -438,6 +462,25 @@ export default function TrainingRegisterPage() {
     statusFilter,
   ]);
 
+  const filteredTrainingTypes = useMemo(() => {
+    const query = typeSearch.trim().toLowerCase();
+
+    return trainingTypes.filter((type) => {
+      const active = type.active !== false;
+
+      if (typeStatusFilter === "active" && !active) return false;
+      if (typeStatusFilter === "inactive" && active) return false;
+
+      if (!query) return true;
+
+      return [type.name, type.category, type.default_expiry_months]
+        .map(clean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [trainingTypes, typeSearch, typeStatusFilter]);
+
   const currentCount = records.filter(
     (record) =>
       employeeById.get(record.employee_id)?.active !== false &&
@@ -462,16 +505,16 @@ export default function TrainingRegisterPage() {
       !record.sharepoint_web_url,
   ).length;
 
-  function openCreate() {
+  function openCreateRecord() {
     setEditingRecord(null);
-    setForm(EMPTY_FORM);
-    setFormOpen(true);
+    setRecordForm(EMPTY_RECORD_FORM);
+    setRecordModalOpen(true);
     setMessage(null);
   }
 
-  function openEdit(record: TrainingRecord) {
+  function openEditRecord(record: TrainingRecord) {
     setEditingRecord(record);
-    setForm({
+    setRecordForm({
       employeeId: record.employee_id,
       trainingTypeId: clean(record.training_type_id),
       trainingName: clean(record.training_name),
@@ -486,16 +529,15 @@ export default function TrainingRegisterPage() {
       sharepointWebUrl: clean(record.sharepoint_web_url),
       sharepointFileName: clean(record.sharepoint_file_name),
     });
-    setFormOpen(true);
+    setRecordModalOpen(true);
     setMessage(null);
   }
 
-  function closeForm() {
-    if (saving) return;
-
-    setFormOpen(false);
+  function closeRecordModal() {
+    if (savingRecord) return;
+    setRecordModalOpen(false);
     setEditingRecord(null);
-    setForm(EMPTY_FORM);
+    setRecordForm(EMPTY_RECORD_FORM);
   }
 
   function applyTrainingType(trainingTypeId: string) {
@@ -503,27 +545,53 @@ export default function TrainingRegisterPage() {
       (type) => type.id === trainingTypeId,
     );
 
-    setForm((current) => ({
+    setRecordForm((current) => {
+      const expiryDate =
+        selectedType?.does_not_expire
+          ? ""
+          : current.issueDate && selectedType?.default_expiry_months
+            ? addMonthsToDate(
+                current.issueDate,
+                selectedType.default_expiry_months,
+              )
+            : current.expiryDate;
+
+      return {
+        ...current,
+        trainingTypeId,
+        trainingName: selectedType?.name ?? current.trainingName,
+        category: selectedType?.category ?? current.category,
+        doesNotExpire: Boolean(selectedType?.does_not_expire),
+        expiryDate,
+      };
+    });
+  }
+
+  function updateIssueDate(issueDate: string) {
+    const selectedType = trainingTypes.find(
+      (type) => type.id === recordForm.trainingTypeId,
+    );
+
+    setRecordForm((current) => ({
       ...current,
-      trainingTypeId,
-      trainingName: selectedType?.name ?? current.trainingName,
-      category: selectedType?.category ?? current.category,
-      doesNotExpire: Boolean(selectedType?.does_not_expire),
-      expiryDate: selectedType?.does_not_expire
-        ? ""
-        : current.expiryDate,
+      issueDate,
+      expiryDate:
+        !current.doesNotExpire &&
+        selectedType?.default_expiry_months
+          ? addMonthsToDate(issueDate, selectedType.default_expiry_months)
+          : current.expiryDate,
     }));
   }
 
   async function saveRecord() {
     setMessage(null);
 
-    if (!form.employeeId) {
+    if (!recordForm.employeeId) {
       setMessage({ tone: "error", text: "Select an employee." });
       return;
     }
 
-    if (!form.trainingName.trim()) {
+    if (!recordForm.trainingName.trim()) {
       setMessage({
         tone: "error",
         text: "Enter a certificate or licence name.",
@@ -531,7 +599,7 @@ export default function TrainingRegisterPage() {
       return;
     }
 
-    if (!form.doesNotExpire && !form.expiryDate) {
+    if (!recordForm.doesNotExpire && !recordForm.expiryDate) {
       setMessage({
         tone: "error",
         text: "Enter an expiry date or select Does not expire.",
@@ -539,23 +607,26 @@ export default function TrainingRegisterPage() {
       return;
     }
 
-    setSaving(true);
+    setSavingRecord(true);
 
     const payload = {
-      employee_id: form.employeeId,
-      training_type_id: form.trainingTypeId || null,
-      training_name: form.trainingName.trim(),
-      category: form.category.trim() || null,
-      certificate_number: form.certificateNumber.trim() || null,
-      class_codes: classCodesArray(form.classCodes),
-      provider: form.provider.trim() || null,
-      issue_date: form.issueDate || null,
-      expiry_date: form.doesNotExpire ? null : form.expiryDate || null,
-      does_not_expire: form.doesNotExpire,
-      notes: form.notes.trim() || null,
-      sharepoint_web_url: form.sharepointWebUrl.trim() || null,
-      sharepoint_file_name: form.sharepointFileName.trim() || null,
+      employee_id: recordForm.employeeId,
+      training_type_id: recordForm.trainingTypeId || null,
+      training_name: recordForm.trainingName.trim(),
+      category: recordForm.category.trim() || null,
+      certificate_number: recordForm.certificateNumber.trim() || null,
+      class_codes: classCodesArray(recordForm.classCodes),
+      provider: recordForm.provider.trim() || null,
+      issue_date: recordForm.issueDate || null,
+      expiry_date: recordForm.doesNotExpire
+        ? null
+        : recordForm.expiryDate || null,
+      does_not_expire: recordForm.doesNotExpire,
+      notes: recordForm.notes.trim() || null,
+      sharepoint_web_url: recordForm.sharepointWebUrl.trim() || null,
+      sharepoint_file_name: recordForm.sharepointFileName.trim() || null,
       status: null,
+      updated_at: new Date().toISOString(),
     };
 
     try {
@@ -566,14 +637,10 @@ export default function TrainingRegisterPage() {
             .eq("id", editingRecord.id)
         : await supabase.from("employee_training_records").insert(payload);
 
-      if (result.error) {
-        throw new Error(result.error.message);
-      }
+      if (result.error) throw new Error(result.error.message);
 
       await loadData();
-      setFormOpen(false);
-      setEditingRecord(null);
-      setForm(EMPTY_FORM);
+      closeRecordModal();
       setMessage({
         tone: "success",
         text: editingRecord
@@ -589,7 +656,154 @@ export default function TrainingRegisterPage() {
             : "Unable to save the training record.",
       });
     } finally {
-      setSaving(false);
+      setSavingRecord(false);
+    }
+  }
+
+  function openCreateType() {
+    setEditingType(null);
+    setTypeForm(EMPTY_TYPE_FORM);
+    setTypeEditorOpen(true);
+    setMessage(null);
+  }
+
+  function openEditType(type: TrainingType) {
+    setEditingType(type);
+    setTypeForm({
+      name: type.name,
+      category: clean(type.category),
+      defaultExpiryMonths:
+        type.default_expiry_months === null
+          ? ""
+          : String(type.default_expiry_months),
+      doesNotExpire: Boolean(type.does_not_expire),
+      active: type.active !== false,
+    });
+    setTypeEditorOpen(true);
+    setMessage(null);
+  }
+
+  function closeTypeEditor() {
+    if (savingType) return;
+    setTypeEditorOpen(false);
+    setEditingType(null);
+    setTypeForm(EMPTY_TYPE_FORM);
+  }
+
+  async function saveTrainingType() {
+    setMessage(null);
+
+    const name = typeForm.name.trim();
+    if (!name) {
+      setMessage({ tone: "error", text: "Enter a training type name." });
+      return;
+    }
+
+    const duplicate = trainingTypes.some(
+      (type) =>
+        type.id !== editingType?.id &&
+        type.name.trim().toLowerCase() === name.toLowerCase(),
+    );
+
+    if (duplicate) {
+      setMessage({
+        tone: "error",
+        text: "A training type with this name already exists.",
+      });
+      return;
+    }
+
+    const expiryMonths = typeForm.doesNotExpire
+      ? null
+      : typeForm.defaultExpiryMonths
+        ? Number(typeForm.defaultExpiryMonths)
+        : null;
+
+    if (
+      expiryMonths !== null &&
+      (!Number.isInteger(expiryMonths) || expiryMonths <= 0)
+    ) {
+      setMessage({
+        tone: "error",
+        text: "Default expiry months must be a whole number greater than zero.",
+      });
+      return;
+    }
+
+    setSavingType(true);
+
+    const payload = {
+      name,
+      category: typeForm.category.trim() || null,
+      default_expiry_months: expiryMonths,
+      does_not_expire: typeForm.doesNotExpire,
+      active: typeForm.active,
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      const result = editingType
+        ? await supabase
+            .from("training_types")
+            .update(payload)
+            .eq("id", editingType.id)
+        : await supabase.from("training_types").insert(payload);
+
+      if (result.error) throw new Error(result.error.message);
+
+      await loadData();
+      closeTypeEditor();
+      setMessage({
+        tone: "success",
+        text: editingType
+          ? `${name} was updated.`
+          : `${name} was added to the training type library.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to save the training type.",
+      });
+    } finally {
+      setSavingType(false);
+    }
+  }
+
+  async function toggleTrainingType(type: TrainingType) {
+    setTogglingTypeId(type.id);
+    setMessage(null);
+
+    const nextActive = type.active === false;
+
+    try {
+      const { error } = await supabase
+        .from("training_types")
+        .update({
+          active: nextActive,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", type.id);
+
+      if (error) throw new Error(error.message);
+
+      await loadData();
+      setMessage({
+        tone: "success",
+        text: `${type.name} is now ${nextActive ? "active" : "inactive"}.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to update the training type.",
+      });
+    } finally {
+      setTogglingTypeId(null);
     }
   }
 
@@ -683,9 +897,9 @@ export default function TrainingRegisterPage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Track certificates, licences, VOCs and expiry dates. TTTracker
-                stores the register data while the actual documents remain in
-                SharePoint.
+                Track certificates, licences, VOCs and expiry dates. Create new
+                training types directly from this page whenever the business
+                needs to track something new.
               </p>
             </div>
 
@@ -715,7 +929,16 @@ export default function TrainingRegisterPage() {
 
               <button
                 type="button"
-                onClick={openCreate}
+                onClick={() => setTypeManagerOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+              >
+                <Library size={16} />
+                Manage Types
+              </button>
+
+              <button
+                type="button"
+                onClick={openCreateRecord}
                 className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
               >
                 <Plus size={16} />
@@ -856,9 +1079,7 @@ export default function TrainingRegisterPage() {
             <SelectField
               value={documentFilter}
               onChange={(value) =>
-                setDocumentFilter(
-                  value as "all" | "attached" | "missing",
-                )
+                setDocumentFilter(value as "all" | "attached" | "missing")
               }
               options={[
                 { value: "all", label: "All documents" },
@@ -897,7 +1118,7 @@ export default function TrainingRegisterPage() {
                 No training records found
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Adjust the filters or add the first training record.
+                Add a record or create a new training type first.
               </p>
             </div>
           ) : (
@@ -916,7 +1137,7 @@ export default function TrainingRegisterPage() {
                     record={record}
                     employee={employee}
                     crew={crew}
-                    onEdit={() => openEdit(record)}
+                    onEdit={() => openEditRecord(record)}
                   />
                 );
               })}
@@ -925,20 +1146,53 @@ export default function TrainingRegisterPage() {
         </section>
       </div>
 
-      {formOpen ? (
+      {recordModalOpen ? (
         <TrainingRecordModal
-          form={form}
-          setForm={setForm}
+          form={recordForm}
+          setForm={setRecordForm}
           editingRecord={editingRecord}
           employees={activeEmployees}
           trainingTypes={trainingTypes.filter(
-            (type) => type.active !== false,
+            (type) =>
+              type.active !== false || type.id === recordForm.trainingTypeId,
           )}
           categories={categories}
-          saving={saving}
+          saving={savingRecord}
           onTrainingTypeChange={applyTrainingType}
-          onClose={closeForm}
+          onIssueDateChange={updateIssueDate}
+          onClose={closeRecordModal}
           onSave={() => void saveRecord()}
+          onOpenTypeManager={() => {
+            setRecordModalOpen(false);
+            setTypeManagerOpen(true);
+          }}
+        />
+      ) : null}
+
+      {typeManagerOpen ? (
+        <TrainingTypeManagerModal
+          trainingTypes={filteredTrainingTypes}
+          search={typeSearch}
+          statusFilter={typeStatusFilter}
+          togglingTypeId={togglingTypeId}
+          onSearchChange={setTypeSearch}
+          onStatusFilterChange={setTypeStatusFilter}
+          onClose={() => setTypeManagerOpen(false)}
+          onCreate={openCreateType}
+          onEdit={openEditType}
+          onToggle={(type) => void toggleTrainingType(type)}
+        />
+      ) : null}
+
+      {typeEditorOpen ? (
+        <TrainingTypeEditorModal
+          form={typeForm}
+          setForm={setTypeForm}
+          editingType={editingType}
+          categories={categories}
+          saving={savingType}
+          onClose={closeTypeEditor}
+          onSave={() => void saveTrainingType()}
         />
       ) : null}
     </AppShell>
@@ -977,12 +1231,11 @@ function TrainingRow({
       </div>
 
       <div>
-        <div className="font-bold text-slate-900">
-          {record.training_name}
-        </div>
+        <div className="font-bold text-slate-900">{record.training_name}</div>
         <div className="mt-1 text-sm text-slate-500">
           {record.category || "Uncategorised"}
         </div>
+
         {record.class_codes?.length ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {record.class_codes.map((code) => (
@@ -1015,6 +1268,7 @@ function TrainingRow({
             ? "Does not expire"
             : formatDate(record.expiry_date)}
         </div>
+
         {!record.does_not_expire && days !== null ? (
           <div
             className={`mt-1 text-xs font-medium ${
@@ -1092,8 +1346,10 @@ function TrainingRecordModal({
   categories,
   saving,
   onTrainingTypeChange,
+  onIssueDateChange,
   onClose,
   onSave,
+  onOpenTypeManager,
 }: {
   form: RecordForm;
   setForm: React.Dispatch<React.SetStateAction<RecordForm>>;
@@ -1103,8 +1359,10 @@ function TrainingRecordModal({
   categories: string[];
   saving: boolean;
   onTrainingTypeChange: (trainingTypeId: string) => void;
+  onIssueDateChange: (issueDate: string) => void;
   onClose: () => void;
   onSave: () => void;
+  onOpenTypeManager: () => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
@@ -1133,9 +1391,25 @@ function TrainingRecordModal({
 
         <div className="space-y-6 p-6">
           <section>
-            <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-              Certificate Details
-            </h3>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
+                  Certificate Details
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Select an existing type or create a new one from this page.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onOpenTypeManager}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Library size={15} />
+                Manage Training Types
+              </button>
+            </div>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Field label="Employee">
@@ -1182,7 +1456,7 @@ function TrainingRecordModal({
                       trainingName: event.target.value,
                     }))
                   }
-                  placeholder="e.g. Rigging Intermediate"
+                  placeholder="e.g. EWP VOC"
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
                 />
               </Field>
@@ -1252,12 +1526,7 @@ function TrainingRecordModal({
                 <input
                   type="date"
                   value={form.issueDate}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      issueDate: event.target.value,
-                    }))
-                  }
+                  onChange={(event) => onIssueDateChange(event.target.value)}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
                 />
               </Field>
@@ -1297,8 +1566,7 @@ function TrainingRecordModal({
                     Does not expire
                   </span>
                   <span className="mt-1 block text-xs leading-5 text-slate-500">
-                    Use this for records such as White Cards where there is no
-                    fixed expiry date.
+                    Use this where there is no fixed expiry date.
                   </span>
                 </span>
               </label>
@@ -1329,9 +1597,8 @@ function TrainingRecordModal({
             </div>
 
             <p className="mt-2 text-sm leading-6 text-blue-800">
-              This version stores the SharePoint link only. The direct upload
-              connection will be added when the Microsoft Graph integration is
-              configured.
+              This version stores the SharePoint link only. Direct PDF upload
+              will be connected through Microsoft Graph later.
             </p>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -1359,7 +1626,7 @@ function TrainingRecordModal({
                       sharepointFileName: event.target.value,
                     }))
                   }
-                  placeholder="e.g. Jeremy-Crothers-RI.pdf"
+                  placeholder="e.g. EWP-VOC.pdf"
                   className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2.5 text-sm outline-none ring-blue-200 focus:ring-2"
                 />
               </Field>
@@ -1384,6 +1651,380 @@ function TrainingRecordModal({
             >
               {saving ? <Loader2 size={16} className="animate-spin" /> : null}
               {editingRecord ? "Save Changes" : "Add Record"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrainingTypeManagerModal({
+  trainingTypes,
+  search,
+  statusFilter,
+  togglingTypeId,
+  onSearchChange,
+  onStatusFilterChange,
+  onClose,
+  onCreate,
+  onEdit,
+  onToggle,
+}: {
+  trainingTypes: TrainingType[];
+  search: string;
+  statusFilter: "all" | "active" | "inactive";
+  togglingTypeId: string | null;
+  onSearchChange: (value: string) => void;
+  onStatusFilterChange: (value: "all" | "active" | "inactive") => void;
+  onClose: () => void;
+  onCreate: () => void;
+  onEdit: (type: TrainingType) => void;
+  onToggle: (type: TrainingType) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
+      <div className="my-auto w-full max-w-5xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <div className="flex items-center gap-2 text-slate-400">
+              <Library size={17} />
+              <span className="text-xs font-semibold uppercase tracking-wider">
+                Training Type Library
+              </span>
+            </div>
+
+            <h2 className="mt-2 text-xl font-bold text-slate-950">
+              Manage Training Types
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Add any new licence, VOC, ticket, certificate or competency without
+              changing the code or database structure.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="space-y-5 p-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+              <label className="relative block">
+                <Search
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  value={search}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search training type or category..."
+                  className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </label>
+
+              <SelectField
+                value={statusFilter}
+                onChange={(value) =>
+                  onStatusFilterChange(
+                    value as "all" | "active" | "inactive",
+                  )
+                }
+                options={[
+                  { value: "all", label: "All types" },
+                  { value: "active", label: "Active types" },
+                  { value: "inactive", label: "Inactive types" },
+                ]}
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={onCreate}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
+            >
+              <Plus size={16} />
+              Add Training Type
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            {trainingTypes.length === 0 ? (
+              <div className="p-10 text-center">
+                <Library size={30} className="mx-auto text-slate-300" />
+                <h3 className="mt-4 font-bold text-slate-900">
+                  No training types found
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Add the first type or adjust the current filters.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {trainingTypes.map((type) => {
+                  const active = type.active !== false;
+
+                  return (
+                    <div
+                      key={type.id}
+                      className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto] lg:items-center"
+                    >
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-bold text-slate-950">
+                            {type.name}
+                          </h3>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                              active
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {active ? "Active" : "Inactive"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {type.category || "Uncategorised"}
+                        </p>
+                      </div>
+
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Default expiry
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-700">
+                          {type.does_not_expire
+                            ? "Does not expire"
+                            : type.default_expiry_months
+                              ? `${type.default_expiry_months} months`
+                              : "No default"}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          New records
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-700">
+                          {active ? "Available" : "Hidden"}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onEdit(type)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <Edit3 size={15} />
+                          Edit
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => onToggle(type)}
+                          disabled={togglingTypeId === type.id}
+                          className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
+                            active
+                              ? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          }`}
+                        >
+                          {togglingTypeId === type.id ? (
+                            <Loader2 size={15} className="animate-spin" />
+                          ) : active ? (
+                            <ToggleLeft size={15} />
+                          ) : (
+                            <ToggleRight size={15} />
+                          )}
+                          {active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
+            Deactivating a type does not remove historical employee records. It
+            only hides the type from new-record dropdowns.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrainingTypeEditorModal({
+  form,
+  setForm,
+  editingType,
+  categories,
+  saving,
+  onClose,
+  onSave,
+}: {
+  form: TrainingTypeForm;
+  setForm: React.Dispatch<React.SetStateAction<TrainingTypeForm>>;
+  editingType: TrainingType | null;
+  categories: string[];
+  saving: boolean;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4">
+      <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <h2 className="text-xl font-bold text-slate-950">
+              {editingType ? "Edit Training Type" : "Add Training Type"}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Define how this licence, certificate, VOC or competency behaves.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="space-y-5 p-6">
+          <Field label="Training type name">
+            <input
+              value={form.name}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  name: event.target.value,
+                }))
+              }
+              placeholder="e.g. EWP VOC"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+            />
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Category">
+              <SelectField
+                value={form.category}
+                onChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    category: value,
+                  }))
+                }
+                options={[
+                  { value: "", label: "Select category..." },
+                  ...categories.map((category) => ({
+                    value: category,
+                    label: category,
+                  })),
+                ]}
+              />
+            </Field>
+
+            <Field label="Default expiry months">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={form.defaultExpiryMonths}
+                disabled={form.doesNotExpire}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    defaultExpiryMonths: event.target.value,
+                  }))
+                }
+                placeholder="e.g. 24"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-100"
+              />
+            </Field>
+          </div>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4">
+            <input
+              type="checkbox"
+              checked={form.doesNotExpire}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  doesNotExpire: event.target.checked,
+                  defaultExpiryMonths: event.target.checked
+                    ? ""
+                    : current.defaultExpiryMonths,
+                }))
+              }
+              className="mt-1 h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              <span className="block text-sm font-bold text-slate-900">
+                Does not expire
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">
+                New records using this type will not require an expiry date.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4">
+            <input
+              type="checkbox"
+              checked={form.active}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  active: event.target.checked,
+                }))
+              }
+              className="mt-1 h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              <span className="block text-sm font-bold text-slate-900">
+                Active training type
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">
+                Active types appear when adding new employee training records.
+              </span>
+            </span>
+          </label>
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saving}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {saving ? <Loader2 size={16} className="animate-spin" /> : null}
+              {editingType ? "Save Changes" : "Add Training Type"}
             </button>
           </div>
         </div>
