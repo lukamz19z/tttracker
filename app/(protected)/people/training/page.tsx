@@ -5,7 +5,10 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  BadgeCheck,
+  BookOpenCheck,
   CalendarClock,
+  CalendarDays,
   CheckCircle2,
   ChevronDown,
   Download,
@@ -14,11 +17,15 @@ import {
   FileText,
   Filter,
   HardHat,
+  History,
+  LayoutDashboard,
   Library,
+  ListChecks,
   Loader2,
   Plus,
   RefreshCw,
   Search,
+  Settings2,
   ShieldCheck,
   ToggleLeft,
   ToggleRight,
@@ -259,7 +266,9 @@ export default function TrainingRegisterPage() {
   const [togglingTypeId, setTogglingTypeId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | TrainingStatus>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | TrainingStatus>(
+    "all",
+  );
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [crewFilter, setCrewFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -268,15 +277,15 @@ export default function TrainingRegisterPage() {
   >("all");
 
   const [recordModalOpen, setRecordModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<TrainingRecord | null>(null);
-  const [recordForm, setRecordForm] =
-    useState<RecordForm>(EMPTY_RECORD_FORM);
+  const [editingRecord, setEditingRecord] = useState<TrainingRecord | null>(
+    null,
+  );
+  const [recordForm, setRecordForm] = useState<RecordForm>(EMPTY_RECORD_FORM);
 
   const [typeManagerOpen, setTypeManagerOpen] = useState(false);
   const [typeEditorOpen, setTypeEditorOpen] = useState(false);
   const [editingType, setEditingType] = useState<TrainingType | null>(null);
-  const [typeForm, setTypeForm] =
-    useState<TrainingTypeForm>(EMPTY_TYPE_FORM);
+  const [typeForm, setTypeForm] = useState<TrainingTypeForm>(EMPTY_TYPE_FORM);
   const [typeSearch, setTypeSearch] = useState("");
   const [typeStatusFilter, setTypeStatusFilter] = useState<
     "all" | "active" | "inactive"
@@ -546,15 +555,14 @@ export default function TrainingRegisterPage() {
     );
 
     setRecordForm((current) => {
-      const expiryDate =
-        selectedType?.does_not_expire
-          ? ""
-          : current.issueDate && selectedType?.default_expiry_months
-            ? addMonthsToDate(
-                current.issueDate,
-                selectedType.default_expiry_months,
-              )
-            : current.expiryDate;
+      const expiryDate = selectedType?.does_not_expire
+        ? ""
+        : current.issueDate && selectedType?.default_expiry_months
+          ? addMonthsToDate(
+              current.issueDate,
+              selectedType.default_expiry_months,
+            )
+          : current.expiryDate;
 
       return {
         ...current,
@@ -576,8 +584,7 @@ export default function TrainingRegisterPage() {
       ...current,
       issueDate,
       expiryDate:
-        !current.doesNotExpire &&
-        selectedType?.default_expiry_months
+        !current.doesNotExpire && selectedType?.default_expiry_months
           ? addMonthsToDate(issueDate, selectedType.default_expiry_months)
           : current.expiryDate,
     }));
@@ -967,6 +974,92 @@ export default function TrainingRegisterPage() {
           </section>
         ) : null}
 
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-slate-400">
+                <LayoutDashboard size={17} />
+                <span className="text-xs font-semibold uppercase tracking-wider">
+                  Training Management
+                </span>
+              </div>
+              <h2 className="mt-2 text-xl font-bold text-slate-950">
+                Training tools
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+                Open role rules, project mobilisation checks, renewals, course
+                planning and verification from one place.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <TrainingModuleCard
+              href="/people/training/requirements"
+              title="Role Requirements"
+              description="Define mandatory and recommended training for each employee role."
+              icon={<Settings2 size={20} />}
+              tone="violet"
+            />
+            <TrainingModuleCard
+              href="/people/training/project-compliance"
+              title="Project Compliance"
+              description="Check mobilisation readiness, blockers and crew compliance by project."
+              icon={<ShieldCheck size={20} />}
+              tone="emerald"
+            />
+            <TrainingModuleCard
+              href="/people/training/renewals"
+              title="Renewals"
+              description="Action expired, expiring, missing and unverified training records."
+              icon={<CalendarClock size={20} />}
+              tone="amber"
+            />
+            <TrainingModuleCard
+              href="/people/training/project-requirements"
+              title="Project Requirements"
+              description="Configure inductions, licences and competencies unique to each project."
+              icon={<ListChecks size={20} />}
+              tone="blue"
+            />
+            <TrainingModuleCard
+              href="/people/training/dashboard"
+              title="Training Dashboard"
+              description="View company-wide compliance, project risk and management KPIs."
+              icon={<LayoutDashboard size={20} />}
+              tone="slate"
+            />
+            <TrainingModuleCard
+              href="/people/training/courses"
+              title="Courses"
+              description="Create training sessions, assign personnel and complete attendance."
+              icon={<BookOpenCheck size={20} />}
+              tone="blue"
+            />
+            <TrainingModuleCard
+              href="/people/training/calendar"
+              title="Training Calendar"
+              description="See upcoming courses, trainers, locations, capacity and bookings."
+              icon={<CalendarDays size={20} />}
+              tone="amber"
+            />
+            <TrainingModuleCard
+              href="/people/training/verification"
+              title="Verification Queue"
+              description="Review uploaded certificates and approve, reject or request clearer evidence."
+              icon={<BadgeCheck size={20} />}
+              tone="emerald"
+            />
+            <TrainingModuleCard
+              href="/people/training/history"
+              title="Training History"
+              description="Review the complete chronological training history for each employee."
+              icon={<History size={20} />}
+              tone="violet"
+            />
+          </div>
+        </section>
+
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <KpiCard
             label="Active people"
@@ -1211,9 +1304,7 @@ function TrainingRow({
   onEdit: () => void;
 }) {
   const status = calculateStatus(record);
-  const days = record.does_not_expire
-    ? null
-    : daysUntil(record.expiry_date);
+  const days = record.does_not_expire ? null : daysUntil(record.expiry_date);
 
   return (
     <div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_auto] xl:items-center">
@@ -1699,8 +1790,8 @@ function TrainingTypeManagerModal({
             </h2>
 
             <p className="mt-1 text-sm text-slate-500">
-              Add any new licence, VOC, ticket, certificate or competency without
-              changing the code or database structure.
+              Add any new licence, VOC, ticket, certificate or competency
+              without changing the code or database structure.
             </p>
           </div>
 
@@ -1733,9 +1824,7 @@ function TrainingTypeManagerModal({
               <SelectField
                 value={statusFilter}
                 onChange={(value) =>
-                  onStatusFilterChange(
-                    value as "all" | "active" | "inactive",
-                  )
+                  onStatusFilterChange(value as "all" | "active" | "inactive")
                 }
                 options={[
                   { value: "all", label: "All types" },
@@ -2030,6 +2119,57 @@ function TrainingTypeEditorModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function TrainingModuleCard({
+  href,
+  title,
+  description,
+  icon,
+  tone,
+}: {
+  href: string;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  tone: "slate" | "blue" | "emerald" | "amber" | "violet";
+}) {
+  const iconClasses =
+    tone === "blue"
+      ? "bg-blue-100 text-blue-700"
+      : tone === "emerald"
+        ? "bg-emerald-100 text-emerald-700"
+        : tone === "amber"
+          ? "bg-amber-100 text-amber-800"
+          : tone === "violet"
+            ? "bg-violet-100 text-violet-700"
+            : "bg-slate-100 text-slate-700";
+
+  return (
+    <Link
+      href={href}
+      className="group rounded-2xl border border-slate-200 bg-white p-4 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconClasses}`}
+        >
+          {icon}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="font-bold text-slate-950">{title}</h3>
+            <ExternalLink
+              size={15}
+              className="shrink-0 text-slate-300 transition group-hover:text-slate-700"
+            />
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
+        </div>
+      </div>
+    </Link>
   );
 }
 
