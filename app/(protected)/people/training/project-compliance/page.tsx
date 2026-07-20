@@ -39,8 +39,10 @@ type Project = {
 
 type Crew = {
   id: string;
-  name: string;
-  project_id: string | null;
+  crew_number: string | null;
+  crew_name: string | null;
+  leading_hand: string | null;
+  active: boolean | null;
 };
 
 type Employee = {
@@ -49,15 +51,20 @@ type Employee = {
   role: string | null;
   active: boolean | null;
   crew_id: string | null;
-  project_id: string | null;
+  user_id: string | null;
+};
+
+type ProjectAccessRow = {
+  project_id: string;
+  user_id: string;
 };
 
 type TrainingType = {
   id: string;
   name: string;
-  short_code: string | null;
   category: string | null;
-  expiry_required: boolean | null;
+  default_expiry_months: number | null;
+  does_not_expire: boolean | null;
   active: boolean | null;
 };
 
@@ -87,18 +94,19 @@ type ProjectRequirement = {
 type TrainingRecord = {
   id: string;
   employee_id: string;
-  training_type_id: string;
+  training_type_id: string | null;
   issue_date: string | null;
   expiry_date: string | null;
-  status: string | null;
-  verification_status: string | null;
+  does_not_expire: boolean | null;
+  record_status: string | null;
+  superseded_at: string | null;
   revoked_at: string | null;
   notes: string | null;
 };
 
 type TrainingDocument = {
   id: string;
-  employee_training_record_id: string;
+  training_record_id: string;
   document_type_id: string | null;
   file_name: string | null;
   file_url: string | null;
@@ -180,6 +188,19 @@ function clean(value: unknown) {
 
 function normalise(value: unknown) {
   return clean(value).replace(/\s+/g, " ").toLowerCase();
+}
+
+function crewLabel(crew: Crew | null | undefined) {
+  if (!crew) return "Unassigned";
+
+  const number = clean(crew.crew_number);
+  const name = clean(crew.crew_name);
+
+  if (number && name) return `Crew ${number} · ${name}`;
+  if (number) return `Crew ${number}`;
+  if (name) return name;
+
+  return "Unassigned";
 }
 
 function parseDate(value: string | null | undefined) {
@@ -303,6 +324,7 @@ export default function ProjectTrainingCompliancePage() {
     ProjectRequirement[]
   >([]);
   const [trainingRecords, setTrainingRecords] = useState<TrainingRecord[]>([]);
+  const [projectAccess, setProjectAccess] = useState<ProjectAccessRow[]>([]);
   const [trainingDocuments, setTrainingDocuments] = useState<
     TrainingDocument[]
   >([]);
@@ -338,6 +360,7 @@ export default function ProjectTrainingCompliancePage() {
       roleRequirementResult,
       projectRequirementResult,
       recordResult,
+      projectAccessResult,
       documentResult,
       documentRequirementResult,
     ] = await Promise.all([
@@ -347,17 +370,17 @@ export default function ProjectTrainingCompliancePage() {
         .order("name", { ascending: true }),
       supabase
         .from("crews")
-        .select("id, name, project_id")
-        .order("name", { ascending: true }),
+        .select("id, crew_number, crew_name, leading_hand, active")
+        .order("crew_number", { ascending: true }),
       supabase
         .from("employees")
-        .select("id, full_name, role, active, crew_id, project_id")
+        .select("id, full_name, role, active, crew_id, user_id")
         .eq("active", true)
         .order("full_name", { ascending: true }),
       supabase
         .from("training_types")
         .select(
-          "id, name, short_code, category, expiry_required, active",
+          "id, name, category, default_expiry_months, does_not_expire, active",
         )
         .order("name", { ascending: true }),
       supabase
@@ -375,20 +398,20 @@ export default function ProjectTrainingCompliancePage() {
       supabase
         .from("employee_training_records")
         .select(
-          "id, employee_id, training_type_id, issue_date, expiry_date, status, verification_status, revoked_at, notes",
-        ),
+          "id, employee_id, training_type_id, issue_date, expiry_date, does_not_expire, record_status, superseded_at, revoked_at, notes",
+        )
+        .is("superseded_at", null),
+      supabase
+        .from("project_access")
+        .select("project_id, user_id"),
       supabase
         .from("employee_training_documents")
         .select(
-          "id, employee_training_record_id, document_type_id, file_name, file_url, active",
-        )
-        .eq("active", true),
+          "id, training_record_id, document_type_name, document_type_code, sharepoint_web_url, generated_file_name, active",
+        ),
       supabase
         .from("training_type_document_requirements")
-        .select(
-          "id, training_type_id, training_document_type_id, required",
-        )
-        .eq("required", true),
+        .select("*"),
     ]);
 
     const errors = [
@@ -399,6 +422,7 @@ export default function ProjectTrainingCompliancePage() {
       roleRequirementResult.error,
       projectRequirementResult.error,
       recordResult.error,
+      projectAccessResult.error,
       documentResult.error,
       documentRequirementResult.error,
     ].filter(Boolean);
@@ -419,9 +443,38 @@ export default function ProjectTrainingCompliancePage() {
       (projectRequirementResult.data ?? []) as ProjectRequirement[],
     );
     setTrainingRecords((recordResult.data ?? []) as TrainingRecord[]);
-    setTrainingDocuments((documentResult.data ?? []) as TrainingDocument[]);
+    setProjectAccess((projectAccessResult.data ?? []) as ProjectAccessRow[]);
+    setTrainingDocuments(
+      (documentResult.data ?? [])
+        .filter((item) => item.active !== false)
+        .map((item) => ({
+          id: String(item.id),
+          training_record_id: String(item.training_record_id ?? ""),
+          document_type_id:
+            item.document_type_code ??
+            item.document_type_name ??
+            null,
+          file_name: item.generated_file_name ?? null,
+          file_url: item.sharepoint_web_url ?? null,
+          active: item.active ?? true,
+        })) as TrainingDocument[],
+    );
     setDocumentRequirements(
-      (documentRequirementResult.data ?? []) as DocumentRequirement[],
+      (documentRequirementResult.data ?? [])
+        .filter((item) => item.required !== false)
+        .map((item) => ({
+          id: String(item.id),
+          training_type_id: String(item.training_type_id ?? ""),
+          training_document_type_id: String(
+            item.training_document_type_id ?? item.document_type_id ?? "",
+          ),
+          required: item.required ?? true,
+        }))
+        .filter(
+          (item) =>
+            item.training_type_id &&
+            item.training_document_type_id,
+        ) as DocumentRequirement[],
     );
 
     if (!selectedProjectId && (projectResult.data ?? []).length > 0) {
@@ -488,9 +541,9 @@ export default function ProjectTrainingCompliancePage() {
     const map = new Map<string, TrainingDocument[]>();
 
     trainingDocuments.forEach((document) => {
-      const list = map.get(document.employee_training_record_id) ?? [];
+      const list = map.get(document.training_record_id) ?? [];
       list.push(document);
-      map.set(document.employee_training_record_id, list);
+      map.set(document.training_record_id, list);
     });
 
     return map;
@@ -524,18 +577,18 @@ export default function ProjectTrainingCompliancePage() {
   const projectEmployees = useMemo(() => {
     if (!selectedProjectId) return [];
 
-    const projectCrewIds = new Set(
-      crews
-        .filter((crew) => crew.project_id === selectedProjectId)
-        .map((crew) => crew.id),
+    const projectUserIds = new Set(
+      projectAccess
+        .filter((row) => row.project_id === selectedProjectId)
+        .map((row) => row.user_id),
     );
 
     return employees.filter(
       (employee) =>
-        employee.project_id === selectedProjectId ||
-        (employee.crew_id ? projectCrewIds.has(employee.crew_id) : false),
+        Boolean(employee.user_id) &&
+        projectUserIds.has(employee.user_id as string),
     );
-  }, [crews, employees, selectedProjectId]);
+  }, [employees, projectAccess, selectedProjectId]);
 
   const evaluateRequirement = useCallback(
     ({
@@ -569,7 +622,7 @@ export default function ProjectTrainingCompliancePage() {
 
       const candidates = employeeRecords
         .filter((record) =>
-          candidateTrainingTypeIds.includes(record.training_type_id),
+          record.training_type_id ? candidateTrainingTypeIds.includes(record.training_type_id) : false,
         )
         .sort((a, b) => {
           const aExpiry = parseDate(a.expiry_date)?.getTime() ?? Number.MAX_SAFE_INTEGER;
@@ -579,8 +632,11 @@ export default function ProjectTrainingCompliancePage() {
 
       const record =
         candidates.find((candidate) => {
-          const status = normalise(candidate.status);
-          return !["superseded", "cancelled", "void"].includes(status);
+          const status = normalise(candidate.record_status);
+          return (
+            !candidate.superseded_at &&
+            !["superseded", "cancelled", "void"].includes(status)
+          );
         }) ?? null;
 
       if (!record) {
@@ -612,7 +668,9 @@ export default function ProjectTrainingCompliancePage() {
 
       if (
         record.revoked_at ||
-        ["revoked", "suspended", "invalid"].includes(normalise(record.status))
+        ["revoked", "suspended", "invalid"].includes(
+          normalise(record.record_status),
+        )
       ) {
         return {
           key,
@@ -630,7 +688,7 @@ export default function ProjectTrainingCompliancePage() {
           missingDocumentCount: 0,
           requiredDocumentCount:
             requiredDocumentTypeIdsByTrainingTypeId.get(
-              record.training_type_id,
+              record.training_type_id ?? trainingTypeId,
             )?.length ?? 0,
           daysRemaining: null,
         };
@@ -638,7 +696,7 @@ export default function ProjectTrainingCompliancePage() {
 
       const requiredDocumentTypeIds =
         requiredDocumentTypeIdsByTrainingTypeId.get(
-          record.training_type_id,
+          record.training_type_id ?? trainingTypeId,
         ) ?? [];
 
       const recordDocuments = documentsByRecordId.get(record.id) ?? [];
@@ -676,7 +734,7 @@ export default function ProjectTrainingCompliancePage() {
 
       const expiryDate = parseDate(record.expiry_date);
 
-      if (!expiryDate) {
+      if (record.does_not_expire || !expiryDate) {
         return {
           key,
           source,
@@ -922,7 +980,7 @@ export default function ProjectTrainingCompliancePage() {
     const values = new Map<string, string>();
 
     complianceRows.forEach((row) => {
-      if (row.crew) values.set(row.crew.id, row.crew.name);
+      if (row.crew) values.set(row.crew.id, crewLabel(row.crew));
     });
 
     return [...values.entries()]
@@ -986,7 +1044,7 @@ export default function ProjectTrainingCompliancePage() {
         return [
           row.employee.full_name,
           row.employee.role,
-          row.crew?.name,
+          crewLabel(row.crew),
           ...row.requirements.map(
             (requirement) =>
               trainingTypeById.get(requirement.trainingTypeId)?.name ?? "",
@@ -1062,7 +1120,7 @@ export default function ProjectTrainingCompliancePage() {
 
     complianceRows.forEach((row) => {
       const id = row.crew?.id ?? "unassigned";
-      const name = row.crew?.name ?? "Unassigned";
+      const name = crewLabel(row.crew) ?? "Unassigned";
 
       const current = map.get(id) ?? {
         id,
@@ -1137,7 +1195,7 @@ export default function ProjectTrainingCompliancePage() {
       row.project?.name ?? "",
       row.employee.full_name,
       row.employee.role ?? "",
-      row.crew?.name ?? "Unassigned",
+      crewLabel(row.crew) ?? "Unassigned",
       row.mobilisationReady ? "Ready" : "Blocked",
       `${row.score}%`,
       row.mandatoryCompliant,
@@ -1535,7 +1593,7 @@ export default function ProjectTrainingCompliancePage() {
                             </td>
 
                             <td className="px-5 py-4 text-slate-600">
-                              {row.crew?.name ?? "Unassigned"}
+                              {crewLabel(row.crew) ?? "Unassigned"}
                             </td>
 
                             <td className="px-5 py-4">
@@ -1818,7 +1876,7 @@ function EmployeeComplianceModal({
             </div>
 
             <p className="mt-2 text-sm text-slate-500">
-              {[row.employee.role, row.crew?.name, row.project?.name]
+              {[row.employee.role, crewLabel(row.crew), row.project?.name]
                 .filter(Boolean)
                 .join(" · ")}
             </p>
