@@ -41,10 +41,10 @@ type Employee = {
 type TrainingType = {
   id: string;
   name: string;
-  short_code: string | null;
   category: string | null;
+  default_expiry_months: number | null;
+  does_not_expire: boolean | null;
   active: boolean | null;
-  sort_order: number | null;
 };
 
 type RoleRequirement = {
@@ -178,9 +178,9 @@ export default function TrainingRequirementsPage() {
         supabase
           .from("training_types")
           .select(
-            "id, name, short_code, category, active, sort_order",
+            "id, name, category, default_expiry_months, does_not_expire, active",
           )
-          .order("sort_order", { ascending: true })
+          .order("category", { ascending: true })
           .order("name", { ascending: true }),
         supabase
           .from("role_training_requirements")
@@ -218,7 +218,23 @@ export default function TrainingRequirementsPage() {
         active: item.active !== false,
       })),
     );
-  }, [supabase]);
+
+    const loadedRoles = new Set<string>();
+    (employeeResult.data ?? []).forEach((employee) => {
+      const role = normaliseRole((employee as Employee).role);
+      if (role) loadedRoles.add(role);
+    });
+    (requirementResult.data ?? []).forEach((requirement) => {
+      const role = normaliseRole((requirement as RoleRequirement).role_name);
+      if (role) loadedRoles.add(role);
+    });
+
+    if (!selectedRole && loadedRoles.size > 0) {
+      setSelectedRole(
+        [...loadedRoles].sort((a, b) => a.localeCompare(b))[0] ?? null,
+      );
+    }
+  }, [selectedRole, supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -380,7 +396,6 @@ export default function TrainingRequirementsPage() {
       return [
         requirement.role_name,
         trainingType?.name,
-        trainingType?.short_code,
         trainingType?.category,
         requirement.notes,
       ]
@@ -816,7 +831,7 @@ export default function TrainingRequirementsPage() {
       return [
         requirement.role_name,
         trainingType?.name ?? "Unknown training type",
-        trainingType?.short_code ?? "",
+        "",
         trainingType?.category ?? "",
         requirement.requirement_level,
         requirement.renewal_lead_days,
@@ -1337,8 +1352,7 @@ export default function TrainingRequirementsPage() {
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
                             {[
-                              trainingType?.short_code,
-                              trainingType?.category,
+                                                    trainingType?.category,
                             ]
                               .filter(Boolean)
                               .join(" · ") || "No category"}
@@ -1527,8 +1541,7 @@ function RequirementCard({
 
           <div className="mt-2 text-sm text-slate-500">
             {[
-              trainingType?.short_code,
-              trainingType?.category,
+                    trainingType?.category,
             ]
               .filter(Boolean)
               .join(" · ") || "No category"}
@@ -1547,7 +1560,7 @@ function RequirementCard({
                   ? alternativeTrainingTypes
                       .map(
                         (item) =>
-                          item.short_code || item.name,
+                          item.name,
                       )
                       .join(", ")
                   : "None"
@@ -1722,11 +1735,7 @@ function RequirementFormModal({
                   },
                   ...trainingTypes.map((trainingType) => ({
                     value: trainingType.id,
-                    label: `${
-                      trainingType.short_code
-                        ? `${trainingType.short_code} · `
-                        : ""
-                    }${trainingType.name}`,
+                    label: trainingType.name,
                   })),
                 ]}
               />
@@ -1826,8 +1835,7 @@ function RequirementFormModal({
 
                           <span>
                             <span className="block text-sm font-bold">
-                              {trainingType.short_code ||
-                                trainingType.name}
+                              {trainingType.name}
                             </span>
                             <span
                               className={`mt-1 block text-xs ${
@@ -1874,9 +1882,7 @@ function RequirementFormModal({
               <div className="mt-1">
                 {selectedTrainingType.category ||
                   "Uncategorised training type"}
-                {selectedTrainingType.short_code
-                  ? ` · ${selectedTrainingType.short_code}`
-                  : ""}
+
               </div>
             </div>
           ) : null}
