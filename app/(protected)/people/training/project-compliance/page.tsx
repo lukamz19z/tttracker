@@ -5,7 +5,9 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   BadgeCheck,
+  BarChart3,
   BriefcaseBusiness,
   CalendarClock,
   CheckCircle2,
@@ -17,9 +19,12 @@ import {
   FileWarning,
   Filter,
   GraduationCap,
+  ListChecks,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Search,
+  Settings2,
   ShieldAlert,
   ShieldCheck,
   UserRoundCheck,
@@ -478,7 +483,16 @@ export default function ProjectTrainingCompliancePage() {
     );
 
     if (!selectedProjectId && (projectResult.data ?? []).length > 0) {
-      setSelectedProjectId(projectResult.data?.[0]?.id ?? "");
+      const loadedProjects = (projectResult.data ?? []) as Project[];
+      const firstActiveProject =
+        loadedProjects.find(
+          (project) =>
+            !["completed", "closed", "archived", "inactive"].includes(
+              normalise(project.status),
+            ),
+        ) ?? loadedProjects[0];
+
+      setSelectedProjectId(firstActiveProject?.id ?? "");
     }
   }, [selectedProjectId, supabase]);
 
@@ -1004,7 +1018,15 @@ export default function ProjectTrainingCompliancePage() {
 
     return complianceRows
       .filter((row) => {
-        if (crewFilter !== "all" && row.crew?.id !== crewFilter) {
+        if (crewFilter === "unassigned" && row.crew) {
+          return false;
+        }
+
+        if (
+          crewFilter !== "all" &&
+          crewFilter !== "unassigned" &&
+          row.crew?.id !== crewFilter
+        ) {
           return false;
         }
 
@@ -1098,6 +1120,7 @@ export default function ProjectTrainingCompliancePage() {
   const missingItems = complianceRows.reduce(
     (sum, row) =>
       sum +
+      row.expiredCount +
       row.missingCount +
       row.missingDocumentCount +
       row.revokedCount,
@@ -1148,6 +1171,172 @@ export default function ProjectTrainingCompliancePage() {
       return a.name.localeCompare(b.name);
     });
   }, [complianceRows]);
+
+  const projectRequirementCount = projectRequirements.filter(
+    (requirement) => requirement.project_id === selectedProjectId,
+  ).length;
+
+  const roleRequirementCoverage = new Set(
+    complianceRows
+      .filter((row) =>
+        roleRequirements.some(
+          (requirement) =>
+            normalise(requirement.role_name) === normalise(row.employee.role),
+        ),
+      )
+      .map((row) => normalise(row.employee.role))
+      .filter(Boolean),
+  ).size;
+
+  const projectRoles = new Set(
+    complianceRows
+      .map((row) => normalise(row.employee.role))
+      .filter(Boolean),
+  );
+
+  const unconfiguredRoleCount = [...projectRoles].filter(
+    (role) =>
+      !roleRequirements.some(
+        (requirement) => normalise(requirement.role_name) === role,
+      ),
+  ).length;
+
+  const employeesWithoutRole = complianceRows.filter(
+    (row) => !clean(row.employee.role),
+  ).length;
+
+  const activeFilterCount = [
+    search.trim() ? "search" : "",
+    crewFilter !== "all" ? crewFilter : "",
+    roleFilter !== "all" ? roleFilter : "",
+    statusFilter !== "all" ? statusFilter : "",
+  ].filter(Boolean).length;
+
+  const priorityRows = useMemo(
+    () =>
+      complianceRows
+        .filter((row) => !row.mobilisationReady || row.expiringCount > 0)
+        .sort((a, b) => {
+          if (a.mobilisationReady !== b.mobilisationReady) {
+            return a.mobilisationReady ? 1 : -1;
+          }
+          if (a.blockerCount !== b.blockerCount) {
+            return b.blockerCount - a.blockerCount;
+          }
+          return a.employee.full_name.localeCompare(b.employee.full_name);
+        })
+        .slice(0, 8),
+    [complianceRows],
+  );
+
+  const roleComplianceSummaries = useMemo(() => {
+    const map = new Map<
+      string,
+      { role: string; total: number; ready: number; blocked: number; scoreSum: number }
+    >();
+
+    complianceRows.forEach((row) => {
+      const role = clean(row.employee.role) || "No role assigned";
+      const current = map.get(role) ?? {
+        role,
+        total: 0,
+        ready: 0,
+        blocked: 0,
+        scoreSum: 0,
+      };
+
+      current.total += 1;
+      current.scoreSum += row.score;
+      if (row.mobilisationReady) current.ready += 1;
+      else current.blocked += 1;
+      map.set(role, current);
+    });
+
+    return [...map.values()]
+      .map((item) => ({
+        ...item,
+        score: item.total > 0 ? Math.round(item.scoreSum / item.total) : 100,
+      }))
+      .sort((a, b) => {
+        if (a.blocked !== b.blocked) return b.blocked - a.blocked;
+        return a.role.localeCompare(b.role);
+      });
+  }, [complianceRows]);
+
+  const categoryComplianceSummaries = useMemo(() => {
+    const map = new Map<
+      string,
+      { category: string; total: number; compliant: number; blockers: number; expiring: number }
+    >();
+
+    complianceRows.forEach((row) => {
+      row.requirements.forEach((requirement) => {
+        const category =
+          clean(trainingTypeById.get(requirement.trainingTypeId)?.category) ||
+          "Uncategorised";
+        const current = map.get(category) ?? {
+          category,
+          total: 0,
+          compliant: 0,
+          blockers: 0,
+          expiring: 0,
+        };
+
+        current.total += 1;
+        if (isCompliantStatus(requirement.status)) current.compliant += 1;
+        if (isBlockerStatus(requirement.status)) current.blockers += 1;
+        if (requirement.status === "expiring") current.expiring += 1;
+        map.set(category, current);
+      });
+    });
+
+    return [...map.values()]
+      .map((item) => ({
+        ...item,
+        score:
+          item.total > 0
+            ? Math.round((item.compliant / item.total) * 100)
+            : 100,
+      }))
+      .sort((a, b) => {
+        if (a.blockers !== b.blockers) return b.blockers - a.blockers;
+        return a.category.localeCompare(b.category);
+      });
+  }, [complianceRows, trainingTypeById]);
+
+  const renewalForecast = useMemo(() => {
+    const buckets = [
+      { label: "Next 7 days", min: 0, max: 7, count: 0 },
+      { label: "8–30 days", min: 8, max: 30, count: 0 },
+      { label: "31–60 days", min: 31, max: 60, count: 0 },
+      { label: "61–90 days", min: 61, max: 90, count: 0 },
+    ];
+
+    complianceRows.forEach((row) => {
+      row.requirements.forEach((requirement) => {
+        if (requirement.daysRemaining === null || requirement.daysRemaining < 0) {
+          return;
+        }
+
+        const bucket = buckets.find(
+          (item) =>
+            requirement.daysRemaining !== null &&
+            requirement.daysRemaining >= item.min &&
+            requirement.daysRemaining <= item.max,
+        );
+        if (bucket) bucket.count += 1;
+      });
+    });
+
+    return buckets;
+  }, [complianceRows]);
+
+  function resetFilters() {
+    setSearch("");
+    setCrewFilter("all");
+    setRoleFilter("all");
+    setStatusFilter("all");
+  }
 
   async function refreshData() {
     setRefreshing(true);
@@ -1242,7 +1431,7 @@ export default function ProjectTrainingCompliancePage() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft size={16} />
-                Back to Training Register
+                Back to Training Dashboard
               </Link>
 
               <div className="mt-5 flex items-center gap-2 text-slate-400">
@@ -1265,6 +1454,22 @@ export default function ProjectTrainingCompliancePage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                href="/people/training/project-requirements"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Settings2 size={16} />
+                Project Rules
+              </Link>
+
+              <Link
+                href="/people/training/requirements"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <BriefcaseBusiness size={16} />
+                Role Rules
+              </Link>
+
               <button
                 type="button"
                 onClick={() => void refreshData()}
@@ -1428,10 +1633,132 @@ export default function ProjectTrainingCompliancePage() {
               />
             </section>
 
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <BarChart3 size={17} />
+                      <span className="text-xs font-semibold uppercase tracking-wider">
+                        Assurance overview
+                      </span>
+                    </div>
+                    <h2 className="mt-2 text-lg font-bold text-slate-950">
+                      {selectedProject.project_number
+                        ? `${selectedProject.project_number} · ${selectedProject.name}`
+                        : selectedProject.name}
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Live mobilisation readiness calculated from role rules, project rules, records and required evidence.
+                    </p>
+                  </div>
+
+                  <span
+                    className={`inline-flex self-start rounded-full border px-3 py-1.5 text-xs font-bold ${
+                      blockedPersonnel === 0
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-rose-200 bg-rose-50 text-rose-700"
+                    }`}
+                  >
+                    {blockedPersonnel === 0
+                      ? "Project ready"
+                      : `${plural(blockedPersonnel, "person")} blocked`}
+                  </span>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <SummaryTile
+                    label="Project rules"
+                    value={String(projectRequirementCount)}
+                    detail="Active requirements"
+                  />
+                  <SummaryTile
+                    label="Roles covered"
+                    value={`${roleRequirementCoverage}/${projectRoles.size}`}
+                    detail="Configured role profiles"
+                  />
+                  <SummaryTile
+                    label="Crews"
+                    value={String(crewSummaries.length)}
+                    detail="Including unassigned"
+                  />
+                  <SummaryTile
+                    label="Action items"
+                    value={String(missingItems + expiringItems)}
+                    detail="Invalid or due soon"
+                  />
+                </div>
+              </div>
+
+              <div
+                className={`rounded-3xl border p-5 shadow-sm ${
+                  projectRequirementCount === 0 ||
+                  unconfiguredRoleCount > 0 ||
+                  employeesWithoutRole > 0
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-emerald-200 bg-emerald-50"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {projectRequirementCount === 0 ||
+                  unconfiguredRoleCount > 0 ||
+                  employeesWithoutRole > 0 ? (
+                    <AlertTriangle size={18} className="text-amber-700" />
+                  ) : (
+                    <CheckCircle2 size={18} className="text-emerald-700" />
+                  )}
+                  <h3 className="font-bold text-slate-950">Configuration health</h3>
+                </div>
+
+                <div className="mt-4 space-y-2.5 text-sm">
+                  <HealthCheck
+                    label="Project requirements configured"
+                    healthy={projectRequirementCount > 0}
+                    detail={`${projectRequirementCount} active rules`}
+                  />
+                  <HealthCheck
+                    label="Every project role configured"
+                    healthy={unconfiguredRoleCount === 0}
+                    detail={
+                      unconfiguredRoleCount === 0
+                        ? "All roles covered"
+                        : `${plural(unconfiguredRoleCount, "role")} need setup`
+                    }
+                  />
+                  <HealthCheck
+                    label="Personnel roles complete"
+                    healthy={employeesWithoutRole === 0}
+                    detail={
+                      employeesWithoutRole === 0
+                        ? "No missing roles"
+                        : `${plural(employeesWithoutRole, "employee")} missing a role`
+                    }
+                  />
+                </div>
+              </div>
+            </section>
+
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-2 text-slate-500">
-                <Filter size={17} />
-                <span className="text-sm font-semibold">Filters</span>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-slate-500">
+                  <Filter size={17} />
+                  <span className="text-sm font-semibold">Filters</span>
+                  {activeFilterCount > 0 ? (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                      {activeFilterCount} active
+                    </span>
+                  ) : null}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  disabled={activeFilterCount === 0}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  <RotateCcw size={14} />
+                  Reset
+                </button>
               </div>
 
               <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_230px_230px]">
@@ -1460,6 +1787,9 @@ export default function ProjectTrainingCompliancePage() {
                       value: crew.id,
                       label: crew.name,
                     })),
+                    ...(complianceRows.some((row) => !row.crew)
+                      ? [{ value: "unassigned", label: "Unassigned" }]
+                      : []),
                   ]}
                 />
 
@@ -1716,6 +2046,70 @@ export default function ProjectTrainingCompliancePage() {
               <div className="space-y-6">
                 <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
                   <div className="border-b border-slate-200 px-5 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-lg font-bold text-slate-950">
+                          Action Today
+                        </h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Highest-priority blockers and renewals.
+                        </p>
+                      </div>
+                      <ListChecks size={19} className="text-slate-400" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 p-4">
+                    {priorityRows.length === 0 ? (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
+                        No immediate mobilisation actions.
+                      </div>
+                    ) : (
+                      priorityRows.map((row) => (
+                        <button
+                          key={row.employee.id}
+                          type="button"
+                          onClick={() => setSelectedEmployeeId(row.employee.id)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 p-3 text-left hover:bg-slate-50"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold text-slate-950">
+                              {row.employee.full_name}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {row.blockerCount > 0
+                                ? `${plural(row.blockerCount, "blocker")}`
+                                : `${plural(row.expiringCount, "item")} expiring`}
+                            </div>
+                          </div>
+                          <ArrowRight size={16} className="shrink-0 text-slate-400" />
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </section>
+
+                <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-5 py-4">
+                    <h2 className="text-lg font-bold text-slate-950">Renewal Forecast</h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Certificates reaching expiry in the next 90 days.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 p-4">
+                    {renewalForecast.map((bucket) => (
+                      <SmallCount
+                        key={bucket.label}
+                        label={bucket.label}
+                        value={bucket.count}
+                        tone={bucket.count > 0 ? "rose" : "slate"}
+                      />
+                    ))}
+                  </div>
+                </section>
+
+                <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-5 py-4">
                     <h2 className="text-lg font-bold text-slate-950">
                       Crew Summary
                     </h2>
@@ -1738,9 +2132,7 @@ export default function ProjectTrainingCompliancePage() {
                           type="button"
                           onClick={() =>
                             setCrewFilter(
-                              crew.id === "unassigned"
-                                ? "all"
-                                : crew.id,
+                              crew.id,
                             )
                           }
                           className="w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
@@ -1802,6 +2194,68 @@ export default function ProjectTrainingCompliancePage() {
                     mandatory requirements block mobilisation.
                   </p>
                 </section>
+              </div>
+            </section>
+
+            <section className="grid gap-6 xl:grid-cols-2">
+              <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-4">
+                  <h2 className="text-lg font-bold text-slate-950">Role Readiness</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Compliance performance by employee role.
+                  </p>
+                </div>
+                <div className="divide-y divide-slate-200">
+                  {roleComplianceSummaries.length === 0 ? (
+                    <div className="p-6 text-sm text-slate-500">No role data available.</div>
+                  ) : (
+                    roleComplianceSummaries.map((item) => (
+                      <button
+                        key={item.role}
+                        type="button"
+                        onClick={() => setRoleFilter(item.role === "No role assigned" ? "all" : item.role)}
+                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-950">{item.role}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {plural(item.total, "employee")} · {item.ready} ready · {item.blocked} blocked
+                          </div>
+                        </div>
+                        <ScoreBadge score={item.score} />
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-4">
+                  <h2 className="text-lg font-bold text-slate-950">Category Assurance</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Requirement performance grouped by training category.
+                  </p>
+                </div>
+                <div className="divide-y divide-slate-200">
+                  {categoryComplianceSummaries.length === 0 ? (
+                    <div className="p-6 text-sm text-slate-500">No category data available.</div>
+                  ) : (
+                    categoryComplianceSummaries.map((item) => (
+                      <div
+                        key={item.category}
+                        className="flex items-center justify-between gap-4 px-5 py-4"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-950">{item.category}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {item.compliant}/{item.total} compliant · {item.blockers} blockers · {item.expiring} expiring
+                          </div>
+                        </div>
+                        <ScoreBadge score={item.score} />
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </section>
           </>
@@ -2062,6 +2516,65 @@ function EmployeeComplianceModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function SummaryTile({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-bold text-slate-950">{value}</div>
+      <div className="mt-1 text-xs text-slate-500">{detail}</div>
+    </div>
+  );
+}
+
+function HealthCheck({
+  label,
+  healthy,
+  detail,
+}: {
+  label: string;
+  healthy: boolean;
+  detail: string;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-xl bg-white/70 px-3 py-2.5">
+      <div>
+        <div className="font-semibold text-slate-800">{label}</div>
+        <div className="mt-0.5 text-xs text-slate-500">{detail}</div>
+      </div>
+      {healthy ? (
+        <CheckCircle2 size={17} className="mt-0.5 shrink-0 text-emerald-600" />
+      ) : (
+        <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600" />
+      )}
+    </div>
+  );
+}
+
+function ScoreBadge({ score }: { score: number }) {
+  const classes =
+    score >= 95
+      ? "bg-emerald-100 text-emerald-700"
+      : score >= 80
+        ? "bg-amber-100 text-amber-800"
+        : "bg-rose-100 text-rose-700";
+
+  return (
+    <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${classes}`}>
+      {score}%
+    </span>
   );
 }
 

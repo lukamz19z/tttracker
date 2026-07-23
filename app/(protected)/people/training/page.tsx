@@ -877,23 +877,85 @@ export default function TrainingPage() {
                 />
                 Refresh
               </button>
-
-              <Link
-                href="/people/training/register"
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <GraduationCap size={16} />
-                Training Register
-              </Link>
-
-              <Link
-                href="/people/training/renewals"
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
-              >
-                <CalendarClock size={16} />
-                Open Renewals
-              </Link>
             </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-slate-500">
+                <ListChecks size={17} />
+                <span className="text-sm font-semibold uppercase tracking-wider">
+                  Quick Links
+                </span>
+              </div>
+              <h2 className="mt-2 text-lg font-bold text-slate-950">
+                Training Management
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Open the key training registers, compliance tools and administration pages.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <QuickLinkButton
+              href="/people/training/register"
+              title="Training Register"
+              description="Employee records"
+              icon={<GraduationCap size={18} />}
+              tone="slate"
+            />
+            <QuickLinkButton
+              href="/people/training/renewals"
+              title="Renewals"
+              description="Expired and upcoming"
+              icon={<CalendarClock size={18} />}
+              tone="amber"
+            />
+            <QuickLinkButton
+              href="/people/training/project-compliance"
+              title="Project Compliance"
+              description="Mobilisation readiness"
+              icon={<ShieldCheck size={18} />}
+              tone="emerald"
+            />
+            <QuickLinkButton
+              href="/people/training/requirements"
+              title="Role Requirements"
+              description="Role-based rules"
+              icon={<Settings2 size={18} />}
+              tone="violet"
+            />
+            <QuickLinkButton
+              href="/people/training/project-requirements"
+              title="Project Requirements"
+              description="Project-specific rules"
+              icon={<ListChecks size={18} />}
+              tone="blue"
+            />
+            <QuickLinkButton
+              href="/people/training/calendar"
+              title="Training Calendar"
+              description="Courses and bookings"
+              icon={<CalendarDays size={18} />}
+              tone="blue"
+            />
+            <QuickLinkButton
+              href="/people/training/verification"
+              title="Verification Queue"
+              description="Evidence review"
+              icon={<BadgeCheck size={18} />}
+              tone="emerald"
+            />
+            <QuickLinkButton
+              href="/people/training/history"
+              title="Training History"
+              description="Audit trail"
+              icon={<History size={18} />}
+              tone="violet"
+            />
           </div>
         </section>
 
@@ -1100,7 +1162,7 @@ export default function TrainingPage() {
           />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+        <section>
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4">
               <h2 className="text-lg font-bold text-slate-950">
@@ -1163,64 +1225,6 @@ export default function TrainingPage() {
             )}
           </div>
 
-          <div className="space-y-4">
-            <NavigationCard
-              href="/people/training/register"
-              title="Training Register"
-              description="Add, update and review employee training records."
-              icon={<GraduationCap size={20} />}
-              tone="slate"
-            />
-            <NavigationCard
-              href="/people/training/requirements"
-              title="Role Requirements"
-              description="Configure mandatory and recommended training by role."
-              icon={<Settings2 size={20} />}
-              tone="violet"
-            />
-            <NavigationCard
-              href="/people/training/project-requirements"
-              title="Project Requirements"
-              description="Configure project-specific mobilisation rules."
-              icon={<ListChecks size={20} />}
-              tone="blue"
-            />
-            <NavigationCard
-              href="/people/training/project-compliance"
-              title="Project Compliance"
-              description="Review individual mobilisation readiness by project."
-              icon={<ShieldCheck size={20} />}
-              tone="emerald"
-            />
-            <NavigationCard
-              href="/people/training/renewals"
-              title="Renewals"
-              description="Manage expired and upcoming qualifications."
-              icon={<CalendarClock size={20} />}
-              tone="amber"
-            />
-            <NavigationCard
-              href="/people/training/calendar"
-              title="Training Calendar"
-              description="Plan courses, bookings, providers and attendance."
-              icon={<CalendarDays size={20} />}
-              tone="blue"
-            />
-            <NavigationCard
-              href="/people/training/verification"
-              title="Verification Queue"
-              description="Review uploaded evidence before records are accepted."
-              icon={<BadgeCheck size={20} />}
-              tone="emerald"
-            />
-            <NavigationCard
-              href="/people/training/history"
-              title="Audit History"
-              description="Review the complete training and verification history."
-              icon={<History size={20} />}
-              tone="violet"
-            />
-          </div>
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -1509,7 +1513,7 @@ function RiskPanel({
   );
 }
 
-function NavigationCard({
+function QuickLinkButton({
   href,
   title,
   description,
@@ -1536,10 +1540,10 @@ function NavigationCard({
   return (
     <Link
       href={href}
-      className="group flex items-start gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+      className="group flex min-h-24 items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-sm"
     >
       <div
-        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${iconClasses}`}
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconClasses}`}
       >
         {icon}
       </div>
@@ -1548,7 +1552,7 @@ function NavigationCard({
         <h3 className="font-bold text-slate-950 group-hover:text-blue-700">
           {title}
         </h3>
-        <p className="mt-1 text-sm leading-6 text-slate-500">
+        <p className="mt-1 text-xs leading-5 text-slate-500">
           {description}
         </p>
       </div>

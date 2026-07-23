@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  BarChart3,
   BriefcaseBusiness,
   Check,
   CheckCircle2,
@@ -15,9 +16,11 @@ import {
   Eye,
   Filter,
   GraduationCap,
+  Layers3,
   Loader2,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Settings2,
@@ -461,6 +464,103 @@ export default function TrainingRequirementsPage() {
     (summary) => summary.activeRequirementCount > 0,
   ).length;
 
+  const archivedRequirements = requirements.filter(
+    (requirement) => !requirement.active,
+  ).length;
+
+  const unknownTrainingTypeCount = requirements.filter(
+    (requirement) => !trainingTypeById.has(requirement.training_type_id),
+  ).length;
+
+  const duplicateActiveRequirementCount = useMemo(() => {
+    const keys = new Set<string>();
+    let duplicates = 0;
+
+    requirements
+      .filter((requirement) => requirement.active)
+      .forEach((requirement) => {
+        const key = `${normaliseRole(requirement.role_name).toLowerCase()}|${requirement.training_type_id}`;
+        if (keys.has(key)) duplicates += 1;
+        keys.add(key);
+      });
+
+    return duplicates;
+  }, [requirements]);
+
+  const categoryCoverage = useMemo(() => {
+    const map = new Map<
+      string,
+      { category: string; requirements: number; roles: Set<string> }
+    >();
+
+    requirements
+      .filter((requirement) => requirement.active)
+      .forEach((requirement) => {
+        const category =
+          clean(trainingTypeById.get(requirement.training_type_id)?.category) ||
+          "Uncategorised";
+        const current = map.get(category) ?? {
+          category,
+          requirements: 0,
+          roles: new Set<string>(),
+        };
+
+        current.requirements += 1;
+        current.roles.add(normaliseRole(requirement.role_name));
+        map.set(category, current);
+      });
+
+    return [...map.values()]
+      .map((item) => ({
+        category: item.category,
+        requirements: item.requirements,
+        roles: item.roles.size,
+      }))
+      .sort(
+        (a, b) =>
+          b.requirements - a.requirements ||
+          a.category.localeCompare(b.category),
+      );
+  }, [requirements, trainingTypeById]);
+
+  const selectedRoleSummary = useMemo(
+    () =>
+      selectedRole
+        ? roleSummaries.find((summary) => summary.roleName === selectedRole) ??
+          null
+        : null,
+    [roleSummaries, selectedRole],
+  );
+
+  const selectedRoleRequirementGroups = useMemo(() => {
+    const map = new Map<string, RoleRequirement[]>();
+
+    selectedRoleRequirements.forEach((requirement) => {
+      const category =
+        clean(trainingTypeById.get(requirement.training_type_id)?.category) ||
+        "Uncategorised";
+      const list = map.get(category) ?? [];
+      list.push(requirement);
+      map.set(category, list);
+    });
+
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [selectedRoleRequirements, trainingTypeById]);
+
+  const activeFilterCount = [
+    search.trim() ? "search" : "",
+    roleFilter !== "all" ? "role" : "",
+    categoryFilter !== "all" ? "category" : "",
+    statusFilter !== "all" ? "status" : "",
+  ].filter(Boolean).length;
+
+  function resetFilters() {
+    setSearch("");
+    setRoleFilter("all");
+    setCategoryFilter("all");
+    setStatusFilter("all");
+  }
+
   async function refreshData() {
     setRefreshing(true);
     setMessage(null);
@@ -871,7 +971,7 @@ export default function TrainingRequirementsPage() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft size={16} />
-                Back to Training Register
+                Back to Training Dashboard
               </Link>
 
               <div className="mt-5 flex items-center gap-2 text-slate-400">
@@ -894,6 +994,14 @@ export default function TrainingRequirementsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                href="/people/training/project-compliance"
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+              >
+                <BarChart3 size={16} />
+                Preview Compliance
+              </Link>
+
               <button
                 type="button"
                 onClick={() => openCopyModal()}
@@ -998,10 +1106,124 @@ export default function TrainingRequirementsPage() {
           />
         </section>
 
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-slate-400">
+                  <ShieldCheck size={17} />
+                  <span className="text-xs font-semibold uppercase tracking-wider">
+                    Configuration Health
+                  </span>
+                </div>
+                <h2 className="mt-2 text-lg font-bold text-slate-950">
+                  Role rule-set health
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Checks that affect whether role compliance can be calculated reliably.
+                </p>
+              </div>
+
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                  rolesWithoutRequirements === 0 &&
+                  unknownTrainingTypeCount === 0 &&
+                  duplicateActiveRequirementCount === 0
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-amber-200 bg-amber-50 text-amber-800"
+                }`}
+              >
+                {rolesWithoutRequirements === 0 &&
+                unknownTrainingTypeCount === 0 &&
+                duplicateActiveRequirementCount === 0
+                  ? "Healthy"
+                  : "Review required"}
+              </span>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <HealthItem
+                label="Roles without active rules"
+                value={rolesWithoutRequirements}
+                good={rolesWithoutRequirements === 0}
+                detail="Active employee roles that have no baseline requirements."
+              />
+              <HealthItem
+                label="Unknown training references"
+                value={unknownTrainingTypeCount}
+                good={unknownTrainingTypeCount === 0}
+                detail="Rules linked to a training type that no longer exists."
+              />
+              <HealthItem
+                label="Duplicate active rules"
+                value={duplicateActiveRequirementCount}
+                good={duplicateActiveRequirementCount === 0}
+                detail="More than one active rule for the same role and training type."
+              />
+              <HealthItem
+                label="Archived rules"
+                value={archivedRequirements}
+                good
+                detail="Retained for history but excluded from compliance calculations."
+              />
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-2 text-slate-400">
+              <Layers3 size={17} />
+              <span className="text-xs font-semibold uppercase tracking-wider">
+                Training Coverage
+              </span>
+            </div>
+            <h2 className="mt-2 text-lg font-bold text-slate-950">
+              Active rules by category
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Shows how broadly each training category is applied across roles.
+            </p>
+
+            {categoryCoverage.length === 0 ? (
+              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">
+                No active role requirements have been configured.
+              </div>
+            ) : (
+              <div className="mt-5 space-y-3">
+                {categoryCoverage.slice(0, 7).map((item) => (
+                  <CategoryCoverageRow
+                    key={item.category}
+                    category={item.category}
+                    requirements={item.requirements}
+                    roles={item.roles}
+                    totalRoles={Math.max(configuredRoles, 1)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2 text-slate-500">
-            <Filter size={17} />
-            <span className="text-sm font-semibold">Filters</span>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-slate-500">
+              <Filter size={17} />
+              <span className="text-sm font-semibold">Filters</span>
+              {activeFilterCount > 0 ? (
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                  {activeFilterCount} active
+                </span>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={resetFilters}
+              disabled={activeFilterCount === 0}
+              className="inline-flex items-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <RotateCcw size={15} />
+              Reset filters
+            </button>
           </div>
 
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_220px_210px]">
@@ -1174,6 +1396,22 @@ export default function TrainingRequirementsPage() {
                       }{" "}
                       active employees use this role.
                     </p>
+
+                    {selectedRoleSummary ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">
+                          {selectedRoleSummary.mandatoryCount} mandatory
+                        </span>
+                        <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700">
+                          {selectedRoleSummary.recommendedCount} recommended
+                        </span>
+                        {selectedRoleSummary.archivedRequirementCount > 0 ? (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            {selectedRoleSummary.archivedRequirementCount} archived
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -1213,50 +1451,56 @@ export default function TrainingRequirementsPage() {
                       }
                     />
                   ) : (
-                    <div className="space-y-3">
-                      {selectedRoleRequirements.map(
-                        (requirement) => (
-                          <RequirementCard
-                            key={requirement.id}
-                            requirement={requirement}
-                            trainingType={trainingTypeById.get(
-                              requirement.training_type_id,
-                            )}
-                            alternativeTrainingTypes={
-                              requirement.accepted_alternative_training_type_ids
-                                .map((trainingTypeId) =>
-                                  trainingTypeById.get(
-                                    trainingTypeId,
-                                  ),
-                                )
-                                .filter(
-                                  (
-                                    trainingType,
-                                  ): trainingType is TrainingType =>
-                                    Boolean(trainingType),
-                                )
-                            }
-                            onEdit={() =>
-                              openEditForm(requirement)
-                            }
-                            onArchive={() =>
-                              void setRequirementActive(
-                                requirement,
-                                false,
-                              )
-                            }
-                            onRestore={() =>
-                              void setRequirementActive(
-                                requirement,
-                                true,
-                              )
-                            }
-                            onDelete={() =>
-                              void deleteRequirement(
-                                requirement,
-                              )
-                            }
-                          />
+                    <div className="space-y-6">
+                      {selectedRoleRequirementGroups.map(
+                        ([category, categoryRequirements]) => (
+                          <section key={category}>
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <h3 className="font-bold text-slate-900">
+                                  {category}
+                                </h3>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {plural(categoryRequirements.length, "requirement")}
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                {categoryRequirements.filter((item) => item.active).length} active
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {categoryRequirements.map((requirement) => (
+                                <RequirementCard
+                                  key={requirement.id}
+                                  requirement={requirement}
+                                  trainingType={trainingTypeById.get(
+                                    requirement.training_type_id,
+                                  )}
+                                  alternativeTrainingTypes={
+                                    requirement.accepted_alternative_training_type_ids
+                                      .map((trainingTypeId) =>
+                                        trainingTypeById.get(trainingTypeId),
+                                      )
+                                      .filter(
+                                        (trainingType): trainingType is TrainingType =>
+                                          Boolean(trainingType),
+                                      )
+                                  }
+                                  onEdit={() => openEditForm(requirement)}
+                                  onArchive={() =>
+                                    void setRequirementActive(requirement, false)
+                                  }
+                                  onRestore={() =>
+                                    void setRequirementActive(requirement, true)
+                                  }
+                                  onDelete={() =>
+                                    void deleteRequirement(requirement)
+                                  }
+                                />
+                              ))}
+                            </div>
+                          </section>
                         ),
                       )}
                     </div>
@@ -1844,10 +2088,7 @@ function RequirementFormModal({
                                   : "text-slate-500"
                               }`}
                             >
-                              {trainingType.name}
-                              {trainingType.category
-                                ? ` · ${trainingType.category}`
-                                : ""}
+                              {trainingType.category || "Uncategorised"}
                             </span>
                           </span>
                         </button>
@@ -2063,6 +2304,90 @@ function CopyRoleModal({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HealthItem({
+  label,
+  value,
+  good,
+  detail,
+}: {
+  label: string;
+  value: number;
+  good: boolean;
+  detail: string;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${
+        good
+          ? "border-emerald-200 bg-emerald-50"
+          : "border-amber-200 bg-amber-50"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div
+            className={`text-sm font-bold ${
+              good ? "text-emerald-900" : "text-amber-900"
+            }`}
+          >
+            {label}
+          </div>
+          <p
+            className={`mt-1 text-xs leading-5 ${
+              good ? "text-emerald-700" : "text-amber-800"
+            }`}
+          >
+            {detail}
+          </p>
+        </div>
+        <span
+          className={`text-2xl font-bold ${
+            good ? "text-emerald-700" : "text-amber-800"
+          }`}
+        >
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CategoryCoverageRow({
+  category,
+  requirements,
+  roles,
+  totalRoles,
+}: {
+  category: string;
+  requirements: number;
+  roles: number;
+  totalRoles: number;
+}) {
+  const coverage = Math.round((roles / Math.max(totalRoles, 1)) * 100);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-bold text-slate-800">
+            {category}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {requirements} rules across {roles} roles
+          </div>
+        </div>
+        <span className="text-sm font-bold text-slate-700">{coverage}%</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-slate-700"
+          style={{ width: `${Math.min(coverage, 100)}%` }}
+        />
       </div>
     </div>
   );

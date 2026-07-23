@@ -11,7 +11,10 @@ import {
   Download,
   Edit3,
   Filter,
+  Eye,
   GraduationCap,
+  Layers3,
+  SlidersHorizontal,
   Loader2,
   Plus,
   RefreshCw,
@@ -409,6 +412,68 @@ export default function ProjectTrainingRequirementsPage() {
     (requirement) => !clean(requirement.applies_to_role),
   ).length;
   const roleSpecificCount = activeRequirements.length - allPersonnelCount;
+
+  const categoryCoverage = useMemo(() => {
+    const map = new Map<
+      string,
+      { category: string; total: number; mandatory: number; recommended: number }
+    >();
+
+    activeRequirements.forEach((requirement) => {
+      const trainingType = trainingTypeById.get(requirement.training_type_id);
+      const category = clean(trainingType?.category) || "Uncategorised";
+      const current = map.get(category) ?? {
+        category,
+        total: 0,
+        mandatory: 0,
+        recommended: 0,
+      };
+
+      current.total += 1;
+      if (requirement.requirement_level === "mandatory") {
+        current.mandatory += 1;
+      } else {
+        current.recommended += 1;
+      }
+
+      map.set(category, current);
+    });
+
+    return [...map.values()].sort(
+      (a, b) => b.total - a.total || a.category.localeCompare(b.category),
+    );
+  }, [activeRequirements, trainingTypeById]);
+
+  const filteredRequirementGroups = useMemo(() => {
+    const map = new Map<string, ProjectRequirement[]>();
+
+    filteredRequirements.forEach((requirement) => {
+      const category =
+        clean(trainingTypeById.get(requirement.training_type_id)?.category) ||
+        "Uncategorised";
+      const list = map.get(category) ?? [];
+      list.push(requirement);
+      map.set(category, list);
+    });
+
+    return [...map.entries()]
+      .map(([category, items]) => ({ category, items }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+  }, [filteredRequirements, trainingTypeById]);
+
+  const activeFilterCount = [
+    search.trim() ? 1 : 0,
+    statusFilter !== "active" ? 1 : 0,
+    levelFilter !== "all" ? 1 : 0,
+    roleFilter !== "all" ? 1 : 0,
+  ].reduce((sum, value) => sum + value, 0);
+
+  function resetFilters() {
+    setSearch("");
+    setStatusFilter("active");
+    setLevelFilter("all");
+    setRoleFilter("all");
+  }
 
   async function refreshData() {
     setRefreshing(true);
@@ -885,7 +950,7 @@ export default function ProjectTrainingRequirementsPage() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft size={16} />
-                Back to Training Register
+                Back to Training Dashboard
               </Link>
 
               <div className="mt-5 flex items-center gap-2 text-slate-400">
@@ -901,12 +966,24 @@ export default function ProjectTrainingRequirementsPage() {
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
                 Configure project-wide inductions, licences and competencies,
-                then add role-specific rules where particular workers need
-                additional evidence before mobilisation.
+                apply role-specific mobilisation rules, accept equivalent
+                qualifications and copy proven requirement sets between projects.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                href={
+                  selectedProjectId
+                    ? `/people/training/project-compliance?project=${selectedProjectId}`
+                    : "/people/training/project-compliance"
+                }
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
+              >
+                <Eye size={16} />
+                Preview Compliance
+              </Link>
+
               <button
                 type="button"
                 onClick={() => openCopyModal()}
@@ -1060,8 +1137,117 @@ export default function ProjectTrainingRequirementsPage() {
               />
             </section>
 
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <Layers3 size={17} />
+                      <span className="text-xs font-semibold uppercase tracking-wider">
+                        Requirement Coverage
+                      </span>
+                    </div>
+                    <h2 className="mt-2 text-lg font-bold text-slate-950">
+                      Coverage by training category
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                      A quick check that the project rule set covers the main licence, competency and induction groups.
+                    </p>
+                  </div>
+                </div>
+
+                {categoryCoverage.length === 0 ? (
+                  <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">
+                    Add active requirements to build project category coverage.
+                  </div>
+                ) : (
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    {categoryCoverage.map((item) => (
+                      <div
+                        key={item.category}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-bold text-slate-900">
+                              {item.category}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {item.mandatory} mandatory · {item.recommended} recommended
+                            </div>
+                          </div>
+                          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-700 shadow-sm">
+                            {item.total}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-center gap-2 text-slate-400">
+                  <ShieldCheck size={17} />
+                  <span className="text-xs font-semibold uppercase tracking-wider">
+                    Configuration Health
+                  </span>
+                </div>
+                <h2 className="mt-2 text-lg font-bold text-slate-950">
+                  Project rule-set check
+                </h2>
+
+                <div className="mt-5 space-y-3">
+                  <HealthCheckRow
+                    label="Mandatory rules configured"
+                    passed={mandatoryCount > 0}
+                    detail={mandatoryCount > 0 ? `${mandatoryCount} active mandatory rules` : "No mandatory rules configured"}
+                  />
+                  <HealthCheckRow
+                    label="Project-wide coverage"
+                    passed={allPersonnelCount > 0}
+                    detail={allPersonnelCount > 0 ? `${allPersonnelCount} rules apply to everyone` : "No all-personnel rules configured"}
+                  />
+                  <HealthCheckRow
+                    label="Role-specific coverage"
+                    passed={roleSpecificCount > 0}
+                    detail={roleSpecificCount > 0 ? `${roleSpecificCount} role-specific rules` : "No role-specific project rules"}
+                    advisory
+                  />
+                  <HealthCheckRow
+                    label="Category coverage"
+                    passed={categoryCoverage.length >= 3}
+                    detail={`${categoryCoverage.length} training categories represented`}
+                    advisory
+                  />
+                </div>
+              </div>
+            </section>
+
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-2 text-slate-500">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 text-slate-500">
+                  <Filter size={17} />
+                  <span className="text-sm font-semibold">Filters</span>
+                  {activeFilterCount > 0 ? (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                      {activeFilterCount} changed
+                    </span>
+                  ) : null}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  disabled={activeFilterCount === 0}
+                  className="inline-flex items-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 sm:self-auto"
+                >
+                  <SlidersHorizontal size={15} />
+                  Reset filters
+                </button>
+              </div>
+
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_240px]">
                 <Filter size={17} />
                 <span className="text-sm font-semibold">Filters</span>
               </div>
@@ -1153,39 +1339,53 @@ export default function ProjectTrainingRequirementsPage() {
                     />
                   </div>
                 ) : (
-                  <div className="space-y-3 p-5">
-                    {filteredRequirements.map((requirement) => (
-                      <RequirementCard
-                        key={requirement.id}
-                        requirement={requirement}
-                        trainingType={trainingTypeById.get(
-                          requirement.training_type_id,
-                        )}
-                        alternatives={(
-                          requirement.accepted_alternative_training_type_ids ??
-                          []
-                        )
-                          .map((id) => trainingTypeById.get(id))
-                          .filter(
-                            (
-                              item,
-                            ): item is TrainingType => Boolean(item),
-                          )}
-                        deleting={deletingId === requirement.id}
-                        changingStatus={
-                          changingStatusId === requirement.id
-                        }
-                        onEdit={() => openEditForm(requirement)}
-                        onArchive={() =>
-                          void setRequirementActive(requirement, false)
-                        }
-                        onRestore={() =>
-                          void setRequirementActive(requirement, true)
-                        }
-                        onDelete={() =>
-                          void deleteRequirement(requirement)
-                        }
-                      />
+                  <div className="space-y-6 p-5">
+                    {filteredRequirementGroups.map((group) => (
+                      <section key={group.category}>
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div>
+                            <h3 className="font-bold text-slate-900">
+                              {group.category}
+                            </h3>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {plural(group.items.length, "requirement")}
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                            {group.items.length}
+                          </span>
+                        </div>
+
+                        <div className="space-y-3">
+                          {group.items.map((requirement) => (
+                            <RequirementCard
+                              key={requirement.id}
+                              requirement={requirement}
+                              trainingType={trainingTypeById.get(
+                                requirement.training_type_id,
+                              )}
+                              alternatives={(
+                                requirement.accepted_alternative_training_type_ids ??
+                                []
+                              )
+                                .map((id) => trainingTypeById.get(id))
+                                .filter(
+                                  (item): item is TrainingType => Boolean(item),
+                                )}
+                              deleting={deletingId === requirement.id}
+                              changingStatus={changingStatusId === requirement.id}
+                              onEdit={() => openEditForm(requirement)}
+                              onArchive={() =>
+                                void setRequirementActive(requirement, false)
+                              }
+                              onRestore={() =>
+                                void setRequirementActive(requirement, true)
+                              }
+                              onDelete={() => void deleteRequirement(requirement)}
+                            />
+                          ))}
+                        </div>
+                      </section>
                     ))}
                   </div>
                 )}
@@ -1245,6 +1445,23 @@ export default function ProjectTrainingRequirementsPage() {
                       </div>
                     ) : null}
                   </div>
+                </section>
+
+                <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+                  <div className="flex items-center gap-2 text-emerald-900">
+                    <Eye size={18} />
+                    <h3 className="font-bold">Preview mobilisation impact</h3>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-emerald-800">
+                    Open Project Compliance with this project selected to see which employees satisfy the current rule set and who is blocked.
+                  </p>
+                  <Link
+                    href={`/people/training/project-compliance?project=${selectedProjectId}`}
+                    className="mt-4 inline-flex items-center gap-2 rounded-xl bg-emerald-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800"
+                  >
+                    <Eye size={16} />
+                    Preview Compliance
+                  </Link>
                 </section>
 
                 <section className="rounded-3xl border border-blue-200 bg-blue-50 p-5 shadow-sm">
@@ -1871,6 +2088,43 @@ function CopyProjectModal({
               Copy Requirements
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HealthCheckRow({
+  label,
+  passed,
+  detail,
+  advisory = false,
+}: {
+  label: string;
+  passed: boolean;
+  detail: string;
+  advisory?: boolean;
+}) {
+  const positive = passed;
+  const classes = positive
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : advisory
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-rose-200 bg-rose-50 text-rose-800";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${classes}`}>
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-full bg-white/70 p-1">
+          {positive ? (
+            <CheckCircle2 size={16} />
+          ) : (
+            <X size={16} />
+          )}
+        </div>
+        <div>
+          <div className="text-sm font-bold">{label}</div>
+          <div className="mt-1 text-xs opacity-80">{detail}</div>
         </div>
       </div>
     </div>
