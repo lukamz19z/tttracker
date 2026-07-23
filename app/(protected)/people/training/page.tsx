@@ -6,44 +6,38 @@ import {
   AlertTriangle,
   ArrowLeft,
   BadgeCheck,
-  BookOpenCheck,
-  CalendarClock,
   CalendarDays,
+  CalendarClock,
   CheckCircle2,
   ChevronDown,
-  Download,
-  Edit3,
-  ExternalLink,
-  FileText,
-  Filter,
-  HardHat,
+  ClipboardCheck,
   History,
+  GraduationCap,
   LayoutDashboard,
-  Library,
   ListChecks,
   Loader2,
-  Plus,
   RefreshCw,
   Search,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
-  ToggleLeft,
-  ToggleRight,
-  Upload,
+  TrendingUp,
+  UserCheck,
+  UserRound,
   Users,
+  UsersRound,
   X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-type TrainingStatus = "current" | "expiring" | "expired" | "missing";
-
 type Employee = {
   id: string;
   full_name: string;
   role: string | null;
   crew_id: string | null;
+  user_id: string | null;
   active: boolean | null;
 };
 
@@ -54,15 +48,23 @@ type Crew = {
   active: boolean | null;
 };
 
+type Project = {
+  id: string;
+  name: string;
+  project_number: string | null;
+  status: string | null;
+};
+
+type ProjectAccessRow = {
+  project_id: string;
+  user_id: string;
+};
+
 type TrainingType = {
   id: string;
   name: string;
   category: string | null;
-  default_expiry_months: number | null;
-  does_not_expire: boolean | null;
   active: boolean | null;
-  created_at: string | null;
-  updated_at: string | null;
 };
 
 type TrainingRecord = {
@@ -72,110 +74,120 @@ type TrainingRecord = {
   training_name: string;
   category: string | null;
   certificate_number: string | null;
-  class_codes: string[] | null;
-  provider: string | null;
-  issue_date: string | null;
   expiry_date: string | null;
   does_not_expire: boolean | null;
-  notes: string | null;
-  sharepoint_item_id: string | null;
-  sharepoint_drive_id: string | null;
-  sharepoint_web_url: string | null;
-  sharepoint_file_name: string | null;
   status: string | null;
-  supersedes_record_id: string | null;
   superseded_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  uploaded_by: string | null;
+  sharepoint_web_url?: string | null;
+  created_at?: string | null;
 };
 
-type RecordForm = {
-  employeeId: string;
+type RoleRequirement = {
+  id: string;
+  role_name: string;
+  training_type_id: string;
+  requirement_level: "mandatory" | "recommended";
+  renewal_lead_days: number | null;
+  accepted_alternative_training_type_ids: string[] | null;
+  active: boolean | null;
+};
+
+type ProjectRequirement = {
+  id: string;
+  project_id: string;
+  training_type_id: string;
+  requirement_level: "mandatory" | "recommended";
+  renewal_lead_days: number | null;
+  accepted_alternative_training_type_ids: string[] | null;
+  applies_to_role: string | null;
+  active: boolean | null;
+};
+
+type RequirementCheck = {
+  key: string;
+  source: "role" | "project";
+  sourceLabel: string;
   trainingTypeId: string;
   trainingName: string;
-  category: string;
-  certificateNumber: string;
-  classCodes: string;
-  provider: string;
-  issueDate: string;
-  expiryDate: string;
-  doesNotExpire: boolean;
-  notes: string;
-  sharepointWebUrl: string;
-  sharepointFileName: string;
+  requirementLevel: "mandatory" | "recommended";
+  renewalLeadDays: number;
+  alternatives: string[];
+  status: "current" | "due" | "expired" | "missing";
+  record: TrainingRecord | null;
 };
 
-type TrainingTypeForm = {
+type EmployeeCompliance = {
+  employee: Employee;
+  crew: Crew | null;
+  projects: Project[];
+  checks: RequirementCheck[];
+  mandatoryChecks: RequirementCheck[];
+  recommendedChecks: RequirementCheck[];
+  compliantMandatory: number;
+  mandatoryTotal: number;
+  compliancePercent: number;
+  blocked: boolean;
+  dueCount: number;
+  expiredCount: number;
+  missingCount: number;
+};
+
+type RiskSummary = {
+  id: string;
   name: string;
-  category: string;
-  defaultExpiryMonths: string;
-  doesNotExpire: boolean;
-  active: boolean;
+  people: number;
+  compliant: number;
+  blocked: number;
+  percent: number;
 };
 
-const EMPTY_RECORD_FORM: RecordForm = {
-  employeeId: "",
-  trainingTypeId: "",
-  trainingName: "",
-  category: "",
-  certificateNumber: "",
-  classCodes: "",
-  provider: "",
-  issueDate: "",
-  expiryDate: "",
-  doesNotExpire: false,
-  notes: "",
-  sharepointWebUrl: "",
-  sharepointFileName: "",
+type AttentionItem = {
+  employeeId: string;
+  employeeName: string;
+  role: string;
+  crew: string;
+  projects: string;
+  issue: string;
+  detail: string;
+  severity: "critical" | "warning" | "info";
+  href: string;
 };
 
-const EMPTY_TYPE_FORM: TrainingTypeForm = {
-  name: "",
-  category: "",
-  defaultExpiryMonths: "",
-  doesNotExpire: false,
-  active: true,
-};
-
-const DEFAULT_CATEGORIES = [
-  "High Risk Licence",
-  "VOC",
-  "General Training",
-  "Medical / First Aid",
-  "Client Requirement",
-  "Internal Competency",
-  "Driver Licence",
-  "Plant / Equipment",
-  "Site Induction",
-  "Other",
-];
+const DAY_MS = 86_400_000;
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function csvSafe(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
-function crewLabel(crew: Crew | null | undefined) {
-  if (!crew) return "Unassigned";
-
-  const number = clean(crew.crew_number);
-  const name = clean(crew.crew_name);
-
-  if (number && name) return `Crew ${number} · ${name}`;
-  if (number) return `Crew ${number}`;
-  if (name) return name;
-
-  return "Unassigned";
+function normalise(value: unknown) {
+  return clean(value).replace(/\s+/g, " ").toLowerCase();
 }
 
 function parseDate(value?: string | null) {
   if (!value) return null;
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function daysUntil(value?: string | null) {
+  const target = parseDate(value);
+  if (!target) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const fromUtc = Date.UTC(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const toUtc = Date.UTC(
+    target.getFullYear(),
+    target.getMonth(),
+    target.getDate(),
+  );
+
+  return Math.ceil((toUtc - fromUtc) / DAY_MS);
 }
 
 function formatDate(value?: string | null) {
@@ -189,159 +201,203 @@ function formatDate(value?: string | null) {
   }).format(date);
 }
 
-function daysUntil(value?: string | null) {
-  const date = parseDate(value);
-  if (!date) return null;
+function crewLabel(crew: Crew | null | undefined) {
+  if (!crew) return "Unassigned";
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const number = clean(crew.crew_number);
+  const name = clean(crew.crew_name);
 
-  return Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
+  if (number && name) return `Crew ${number} · ${name}`;
+  if (number) return `Crew ${number}`;
+  if (name) return name;
+  return "Unassigned";
 }
 
-function calculateStatus(record: TrainingRecord): TrainingStatus {
-  if (record.does_not_expire) {
-    return record.sharepoint_web_url ? "current" : "missing";
-  }
+function projectLabel(project: Project) {
+  return project.project_number
+    ? `${project.project_number} · ${project.name}`
+    : project.name;
+}
 
-  if (!record.expiry_date) return "missing";
+function isInactiveProject(project: Project) {
+  return ["completed", "closed", "archived", "inactive"].includes(
+    normalise(project.status),
+  );
+}
 
-  const days = daysUntil(record.expiry_date);
-  if (days === null) return "missing";
-  if (days < 0) return "expired";
-  if (days <= 60) return "expiring";
+function recordIsUsable(record: TrainingRecord) {
+  const status = normalise(record.status);
 
+  return (
+    !record.superseded_at &&
+    !["revoked", "superseded", "cancelled", "void"].includes(status)
+  );
+}
+
+function recordStatus(
+  record: TrainingRecord,
+  renewalLeadDays: number,
+): "current" | "due" | "expired" {
+  if (record.does_not_expire || !record.expiry_date) return "current";
+
+  const remaining = daysUntil(record.expiry_date);
+  if (remaining === null) return "current";
+  if (remaining < 0) return "expired";
+  if (remaining <= renewalLeadDays) return "due";
   return "current";
 }
 
-function statusLabel(status: TrainingStatus) {
-  if (status === "current") return "Current";
-  if (status === "expiring") return "Expiring";
-  if (status === "expired") return "Expired";
-  return "Missing details";
+function bestRecord(
+  employeeRecords: TrainingRecord[],
+  primaryId: string,
+  alternatives: string[],
+  renewalLeadDays: number,
+) {
+  const acceptedIds = new Set([primaryId, ...alternatives]);
+
+  const matching = employeeRecords
+    .filter(
+      (record) =>
+        recordIsUsable(record) &&
+        Boolean(record.training_type_id) &&
+        acceptedIds.has(record.training_type_id!),
+    )
+    .sort((a, b) => {
+      const statusRank = {
+        current: 0,
+        due: 1,
+        expired: 2,
+      };
+
+      const aStatus = recordStatus(a, renewalLeadDays);
+      const bStatus = recordStatus(b, renewalLeadDays);
+
+      if (statusRank[aStatus] !== statusRank[bStatus]) {
+        return statusRank[aStatus] - statusRank[bStatus];
+      }
+
+      const aExpiry = parseDate(a.expiry_date)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const bExpiry = parseDate(b.expiry_date)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+
+      return bExpiry - aExpiry;
+    });
+
+  return matching[0] ?? null;
 }
 
-function statusClasses(status: TrainingStatus) {
-  if (status === "current") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  }
-  if (status === "expiring") {
-    return "border-amber-200 bg-amber-50 text-amber-800";
-  }
-  if (status === "expired") {
-    return "border-rose-200 bg-rose-50 text-rose-700";
-  }
-  return "border-slate-200 bg-slate-100 text-slate-600";
+function percent(value: number, total: number) {
+  if (total <= 0) return 100;
+  return Math.round((value / total) * 100);
 }
 
-function classCodesArray(value: string) {
-  return value
-    .split(/[,;\n]+/)
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
+function toneForPercent(value: number) {
+  if (value >= 95) return "emerald";
+  if (value >= 85) return "amber";
+  return "rose";
 }
 
-function addMonthsToDate(dateValue: string, months: number | null) {
-  if (!dateValue || !months || months <= 0) return "";
 
-  const date = new Date(`${dateValue}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return "";
-
-  date.setMonth(date.getMonth() + months);
-  return date.toISOString().slice(0, 10);
-}
-
-export default function TrainingRegisterPage() {
+export default function TrainingPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectAccess, setProjectAccess] = useState<ProjectAccessRow[]>([]);
   const [trainingTypes, setTrainingTypes] = useState<TrainingType[]>([]);
   const [records, setRecords] = useState<TrainingRecord[]>([]);
+  const [roleRequirements, setRoleRequirements] = useState<RoleRequirement[]>([]);
+  const [projectRequirements, setProjectRequirements] = useState<
+    ProjectRequirement[]
+  >([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [savingRecord, setSavingRecord] = useState(false);
-  const [savingType, setSavingType] = useState(false);
-  const [togglingTypeId, setTogglingTypeId] = useState<string | null>(null);
-
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | TrainingStatus>(
-    "all",
-  );
-  const [employeeFilter, setEmployeeFilter] = useState("all");
+  const [projectFilter, setProjectFilter] = useState("all");
   const [crewFilter, setCrewFilter] = useState("all");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [documentFilter, setDocumentFilter] = useState<
-    "all" | "attached" | "missing"
-  >("all");
-
-  const [recordModalOpen, setRecordModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<TrainingRecord | null>(
-    null,
-  );
-  const [recordForm, setRecordForm] = useState<RecordForm>(EMPTY_RECORD_FORM);
-
-  const [typeManagerOpen, setTypeManagerOpen] = useState(false);
-  const [typeEditorOpen, setTypeEditorOpen] = useState(false);
-  const [editingType, setEditingType] = useState<TrainingType | null>(null);
-  const [typeForm, setTypeForm] = useState<TrainingTypeForm>(EMPTY_TYPE_FORM);
-  const [typeSearch, setTypeSearch] = useState("");
-  const [typeStatusFilter, setTypeStatusFilter] = useState<
-    "all" | "active" | "inactive"
-  >("all");
-
+  const [includeInactiveProjects, setIncludeInactiveProjects] = useState(false);
   const [message, setMessage] = useState<{
     tone: "success" | "error";
     text: string;
   } | null>(null);
 
-  const employeeById = useMemo(
-    () => new Map(employees.map((employee) => [employee.id, employee])),
-    [employees],
-  );
-
-  const crewById = useMemo(
-    () => new Map(crews.map((crew) => [crew.id, crew])),
-    [crews],
-  );
-
   const loadData = useCallback(async () => {
-    const [employeeResult, crewResult, typeResult, recordResult] =
-      await Promise.all([
-        supabase
-          .from("employees")
-          .select("id, full_name, role, crew_id, active")
-          .order("full_name"),
-        supabase
-          .from("crews")
-          .select("id, crew_number, crew_name, active")
-          .order("crew_number"),
-        supabase
-          .from("training_types")
-          .select(
-            "id, name, category, default_expiry_months, does_not_expire, active, created_at, updated_at",
-          )
-          .order("category")
-          .order("name"),
-        supabase
-          .from("employee_training_records")
-          .select(
-            "id, employee_id, training_type_id, training_name, category, certificate_number, class_codes, provider, issue_date, expiry_date, does_not_expire, notes, sharepoint_item_id, sharepoint_drive_id, sharepoint_web_url, sharepoint_file_name, status, supersedes_record_id, superseded_at, created_at, updated_at, uploaded_by",
-          )
-          .is("superseded_at", null)
-          .order("expiry_date", { ascending: true, nullsFirst: false }),
-      ]);
+    const [
+      employeeResult,
+      crewResult,
+      projectResult,
+      projectAccessResult,
+      trainingTypeResult,
+      recordResult,
+      roleRequirementResult,
+      projectRequirementResult,
+    ] = await Promise.all([
+      supabase
+        .from("employees")
+        .select("id, full_name, role, crew_id, user_id, active")
+        .eq("active", true)
+        .order("full_name"),
+      supabase
+        .from("crews")
+        .select("id, crew_number, crew_name, active")
+        .order("crew_number"),
+      supabase
+        .from("projects")
+        .select("id, name, project_number, status")
+        .order("name"),
+      supabase.from("project_access").select("project_id, user_id"),
+      supabase
+        .from("training_types")
+        .select("id, name, category, active")
+        .order("category")
+        .order("name"),
+      supabase
+        .from("employee_training_records")
+        .select(
+          "id, employee_id, training_type_id, training_name, category, certificate_number, expiry_date, does_not_expire, status, superseded_at, sharepoint_web_url, created_at",
+        )
+        .is("superseded_at", null),
+      supabase
+        .from("role_training_requirements")
+        .select(
+          "id, role_name, training_type_id, requirement_level, renewal_lead_days, accepted_alternative_training_type_ids, active",
+        )
+        .eq("active", true),
+      supabase
+        .from("project_training_requirements")
+        .select(
+          "id, project_id, training_type_id, requirement_level, renewal_lead_days, accepted_alternative_training_type_ids, applies_to_role, active",
+        )
+        .eq("active", true),
+    ]);
 
-    if (employeeResult.error) throw new Error(employeeResult.error.message);
-    if (crewResult.error) throw new Error(crewResult.error.message);
-    if (typeResult.error) throw new Error(typeResult.error.message);
-    if (recordResult.error) throw new Error(recordResult.error.message);
+    const results = [
+      employeeResult,
+      crewResult,
+      projectResult,
+      projectAccessResult,
+      trainingTypeResult,
+      recordResult,
+      roleRequirementResult,
+      projectRequirementResult,
+    ];
+
+    const error = results.find((result) => result.error)?.error;
+    if (error) throw new Error(error.message);
 
     setEmployees((employeeResult.data ?? []) as Employee[]);
     setCrews((crewResult.data ?? []) as Crew[]);
-    setTrainingTypes((typeResult.data ?? []) as TrainingType[]);
+    setProjects((projectResult.data ?? []) as Project[]);
+    setProjectAccess((projectAccessResult.data ?? []) as ProjectAccessRow[]);
+    setTrainingTypes((trainingTypeResult.data ?? []) as TrainingType[]);
     setRecords((recordResult.data ?? []) as TrainingRecord[]);
+    setRoleRequirements(
+      (roleRequirementResult.data ?? []) as RoleRequirement[],
+    );
+    setProjectRequirements(
+      (projectRequirementResult.data ?? []) as ProjectRequirement[],
+    );
   }, [supabase]);
 
   useEffect(() => {
@@ -355,7 +411,7 @@ export default function TrainingRegisterPage() {
             text:
               error instanceof Error
                 ? error.message
-                : "Unable to load the training register.",
+                : "Unable to load the training dashboard.",
           });
         } finally {
           setLoading(false);
@@ -366,293 +422,392 @@ export default function TrainingRegisterPage() {
     return () => window.clearTimeout(timer);
   }, [loadData]);
 
-  async function refreshData() {
-    setRefreshing(true);
-    setMessage(null);
-
-    try {
-      await loadData();
-    } catch (error) {
-      setMessage({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to refresh the training register.",
-      });
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
-  const activeEmployees = useMemo(
-    () => employees.filter((employee) => employee.active !== false),
-    [employees],
+  const crewById = useMemo(
+    () => new Map(crews.map((crew) => [crew.id, crew])),
+    [crews],
   );
 
-  const categories = useMemo(() => {
-    const values = new Set<string>(DEFAULT_CATEGORIES);
+  const projectById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project])),
+    [projects],
+  );
 
-    trainingTypes.forEach((type) => {
-      if (clean(type.category)) values.add(clean(type.category));
-    });
+  const trainingTypeById = useMemo(
+    () => new Map(trainingTypes.map((item) => [item.id, item])),
+    [trainingTypes],
+  );
+
+  const recordsByEmployee = useMemo(() => {
+    const map = new Map<string, TrainingRecord[]>();
 
     records.forEach((record) => {
-      if (clean(record.category)) values.add(clean(record.category));
+      const list = map.get(record.employee_id) ?? [];
+      list.push(record);
+      map.set(record.employee_id, list);
     });
 
-    return [...values].sort();
-  }, [records, trainingTypes]);
+    return map;
+  }, [records]);
 
-  const filteredRecords = useMemo(() => {
+  const projectsByUserId = useMemo(() => {
+    const map = new Map<string, Project[]>();
+
+    projectAccess.forEach((row) => {
+      const project = projectById.get(row.project_id);
+      if (!project) return;
+      if (!includeInactiveProjects && isInactiveProject(project)) return;
+
+      const list = map.get(row.user_id) ?? [];
+      list.push(project);
+      map.set(row.user_id, list);
+    });
+
+    return map;
+  }, [
+    includeInactiveProjects,
+    projectAccess,
+    projectById,
+  ]);
+
+  const complianceRows = useMemo<EmployeeCompliance[]>(() => {
+    return employees
+      .filter((employee) => employee.active !== false)
+      .map((employee) => {
+        const employeeRecords = recordsByEmployee.get(employee.id) ?? [];
+        const employeeProjects = employee.user_id
+          ? projectsByUserId.get(employee.user_id) ?? []
+          : [];
+
+        const checks: RequirementCheck[] = [];
+
+        roleRequirements
+          .filter(
+            (requirement) =>
+              requirement.active !== false &&
+              normalise(requirement.role_name) === normalise(employee.role),
+          )
+          .forEach((requirement) => {
+            const alternatives =
+              requirement.accepted_alternative_training_type_ids ?? [];
+            const leadDays = requirement.renewal_lead_days ?? 60;
+            const record = bestRecord(
+              employeeRecords,
+              requirement.training_type_id,
+              alternatives,
+              leadDays,
+            );
+
+            checks.push({
+              key: `role-${requirement.id}`,
+              source: "role",
+              sourceLabel: clean(requirement.role_name) || "Role",
+              trainingTypeId: requirement.training_type_id,
+              trainingName:
+                trainingTypeById.get(requirement.training_type_id)?.name ??
+                "Unknown training",
+              requirementLevel: requirement.requirement_level,
+              renewalLeadDays: leadDays,
+              alternatives,
+              status: record ? recordStatus(record, leadDays) : "missing",
+              record,
+            });
+          });
+
+        employeeProjects.forEach((project) => {
+          projectRequirements
+            .filter((requirement) => {
+              if (
+                requirement.active === false ||
+                requirement.project_id !== project.id
+              ) {
+                return false;
+              }
+
+              const role = clean(requirement.applies_to_role);
+              return !role || normalise(role) === normalise(employee.role);
+            })
+            .forEach((requirement) => {
+              const duplicate = checks.some(
+                (check) =>
+                  check.trainingTypeId === requirement.training_type_id &&
+                  check.requirementLevel === requirement.requirement_level,
+              );
+
+              if (duplicate) return;
+
+              const alternatives =
+                requirement.accepted_alternative_training_type_ids ?? [];
+              const leadDays = requirement.renewal_lead_days ?? 60;
+              const record = bestRecord(
+                employeeRecords,
+                requirement.training_type_id,
+                alternatives,
+                leadDays,
+              );
+
+              checks.push({
+                key: `project-${requirement.id}`,
+                source: "project",
+                sourceLabel: project.name,
+                trainingTypeId: requirement.training_type_id,
+                trainingName:
+                  trainingTypeById.get(requirement.training_type_id)?.name ??
+                  "Unknown training",
+                requirementLevel: requirement.requirement_level,
+                renewalLeadDays: leadDays,
+                alternatives,
+                status: record ? recordStatus(record, leadDays) : "missing",
+                record,
+              });
+            });
+        });
+
+        const mandatoryChecks = checks.filter(
+          (check) => check.requirementLevel === "mandatory",
+        );
+        const recommendedChecks = checks.filter(
+          (check) => check.requirementLevel === "recommended",
+        );
+        const compliantMandatory = mandatoryChecks.filter(
+          (check) => check.status === "current" || check.status === "due",
+        ).length;
+        const expiredCount = checks.filter(
+          (check) => check.status === "expired",
+        ).length;
+        const missingCount = checks.filter(
+          (check) => check.status === "missing",
+        ).length;
+        const dueCount = checks.filter(
+          (check) => check.status === "due",
+        ).length;
+        const blocked = mandatoryChecks.some(
+          (check) =>
+            check.status === "expired" || check.status === "missing",
+        );
+
+        return {
+          employee,
+          crew: employee.crew_id
+            ? crewById.get(employee.crew_id) ?? null
+            : null,
+          projects: employeeProjects,
+          checks,
+          mandatoryChecks,
+          recommendedChecks,
+          compliantMandatory,
+          mandatoryTotal: mandatoryChecks.length,
+          compliancePercent: percent(
+            compliantMandatory,
+            mandatoryChecks.length,
+          ),
+          blocked,
+          dueCount,
+          expiredCount,
+          missingCount,
+        };
+      })
+      .sort((a, b) => {
+        if (a.blocked !== b.blocked) return a.blocked ? -1 : 1;
+        if (a.compliancePercent !== b.compliancePercent) {
+          return a.compliancePercent - b.compliancePercent;
+        }
+        return a.employee.full_name.localeCompare(b.employee.full_name);
+      });
+  }, [
+    crewById,
+    employees,
+    projectRequirements,
+    projectsByUserId,
+    recordsByEmployee,
+    roleRequirements,
+    trainingTypeById,
+  ]);
+
+  const visibleProjects = useMemo(
+    () =>
+      includeInactiveProjects
+        ? projects
+        : projects.filter((project) => !isInactiveProject(project)),
+    [includeInactiveProjects, projects],
+  );
+
+  const filteredCompliance = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return records.filter((record) => {
-      const employee = employeeById.get(record.employee_id);
-      if (!employee || employee.active === false) return false;
-
-      const crew = employee.crew_id
-        ? crewById.get(employee.crew_id)
-        : undefined;
-      const status = calculateStatus(record);
-      const hasDocument = Boolean(record.sharepoint_web_url);
-
-      if (statusFilter !== "all" && status !== statusFilter) return false;
-      if (employeeFilter !== "all" && record.employee_id !== employeeFilter) {
-        return false;
-      }
-
-      if (crewFilter === "unassigned" && employee.crew_id) return false;
+    return complianceRows.filter((row) => {
       if (
         crewFilter !== "all" &&
-        crewFilter !== "unassigned" &&
-        employee.crew_id !== crewFilter
+        row.employee.crew_id !== crewFilter
       ) {
         return false;
       }
 
       if (
-        categoryFilter !== "all" &&
-        clean(record.category) !== categoryFilter
+        projectFilter !== "all" &&
+        !row.projects.some((project) => project.id === projectFilter)
       ) {
         return false;
       }
-
-      if (documentFilter === "attached" && !hasDocument) return false;
-      if (documentFilter === "missing" && hasDocument) return false;
 
       if (!query) return true;
 
       return [
-        employee.full_name,
-        employee.role,
-        crewLabel(crew),
-        record.training_name,
-        record.category,
-        record.certificate_number,
-        record.provider,
-        record.class_codes?.join(" "),
-        record.notes,
+        row.employee.full_name,
+        row.employee.role,
+        crewLabel(row.crew),
+        row.projects.map((project) => project.name).join(" "),
+        row.checks.map((check) => check.trainingName).join(" "),
       ]
         .map(clean)
         .join(" ")
         .toLowerCase()
         .includes(query);
     });
-  }, [
-    categoryFilter,
-    crewById,
-    crewFilter,
-    documentFilter,
-    employeeById,
-    employeeFilter,
-    records,
-    search,
-    statusFilter,
-  ]);
+  }, [complianceRows, crewFilter, projectFilter, search]);
 
-  const filteredTrainingTypes = useMemo(() => {
-    const query = typeSearch.trim().toLowerCase();
+  const companyMandatoryTotal = complianceRows.reduce(
+    (sum, row) => sum + row.mandatoryTotal,
+    0,
+  );
+  const companyMandatoryCompliant = complianceRows.reduce(
+    (sum, row) => sum + row.compliantMandatory,
+    0,
+  );
+  const companyCompliancePercent = percent(
+    companyMandatoryCompliant,
+    companyMandatoryTotal,
+  );
+  const fullyCompliantCount = complianceRows.filter(
+    (row) => !row.blocked && row.compliancePercent === 100,
+  ).length;
+  const blockedCount = complianceRows.filter((row) => row.blocked).length;
+  const duePeopleCount = complianceRows.filter(
+    (row) => row.dueCount > 0,
+  ).length;
 
-    return trainingTypes.filter((type) => {
-      const active = type.active !== false;
+  const expiredRecords = records.filter((record) => {
+    if (!recordIsUsable(record)) return false;
+    if (record.does_not_expire || !record.expiry_date) return false;
+    const remaining = daysUntil(record.expiry_date);
+    return remaining !== null && remaining < 0;
+  }).length;
 
-      if (typeStatusFilter === "active" && !active) return false;
-      if (typeStatusFilter === "inactive" && active) return false;
+  const due30Records = records.filter((record) => {
+    if (!recordIsUsable(record)) return false;
+    if (record.does_not_expire || !record.expiry_date) return false;
+    const remaining = daysUntil(record.expiry_date);
+    return remaining !== null && remaining >= 0 && remaining <= 30;
+  }).length;
 
-      if (!query) return true;
+  const projectRisk = useMemo<RiskSummary[]>(() => {
+    return visibleProjects
+      .map((project) => {
+        const people = complianceRows.filter((row) =>
+          row.projects.some((item) => item.id === project.id),
+        );
+        const compliant = people.filter((row) => !row.blocked).length;
+        const blocked = people.length - compliant;
 
-      return [type.name, type.category, type.default_expiry_months]
-        .map(clean)
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
+        return {
+          id: project.id,
+          name: projectLabel(project),
+          people: people.length,
+          compliant,
+          blocked,
+          percent: percent(compliant, people.length),
+        };
+      })
+      .filter((item) => item.people > 0)
+      .sort((a, b) => a.percent - b.percent || b.people - a.people);
+  }, [complianceRows, visibleProjects]);
+
+  const crewRisk = useMemo<RiskSummary[]>(() => {
+    return crews
+      .filter((crew) => crew.active !== false)
+      .map((crew) => {
+        const people = complianceRows.filter(
+          (row) => row.employee.crew_id === crew.id,
+        );
+        const compliant = people.filter((row) => !row.blocked).length;
+        const blocked = people.length - compliant;
+
+        return {
+          id: crew.id,
+          name: crewLabel(crew),
+          people: people.length,
+          compliant,
+          blocked,
+          percent: percent(compliant, people.length),
+        };
+      })
+      .filter((item) => item.people > 0)
+      .sort((a, b) => a.percent - b.percent || b.people - a.people);
+  }, [complianceRows, crews]);
+
+  const attentionItems = useMemo<AttentionItem[]>(() => {
+    const items: AttentionItem[] = [];
+
+    complianceRows.forEach((row) => {
+      row.checks
+        .filter((check) => check.status !== "current")
+        .forEach((check) => {
+          const severity =
+            check.status === "expired" || check.status === "missing"
+              ? "critical"
+              : "warning";
+
+          const detail =
+            check.status === "missing"
+              ? `${check.trainingName} is missing`
+              : check.status === "expired"
+                ? `${check.trainingName} expired ${formatDate(
+                    check.record?.expiry_date,
+                  )}`
+                : `${check.trainingName} expires ${formatDate(
+                    check.record?.expiry_date,
+                  )}`;
+
+          items.push({
+            employeeId: row.employee.id,
+            employeeName: row.employee.full_name,
+            role: row.employee.role || "Role not set",
+            crew: crewLabel(row.crew),
+            projects:
+              row.projects.map((project) => project.name).join(", ") ||
+              "No project",
+            issue:
+              check.status === "missing"
+                ? "Missing training"
+                : check.status === "expired"
+                  ? "Expired training"
+                  : "Renewal due",
+            detail,
+            severity,
+            href: `/people/${row.employee.id}`,
+          });
+        });
     });
-  }, [trainingTypes, typeSearch, typeStatusFilter]);
 
-  const currentCount = records.filter(
-    (record) =>
-      employeeById.get(record.employee_id)?.active !== false &&
-      calculateStatus(record) === "current",
-  ).length;
+    return items
+      .sort((a, b) => {
+        const rank = { critical: 0, warning: 1, info: 2 };
+        if (rank[a.severity] !== rank[b.severity]) {
+          return rank[a.severity] - rank[b.severity];
+        }
+        return a.employeeName.localeCompare(b.employeeName);
+      })
+      .slice(0, 12);
+  }, [complianceRows]);
 
-  const expiringCount = records.filter(
-    (record) =>
-      employeeById.get(record.employee_id)?.active !== false &&
-      calculateStatus(record) === "expiring",
-  ).length;
-
-  const expiredCount = records.filter(
-    (record) =>
-      employeeById.get(record.employee_id)?.active !== false &&
-      calculateStatus(record) === "expired",
-  ).length;
-
-  const missingDocumentCount = records.filter(
-    (record) =>
-      employeeById.get(record.employee_id)?.active !== false &&
-      !record.sharepoint_web_url,
-  ).length;
-
-  function openCreateRecord() {
-    setEditingRecord(null);
-    setRecordForm(EMPTY_RECORD_FORM);
-    setRecordModalOpen(true);
+  async function refreshData() {
+    setRefreshing(true);
     setMessage(null);
-  }
-
-  function openEditRecord(record: TrainingRecord) {
-    setEditingRecord(record);
-    setRecordForm({
-      employeeId: record.employee_id,
-      trainingTypeId: clean(record.training_type_id),
-      trainingName: clean(record.training_name),
-      category: clean(record.category),
-      certificateNumber: clean(record.certificate_number),
-      classCodes: (record.class_codes ?? []).join(", "),
-      provider: clean(record.provider),
-      issueDate: clean(record.issue_date),
-      expiryDate: clean(record.expiry_date),
-      doesNotExpire: Boolean(record.does_not_expire),
-      notes: clean(record.notes),
-      sharepointWebUrl: clean(record.sharepoint_web_url),
-      sharepointFileName: clean(record.sharepoint_file_name),
-    });
-    setRecordModalOpen(true);
-    setMessage(null);
-  }
-
-  function closeRecordModal() {
-    if (savingRecord) return;
-    setRecordModalOpen(false);
-    setEditingRecord(null);
-    setRecordForm(EMPTY_RECORD_FORM);
-  }
-
-  function applyTrainingType(trainingTypeId: string) {
-    const selectedType = trainingTypes.find(
-      (type) => type.id === trainingTypeId,
-    );
-
-    setRecordForm((current) => {
-      const expiryDate = selectedType?.does_not_expire
-        ? ""
-        : current.issueDate && selectedType?.default_expiry_months
-          ? addMonthsToDate(
-              current.issueDate,
-              selectedType.default_expiry_months,
-            )
-          : current.expiryDate;
-
-      return {
-        ...current,
-        trainingTypeId,
-        trainingName: selectedType?.name ?? current.trainingName,
-        category: selectedType?.category ?? current.category,
-        doesNotExpire: Boolean(selectedType?.does_not_expire),
-        expiryDate,
-      };
-    });
-  }
-
-  function updateIssueDate(issueDate: string) {
-    const selectedType = trainingTypes.find(
-      (type) => type.id === recordForm.trainingTypeId,
-    );
-
-    setRecordForm((current) => ({
-      ...current,
-      issueDate,
-      expiryDate:
-        !current.doesNotExpire && selectedType?.default_expiry_months
-          ? addMonthsToDate(issueDate, selectedType.default_expiry_months)
-          : current.expiryDate,
-    }));
-  }
-
-  async function saveRecord() {
-    setMessage(null);
-
-    if (!recordForm.employeeId) {
-      setMessage({ tone: "error", text: "Select an employee." });
-      return;
-    }
-
-    if (!recordForm.trainingName.trim()) {
-      setMessage({
-        tone: "error",
-        text: "Enter a certificate or licence name.",
-      });
-      return;
-    }
-
-    if (!recordForm.doesNotExpire && !recordForm.expiryDate) {
-      setMessage({
-        tone: "error",
-        text: "Enter an expiry date or select Does not expire.",
-      });
-      return;
-    }
-
-    setSavingRecord(true);
-
-    const payload = {
-      employee_id: recordForm.employeeId,
-      training_type_id: recordForm.trainingTypeId || null,
-      training_name: recordForm.trainingName.trim(),
-      category: recordForm.category.trim() || null,
-      certificate_number: recordForm.certificateNumber.trim() || null,
-      class_codes: classCodesArray(recordForm.classCodes),
-      provider: recordForm.provider.trim() || null,
-      issue_date: recordForm.issueDate || null,
-      expiry_date: recordForm.doesNotExpire
-        ? null
-        : recordForm.expiryDate || null,
-      does_not_expire: recordForm.doesNotExpire,
-      notes: recordForm.notes.trim() || null,
-      sharepoint_web_url: recordForm.sharepointWebUrl.trim() || null,
-      sharepoint_file_name: recordForm.sharepointFileName.trim() || null,
-      status: null,
-      updated_at: new Date().toISOString(),
-    };
 
     try {
-      const result = editingRecord
-        ? await supabase
-            .from("employee_training_records")
-            .update(payload)
-            .eq("id", editingRecord.id)
-        : await supabase.from("employee_training_records").insert(payload);
-
-      if (result.error) throw new Error(result.error.message);
-
       await loadData();
-      closeRecordModal();
       setMessage({
         tone: "success",
-        text: editingRecord
-          ? "Training record updated."
-          : "Training record added.",
+        text: "Training dashboard refreshed.",
       });
     } catch (error) {
       setMessage({
@@ -660,222 +815,21 @@ export default function TrainingRegisterPage() {
         text:
           error instanceof Error
             ? error.message
-            : "Unable to save the training record.",
+            : "Unable to refresh the training dashboard.",
       });
     } finally {
-      setSavingRecord(false);
+      setRefreshing(false);
     }
   }
 
-  function openCreateType() {
-    setEditingType(null);
-    setTypeForm(EMPTY_TYPE_FORM);
-    setTypeEditorOpen(true);
-    setMessage(null);
-  }
-
-  function openEditType(type: TrainingType) {
-    setEditingType(type);
-    setTypeForm({
-      name: type.name,
-      category: clean(type.category),
-      defaultExpiryMonths:
-        type.default_expiry_months === null
-          ? ""
-          : String(type.default_expiry_months),
-      doesNotExpire: Boolean(type.does_not_expire),
-      active: type.active !== false,
-    });
-    setTypeEditorOpen(true);
-    setMessage(null);
-  }
-
-  function closeTypeEditor() {
-    if (savingType) return;
-    setTypeEditorOpen(false);
-    setEditingType(null);
-    setTypeForm(EMPTY_TYPE_FORM);
-  }
-
-  async function saveTrainingType() {
-    setMessage(null);
-
-    const name = typeForm.name.trim();
-    if (!name) {
-      setMessage({ tone: "error", text: "Enter a training type name." });
-      return;
-    }
-
-    const duplicate = trainingTypes.some(
-      (type) =>
-        type.id !== editingType?.id &&
-        type.name.trim().toLowerCase() === name.toLowerCase(),
+  if (loading) {
+    return (
+      <AppShell>
+        <div className="flex min-h-[65vh] items-center justify-center">
+          <Loader2 size={30} className="animate-spin text-slate-400" />
+        </div>
+      </AppShell>
     );
-
-    if (duplicate) {
-      setMessage({
-        tone: "error",
-        text: "A training type with this name already exists.",
-      });
-      return;
-    }
-
-    const expiryMonths = typeForm.doesNotExpire
-      ? null
-      : typeForm.defaultExpiryMonths
-        ? Number(typeForm.defaultExpiryMonths)
-        : null;
-
-    if (
-      expiryMonths !== null &&
-      (!Number.isInteger(expiryMonths) || expiryMonths <= 0)
-    ) {
-      setMessage({
-        tone: "error",
-        text: "Default expiry months must be a whole number greater than zero.",
-      });
-      return;
-    }
-
-    setSavingType(true);
-
-    const payload = {
-      name,
-      category: typeForm.category.trim() || null,
-      default_expiry_months: expiryMonths,
-      does_not_expire: typeForm.doesNotExpire,
-      active: typeForm.active,
-      updated_at: new Date().toISOString(),
-    };
-
-    try {
-      const result = editingType
-        ? await supabase
-            .from("training_types")
-            .update(payload)
-            .eq("id", editingType.id)
-        : await supabase.from("training_types").insert(payload);
-
-      if (result.error) throw new Error(result.error.message);
-
-      await loadData();
-      closeTypeEditor();
-      setMessage({
-        tone: "success",
-        text: editingType
-          ? `${name} was updated.`
-          : `${name} was added to the training type library.`,
-      });
-    } catch (error) {
-      setMessage({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to save the training type.",
-      });
-    } finally {
-      setSavingType(false);
-    }
-  }
-
-  async function toggleTrainingType(type: TrainingType) {
-    setTogglingTypeId(type.id);
-    setMessage(null);
-
-    const nextActive = type.active === false;
-
-    try {
-      const { error } = await supabase
-        .from("training_types")
-        .update({
-          active: nextActive,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", type.id);
-
-      if (error) throw new Error(error.message);
-
-      await loadData();
-      setMessage({
-        tone: "success",
-        text: `${type.name} is now ${nextActive ? "active" : "inactive"}.`,
-      });
-    } catch (error) {
-      setMessage({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to update the training type.",
-      });
-    } finally {
-      setTogglingTypeId(null);
-    }
-  }
-
-  function exportRegister() {
-    const headers = [
-      "Employee",
-      "Position",
-      "Crew",
-      "Certificate / Licence",
-      "Category",
-      "Certificate Number",
-      "Classes",
-      "Provider",
-      "Issue Date",
-      "Expiry Date",
-      "Days Remaining",
-      "Status",
-      "SharePoint Document",
-    ];
-
-    const rows = filteredRecords.map((record) => {
-      const employee = employeeById.get(record.employee_id);
-      const crew = employee?.crew_id
-        ? crewById.get(employee.crew_id)
-        : undefined;
-      const status = calculateStatus(record);
-      const days = record.does_not_expire
-        ? "Does not expire"
-        : daysUntil(record.expiry_date);
-
-      return [
-        employee?.full_name ?? "",
-        employee?.role ?? "",
-        crewLabel(crew),
-        record.training_name,
-        record.category,
-        record.certificate_number,
-        record.class_codes?.join(", "),
-        record.provider,
-        record.issue_date,
-        record.does_not_expire ? "Does not expire" : record.expiry_date,
-        days ?? "",
-        statusLabel(status),
-        record.sharepoint_web_url,
-      ];
-    });
-
-    const csv = [
-      headers.map(csvSafe).join(","),
-      ...rows.map((row) => row.map(csvSafe).join(",")),
-    ].join("\n");
-
-    const blob = new Blob([csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
-    link.download = `training-register-${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
-    link.click();
-
-    URL.revokeObjectURL(url);
   }
 
   return (
@@ -893,20 +847,20 @@ export default function TrainingRegisterPage() {
               </Link>
 
               <div className="mt-5 flex items-center gap-2 text-slate-400">
-                <ShieldCheck size={18} />
+                <LayoutDashboard size={18} />
                 <span className="text-sm font-semibold uppercase tracking-wider">
-                  Workforce Compliance
+                  Training Management
                 </span>
               </div>
 
               <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
-                Training Register
+                Training Dashboard
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Track certificates, licences, VOCs and expiry dates. Create new
-                training types directly from this page whenever the business
-                needs to track something new.
+                A company-wide view of mobilisation readiness, training risk,
+                expiring qualifications and the people, crews and projects that
+                need immediate attention.
               </p>
             </div>
 
@@ -915,7 +869,7 @@ export default function TrainingRegisterPage() {
                 type="button"
                 onClick={() => void refreshData()}
                 disabled={refreshing}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 <RefreshCw
                   size={16}
@@ -924,33 +878,21 @@ export default function TrainingRegisterPage() {
                 Refresh
               </button>
 
-              <button
-                type="button"
-                onClick={exportRegister}
-                disabled={filteredRecords.length === 0}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+              <Link
+                href="/people/training/register"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
-                <Download size={16} />
-                Export CSV
-              </button>
+                <GraduationCap size={16} />
+                Training Register
+              </Link>
 
-              <button
-                type="button"
-                onClick={() => setTypeManagerOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+              <Link
+                href="/people/training/renewals"
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
               >
-                <Library size={16} />
-                Manage Types
-              </button>
-
-              <button
-                type="button"
-                onClick={openCreateRecord}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-              >
-                <Plus size={16} />
-                Add Record
-              </button>
+                <CalendarClock size={16} />
+                Open Renewals
+              </Link>
             </div>
           </div>
         </section>
@@ -974,211 +916,309 @@ export default function TrainingRegisterPage() {
           </section>
         ) : null}
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-slate-400">
-                <LayoutDashboard size={17} />
-                <span className="text-xs font-semibold uppercase tracking-wider">
-                  Training Management
-                </span>
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+          <MetricCard
+            label="Active Employees"
+            value={String(complianceRows.length)}
+            detail="Included in dashboard"
+            tone="slate"
+            icon={<Users size={20} />}
+          />
+          <MetricCard
+            label="Company Compliance"
+            value={`${companyCompliancePercent}%`}
+            detail="Mandatory requirements"
+            tone={toneForPercent(companyCompliancePercent)}
+            icon={<ShieldCheck size={20} />}
+          />
+          <MetricCard
+            label="Fully Compliant"
+            value={String(fullyCompliantCount)}
+            detail="No mobilisation blockers"
+            tone="emerald"
+            icon={<UserCheck size={20} />}
+          />
+          <MetricCard
+            label="Blocked"
+            value={String(blockedCount)}
+            detail="Missing or expired mandatory"
+            tone={blockedCount > 0 ? "rose" : "slate"}
+            icon={<ShieldAlert size={20} />}
+          />
+          <MetricCard
+            label="Renewals Due"
+            value={String(duePeopleCount)}
+            detail="People with due training"
+            tone={duePeopleCount > 0 ? "amber" : "slate"}
+            icon={<CalendarClock size={20} />}
+          />
+          <MetricCard
+            label="Expired Records"
+            value={String(expiredRecords)}
+            detail="All active employee records"
+            tone={expiredRecords > 0 ? "rose" : "slate"}
+            icon={<AlertTriangle size={20} />}
+          />
+          <MetricCard
+            label="Due in 30 Days"
+            value={String(due30Records)}
+            detail="Upcoming expiries"
+            tone={due30Records > 0 ? "amber" : "slate"}
+            icon={<TrendingUp size={20} />}
+          />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Company Compliance
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Mandatory role and project requirements currently satisfied.
+                </p>
               </div>
-              <h2 className="mt-2 text-xl font-bold text-slate-950">
-                Training tools
-              </h2>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-                Open role rules, project mobilisation checks, renewals, course
-                planning and verification from one place.
-              </p>
+
+              <div className="text-4xl font-bold tracking-tight text-slate-950">
+                {companyCompliancePercent}%
+              </div>
+            </div>
+
+            <div className="mt-6 h-5 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={`h-full rounded-full ${
+                  companyCompliancePercent >= 95
+                    ? "bg-emerald-500"
+                    : companyCompliancePercent >= 85
+                      ? "bg-amber-500"
+                      : "bg-rose-500"
+                }`}
+                style={{ width: `${companyCompliancePercent}%` }}
+              />
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <SummaryTile
+                label="Requirements Met"
+                value={companyMandatoryCompliant}
+                detail={`of ${companyMandatoryTotal} mandatory checks`}
+              />
+              <SummaryTile
+                label="Blocked People"
+                value={blockedCount}
+                detail="Require action before mobilisation"
+              />
+              <SummaryTile
+                label="Renewal Warnings"
+                value={complianceRows.reduce(
+                  (sum, row) => sum + row.dueCount,
+                  0,
+                )}
+                detail="Current but within lead time"
+              />
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <TrainingModuleCard
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-950">
+              Dashboard Filters
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Narrow the employee readiness table.
+            </p>
+
+            <div className="mt-5 space-y-3">
+              <label className="relative block">
+                <Search
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search employee, role or training..."
+                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </label>
+
+              <SelectField
+                value={projectFilter}
+                onChange={setProjectFilter}
+                options={[
+                  { value: "all", label: "All projects" },
+                  ...visibleProjects.map((project) => ({
+                    value: project.id,
+                    label: projectLabel(project),
+                  })),
+                ]}
+              />
+
+              <SelectField
+                value={crewFilter}
+                onChange={setCrewFilter}
+                options={[
+                  { value: "all", label: "All crews" },
+                  ...crews
+                    .filter((crew) => crew.active !== false)
+                    .map((crew) => ({
+                      value: crew.id,
+                      label: crewLabel(crew),
+                    })),
+                ]}
+              />
+
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 p-3 text-sm font-semibold text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={includeInactiveProjects}
+                  onChange={(event) =>
+                    setIncludeInactiveProjects(event.target.checked)
+                  }
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Include inactive projects
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-2">
+          <RiskPanel
+            title="Project Risk"
+            description="Lowest compliance projects appear first."
+            icon={<ClipboardCheck size={18} />}
+            items={projectRisk}
+            emptyText="No project-linked employees were found."
+          />
+          <RiskPanel
+            title="Crew Risk"
+            description="Crew compliance against mandatory requirements."
+            icon={<UsersRound size={18} />}
+            items={crewRisk}
+            emptyText="No active crew allocations were found."
+          />
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-lg font-bold text-slate-950">
+                People Requiring Attention
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                The highest-priority missing, expired and due training items.
+              </p>
+            </div>
+
+            {attentionItems.length === 0 ? (
+              <div className="p-10">
+                <EmptyState
+                  icon={<BadgeCheck size={30} />}
+                  title="No immediate training risks"
+                  description="No missing, expired or due requirements were found."
+                />
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {attentionItems.map((item, index) => (
+                  <Link
+                    key={`${item.employeeId}-${item.detail}-${index}`}
+                    href={item.href}
+                    className="grid gap-3 p-5 hover:bg-slate-50 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] md:items-center"
+                  >
+                    <div>
+                      <div className="font-bold text-slate-950">
+                        {item.employeeName}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {item.role} · {item.crew}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {item.projects}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">
+                        {item.issue}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {item.detail}
+                      </div>
+                    </div>
+
+                    <span
+                      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${
+                        item.severity === "critical"
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : "border-amber-200 bg-amber-50 text-amber-800"
+                      }`}
+                    >
+                      {item.severity === "critical" ? "Action now" : "Plan renewal"}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <NavigationCard
+              href="/people/training/register"
+              title="Training Register"
+              description="Add, update and review employee training records."
+              icon={<GraduationCap size={20} />}
+              tone="slate"
+            />
+            <NavigationCard
               href="/people/training/requirements"
               title="Role Requirements"
-              description="Define mandatory and recommended training for each employee role."
+              description="Configure mandatory and recommended training by role."
               icon={<Settings2 size={20} />}
               tone="violet"
             />
-            <TrainingModuleCard
-              href="/people/training/project-compliance"
-              title="Project Compliance"
-              description="Check mobilisation readiness, blockers and crew compliance by project."
-              icon={<ShieldCheck size={20} />}
-              tone="emerald"
-            />
-            <TrainingModuleCard
-              href="/people/training/renewals"
-              title="Renewals"
-              description="Action expired, expiring, missing and unverified training records."
-              icon={<CalendarClock size={20} />}
-              tone="amber"
-            />
-            <TrainingModuleCard
+            <NavigationCard
               href="/people/training/project-requirements"
               title="Project Requirements"
-              description="Configure inductions, licences and competencies unique to each project."
+              description="Configure project-specific mobilisation rules."
               icon={<ListChecks size={20} />}
               tone="blue"
             />
-            <TrainingModuleCard
-              href="/people/training/dashboard"
-              title="Training Dashboard"
-              description="View company-wide compliance, project risk and management KPIs."
-              icon={<LayoutDashboard size={20} />}
-              tone="slate"
+            <NavigationCard
+              href="/people/training/project-compliance"
+              title="Project Compliance"
+              description="Review individual mobilisation readiness by project."
+              icon={<ShieldCheck size={20} />}
+              tone="emerald"
             />
-            <TrainingModuleCard
-              href="/people/training/courses"
-              title="Courses"
-              description="Create training sessions, assign personnel and complete attendance."
-              icon={<BookOpenCheck size={20} />}
-              tone="blue"
-            />
-            <TrainingModuleCard
-              href="/people/training/calendar"
-              title="Training Calendar"
-              description="See upcoming courses, trainers, locations, capacity and bookings."
-              icon={<CalendarDays size={20} />}
+            <NavigationCard
+              href="/people/training/renewals"
+              title="Renewals"
+              description="Manage expired and upcoming qualifications."
+              icon={<CalendarClock size={20} />}
               tone="amber"
             />
-            <TrainingModuleCard
+            <NavigationCard
+              href="/people/training/calendar"
+              title="Training Calendar"
+              description="Plan courses, bookings, providers and attendance."
+              icon={<CalendarDays size={20} />}
+              tone="blue"
+            />
+            <NavigationCard
               href="/people/training/verification"
               title="Verification Queue"
-              description="Review uploaded certificates and approve, reject or request clearer evidence."
+              description="Review uploaded evidence before records are accepted."
               icon={<BadgeCheck size={20} />}
               tone="emerald"
             />
-            <TrainingModuleCard
+            <NavigationCard
               href="/people/training/history"
-              title="Training History"
-              description="Review the complete chronological training history for each employee."
+              title="Audit History"
+              description="Review the complete training and verification history."
               icon={<History size={20} />}
               tone="violet"
-            />
-          </div>
-        </section>
-
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <KpiCard
-            label="Active people"
-            value={String(activeEmployees.length)}
-            detail="Included in register"
-            icon={<Users size={20} />}
-          />
-          <KpiCard
-            label="Current"
-            value={String(currentCount)}
-            detail="More than 60 days"
-            icon={<CheckCircle2 size={20} />}
-          />
-          <KpiCard
-            label="Expiring"
-            value={String(expiringCount)}
-            detail="Within 60 days"
-            icon={<CalendarClock size={20} />}
-            tone={expiringCount > 0 ? "amber" : "default"}
-          />
-          <KpiCard
-            label="Expired"
-            value={String(expiredCount)}
-            detail="Requires action"
-            icon={<AlertTriangle size={20} />}
-            tone={expiredCount > 0 ? "rose" : "default"}
-          />
-          <KpiCard
-            label="Missing document"
-            value={String(missingDocumentCount)}
-            detail="No SharePoint link"
-            icon={<FileText size={20} />}
-            tone={missingDocumentCount > 0 ? "amber" : "default"}
-          />
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2 text-slate-500">
-            <Filter size={17} />
-            <span className="text-sm font-semibold">Filters</span>
-          </div>
-
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_220px_200px_220px_190px]">
-            <label className="relative block">
-              <Search
-                size={17}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search employee, certificate, number or class..."
-                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
-              />
-            </label>
-
-            <SelectField
-              value={statusFilter}
-              onChange={(value) =>
-                setStatusFilter(value as "all" | TrainingStatus)
-              }
-              options={[
-                { value: "all", label: "All statuses" },
-                { value: "current", label: "Current" },
-                { value: "expiring", label: "Expiring" },
-                { value: "expired", label: "Expired" },
-                { value: "missing", label: "Missing details" },
-              ]}
-            />
-
-            <SelectField
-              value={employeeFilter}
-              onChange={setEmployeeFilter}
-              options={[
-                { value: "all", label: "All employees" },
-                ...activeEmployees.map((employee) => ({
-                  value: employee.id,
-                  label: employee.full_name,
-                })),
-              ]}
-            />
-
-            <SelectField
-              value={crewFilter}
-              onChange={setCrewFilter}
-              options={[
-                { value: "all", label: "All crews" },
-                { value: "unassigned", label: "Unassigned" },
-                ...crews
-                  .filter((crew) => crew.active !== false)
-                  .map((crew) => ({
-                    value: crew.id,
-                    label: crewLabel(crew),
-                  })),
-              ]}
-            />
-
-            <SelectField
-              value={categoryFilter}
-              onChange={setCategoryFilter}
-              options={[
-                { value: "all", label: "All categories" },
-                ...categories.map((category) => ({
-                  value: category,
-                  label: category,
-                })),
-              ]}
-            />
-
-            <SelectField
-              value={documentFilter}
-              onChange={(value) =>
-                setDocumentFilter(value as "all" | "attached" | "missing")
-              }
-              options={[
-                { value: "all", label: "All documents" },
-                { value: "attached", label: "Document attached" },
-                { value: "missing", label: "Document missing" },
-              ]}
             />
           </div>
         </section>
@@ -1187,942 +1227,289 @@ export default function TrainingRegisterPage() {
           <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-lg font-bold text-slate-950">
-                Certificate & Licence Register
+                Employee Readiness
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                {filteredRecords.length} record
-                {filteredRecords.length === 1 ? "" : "s"} shown
+                {filteredCompliance.length} active employee
+                {filteredCompliance.length === 1 ? "" : "s"} shown.
               </p>
             </div>
 
-            <div className="text-xs font-medium text-slate-400">
-              Statuses are calculated automatically from expiry dates.
-            </div>
+            <Link
+              href="/people/training/project-compliance"
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+            >
+              Open detailed compliance
+            </Link>
           </div>
 
-          {loading ? (
-            <div className="flex min-h-64 items-center justify-center">
-              <Loader2 size={26} className="animate-spin text-slate-400" />
-            </div>
-          ) : filteredRecords.length === 0 ? (
-            <div className="p-10 text-center">
-              <HardHat size={32} className="mx-auto text-slate-300" />
-              <h3 className="mt-4 text-lg font-bold text-slate-900">
-                No training records found
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Add a record or create a new training type first.
-              </p>
+          {filteredCompliance.length === 0 ? (
+            <div className="p-10">
+              <EmptyState
+                icon={<UserRound size={30} />}
+                title="No employees match"
+                description="Change the dashboard filters to show more employees."
+              />
             </div>
           ) : (
-            <div className="divide-y divide-slate-100">
-              {filteredRecords.map((record) => {
-                const employee = employeeById.get(record.employee_id);
-                if (!employee) return null;
-
-                const crew = employee.crew_id
-                  ? crewById.get(employee.crew_id)
-                  : undefined;
-
-                return (
-                  <TrainingRow
-                    key={record.id}
-                    record={record}
-                    employee={employee}
-                    crew={crew}
-                    onEdit={() => openEditRecord(record)}
-                  />
-                );
-              })}
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 font-semibold">Employee</th>
+                    <th className="px-5 py-3 font-semibold">Crew / Projects</th>
+                    <th className="px-5 py-3 font-semibold">Compliance</th>
+                    <th className="px-5 py-3 font-semibold">Issues</th>
+                    <th className="px-5 py-3 font-semibold">Status</th>
+                    <th className="px-5 py-3 text-right font-semibold">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredCompliance.map((row) => (
+                    <tr key={row.employee.id} className="hover:bg-slate-50">
+                      <td className="px-5 py-4">
+                        <div className="font-bold text-slate-950">
+                          {row.employee.full_name}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {row.employee.role || "Role not set"}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="font-semibold text-slate-700">
+                          {crewLabel(row.crew)}
+                        </div>
+                        <div className="mt-1 max-w-xs text-xs text-slate-500">
+                          {row.projects.length
+                            ? row.projects
+                                .map((project) => project.name)
+                                .join(", ")
+                            : "No linked project"}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-100">
+                            <div
+                              className={`h-full rounded-full ${
+                                row.compliancePercent >= 95
+                                  ? "bg-emerald-500"
+                                  : row.compliancePercent >= 85
+                                    ? "bg-amber-500"
+                                    : "bg-rose-500"
+                              }`}
+                              style={{
+                                width: `${row.compliancePercent}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="font-bold text-slate-800">
+                            {row.compliancePercent}%
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {row.compliantMandatory} of {row.mandatoryTotal} mandatory
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex flex-wrap gap-1.5">
+                          {row.expiredCount > 0 ? (
+                            <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">
+                              {row.expiredCount} expired
+                            </span>
+                          ) : null}
+                          {row.missingCount > 0 ? (
+                            <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">
+                              {row.missingCount} missing
+                            </span>
+                          ) : null}
+                          {row.dueCount > 0 ? (
+                            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                              {row.dueCount} due
+                            </span>
+                          ) : null}
+                          {row.expiredCount === 0 &&
+                          row.missingCount === 0 &&
+                          row.dueCount === 0 ? (
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                              No issues
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span
+                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${
+                            row.blocked
+                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                              : row.dueCount > 0
+                                ? "border-amber-200 bg-amber-50 text-amber-800"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {row.blocked
+                            ? "Blocked"
+                            : row.dueCount > 0
+                              ? "Compliant · renewal due"
+                              : "Ready"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <Link
+                          href={`/people/${row.employee.id}`}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <UserRound size={15} />
+                          Profile
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
       </div>
-
-      {recordModalOpen ? (
-        <TrainingRecordModal
-          form={recordForm}
-          setForm={setRecordForm}
-          editingRecord={editingRecord}
-          employees={activeEmployees}
-          trainingTypes={trainingTypes.filter(
-            (type) =>
-              type.active !== false || type.id === recordForm.trainingTypeId,
-          )}
-          categories={categories}
-          saving={savingRecord}
-          onTrainingTypeChange={applyTrainingType}
-          onIssueDateChange={updateIssueDate}
-          onClose={closeRecordModal}
-          onSave={() => void saveRecord()}
-          onOpenTypeManager={() => {
-            setRecordModalOpen(false);
-            setTypeManagerOpen(true);
-          }}
-        />
-      ) : null}
-
-      {typeManagerOpen ? (
-        <TrainingTypeManagerModal
-          trainingTypes={filteredTrainingTypes}
-          search={typeSearch}
-          statusFilter={typeStatusFilter}
-          togglingTypeId={togglingTypeId}
-          onSearchChange={setTypeSearch}
-          onStatusFilterChange={setTypeStatusFilter}
-          onClose={() => setTypeManagerOpen(false)}
-          onCreate={openCreateType}
-          onEdit={openEditType}
-          onToggle={(type) => void toggleTrainingType(type)}
-        />
-      ) : null}
-
-      {typeEditorOpen ? (
-        <TrainingTypeEditorModal
-          form={typeForm}
-          setForm={setTypeForm}
-          editingType={editingType}
-          categories={categories}
-          saving={savingType}
-          onClose={closeTypeEditor}
-          onSave={() => void saveTrainingType()}
-        />
-      ) : null}
     </AppShell>
   );
 }
 
-function TrainingRow({
-  record,
-  employee,
-  crew,
-  onEdit,
+function MetricCard({
+  label,
+  value,
+  detail,
+  tone,
+  icon,
 }: {
-  record: TrainingRecord;
-  employee: Employee;
-  crew: Crew | undefined;
-  onEdit: () => void;
+  label: string;
+  value: string;
+  detail: string;
+  tone: "emerald" | "amber" | "rose" | "slate";
+  icon: React.ReactNode;
 }) {
-  const status = calculateStatus(record);
-  const days = record.does_not_expire ? null : daysUntil(record.expiry_date);
+  const classes =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : tone === "rose"
+          ? "border-rose-200 bg-rose-50 text-rose-800"
+          : "border-slate-200 bg-white text-slate-800";
 
   return (
-    <div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_auto] xl:items-center">
-      <div className="min-w-0">
-        <Link
-          href={`/people/${employee.id}`}
-          className="font-bold text-slate-950 hover:text-blue-700"
-        >
-          {employee.full_name}
-        </Link>
-        <p className="mt-1 text-sm text-slate-500">
-          {employee.role || "Position not set"}
-        </p>
-        <p className="mt-1 text-xs text-slate-400">{crewLabel(crew)}</p>
-      </div>
-
-      <div>
-        <div className="font-bold text-slate-900">{record.training_name}</div>
-        <div className="mt-1 text-sm text-slate-500">
-          {record.category || "Uncategorised"}
-        </div>
-
-        {record.class_codes?.length ? (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {record.class_codes.map((code) => (
-              <span
-                key={`${record.id}-${code}`}
-                className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700"
-              >
-                {code}
-              </span>
-            ))}
+    <div className={`rounded-2xl border p-5 shadow-sm ${classes}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{label}</div>
+          <div className="mt-2 text-3xl font-bold tracking-tight">
+            {value}
           </div>
-        ) : null}
-      </div>
-
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Number
+          <div className="mt-1 text-xs opacity-70">{detail}</div>
         </div>
-        <div className="mt-2 text-sm font-semibold text-slate-700">
-          {record.certificate_number || "Not set"}
-        </div>
-      </div>
-
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Expiry
-        </div>
-        <div className="mt-2 text-sm font-semibold text-slate-700">
-          {record.does_not_expire
-            ? "Does not expire"
-            : formatDate(record.expiry_date)}
-        </div>
-
-        {!record.does_not_expire && days !== null ? (
-          <div
-            className={`mt-1 text-xs font-medium ${
-              days < 0
-                ? "text-rose-600"
-                : days <= 60
-                  ? "text-amber-700"
-                  : "text-slate-400"
-            }`}
-          >
-            {days < 0
-              ? `${Math.abs(days)} days overdue`
-              : `${days} days remaining`}
-          </div>
-        ) : null}
-      </div>
-
-      <div>
-        <span
-          className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${statusClasses(
-            status,
-          )}`}
-        >
-          {statusLabel(status)}
-        </span>
-
-        <div className="mt-2">
-          {record.sharepoint_web_url ? (
-            <a
-              href={record.sharepoint_web_url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 hover:text-blue-900"
-            >
-              <ExternalLink size={13} />
-              {record.sharepoint_file_name || "Open document"}
-            </a>
-          ) : (
-            <span className="text-xs font-medium text-amber-700">
-              No document attached
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2 xl:justify-end">
-        <button
-          type="button"
-          onClick={onEdit}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <Edit3 size={15} />
-          Edit
-        </button>
-
-        <button
-          type="button"
-          onClick={onEdit}
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-        >
-          <Upload size={15} />
-          Renew
-        </button>
+        <div className="rounded-xl bg-white/70 p-2.5">{icon}</div>
       </div>
     </div>
   );
 }
 
-function TrainingRecordModal({
-  form,
-  setForm,
-  editingRecord,
-  employees,
-  trainingTypes,
-  categories,
-  saving,
-  onTrainingTypeChange,
-  onIssueDateChange,
-  onClose,
-  onSave,
-  onOpenTypeManager,
+function SummaryTile({
+  label,
+  value,
+  detail,
 }: {
-  form: RecordForm;
-  setForm: React.Dispatch<React.SetStateAction<RecordForm>>;
-  editingRecord: TrainingRecord | null;
-  employees: Employee[];
-  trainingTypes: TrainingType[];
-  categories: string[];
-  saving: boolean;
-  onTrainingTypeChange: (trainingTypeId: string) => void;
-  onIssueDateChange: (issueDate: string) => void;
-  onClose: () => void;
-  onSave: () => void;
-  onOpenTypeManager: () => void;
+  label: string;
+  value: number;
+  detail: string;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
-      <div className="my-auto w-full max-w-4xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
-          <div>
-            <h2 className="text-xl font-bold text-slate-950">
-              {editingRecord ? "Update Training Record" : "Add Training Record"}
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Store register details in TTTracker and link the supporting
-              document from SharePoint.
-            </p>
-          </div>
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="text-sm font-semibold text-slate-600">{label}</div>
+      <div className="mt-2 text-2xl font-bold text-slate-950">{value}</div>
+      <div className="mt-1 text-xs text-slate-500">{detail}</div>
+    </div>
+  );
+}
 
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-60"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
+function RiskPanel({
+  title,
+  description,
+  icon,
+  items,
+  emptyText,
+}: {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  items: RiskSummary[];
+  emptyText: string;
+}) {
+  return (
+    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-5 py-4">
+        <div className="flex items-center gap-2 text-slate-700">
+          {icon}
+          <h2 className="text-lg font-bold text-slate-950">{title}</h2>
         </div>
+        <p className="mt-1 text-sm text-slate-500">{description}</p>
+      </div>
 
-        <div className="space-y-6 p-6">
-          <section>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-400">
-                  Certificate Details
-                </h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Select an existing type or create a new one from this page.
-                </p>
+      {items.length === 0 ? (
+        <div className="p-8 text-center text-sm text-slate-500">
+          {emptyText}
+        </div>
+      ) : (
+        <div className="space-y-3 p-5">
+          {items.slice(0, 8).map((item) => (
+            <div
+              key={item.id}
+              className="rounded-2xl border border-slate-200 p-4"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="truncate font-bold text-slate-900">
+                    {item.name}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {item.people} people · {item.blocked} blocked
+                  </div>
+                </div>
+                <div
+                  className={`text-xl font-bold ${
+                    item.percent >= 95
+                      ? "text-emerald-700"
+                      : item.percent >= 85
+                        ? "text-amber-700"
+                        : "text-rose-700"
+                  }`}
+                >
+                  {item.percent}%
+                </div>
               </div>
 
-              <button
-                type="button"
-                onClick={onOpenTypeManager}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <Library size={15} />
-                Manage Training Types
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <Field label="Employee">
-                <SelectField
-                  value={form.employeeId}
-                  onChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      employeeId: value,
-                    }))
-                  }
-                  options={[
-                    { value: "", label: "Select employee..." },
-                    ...employees.map((employee) => ({
-                      value: employee.id,
-                      label: employee.full_name,
-                    })),
-                  ]}
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full rounded-full ${
+                    item.percent >= 95
+                      ? "bg-emerald-500"
+                      : item.percent >= 85
+                        ? "bg-amber-500"
+                        : "bg-rose-500"
+                  }`}
+                  style={{ width: `${item.percent}%` }}
                 />
-              </Field>
-
-              <Field label="Training type">
-                <SelectField
-                  value={form.trainingTypeId}
-                  onChange={onTrainingTypeChange}
-                  options={[
-                    { value: "", label: "Manual / other..." },
-                    ...trainingTypes.map((type) => ({
-                      value: type.id,
-                      label: `${type.name}${
-                        type.category ? ` — ${type.category}` : ""
-                      }`,
-                    })),
-                  ]}
-                />
-              </Field>
-
-              <Field label="Certificate / licence name">
-                <input
-                  value={form.trainingName}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      trainingName: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. EWP VOC"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Category">
-                <SelectField
-                  value={form.category}
-                  onChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      category: value,
-                    }))
-                  }
-                  options={[
-                    { value: "", label: "Select category..." },
-                    ...categories.map((category) => ({
-                      value: category,
-                      label: category,
-                    })),
-                  ]}
-                />
-              </Field>
-
-              <Field label="Certificate / licence number">
-                <input
-                  value={form.certificateNumber}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      certificateNumber: event.target.value,
-                    }))
-                  }
-                  placeholder="Optional"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Classes / competencies">
-                <input
-                  value={form.classCodes}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      classCodes: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. DG, RB, RI, RA"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Provider">
-                <input
-                  value={form.provider}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      provider: event.target.value,
-                    }))
-                  }
-                  placeholder="Training provider"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Issue date">
-                <input
-                  type="date"
-                  value={form.issueDate}
-                  onChange={(event) => onIssueDateChange(event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Expiry date">
-                <input
-                  type="date"
-                  value={form.expiryDate}
-                  disabled={form.doesNotExpire}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      expiryDate: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-100"
-                />
-              </Field>
-
-              <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4">
-                <input
-                  type="checkbox"
-                  checked={form.doesNotExpire}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      doesNotExpire: event.target.checked,
-                      expiryDate: event.target.checked
-                        ? ""
-                        : current.expiryDate,
-                    }))
-                  }
-                  className="mt-1 h-4 w-4 rounded border-slate-300"
-                />
-                <span>
-                  <span className="block text-sm font-bold text-slate-900">
-                    Does not expire
-                  </span>
-                  <span className="mt-1 block text-xs leading-5 text-slate-500">
-                    Use this where there is no fixed expiry date.
-                  </span>
-                </span>
-              </label>
-            </div>
-
-            <div className="mt-4">
-              <Field label="Operational notes">
-                <textarea
-                  value={form.notes}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      notes: event.target.value,
-                    }))
-                  }
-                  rows={3}
-                  placeholder="Operational notes only"
-                  className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-            <div className="flex items-center gap-2 text-blue-900">
-              <FileText size={18} />
-              <h3 className="font-bold">SharePoint Document</h3>
-            </div>
-
-            <p className="mt-2 text-sm leading-6 text-blue-800">
-              This version stores the SharePoint link only. Direct PDF upload
-              will be connected through Microsoft Graph later.
-            </p>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <Field label="SharePoint document URL">
-                <input
-                  type="url"
-                  value={form.sharepointWebUrl}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      sharepointWebUrl: event.target.value,
-                    }))
-                  }
-                  placeholder="Paste SharePoint file link"
-                  className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2.5 text-sm outline-none ring-blue-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="File name">
-                <input
-                  value={form.sharepointFileName}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      sharepointFileName: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. EWP-VOC.pdf"
-                  className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2.5 text-sm outline-none ring-blue-200 focus:ring-2"
-                />
-              </Field>
-            </div>
-          </section>
-
-          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={saving}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : null}
-              {editingRecord ? "Save Changes" : "Add Record"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TrainingTypeManagerModal({
-  trainingTypes,
-  search,
-  statusFilter,
-  togglingTypeId,
-  onSearchChange,
-  onStatusFilterChange,
-  onClose,
-  onCreate,
-  onEdit,
-  onToggle,
-}: {
-  trainingTypes: TrainingType[];
-  search: string;
-  statusFilter: "all" | "active" | "inactive";
-  togglingTypeId: string | null;
-  onSearchChange: (value: string) => void;
-  onStatusFilterChange: (value: "all" | "active" | "inactive") => void;
-  onClose: () => void;
-  onCreate: () => void;
-  onEdit: (type: TrainingType) => void;
-  onToggle: (type: TrainingType) => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
-      <div className="my-auto w-full max-w-5xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
-          <div>
-            <div className="flex items-center gap-2 text-slate-400">
-              <Library size={17} />
-              <span className="text-xs font-semibold uppercase tracking-wider">
-                Training Type Library
-              </span>
-            </div>
-
-            <h2 className="mt-2 text-xl font-bold text-slate-950">
-              Manage Training Types
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500">
-              Add any new licence, VOC, ticket, certificate or competency
-              without changing the code or database structure.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="space-y-5 p-6">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-              <label className="relative block">
-                <Search
-                  size={17}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                />
-                <input
-                  value={search}
-                  onChange={(event) => onSearchChange(event.target.value)}
-                  placeholder="Search training type or category..."
-                  className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </label>
-
-              <SelectField
-                value={statusFilter}
-                onChange={(value) =>
-                  onStatusFilterChange(value as "all" | "active" | "inactive")
-                }
-                options={[
-                  { value: "all", label: "All types" },
-                  { value: "active", label: "Active types" },
-                  { value: "inactive", label: "Inactive types" },
-                ]}
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={onCreate}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              <Plus size={16} />
-              Add Training Type
-            </button>
-          </div>
-
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
-            {trainingTypes.length === 0 ? (
-              <div className="p-10 text-center">
-                <Library size={30} className="mx-auto text-slate-300" />
-                <h3 className="mt-4 font-bold text-slate-900">
-                  No training types found
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Add the first type or adjust the current filters.
-                </p>
               </div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {trainingTypes.map((type) => {
-                  const active = type.active !== false;
-
-                  return (
-                    <div
-                      key={type.id}
-                      className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto] lg:items-center"
-                    >
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-bold text-slate-950">
-                            {type.name}
-                          </h3>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              active
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {active ? "Active" : "Inactive"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {type.category || "Uncategorised"}
-                        </p>
-                      </div>
-
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Default expiry
-                        </div>
-                        <div className="mt-1 text-sm font-semibold text-slate-700">
-                          {type.does_not_expire
-                            ? "Does not expire"
-                            : type.default_expiry_months
-                              ? `${type.default_expiry_months} months`
-                              : "No default"}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          New records
-                        </div>
-                        <div className="mt-1 text-sm font-semibold text-slate-700">
-                          {active ? "Available" : "Hidden"}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2 lg:justify-end">
-                        <button
-                          type="button"
-                          onClick={() => onEdit(type)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          <Edit3 size={15} />
-                          Edit
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => onToggle(type)}
-                          disabled={togglingTypeId === type.id}
-                          className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
-                            active
-                              ? "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                              : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          }`}
-                        >
-                          {togglingTypeId === type.id ? (
-                            <Loader2 size={15} className="animate-spin" />
-                          ) : active ? (
-                            <ToggleLeft size={15} />
-                          ) : (
-                            <ToggleRight size={15} />
-                          )}
-                          {active ? "Deactivate" : "Reactivate"}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-800">
-            Deactivating a type does not remove historical employee records. It
-            only hides the type from new-record dropdowns.
-          </div>
+            </div>
+          ))}
         </div>
-      </div>
-    </div>
+      )}
+    </section>
   );
 }
 
-function TrainingTypeEditorModal({
-  form,
-  setForm,
-  editingType,
-  categories,
-  saving,
-  onClose,
-  onSave,
-}: {
-  form: TrainingTypeForm;
-  setForm: React.Dispatch<React.SetStateAction<TrainingTypeForm>>;
-  editingType: TrainingType | null;
-  categories: string[];
-  saving: boolean;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4">
-      <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
-          <div>
-            <h2 className="text-xl font-bold text-slate-950">
-              {editingType ? "Edit Training Type" : "Add Training Type"}
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Define how this licence, certificate, VOC or competency behaves.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-60"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        <div className="space-y-5 p-6">
-          <Field label="Training type name">
-            <input
-              value={form.name}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  name: event.target.value,
-                }))
-              }
-              placeholder="e.g. EWP VOC"
-              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-            />
-          </Field>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Category">
-              <SelectField
-                value={form.category}
-                onChange={(value) =>
-                  setForm((current) => ({
-                    ...current,
-                    category: value,
-                  }))
-                }
-                options={[
-                  { value: "", label: "Select category..." },
-                  ...categories.map((category) => ({
-                    value: category,
-                    label: category,
-                  })),
-                ]}
-              />
-            </Field>
-
-            <Field label="Default expiry months">
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={form.defaultExpiryMonths}
-                disabled={form.doesNotExpire}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    defaultExpiryMonths: event.target.value,
-                  }))
-                }
-                placeholder="e.g. 24"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-100"
-              />
-            </Field>
-          </div>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4">
-            <input
-              type="checkbox"
-              checked={form.doesNotExpire}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  doesNotExpire: event.target.checked,
-                  defaultExpiryMonths: event.target.checked
-                    ? ""
-                    : current.defaultExpiryMonths,
-                }))
-              }
-              className="mt-1 h-4 w-4 rounded border-slate-300"
-            />
-            <span>
-              <span className="block text-sm font-bold text-slate-900">
-                Does not expire
-              </span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500">
-                New records using this type will not require an expiry date.
-              </span>
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 p-4">
-            <input
-              type="checkbox"
-              checked={form.active}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  active: event.target.checked,
-                }))
-              }
-              className="mt-1 h-4 w-4 rounded border-slate-300"
-            />
-            <span>
-              <span className="block text-sm font-bold text-slate-900">
-                Active training type
-              </span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500">
-                Active types appear when adding new employee training records.
-              </span>
-            </span>
-          </label>
-
-          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={saving}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : null}
-              {editingType ? "Save Changes" : "Add Training Type"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TrainingModuleCard({
+function NavigationCard({
   href,
   title,
   description,
@@ -2133,99 +1520,61 @@ function TrainingModuleCard({
   title: string;
   description: string;
   icon: React.ReactNode;
-  tone: "slate" | "blue" | "emerald" | "amber" | "violet";
+  tone: "slate" | "violet" | "blue" | "emerald" | "amber";
 }) {
   const iconClasses =
-    tone === "blue"
-      ? "bg-blue-100 text-blue-700"
-      : tone === "emerald"
-        ? "bg-emerald-100 text-emerald-700"
-        : tone === "amber"
-          ? "bg-amber-100 text-amber-800"
-          : tone === "violet"
-            ? "bg-violet-100 text-violet-700"
+    tone === "violet"
+      ? "bg-violet-100 text-violet-700"
+      : tone === "blue"
+        ? "bg-blue-100 text-blue-700"
+        : tone === "emerald"
+          ? "bg-emerald-100 text-emerald-700"
+          : tone === "amber"
+            ? "bg-amber-100 text-amber-700"
             : "bg-slate-100 text-slate-700";
 
   return (
     <Link
       href={href}
-      className="group rounded-2xl border border-slate-200 bg-white p-4 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+      className="group flex items-start gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
     >
-      <div className="flex items-start gap-3">
-        <div
-          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconClasses}`}
-        >
-          {icon}
-        </div>
+      <div
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${iconClasses}`}
+      >
+        {icon}
+      </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="font-bold text-slate-950">{title}</h3>
-            <ExternalLink
-              size={15}
-              className="shrink-0 text-slate-300 transition group-hover:text-slate-700"
-            />
-          </div>
-          <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
-        </div>
+      <div className="min-w-0">
+        <h3 className="font-bold text-slate-950 group-hover:text-blue-700">
+          {title}
+        </h3>
+        <p className="mt-1 text-sm leading-6 text-slate-500">
+          {description}
+        </p>
       </div>
     </Link>
   );
 }
 
-function KpiCard({
-  label,
-  value,
-  detail,
+function EmptyState({
   icon,
-  tone = "default",
+  title,
+  description,
 }: {
-  label: string;
-  value: string;
-  detail: string;
   icon: React.ReactNode;
-  tone?: "default" | "amber" | "rose";
+  title: string;
+  description: string;
 }) {
-  const classes =
-    tone === "amber"
-      ? "border-amber-200 bg-amber-50"
-      : tone === "rose"
-        ? "border-rose-200 bg-rose-50"
-        : "border-slate-200 bg-white";
-
   return (
-    <div className={`rounded-2xl border p-5 shadow-sm ${classes}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-slate-500">{label}</div>
-          <div className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
-            {value}
-          </div>
-          <div className="mt-1 text-xs text-slate-400">{detail}</div>
-        </div>
-
-        <div className="rounded-xl bg-white/70 p-2.5 text-slate-700">
-          {icon}
-        </div>
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm">
+        {icon}
       </div>
+      <h3 className="mt-4 text-lg font-bold text-slate-900">{title}</h3>
+      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+        {description}
+      </p>
     </div>
-  );
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-bold text-slate-800">
-        {label}
-      </span>
-      {children}
-    </label>
   );
 }
 
@@ -2246,7 +1595,10 @@ function SelectField({
         className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-9 text-sm font-medium text-slate-700 outline-none ring-slate-200 focus:ring-2"
       >
         {options.map((option) => (
-          <option key={`${option.value}-${option.label}`} value={option.value}>
+          <option
+            key={`${option.value}-${option.label}`}
+            value={option.value}
+          >
             {option.label}
           </option>
         ))}

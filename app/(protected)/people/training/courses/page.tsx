@@ -749,11 +749,11 @@ export default function TrainingCoursesPage() {
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <Link
-                href="/people/training/dashboard"
+                href="/people/training"
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft size={16} />
-                Back to Training Dashboard
+                Back to Training Register
               </Link>
 
               <div className="mt-5 flex items-center gap-2 text-slate-400">
