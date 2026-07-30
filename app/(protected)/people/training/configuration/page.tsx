@@ -53,12 +53,7 @@ type RecordType = {
   requires_document: boolean;
   allows_multiple_current: boolean;
   subtype_mode: "none" | "single" | "multiple";
-  supersede_scope:
-    | "type"
-    | "type_and_option"
-    | "type_option_and_project"
-    | "never";
-  filename_pattern: string;
+  filename_components: string[];
   sort_order: number;
 };
 
@@ -74,8 +69,57 @@ type RecordOption = {
 
 type Message = { tone: "success" | "error"; text: string };
 
-const DEFAULT_FILENAME_PATTERN =
-  "{employee_id}_{record_code}_{option_code}_{expiry_date}";
+const DEFAULT_FILENAME_COMPONENTS = [
+  "employee_id",
+  "record_code",
+  "option_code",
+  "issue_date",
+  "expiry_date",
+  "project_code",
+  "document_side",
+];
+
+function normaliseFilenameComponents(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_FILENAME_COMPONENTS];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function buildFilenamePreview(recordType: RecordType): string {
+  const values: Record<string, string> = {
+    employee_id: "EMP003",
+    employee_name: "JAYLEN-DALE",
+    record_code: recordType.code || "RECORD",
+    option_code:
+      recordType.subtype_mode === "multiple"
+        ? "DG-RA-LF-CO"
+        : recordType.subtype_mode === "single"
+          ? "DG"
+          : "",
+    project_code: recordType.requires_project ? "PROJECT" : "",
+    issue_date: recordType.requires_issue_date ? "2026-07-30" : "",
+    expiry_date: recordType.requires_expiry_date ? "2029-07-30" : "",
+    document_side: "",
+  };
+
+  const parts = recordType.filename_components
+    .map((component) => values[component] ?? "")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return `${parts.join("_") || "EMP003_RECORD"}.pdf`;
+}
+
+function filenameComponentsFor(recordType: RecordType): string[] {
+  return [
+    "employee_id",
+    "record_code",
+    recordType.subtype_mode === "none" ? null : "option_code",
+    recordType.requires_project ? "project_code" : null,
+    recordType.requires_issue_date ? "issue_date" : null,
+    recordType.requires_expiry_date ? "expiry_date" : null,
+    "document_side",
+  ].filter((item): item is string => Boolean(item));
+}
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -119,7 +163,7 @@ export default function TrainingConfigurationPage() {
       supabase
         .from("training_types")
         .select(
-          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, supersede_scope, filename_pattern, sort_order",
+          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, filename_components, sort_order",
         )
         .order("sort_order")
         .order("name"),
@@ -137,7 +181,14 @@ export default function TrainingConfigurationPage() {
     if (error) throw new Error(error.message);
 
     setCategories((categoryResult.data ?? []) as Category[]);
-    setRecordTypes((typeResult.data ?? []) as RecordType[]);
+    setRecordTypes(
+      (typeResult.data ?? []).map((item) => ({
+        ...(item as Omit<RecordType, "filename_components">),
+        filename_components: normaliseFilenameComponents(
+          (item as { filename_components?: unknown }).filename_components,
+        ),
+      })),
+    );
     setRecordOptions((optionResult.data ?? []) as RecordOption[]);
   }, [supabase]);
 
@@ -290,8 +341,7 @@ export default function TrainingConfigurationPage() {
       requires_document: true,
       allows_multiple_current: false,
       subtype_mode: "none",
-      supersede_scope: "type",
-      filename_pattern: DEFAULT_FILENAME_PATTERN,
+      filename_components: [...DEFAULT_FILENAME_COMPONENTS],
       sort_order: 0,
     });
   }
@@ -387,11 +437,9 @@ export default function TrainingConfigurationPage() {
         requires_document: typeForm.requires_document,
         allows_multiple_current: typeForm.allows_multiple_current,
         subtype_mode: typeForm.subtype_mode,
-        supersede_scope: typeForm.allows_multiple_current
-          ? "never"
-          : typeForm.supersede_scope,
-        filename_pattern:
-          clean(typeForm.filename_pattern) || DEFAULT_FILENAME_PATTERN,
+        supports_class_codes: typeForm.subtype_mode !== "none",
+        supersede_scope: "never",
+        filename_components: filenameComponentsFor(typeForm),
         sort_order: typeForm.sort_order || 0,
       };
 
@@ -550,8 +598,10 @@ export default function TrainingConfigurationPage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Manage categories, record types, selectable options, SharePoint
-                folder destinations, filename rules and automatic superseding.
+                Manage categories, record types, selectable classes and
+                SharePoint folder destinations. Filenames are generated from the
+                fields enabled for each record type. Superseding is confirmed
+                during upload or renewal.
               </p>
             </div>
 
@@ -743,10 +793,11 @@ export default function TrainingConfigurationPage() {
             <div>
               <h2 className="font-bold">Next step: SharePoint connection</h2>
               <p className="mt-1 leading-6 text-blue-800">
-                This page defines the rules. Next we connect Microsoft Graph on
-                the server, locate the TTTracker Training Documents library,
-                and then build Add Record so files are renamed and uploaded
-                directly to SharePoint.
+                This page defines record fields and classes. The Add Record
+                and Renewals workflows will generate the filename, detect
+                existing current records and ask the user whether the upload
+                should supersede a previous document before anything is moved
+                into the Superseded folder.
               </p>
             </div>
           </div>
@@ -1021,15 +1072,7 @@ export default function TrainingConfigurationPage() {
                 onChange={(value) =>
                   setTypeForm((current) =>
                     current
-                      ? {
-                          ...current,
-                          allows_multiple_current: value,
-                          supersede_scope: value
-                            ? "never"
-                            : current.supersede_scope === "never"
-                              ? "type"
-                              : current.supersede_scope,
-                        }
+                      ? { ...current, allows_multiple_current: value }
                       : current,
                   )
                 }
@@ -1047,13 +1090,13 @@ export default function TrainingConfigurationPage() {
             </div>
 
             <Section
-              title="Options and superseding"
-              description="Options are used for classes such as DG, RB, RI, RA and driver licence classes."
+              title="Classes and current records"
+              description="Choose whether the record has no classes, one class, or several classes on the same document."
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <LabeledSelect
-                label="Option selection"
+                label="Class selection"
                 value={typeForm.subtype_mode}
                 onChange={(value) =>
                   setTypeForm((current) =>
@@ -1066,71 +1109,48 @@ export default function TrainingConfigurationPage() {
                   )
                 }
                 options={[
-                  { value: "none", label: "No options" },
-                  { value: "single", label: "Single option" },
-                  { value: "multiple", label: "Multiple options" },
+                  { value: "none", label: "No classes or endorsements" },
+                  { value: "single", label: "One class per record" },
+                  {
+                    value: "multiple",
+                    label: "Multiple classes on one record",
+                  },
                 ]}
               />
 
-              <LabeledSelect
-                label="Supersede matching rule"
-                value={
-                  typeForm.allows_multiple_current
-                    ? "never"
-                    : typeForm.supersede_scope
-                }
-                disabled={typeForm.allows_multiple_current}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? {
-                          ...current,
-                          supersede_scope:
-                            value as RecordType["supersede_scope"],
-                        }
-                      : current,
-                  )
-                }
-                options={[
-                  { value: "type", label: "Same employee + record type" },
-                  {
-                    value: "type_and_option",
-                    label: "Same employee + type + option",
-                  },
-                  {
-                    value: "type_option_and_project",
-                    label: "Same employee + type + option + project",
-                  },
-                  { value: "never", label: "Never supersede automatically" },
-                ]}
-              />
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-bold text-slate-800">
+                  Existing record handling
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  When a document is uploaded, TTTracker will show any current
+                  matching records and ask whether the new upload should renew
+                  and supersede one of them or be added as another current
+                  record.
+                </p>
+              </div>
             </div>
 
             <Section
-              title="SharePoint filename"
-              description="The file extension is added automatically."
+              title="Generated SharePoint filename"
+              description="The filename is built automatically from enabled fields. Empty or disabled values are omitted."
             />
 
-            <Field
-              label="Filename pattern"
-              value={typeForm.filename_pattern}
-              onChange={(value) =>
-                setTypeForm((current) =>
-                  current ? { ...current, filename_pattern: value } : current,
-                )
-              }
-              required
-            />
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs leading-6 text-slate-600">
-              Tokens: <code>{"{employee_id}"}</code>,{" "}
-              <code>{"{employee_name}"}</code>,{" "}
-              <code>{"{record_code}"}</code>,{" "}
-              <code>{"{option_code}"}</code>,{" "}
-              <code>{"{project_code}"}</code>,{" "}
-              <code>{"{issue_date}"}</code>,{" "}
-              <code>{"{expiry_date}"}</code>,{" "}
-              <code>{"{document_side}"}</code>.
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Example
+              </div>
+              <code className="mt-2 block break-all text-sm font-semibold text-slate-900">
+                {buildFilenamePreview({
+                  ...typeForm,
+                  filename_components: filenameComponentsFor(typeForm),
+                })}
+              </code>
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                Multiple selected classes are joined with hyphens, for example
+                DG-RA-LF-CO. Expiry is only included when the record type asks
+                for an expiry date.
+              </p>
             </div>
 
             <Actions
@@ -1269,7 +1289,7 @@ function TypesTable({
             <th className="px-5 py-3 font-semibold">Category</th>
             <th className="px-5 py-3 font-semibold">Fields</th>
             <th className="px-5 py-3 font-semibold">Options</th>
-            <th className="px-5 py-3 font-semibold">Superseding</th>
+            <th className="px-5 py-3 font-semibold">Current Records</th>
             <th className="px-5 py-3 font-semibold">Status</th>
             <th className="px-5 py-3 text-right font-semibold">Actions</th>
           </tr>
@@ -1324,8 +1344,8 @@ function TypesTable({
                 </td>
                 <td className="px-5 py-4 text-xs text-slate-600">
                   {item.allows_multiple_current
-                    ? "Multiple current"
-                    : item.supersede_scope.replaceAll("_", " ")}
+                    ? "Multiple current allowed"
+                    : "Prompt on upload / renewal"}
                 </td>
                 <td className="px-5 py-4">
                   <Status active={item.active} />
