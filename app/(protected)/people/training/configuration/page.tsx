@@ -49,6 +49,10 @@ type RecordType = {
   requires_issue_date: boolean;
   requires_expiry_date: boolean;
   allows_no_expiry: boolean;
+  validity_mode: "never" | "manual" | "automatic";
+  validity_interval_value: number | null;
+  validity_interval_unit: "days" | "weeks" | "months" | "years" | null;
+  filename_date_field: "none" | "issue_date" | "expiry_date";
   requires_certificate_number: boolean;
   requires_issuer: boolean;
   requires_project: boolean;
@@ -99,12 +103,14 @@ function buildFilenamePreview(recordType: RecordType): string {
           ? "CLASS"
           : "",
     project_code: recordType.requires_project ? "PROJECT_CODE" : "",
-    issue_date: recordType.requires_issue_date ? "ISSUE_DATE" : "",
-    expiry_date: recordType.requires_expiry_date ? "EXPIRY_DATE" : "",
+    issue_date:
+      recordType.filename_date_field === "issue_date" ? "ISSUE_DATE" : "",
+    expiry_date:
+      recordType.filename_date_field === "expiry_date" ? "EXPIRY_DATE" : "",
     document_side: "",
   };
 
-  const parts = recordType.filename_components
+  const parts = filenameComponentsFor(recordType)
     .map((component) => previewValues[component] ?? "")
     .map((value) => value.trim())
     .filter(Boolean);
@@ -119,8 +125,8 @@ function filenameComponentsFor(recordType: RecordType): string[] {
     "record_code",
     recordType.subtype_mode === "none" ? null : "option_code",
     recordType.requires_project ? "project_code" : null,
-    recordType.requires_issue_date ? "issue_date" : null,
-    recordType.requires_expiry_date ? "expiry_date" : null,
+    recordType.filename_date_field === "issue_date" ? "issue_date" : null,
+    recordType.filename_date_field === "expiry_date" ? "expiry_date" : null,
     "document_side",
   ].filter((item): item is string => Boolean(item));
 }
@@ -167,7 +173,7 @@ export default function TrainingConfigurationPage() {
       supabase
         .from("training_types")
         .select(
-          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, filename_components, sort_order",
+          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, filename_components, sort_order",
         )
         .order("sort_order")
         .order("name"),
@@ -188,6 +194,23 @@ export default function TrainingConfigurationPage() {
     setRecordTypes(
       (typeResult.data ?? []).map((item) => ({
         ...(item as Omit<RecordType, "filename_components">),
+        validity_mode:
+          (item as { validity_mode?: RecordType["validity_mode"] }).validity_mode ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "manual"
+            : "never"),
+        validity_interval_value:
+          (item as { validity_interval_value?: number | null })
+            .validity_interval_value ?? null,
+        validity_interval_unit:
+          (item as { validity_interval_unit?: RecordType["validity_interval_unit"] })
+            .validity_interval_unit ?? null,
+        filename_date_field:
+          (item as { filename_date_field?: RecordType["filename_date_field"] })
+            .filename_date_field ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "expiry_date"
+            : "none"),
         filename_components: normaliseFilenameComponents(
           (item as { filename_components?: unknown }).filename_components,
         ),
@@ -339,7 +362,11 @@ export default function TrainingConfigurationPage() {
       active: true,
       requires_issue_date: true,
       requires_expiry_date: true,
-      allows_no_expiry: true,
+      allows_no_expiry: false,
+      validity_mode: "manual",
+      validity_interval_value: null,
+      validity_interval_unit: null,
+      filename_date_field: "expiry_date",
       requires_certificate_number: false,
       requires_issuer: false,
       requires_project: false,
@@ -444,9 +471,22 @@ export default function TrainingConfigurationPage() {
         short_code: makeCode(typeForm.code || typeForm.name),
         description: clean(typeForm.description) || null,
         active: typeForm.active,
-        requires_issue_date: typeForm.requires_issue_date,
-        requires_expiry_date: typeForm.requires_expiry_date,
-        allows_no_expiry: typeForm.allows_no_expiry,
+        requires_issue_date:
+          typeForm.validity_mode === "automatic"
+            ? true
+            : typeForm.requires_issue_date,
+        requires_expiry_date: typeForm.validity_mode !== "never",
+        allows_no_expiry: typeForm.validity_mode === "never",
+        validity_mode: typeForm.validity_mode,
+        validity_interval_value:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_value
+            : null,
+        validity_interval_unit:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_unit
+            : null,
+        filename_date_field: typeForm.filename_date_field,
         requires_certificate_number: typeForm.requires_certificate_number,
         requires_issuer: typeForm.requires_issuer,
         requires_project: typeForm.requires_project,
@@ -461,6 +501,26 @@ export default function TrainingConfigurationPage() {
 
       if (!payload.name) throw new Error("Record type name is required.");
       if (!payload.short_code) throw new Error("Record type code is required.");
+      if (
+        payload.validity_mode === "automatic" &&
+        (!payload.validity_interval_value || payload.validity_interval_value < 1)
+      ) {
+        throw new Error("Enter a renewal interval greater than zero.");
+      }
+      if (
+        payload.validity_mode === "automatic" &&
+        !payload.validity_interval_unit
+      ) {
+        throw new Error("Select a renewal interval unit.");
+      }
+      if (
+        payload.filename_date_field === "expiry_date" &&
+        payload.validity_mode === "never"
+      ) {
+        throw new Error(
+          "A record that never expires cannot show an expiry date in its filename.",
+        );
+      }
 
       const result = typeForm.id
         ? await supabase
@@ -1028,14 +1088,136 @@ export default function TrainingConfigurationPage() {
             />
 
             <Section
-              title="Dynamic form fields"
-              description="Only enabled fields will appear on Add Record."
+              title="Validity and renewal"
+              description="Choose how expiry is handled for this record type. Automatic expiry is calculated from the issue date during upload."
             />
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <LabeledSelect
+                label="Expiry handling"
+                value={typeForm.validity_mode}
+                onChange={(value) =>
+                  setTypeForm((current) => {
+                    if (!current) return current;
+                    const mode = value as RecordType["validity_mode"];
+                    return {
+                      ...current,
+                      validity_mode: mode,
+                      requires_issue_date:
+                        mode === "automatic" ? true : current.requires_issue_date,
+                      requires_expiry_date: mode !== "never",
+                      allows_no_expiry: mode === "never",
+                      validity_interval_value:
+                        mode === "automatic"
+                          ? current.validity_interval_value ?? 1
+                          : null,
+                      validity_interval_unit:
+                        mode === "automatic"
+                          ? current.validity_interval_unit ?? "years"
+                          : null,
+                      filename_date_field:
+                        mode === "never" &&
+                        current.filename_date_field === "expiry_date"
+                          ? "none"
+                          : current.filename_date_field,
+                    };
+                  })
+                }
+                options={[
+                  { value: "never", label: "Never expires" },
+                  { value: "manual", label: "Enter expiry date manually" },
+                  {
+                    value: "automatic",
+                    label: "Calculate expiry from issue date",
+                  },
+                ]}
+              />
+
+              <LabeledSelect
+                label="Date shown in filename"
+                value={typeForm.filename_date_field}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          filename_date_field:
+                            value as RecordType["filename_date_field"],
+                        }
+                      : current,
+                  )
+                }
+                options={[
+                  { value: "none", label: "No date" },
+                  { value: "issue_date", label: "Issue date" },
+                  ...(typeForm.validity_mode !== "never"
+                    ? [{ value: "expiry_date", label: "Expiry date" }]
+                    : []),
+                ]}
+              />
+            </div>
+
+            {typeForm.validity_mode === "automatic" ? (
+              <div className="grid gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <Field
+                  label="Renewal interval"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={String(typeForm.validity_interval_value ?? 1)}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_value:
+                              Number.parseInt(value, 10) || 1,
+                          }
+                        : current,
+                    )
+                  }
+                  required
+                />
+                <LabeledSelect
+                  label="Interval unit"
+                  value={typeForm.validity_interval_unit ?? "years"}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_unit:
+                              value as NonNullable<
+                                RecordType["validity_interval_unit"]
+                              >,
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "days", label: "Days" },
+                    { value: "weeks", label: "Weeks" },
+                    { value: "months", label: "Months" },
+                    { value: "years", label: "Years" },
+                  ]}
+                />
+                <p className="sm:col-span-2 text-xs leading-5 text-blue-800">
+                  Upload example: entering the issue date automatically calculates
+                  the expiry date using this interval. The calculated expiry is
+                  saved to Supabase and used in the filename when Expiry date is
+                  selected above.
+                </p>
+              </div>
+            ) : null}
+
+            {typeForm.validity_mode !== "automatic" ? (
               <Toggle
                 label="Issue date"
-                description="Ask for issue date"
+                description={
+                  typeForm.validity_mode === "manual"
+                    ? "Ask for an issue date as well as the manually entered expiry date"
+                    : "Ask for an issue date even though this record never expires"
+                }
                 checked={typeForm.requires_issue_date}
                 onChange={(value) =>
                   setTypeForm((current) =>
@@ -1045,30 +1227,15 @@ export default function TrainingConfigurationPage() {
                   )
                 }
               />
-              <Toggle
-                label="Expiry date"
-                description="Ask for expiry date"
-                checked={typeForm.requires_expiry_date}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? { ...current, requires_expiry_date: value }
-                      : current,
-                  )
-                }
-              />
-              <Toggle
-                label="Allow no expiry"
-                description="Supports permanent qualifications"
-                checked={typeForm.allows_no_expiry}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? { ...current, allows_no_expiry: value }
-                      : current,
-                  )
-                }
-              />
+            ) : null}
+
+            <Section
+              title="Dynamic form fields"
+              description="Only enabled fields will appear on Add Record."
+            />
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+
               <Toggle
                 label="Certificate number"
                 description="Ask for licence or certificate number"
@@ -1196,11 +1363,10 @@ export default function TrainingConfigurationPage() {
                 })}
               </code>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                This preview uses generic field codes and updates as you change
-                the record code and enabled fields. The employee ID and full name
-                are populated from Supabase during upload. Multiple selected
-                classes are joined with hyphens, and optional fields are omitted
-                when they do not apply.
+                This preview uses generic field codes and updates from the
+                selected configuration. Employee details are populated from
+                Supabase during upload. For automatic renewals, the expiry date
+                is calculated from the issue date and the configured interval.
               </p>
             </div>
 
@@ -1341,8 +1507,16 @@ function TypesTable({
         <tbody className="divide-y divide-slate-100">
           {items.map((item) => {
             const fields = [
-              item.requires_issue_date ? "Issue" : null,
-              item.requires_expiry_date ? "Expiry" : null,
+              item.validity_mode === "automatic"
+                ? `Auto ${item.validity_interval_value ?? "?"} ${item.validity_interval_unit ?? ""}`
+                : item.validity_mode === "manual"
+                  ? "Manual expiry"
+                  : "Never expires",
+              item.filename_date_field === "expiry_date"
+                ? "Filename: expiry"
+                : item.filename_date_field === "issue_date"
+                  ? "Filename: issue"
+                  : null,
               item.requires_certificate_number ? "Number" : null,
               item.requires_issuer ? "Issuer" : null,
               item.requires_project ? "Project" : null,
@@ -1765,16 +1939,25 @@ function Field({
   value,
   onChange,
   required = false,
+  type = "text",
+  min,
+  step,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
+  type?: "text" | "number";
+  min?: string;
+  step?: string;
 }) {
   return (
     <label className="block">
       <span className="text-sm font-semibold text-slate-700">{label}</span>
       <input
+        type={type}
+        min={min}
+        step={step}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
