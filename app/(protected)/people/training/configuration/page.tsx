@@ -4,7 +4,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   FileCog,
@@ -71,6 +73,7 @@ type Message = { tone: "success" | "error"; text: string };
 
 const DEFAULT_FILENAME_COMPONENTS = [
   "employee_id",
+  "employee_name",
   "record_code",
   "option_code",
   "issue_date",
@@ -112,6 +115,7 @@ function buildFilenamePreview(recordType: RecordType): string {
 function filenameComponentsFor(recordType: RecordType): string[] {
   return [
     "employee_id",
+    "employee_name",
     "record_code",
     recordType.subtype_mode === "none" ? null : "option_code",
     recordType.requires_project ? "project_code" : null,
@@ -315,7 +319,8 @@ export default function TrainingConfigurationPage() {
       code: "",
       sharepoint_folder_name: "",
       description: "",
-      sort_order: 0,
+      sort_order:
+        Math.max(0, ...categories.map((item) => item.sort_order || 0)) + 10,
       active: true,
     });
   }
@@ -342,7 +347,8 @@ export default function TrainingConfigurationPage() {
       allows_multiple_current: false,
       subtype_mode: "none",
       filename_components: [...DEFAULT_FILENAME_COMPONENTS],
-      sort_order: 0,
+      sort_order:
+        Math.max(0, ...recordTypes.map((item) => item.sort_order || 0)) + 10,
     });
   }
 
@@ -354,7 +360,17 @@ export default function TrainingConfigurationPage() {
       name: "",
       code: "",
       description: "",
-      sort_order: 0,
+      sort_order:
+        Math.max(
+          0,
+          ...recordOptions
+            .filter((item) =>
+              trainingTypeId
+                ? item.training_type_id === trainingTypeId
+                : true,
+            )
+            .map((item) => item.sort_order || 0),
+        ) + 10,
       active: true,
     });
   }
@@ -539,6 +555,40 @@ export default function TrainingConfigurationPage() {
     await loadData();
   }
 
+  async function moveItem(
+    table: "training_categories" | "training_types" | "training_type_options",
+    items: Array<{ id: string; sort_order: number }>,
+    itemId: string,
+    direction: "up" | "down",
+  ) {
+    const ordered = [...items].sort(
+      (a, b) => (a.sort_order || 0) - (b.sort_order || 0),
+    );
+    const index = ordered.findIndex((item) => item.id === itemId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (index < 0 || targetIndex < 0 || targetIndex >= ordered.length) return;
+
+    const current = ordered[index];
+    const target = ordered[targetIndex];
+
+    const currentOrder = current.sort_order || (index + 1) * 10;
+    const targetOrder = target.sort_order || (targetIndex + 1) * 10;
+
+    const [currentResult, targetResult] = await Promise.all([
+      supabase.from(table).update({ sort_order: targetOrder }).eq("id", current.id),
+      supabase.from(table).update({ sort_order: currentOrder }).eq("id", target.id),
+    ]);
+
+    const error = currentResult.error ?? targetResult.error;
+    if (error) {
+      setMessage({ tone: "error", text: error.message });
+      return;
+    }
+
+    await loadData();
+  }
+
   async function deleteOption(item: RecordOption) {
     if (
       !window.confirm(
@@ -599,9 +649,9 @@ export default function TrainingConfigurationPage() {
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
                 Manage categories, record types, selectable classes and
-                SharePoint folder destinations. Filenames are generated from the
-                fields enabled for each record type. Superseding is confirmed
-                during upload or renewal.
+                SharePoint folder destinations. Use the arrow buttons in each
+                table to control display order. Filenames include the employee’s
+                full name and are generated from applicable fields.
               </p>
             </div>
 
@@ -754,6 +804,9 @@ export default function TrainingConfigurationPage() {
                 void toggleRow("training_types", item.id, item.active)
               }
               onAddOption={newOption}
+              onMove={(item, direction) =>
+                void moveItem("training_types", recordTypes, item.id, direction)
+              }
             />
           ) : null}
 
@@ -766,6 +819,9 @@ export default function TrainingConfigurationPage() {
               onEdit={setCategoryForm}
               onToggle={(item) =>
                 void toggleRow("training_categories", item.id, item.active)
+              }
+              onMove={(item, direction) =>
+                void moveItem("training_categories", categories, item.id, direction)
               }
             />
           ) : null}
@@ -783,6 +839,17 @@ export default function TrainingConfigurationPage() {
                 )
               }
               onDelete={(item) => void deleteOption(item)}
+              onMove={(item, direction) =>
+                void moveItem(
+                  "training_type_options",
+                  recordOptions.filter(
+                    (option) =>
+                      option.training_type_id === item.training_type_id,
+                  ),
+                  item.id,
+                  direction,
+                )
+              }
             />
           ) : null}
         </section>
@@ -867,15 +934,6 @@ export default function TrainingConfigurationPage() {
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <NumberField
-                label="Sort order"
-                value={categoryForm.sort_order}
-                onChange={(value) =>
-                  setCategoryForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
-              />
               <Toggle
                 label="Active"
                 description="Available when adding a record"
@@ -956,15 +1014,6 @@ export default function TrainingConfigurationPage() {
                   )
                 }
                 required
-              />
-              <NumberField
-                label="Sort order"
-                value={typeForm.sort_order}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
               />
             </div>
 
@@ -1147,9 +1196,9 @@ export default function TrainingConfigurationPage() {
                 })}
               </code>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                Multiple selected classes are joined with hyphens, for example
-                DG-RA-LF-CO. Expiry is only included when the record type asks
-                for an expiry date.
+                The employee’s full name is always included. Multiple selected
+                classes are joined with hyphens, for example DG-RA-LF-CO.
+                Expiry is only included when the record type asks for one.
               </p>
             </div>
 
@@ -1230,15 +1279,6 @@ export default function TrainingConfigurationPage() {
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <NumberField
-                label="Sort order"
-                value={optionForm.sort_order}
-                onChange={(value) =>
-                  setOptionForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
-              />
               <Toggle
                 label="Active"
                 description="Available when adding a record"
@@ -1270,6 +1310,7 @@ function TypesTable({
   onEdit,
   onToggle,
   onAddOption,
+  onMove,
 }: {
   items: RecordType[];
   categoryById: Map<string, Category>;
@@ -1277,6 +1318,7 @@ function TypesTable({
   onEdit: (item: RecordType) => void;
   onToggle: (item: RecordType) => void;
   onAddOption: (id: string) => void;
+  onMove: (item: RecordType, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No record types found." />;
 
@@ -1353,6 +1395,16 @@ function TypesTable({
                 <td className="px-5 py-4">
                   <div className="flex justify-end gap-2">
                     <IconButton
+                      title="Move earlier"
+                      onClick={() => onMove(item, "up")}
+                      icon={<ArrowUp size={15} />}
+                    />
+                    <IconButton
+                      title="Move later"
+                      onClick={() => onMove(item, "down")}
+                      icon={<ArrowDown size={15} />}
+                    />
+                    <IconButton
                       title="Add option"
                       onClick={() => onAddOption(item.id)}
                       icon={<Plus size={15} />}
@@ -1389,11 +1441,13 @@ function CategoriesTable({
   typeCount,
   onEdit,
   onToggle,
+  onMove,
 }: {
   items: Category[];
   typeCount: (id: string) => number;
   onEdit: (item: Category) => void;
   onToggle: (item: Category) => void;
+  onMove: (item: Category, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No categories found." />;
 
@@ -1435,6 +1489,16 @@ function CategoriesTable({
               <td className="px-5 py-4">
                 <div className="flex justify-end gap-2">
                   <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
+                  <IconButton
                     title="Edit"
                     onClick={() => onEdit(item)}
                     icon={<Pencil size={15} />}
@@ -1466,12 +1530,14 @@ function OptionsTable({
   onEdit,
   onToggle,
   onDelete,
+  onMove,
 }: {
   items: RecordOption[];
   typeById: Map<string, RecordType>;
   onEdit: (item: RecordOption) => void;
   onToggle: (item: RecordOption) => void;
   onDelete: (item: RecordOption) => void;
+  onMove: (item: RecordOption, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No options found." />;
 
@@ -1505,6 +1571,16 @@ function OptionsTable({
               </td>
               <td className="px-5 py-4">
                 <div className="flex justify-end gap-2">
+                  <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
                   <IconButton
                     title="Edit"
                     onClick={() => onEdit(item)}
@@ -1700,28 +1776,6 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
-        className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-      />
-    </label>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="text-sm font-semibold text-slate-700">{label}</span>
-      <input
-        type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value) || 0)}
         className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
       />
     </label>
