@@ -23,7 +23,7 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
 
 if (!loading && session) {
-  return <Redirect href="/" />;
+  return <Redirect href="/(drawer)" />;
 }
 
   async function handleSignIn() {
