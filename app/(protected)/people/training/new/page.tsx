@@ -29,6 +29,7 @@ type ValidityMode = "never" | "manual" | "automatic";
 type ValidityUnit = "days" | "weeks" | "months" | "years";
 type SubtypeMode = "none" | "single" | "multiple";
 type FilenameDateField = "none" | "issue_date" | "expiry_date";
+type DocumentUploadType = "none" | "single" | "front_back";
 type ReplaceChoice = "replace" | "add" | "cancel" | null;
 
 type Employee = {
@@ -60,6 +61,7 @@ type TrainingType = {
   requires_issuer: boolean;
   requires_project: boolean;
   requires_document: boolean;
+  document_upload_type: DocumentUploadType;
   allows_multiple_current: boolean;
   subtype_mode: SubtypeMode;
   validity_mode: ValidityMode;
@@ -99,7 +101,9 @@ type FormState = {
   issueDate: string;
   expiryDate: string;
   notes: string;
-  file: File | null;
+  singleFile: File | null;
+  frontFile: File | null;
+  backFile: File | null;
 };
 
 type Message = {
@@ -117,7 +121,9 @@ const EMPTY_FORM: FormState = {
   issueDate: "",
   expiryDate: "",
   notes: "",
-  file: null,
+  singleFile: null,
+  frontFile: null,
+  backFile: null,
 };
 
 const clean = (value: unknown) => String(value ?? "").trim();
@@ -247,6 +253,16 @@ function safeFilenamePart(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function employeeNumberComponent(payrollId: string): string {
+  const cleaned = safeFilenamePart(payrollId || "###");
+  return cleaned.startsWith("EMP") ? cleaned : `EMP${cleaned}`;
+}
+
+function employeeDisplayNumber(payrollId: string): string {
+  if (!payrollId) return "No Payroll ID";
+  return employeeNumberComponent(payrollId);
+}
+
 function employeeFilenameName(employee: Employee | null): string {
   if (!employee) return "SURNAME_FIRSTNAME";
 
@@ -264,6 +280,7 @@ function buildFilename(params: {
   issueDate: string;
   expiryDate: string;
   originalFile: File | null;
+  documentSide?: "FRONT" | "BACK" | "";
 }): string {
   const {
     employee,
@@ -273,20 +290,24 @@ function buildFilename(params: {
     issueDate,
     expiryDate,
     originalFile,
+    documentSide = "",
   } = params;
 
   const extension =
-    originalFile?.name.split(".").pop()?.toLowerCase() || "pdf";
+    originalFile?.name.split(".").pop()?.toLowerCase() ||
+    (documentSide ? "jpg" : "pdf");
 
   if (!trainingType) {
-    return `EMP###_SURNAME_FIRSTNAME_RECORD_CODE.${extension}`;
+    return `EMP###_SURNAME_FIRSTNAME_RECORD_CODE${
+      documentSide ? `_${documentSide}` : ""
+    }.${extension}`;
   }
 
   const values: Record<string, string> = {
-    employee_id: safeFilenamePart(employee?.payrollId || "PAYROLL"),
+    employee_id: employeeNumberComponent(employee?.payrollId || "###"),
     employee_name: employeeFilenameName(employee),
     record_code: safeFilenamePart(trainingType.code || "RECORD_CODE"),
-    option_code: selectedOptions
+    option_code: [...selectedOptions]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((option) => safeFilenamePart(option.code))
       .filter(Boolean)
@@ -296,7 +317,7 @@ function buildFilename(params: {
       trainingType.filename_date_field === "issue_date" ? issueDate : "",
     expiry_date:
       trainingType.filename_date_field === "expiry_date" ? expiryDate : "",
-    document_side: "",
+    document_side: documentSide,
   };
 
   const configured = normaliseFilenameComponents(
@@ -313,7 +334,9 @@ function buildFilename(params: {
     trainingType.filename_date_field === "expiry_date"
       ? "expiry_date"
       : null,
-    "document_side",
+    trainingType.document_upload_type === "front_back"
+      ? "document_side"
+      : null,
   ].filter((item): item is string => Boolean(item));
 
   const ordered = configured.filter((item) => components.includes(item));
@@ -370,6 +393,7 @@ export default function NewTrainingRecordPage() {
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [employeeSearch, setEmployeeSearch] = useState("");
+  const [employeePickerOpen, setEmployeePickerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [checkingExisting, setCheckingExisting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -387,7 +411,7 @@ export default function NewTrainingRecordPage() {
         supabase
           .from("training_types")
           .select(
-            "id, category_id, name, code:short_code, description, active, requires_issue_date, requires_expiry_date, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, filename_components, sort_order",
+            "id, category_id, name, code:short_code, description, active, requires_issue_date, requires_expiry_date, requires_certificate_number, requires_issuer, requires_project, requires_document, document_upload_type, allows_multiple_current, subtype_mode, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, filename_components, sort_order",
           )
           .eq("active", true)
           .order("sort_order")
@@ -437,6 +461,9 @@ export default function NewTrainingRecordPage() {
         filename_date_field:
           (item.filename_date_field as FilenameDateField | null) ??
           (item.requires_expiry_date ? "expiry_date" : "none"),
+        document_upload_type:
+          (item.document_upload_type as DocumentUploadType | null) ??
+          (item.requires_document ? "single" : "none"),
         filename_components: normaliseFilenameComponents(
           item.filename_components,
         ),
@@ -500,42 +527,78 @@ export default function NewTrainingRecordPage() {
 
   const filteredEmployees = useMemo(() => {
     const query = employeeSearch.toLowerCase().trim();
-    if (!query) return employees;
+    const numericQuery = query.replace(/^emp/i, "");
 
-    return employees.filter((employee) =>
-      [
-        employee.payrollId,
-        employee.displayName,
-        employee.firstName,
-        employee.lastName,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
+    return employees
+      .filter((employee) => {
+        if (!query) return true;
+
+        const searchText = [
+          employee.payrollId,
+          employeeDisplayNumber(employee.payrollId),
+          employee.displayName,
+          employee.firstName,
+          employee.lastName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return (
+          searchText.includes(query) ||
+          (!!numericQuery &&
+            employee.payrollId.toLowerCase().includes(numericQuery))
+        );
+      })
+      .slice(0, 10);
   }, [employeeSearch, employees]);
 
-  const generatedFilename = useMemo(
-    () =>
-      buildFilename({
-        employee: selectedEmployee,
-        trainingType: selectedType,
-        selectedOptions,
-        project: selectedProject,
-        issueDate: form.issueDate,
-        expiryDate: form.expiryDate,
-        originalFile: form.file,
-      }),
-    [
-      form.expiryDate,
-      form.file,
-      form.issueDate,
-      selectedEmployee,
+  const generatedFilenames = useMemo(() => {
+    const common = {
+      employee: selectedEmployee,
+      trainingType: selectedType,
       selectedOptions,
-      selectedProject,
-      selectedType,
-    ],
-  );
+      project: selectedProject,
+      issueDate: form.issueDate,
+      expiryDate: form.expiryDate,
+    };
+
+    if (selectedType?.document_upload_type === "front_back") {
+      return {
+        single: "",
+        front: buildFilename({
+          ...common,
+          originalFile: form.frontFile,
+          documentSide: "FRONT",
+        }),
+        back: buildFilename({
+          ...common,
+          originalFile: form.backFile,
+          documentSide: "BACK",
+        }),
+      };
+    }
+
+    return {
+      single: buildFilename({
+        ...common,
+        originalFile: form.singleFile,
+      }),
+      front: "",
+      back: "",
+    };
+  }, [
+    form.backFile,
+    form.expiryDate,
+    form.frontFile,
+    form.issueDate,
+    form.singleFile,
+    selectedEmployee,
+    selectedOptions,
+    selectedProject,
+    selectedType,
+  ]);
+
 
   useEffect(() => {
     if (!selectedType) return;
@@ -643,7 +706,9 @@ export default function NewTrainingRecordPage() {
       issueDate: "",
       expiryDate: "",
       notes: "",
-      file: current.file,
+      singleFile: null,
+      frontFile: null,
+      backFile: null,
     }));
 
     setExistingRecords([]);
@@ -677,9 +742,26 @@ export default function NewTrainingRecordPage() {
     });
   }
 
-  function onFileChange(event: ChangeEvent<HTMLInputElement>) {
+  function onFileChange(
+    field: "singleFile" | "frontFile" | "backFile",
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
     const file = event.target.files?.[0] ?? null;
-    setForm((current) => ({ ...current, file }));
+    setForm((current) => ({ ...current, [field]: file }));
+  }
+
+  function selectEmployee(employee: Employee) {
+    setForm((current) => ({ ...current, employeeId: employee.id }));
+    setEmployeeSearch(
+      `${employeeDisplayNumber(employee.payrollId)} — ${employee.displayName}`,
+    );
+    setEmployeePickerOpen(false);
+  }
+
+  function clearEmployee() {
+    setForm((current) => ({ ...current, employeeId: "" }));
+    setEmployeeSearch("");
+    setEmployeePickerOpen(true);
   }
 
   function validate(): string | null {
@@ -732,8 +814,18 @@ export default function NewTrainingRecordPage() {
       return "The expiry date could not be calculated. Check the configured renewal interval.";
     }
 
-    if (selectedType.requires_document && !form.file) {
+    if (
+      selectedType.document_upload_type === "single" &&
+      !form.singleFile
+    ) {
       return "Select the certificate or licence document.";
+    }
+
+    if (
+      selectedType.document_upload_type === "front_back" &&
+      (!form.frontFile || !form.backFile)
+    ) {
+      return "Select both the front and back document files.";
     }
 
     if (existingRecords.length > 0) {
@@ -798,11 +890,16 @@ export default function NewTrainingRecordPage() {
       payload.set("issueDate", form.issueDate);
       payload.set("expiryDate", form.expiryDate);
       payload.set("notes", form.notes.trim());
-      payload.set("generatedFilename", generatedFilename);
+      payload.set("documentUploadType", selectedType.document_upload_type);
+      payload.set("generatedFilename", generatedFilenames.single);
+      payload.set("generatedFrontFilename", generatedFilenames.front);
+      payload.set("generatedBackFilename", generatedFilenames.back);
       payload.set("replacementMode", replaceChoice ?? "none");
       payload.set("supersedesRecordId", replaceRecordId);
 
-      if (form.file) payload.set("file", form.file);
+      if (form.singleFile) payload.set("file", form.singleFile);
+      if (form.frontFile) payload.set("frontFile", form.frontFile);
+      if (form.backFile) payload.set("backFile", form.backFile);
 
       const response = await fetch("/api/training/records/upload", {
         method: "POST",
@@ -821,7 +918,10 @@ export default function NewTrainingRecordPage() {
 
       setMessage({
         tone: "success",
-        text: `Training record uploaded as ${generatedFilename}.`,
+        text:
+          selectedType.document_upload_type === "front_back"
+            ? `Training record uploaded as ${generatedFilenames.front} and ${generatedFilenames.back}.`
+            : `Training record uploaded as ${generatedFilenames.single}.`,
       });
 
       setForm(EMPTY_FORM);
@@ -921,40 +1021,85 @@ export default function NewTrainingRecordPage() {
           <section className="space-y-6">
             <Card
               title="1. Employee"
-              description="Select the employee who owns this training record."
+              description="Search by payroll ID or employee name, then select the matching employee."
             >
-              <div className="mb-3">
-                <label className="relative block">
-                  <Search
-                    size={17}
-                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                  />
-                  <input
-                    value={employeeSearch}
-                    onChange={(event) => setEmployeeSearch(event.target.value)}
-                    placeholder="Search by payroll ID or employee name"
-                    className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                  />
-                </label>
+              <div className="relative">
+                <Search
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  value={employeeSearch}
+                  onFocus={() => setEmployeePickerOpen(true)}
+                  onChange={(event) => {
+                    setEmployeeSearch(event.target.value);
+                    setEmployeePickerOpen(true);
+                    if (form.employeeId) {
+                      setForm((current) => ({ ...current, employeeId: "" }));
+                    }
+                  }}
+                  placeholder="Search by payroll ID or employee name"
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-11 text-sm font-semibold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+
+                {employeeSearch ? (
+                  <button
+                    type="button"
+                    onClick={clearEmployee}
+                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    aria-label="Clear employee"
+                  >
+                    <X size={16} />
+                  </button>
+                ) : null}
+
+                {employeePickerOpen && !form.employeeId ? (
+                  <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    {filteredEmployees.length ? (
+                      filteredEmployees.map((employee) => (
+                        <button
+                          key={employee.id}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectEmployee(employee)}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-blue-50"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-black text-slate-900">
+                              {employee.displayName}
+                            </div>
+                            <div className="mt-0.5 text-xs font-bold text-blue-700">
+                              {employeeDisplayNumber(employee.payrollId)}
+                            </div>
+                          </div>
+                          <span className="shrink-0 text-xs font-semibold text-slate-400">
+                            Select
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-6 text-center text-sm font-semibold text-slate-500">
+                        No matching employees found.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
-              <select
-                value={form.employeeId}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    employeeId: event.target.value,
-                  }))
-                }
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                <option value="">Select employee</option>
-                {filteredEmployees.map((employee) => (
-                  <option key={employee.id} value={employee.id}>
-                    {employee.payrollId || 'No Payroll ID'} — {employee.displayName}
-                  </option>
-                ))}
-              </select>
+              {selectedEmployee ? (
+                <div className="mt-3 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-black text-emerald-950">
+                      {selectedEmployee.displayName}
+                    </div>
+                    <div className="mt-0.5 text-xs font-bold text-emerald-700">
+                      {employeeDisplayNumber(selectedEmployee.payrollId)}
+                    </div>
+                  </div>
+                  <CheckCircle2 size={19} className="text-emerald-600" />
+                </div>
+              ) : null}
             </Card>
 
             <Card
@@ -1168,48 +1313,46 @@ export default function NewTrainingRecordPage() {
 
             <Card
               title="4. Certificate or licence document"
-              description="The backend will upload the file to the employee’s configured SharePoint folder."
+              description="Original files are uploaded to SharePoint exactly as selected. Nothing is converted into a PDF."
             >
-              <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center transition hover:border-blue-400 hover:bg-blue-50">
-                <UploadCloud size={34} className="text-blue-700" />
-                <span className="mt-3 text-sm font-black text-slate-900">
-                  {form.file ? form.file.name : "Choose a document"}
-                </span>
-                <span className="mt-1 text-xs font-semibold text-slate-500">
-                  PDF, image or supported certificate file
-                </span>
-                <input
-                  type="file"
-                  className="sr-only"
-                  onChange={onFileChange}
-                  accept=".pdf,.png,.jpg,.jpeg,.heic,.webp"
-                />
-              </label>
-
-              {form.file ? (
-                <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <FileText size={18} className="shrink-0 text-slate-500" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">
-                        {form.file.name}
-                      </div>
-                      <div className="text-xs font-semibold text-slate-500">
-                        {(form.file.size / 1024 / 1024).toFixed(2)} MB
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm((current) => ({ ...current, file: null }))
-                    }
-                    className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                  >
-                    <X size={17} />
-                  </button>
+              {!selectedType ? (
+                <EmptyState text="Select a training type to display its upload requirements." />
+              ) : selectedType.document_upload_type === "none" ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+                  This training type does not require a document upload.
                 </div>
-              ) : null}
+              ) : selectedType.document_upload_type === "front_back" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <DocumentUpload
+                    label="Front"
+                    required
+                    file={form.frontFile}
+                    onChange={(event) => onFileChange("frontFile", event)}
+                    onClear={() =>
+                      setForm((current) => ({ ...current, frontFile: null }))
+                    }
+                  />
+                  <DocumentUpload
+                    label="Back"
+                    required
+                    file={form.backFile}
+                    onChange={(event) => onFileChange("backFile", event)}
+                    onClear={() =>
+                      setForm((current) => ({ ...current, backFile: null }))
+                    }
+                  />
+                </div>
+              ) : (
+                <DocumentUpload
+                  label="Document"
+                  required
+                  file={form.singleFile}
+                  onChange={(event) => onFileChange("singleFile", event)}
+                  onClear={() =>
+                    setForm((current) => ({ ...current, singleFile: null }))
+                  }
+                />
+              )}
             </Card>
 
             {checkingExisting ? (
@@ -1307,7 +1450,7 @@ export default function NewTrainingRecordPage() {
                 label="Employee"
                 value={
                   selectedEmployee
-                    ? `${selectedEmployee.payrollId || 'No Payroll ID'} — ${selectedEmployee.displayName}`
+                    ? `${employeeDisplayNumber(selectedEmployee.payrollId)} — ${selectedEmployee.displayName}`
                     : "Not selected"
                 }
               />
@@ -1342,13 +1485,39 @@ export default function NewTrainingRecordPage() {
                 }
               />
 
+              <SummaryRow
+                label="Upload type"
+                value={
+                  selectedType?.document_upload_type === "front_back"
+                    ? "Front and back"
+                    : selectedType?.document_upload_type === "single"
+                      ? "Single document"
+                      : "No document"
+                }
+              />
+
               <div className="mt-5 rounded-xl border border-slate-200 bg-slate-950 p-4">
                 <div className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">
-                  Generated filename
+                  Generated SharePoint filename
                 </div>
-                <div className="mt-2 break-all font-mono text-sm font-bold leading-6 text-white">
-                  {generatedFilename}
-                </div>
+                {selectedType?.document_upload_type === "front_back" ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="break-all font-mono text-sm font-bold leading-6 text-white">
+                      {generatedFilenames.front}
+                    </div>
+                    <div className="break-all font-mono text-sm font-bold leading-6 text-white">
+                      {generatedFilenames.back}
+                    </div>
+                  </div>
+                ) : selectedType?.document_upload_type === "none" ? (
+                  <div className="mt-2 text-sm font-semibold text-slate-400">
+                    No document filename required
+                  </div>
+                ) : (
+                  <div className="mt-2 break-all font-mono text-sm font-bold leading-6 text-white">
+                    {generatedFilenames.single}
+                  </div>
+                )}
               </div>
             </Card>
 
@@ -1430,6 +1599,68 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
       <span className="max-w-[62%] text-right text-sm font-black text-slate-900">
         {value}
       </span>
+    </div>
+  );
+}
+
+function DocumentUpload({
+  label,
+  required,
+  file,
+  onChange,
+  onClear,
+}: {
+  label: string;
+  required?: boolean;
+  file: File | null;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-sm font-black text-slate-800">
+        {label}
+        {required ? <span className="ml-1 text-red-600">*</span> : null}
+      </div>
+      <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition hover:border-blue-400 hover:bg-blue-50">
+        <UploadCloud size={30} className="text-blue-700" />
+        <span className="mt-3 max-w-full truncate text-sm font-black text-slate-900">
+          {file ? file.name : `Choose ${label.toLowerCase()} file`}
+        </span>
+        <span className="mt-1 text-xs font-semibold text-slate-500">
+          PDF, JPG, PNG, HEIC or WEBP
+        </span>
+        <input
+          type="file"
+          className="sr-only"
+          onChange={onChange}
+          accept=".pdf,.png,.jpg,.jpeg,.heic,.webp"
+        />
+      </label>
+
+      {file ? (
+        <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <FileText size={18} className="shrink-0 text-slate-500" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-slate-900">
+                {file.name}
+              </div>
+              <div className="text-xs font-semibold text-slate-500">
+                {(file.size / 1024 / 1024).toFixed(2)} MB
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+            aria-label={`Remove ${label.toLowerCase()} file`}
+          >
+            <X size={17} />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
