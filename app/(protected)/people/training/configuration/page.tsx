@@ -119,7 +119,7 @@ export default function TrainingConfigurationPage() {
       supabase
         .from("training_types")
         .select(
-          "id, category_id, name, code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, supersede_scope, filename_pattern, sort_order",
+          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, supersede_scope, filename_pattern, sort_order",
         )
         .order("sort_order")
         .order("name"),
@@ -375,7 +375,7 @@ export default function TrainingConfigurationPage() {
         category_id: category.id,
         category: category.name,
         name: clean(typeForm.name),
-        code: makeCode(typeForm.code || typeForm.name),
+        short_code: makeCode(typeForm.code || typeForm.name),
         description: clean(typeForm.description) || null,
         active: typeForm.active,
         requires_issue_date: typeForm.requires_issue_date,
@@ -396,7 +396,7 @@ export default function TrainingConfigurationPage() {
       };
 
       if (!payload.name) throw new Error("Record type name is required.");
-      if (!payload.code) throw new Error("Record type code is required.");
+      if (!payload.short_code) throw new Error("Record type code is required.");
 
       const result = typeForm.id
         ? await supabase
