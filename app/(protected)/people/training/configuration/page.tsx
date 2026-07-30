@@ -4,7 +4,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   FileCog,
@@ -36,6 +38,8 @@ type Category = {
   active: boolean;
 };
 
+type DocumentUploadType = "none" | "single" | "front_back";
+
 type RecordType = {
   id: string;
   category_id: string | null;
@@ -47,18 +51,18 @@ type RecordType = {
   requires_issue_date: boolean;
   requires_expiry_date: boolean;
   allows_no_expiry: boolean;
+  validity_mode: "never" | "manual" | "automatic";
+  validity_interval_value: number | null;
+  validity_interval_unit: "days" | "weeks" | "months" | "years" | null;
+  filename_date_field: "none" | "issue_date" | "expiry_date";
   requires_certificate_number: boolean;
   requires_issuer: boolean;
   requires_project: boolean;
   requires_document: boolean;
+  document_upload_type: DocumentUploadType;
   allows_multiple_current: boolean;
   subtype_mode: "none" | "single" | "multiple";
-  supersede_scope:
-    | "type"
-    | "type_and_option"
-    | "type_option_and_project"
-    | "never";
-  filename_pattern: string;
+  filename_components: string[];
   sort_order: number;
 };
 
@@ -74,8 +78,76 @@ type RecordOption = {
 
 type Message = { tone: "success" | "error"; text: string };
 
-const DEFAULT_FILENAME_PATTERN =
-  "{employee_id}_{record_code}_{option_code}_{expiry_date}";
+const DEFAULT_FILENAME_COMPONENTS = [
+  "employee_id",
+  "employee_name",
+  "record_code",
+  "option_code",
+  "issue_date",
+  "expiry_date",
+  "project_code",
+  "document_side",
+];
+
+function normaliseFilenameComponents(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_FILENAME_COMPONENTS];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function buildFilenamePreview(recordType: RecordType): string[] {
+  const previewValues: Record<string, string> = {
+    employee_id: "EMP1029",
+    employee_name: "ZETOVIC_LUKA",
+    record_code: clean(recordType.code) || "RECORD_CODE",
+    option_code:
+      recordType.subtype_mode === "multiple"
+        ? "CLASS-CLASS-CLASS"
+        : recordType.subtype_mode === "single"
+          ? "CLASS"
+          : "",
+    project_code: recordType.requires_project ? "PROJECT_CODE" : "",
+    issue_date:
+      recordType.filename_date_field === "issue_date" ? "ISSUE_DATE" : "",
+    expiry_date:
+      recordType.filename_date_field === "expiry_date" ? "EXPIRY_DATE" : "",
+    document_side: "",
+  };
+
+  const build = (side: "FRONT" | "BACK" | "") => {
+    const values: Record<string, string> = {
+      ...previewValues,
+      document_side: side,
+    };
+    const parts = filenameComponentsFor(recordType)
+      .map((component) => values[component] ?? "")
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    const extension = recordType.document_upload_type === "front_back" ? "jpg" : "pdf";
+    return `${parts.join("_") || "EMP1029_ZETOVIC_LUKA_RECORD_CODE"}.${extension}`;
+  };
+
+  if (recordType.document_upload_type === "none") return [];
+  if (recordType.document_upload_type === "front_back") {
+    return [build("FRONT"), build("BACK")];
+  }
+  return [build("")];
+}
+
+function filenameComponentsFor(recordType: RecordType): string[] {
+  return [
+    "employee_id",
+    "employee_name",
+    "record_code",
+    recordType.subtype_mode === "none" ? null : "option_code",
+    recordType.requires_project ? "project_code" : null,
+    recordType.filename_date_field === "issue_date" ? "issue_date" : null,
+    recordType.filename_date_field === "expiry_date" ? "expiry_date" : null,
+    recordType.document_upload_type === "front_back"
+      ? "document_side"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+}
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -119,7 +191,7 @@ export default function TrainingConfigurationPage() {
       supabase
         .from("training_types")
         .select(
-          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, requires_certificate_number, requires_issuer, requires_project, requires_document, allows_multiple_current, subtype_mode, supersede_scope, filename_pattern, sort_order",
+          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, requires_certificate_number, requires_issuer, requires_project, requires_document, document_upload_type, allows_multiple_current, subtype_mode, filename_components, sort_order",
         )
         .order("sort_order")
         .order("name"),
@@ -137,7 +209,37 @@ export default function TrainingConfigurationPage() {
     if (error) throw new Error(error.message);
 
     setCategories((categoryResult.data ?? []) as Category[]);
-    setRecordTypes((typeResult.data ?? []) as RecordType[]);
+    setRecordTypes(
+      (typeResult.data ?? []).map((item) => ({
+        ...(item as Omit<RecordType, "filename_components">),
+        validity_mode:
+          (item as { validity_mode?: RecordType["validity_mode"] }).validity_mode ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "manual"
+            : "never"),
+        validity_interval_value:
+          (item as { validity_interval_value?: number | null })
+            .validity_interval_value ?? null,
+        validity_interval_unit:
+          (item as { validity_interval_unit?: RecordType["validity_interval_unit"] })
+            .validity_interval_unit ?? null,
+        filename_date_field:
+          (item as { filename_date_field?: RecordType["filename_date_field"] })
+            .filename_date_field ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "expiry_date"
+            : "none"),
+        document_upload_type:
+          (item as { document_upload_type?: DocumentUploadType | null })
+            .document_upload_type ??
+          ((item as { requires_document?: boolean }).requires_document
+            ? "single"
+            : "none"),
+        filename_components: normaliseFilenameComponents(
+          (item as { filename_components?: unknown }).filename_components,
+        ),
+      })),
+    );
     setRecordOptions((optionResult.data ?? []) as RecordOption[]);
   }, [supabase]);
 
@@ -264,7 +366,8 @@ export default function TrainingConfigurationPage() {
       code: "",
       sharepoint_folder_name: "",
       description: "",
-      sort_order: 0,
+      sort_order:
+        Math.max(0, ...categories.map((item) => item.sort_order || 0)) + 10,
       active: true,
     });
   }
@@ -283,16 +386,21 @@ export default function TrainingConfigurationPage() {
       active: true,
       requires_issue_date: true,
       requires_expiry_date: true,
-      allows_no_expiry: true,
+      allows_no_expiry: false,
+      validity_mode: "manual",
+      validity_interval_value: null,
+      validity_interval_unit: null,
+      filename_date_field: "expiry_date",
       requires_certificate_number: false,
       requires_issuer: false,
       requires_project: false,
       requires_document: true,
+      document_upload_type: "single",
       allows_multiple_current: false,
       subtype_mode: "none",
-      supersede_scope: "type",
-      filename_pattern: DEFAULT_FILENAME_PATTERN,
-      sort_order: 0,
+      filename_components: [...DEFAULT_FILENAME_COMPONENTS],
+      sort_order:
+        Math.max(0, ...recordTypes.map((item) => item.sort_order || 0)) + 10,
     });
   }
 
@@ -304,7 +412,17 @@ export default function TrainingConfigurationPage() {
       name: "",
       code: "",
       description: "",
-      sort_order: 0,
+      sort_order:
+        Math.max(
+          0,
+          ...recordOptions
+            .filter((item) =>
+              trainingTypeId
+                ? item.training_type_id === trainingTypeId
+                : true,
+            )
+            .map((item) => item.sort_order || 0),
+        ) + 10,
       active: true,
     });
   }
@@ -378,25 +496,57 @@ export default function TrainingConfigurationPage() {
         short_code: makeCode(typeForm.code || typeForm.name),
         description: clean(typeForm.description) || null,
         active: typeForm.active,
-        requires_issue_date: typeForm.requires_issue_date,
-        requires_expiry_date: typeForm.requires_expiry_date,
-        allows_no_expiry: typeForm.allows_no_expiry,
+        requires_issue_date:
+          typeForm.validity_mode === "automatic"
+            ? true
+            : typeForm.requires_issue_date,
+        requires_expiry_date: typeForm.validity_mode !== "never",
+        allows_no_expiry: typeForm.validity_mode === "never",
+        validity_mode: typeForm.validity_mode,
+        validity_interval_value:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_value
+            : null,
+        validity_interval_unit:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_unit
+            : null,
+        filename_date_field: typeForm.filename_date_field,
         requires_certificate_number: typeForm.requires_certificate_number,
         requires_issuer: typeForm.requires_issuer,
         requires_project: typeForm.requires_project,
-        requires_document: typeForm.requires_document,
+        requires_document: typeForm.document_upload_type !== "none",
+        document_upload_type: typeForm.document_upload_type,
         allows_multiple_current: typeForm.allows_multiple_current,
         subtype_mode: typeForm.subtype_mode,
-        supersede_scope: typeForm.allows_multiple_current
-          ? "never"
-          : typeForm.supersede_scope,
-        filename_pattern:
-          clean(typeForm.filename_pattern) || DEFAULT_FILENAME_PATTERN,
+        supports_class_codes: typeForm.subtype_mode !== "none",
+        supersede_scope: "never",
+        filename_components: filenameComponentsFor(typeForm),
         sort_order: typeForm.sort_order || 0,
       };
 
       if (!payload.name) throw new Error("Record type name is required.");
       if (!payload.short_code) throw new Error("Record type code is required.");
+      if (
+        payload.validity_mode === "automatic" &&
+        (!payload.validity_interval_value || payload.validity_interval_value < 1)
+      ) {
+        throw new Error("Enter a renewal interval greater than zero.");
+      }
+      if (
+        payload.validity_mode === "automatic" &&
+        !payload.validity_interval_unit
+      ) {
+        throw new Error("Select a renewal interval unit.");
+      }
+      if (
+        payload.filename_date_field === "expiry_date" &&
+        payload.validity_mode === "never"
+      ) {
+        throw new Error(
+          "A record that never expires cannot show an expiry date in its filename.",
+        );
+      }
 
       const result = typeForm.id
         ? await supabase
@@ -491,6 +641,40 @@ export default function TrainingConfigurationPage() {
     await loadData();
   }
 
+  async function moveItem(
+    table: "training_categories" | "training_types" | "training_type_options",
+    items: Array<{ id: string; sort_order: number }>,
+    itemId: string,
+    direction: "up" | "down",
+  ) {
+    const ordered = [...items].sort(
+      (a, b) => (a.sort_order || 0) - (b.sort_order || 0),
+    );
+    const index = ordered.findIndex((item) => item.id === itemId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (index < 0 || targetIndex < 0 || targetIndex >= ordered.length) return;
+
+    const current = ordered[index];
+    const target = ordered[targetIndex];
+
+    const currentOrder = current.sort_order || (index + 1) * 10;
+    const targetOrder = target.sort_order || (targetIndex + 1) * 10;
+
+    const [currentResult, targetResult] = await Promise.all([
+      supabase.from(table).update({ sort_order: targetOrder }).eq("id", current.id),
+      supabase.from(table).update({ sort_order: currentOrder }).eq("id", target.id),
+    ]);
+
+    const error = currentResult.error ?? targetResult.error;
+    if (error) {
+      setMessage({ tone: "error", text: error.message });
+      return;
+    }
+
+    await loadData();
+  }
+
   async function deleteOption(item: RecordOption) {
     if (
       !window.confirm(
@@ -550,8 +734,10 @@ export default function TrainingConfigurationPage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Manage categories, record types, selectable options, SharePoint
-                folder destinations, filename rules and automatic superseding.
+                Manage categories, record types, selectable classes and
+                SharePoint folder destinations. Use the arrow buttons in each
+                table to control display order. Filenames include the employee’s
+                full name and are generated from applicable fields.
               </p>
             </div>
 
@@ -704,6 +890,9 @@ export default function TrainingConfigurationPage() {
                 void toggleRow("training_types", item.id, item.active)
               }
               onAddOption={newOption}
+              onMove={(item, direction) =>
+                void moveItem("training_types", recordTypes, item.id, direction)
+              }
             />
           ) : null}
 
@@ -716,6 +905,9 @@ export default function TrainingConfigurationPage() {
               onEdit={setCategoryForm}
               onToggle={(item) =>
                 void toggleRow("training_categories", item.id, item.active)
+              }
+              onMove={(item, direction) =>
+                void moveItem("training_categories", categories, item.id, direction)
               }
             />
           ) : null}
@@ -733,6 +925,17 @@ export default function TrainingConfigurationPage() {
                 )
               }
               onDelete={(item) => void deleteOption(item)}
+              onMove={(item, direction) =>
+                void moveItem(
+                  "training_type_options",
+                  recordOptions.filter(
+                    (option) =>
+                      option.training_type_id === item.training_type_id,
+                  ),
+                  item.id,
+                  direction,
+                )
+              }
             />
           ) : null}
         </section>
@@ -743,10 +946,11 @@ export default function TrainingConfigurationPage() {
             <div>
               <h2 className="font-bold">Next step: SharePoint connection</h2>
               <p className="mt-1 leading-6 text-blue-800">
-                This page defines the rules. Next we connect Microsoft Graph on
-                the server, locate the TTTracker Training Documents library,
-                and then build Add Record so files are renamed and uploaded
-                directly to SharePoint.
+                This page defines record fields and classes. The Add Record
+                and Renewals workflows will generate the filename, detect
+                existing current records and ask the user whether the upload
+                should supersede a previous document before anything is moved
+                into the Superseded folder.
               </p>
             </div>
           </div>
@@ -816,15 +1020,6 @@ export default function TrainingConfigurationPage() {
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <NumberField
-                label="Sort order"
-                value={categoryForm.sort_order}
-                onChange={(value) =>
-                  setCategoryForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
-              />
               <Toggle
                 label="Active"
                 description="Available when adding a record"
@@ -906,15 +1101,6 @@ export default function TrainingConfigurationPage() {
                 }
                 required
               />
-              <NumberField
-                label="Sort order"
-                value={typeForm.sort_order}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
-              />
             </div>
 
             <Area
@@ -928,14 +1114,136 @@ export default function TrainingConfigurationPage() {
             />
 
             <Section
-              title="Dynamic form fields"
-              description="Only enabled fields will appear on Add Record."
+              title="Validity and renewal"
+              description="Choose how expiry is handled for this record type. Automatic expiry is calculated from the issue date during upload."
             />
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <LabeledSelect
+                label="Expiry handling"
+                value={typeForm.validity_mode}
+                onChange={(value) =>
+                  setTypeForm((current) => {
+                    if (!current) return current;
+                    const mode = value as RecordType["validity_mode"];
+                    return {
+                      ...current,
+                      validity_mode: mode,
+                      requires_issue_date:
+                        mode === "automatic" ? true : current.requires_issue_date,
+                      requires_expiry_date: mode !== "never",
+                      allows_no_expiry: mode === "never",
+                      validity_interval_value:
+                        mode === "automatic"
+                          ? current.validity_interval_value ?? 1
+                          : null,
+                      validity_interval_unit:
+                        mode === "automatic"
+                          ? current.validity_interval_unit ?? "years"
+                          : null,
+                      filename_date_field:
+                        mode === "never" &&
+                        current.filename_date_field === "expiry_date"
+                          ? "none"
+                          : current.filename_date_field,
+                    };
+                  })
+                }
+                options={[
+                  { value: "never", label: "Never expires" },
+                  { value: "manual", label: "Enter expiry date manually" },
+                  {
+                    value: "automatic",
+                    label: "Calculate expiry from issue date",
+                  },
+                ]}
+              />
+
+              <LabeledSelect
+                label="Date shown in filename"
+                value={typeForm.filename_date_field}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          filename_date_field:
+                            value as RecordType["filename_date_field"],
+                        }
+                      : current,
+                  )
+                }
+                options={[
+                  { value: "none", label: "No date" },
+                  { value: "issue_date", label: "Issue date" },
+                  ...(typeForm.validity_mode !== "never"
+                    ? [{ value: "expiry_date", label: "Expiry date" }]
+                    : []),
+                ]}
+              />
+            </div>
+
+            {typeForm.validity_mode === "automatic" ? (
+              <div className="grid gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <Field
+                  label="Renewal interval"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={String(typeForm.validity_interval_value ?? 1)}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_value:
+                              Number.parseInt(value, 10) || 1,
+                          }
+                        : current,
+                    )
+                  }
+                  required
+                />
+                <LabeledSelect
+                  label="Interval unit"
+                  value={typeForm.validity_interval_unit ?? "years"}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_unit:
+                              value as NonNullable<
+                                RecordType["validity_interval_unit"]
+                              >,
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "days", label: "Days" },
+                    { value: "weeks", label: "Weeks" },
+                    { value: "months", label: "Months" },
+                    { value: "years", label: "Years" },
+                  ]}
+                />
+                <p className="sm:col-span-2 text-xs leading-5 text-blue-800">
+                  Upload example: entering the issue date automatically calculates
+                  the expiry date using this interval. The calculated expiry is
+                  saved to Supabase and used in the filename when Expiry date is
+                  selected above.
+                </p>
+              </div>
+            ) : null}
+
+            {typeForm.validity_mode !== "automatic" ? (
               <Toggle
                 label="Issue date"
-                description="Ask for issue date"
+                description={
+                  typeForm.validity_mode === "manual"
+                    ? "Ask for an issue date as well as the manually entered expiry date"
+                    : "Ask for an issue date even though this record never expires"
+                }
                 checked={typeForm.requires_issue_date}
                 onChange={(value) =>
                   setTypeForm((current) =>
@@ -945,30 +1253,15 @@ export default function TrainingConfigurationPage() {
                   )
                 }
               />
-              <Toggle
-                label="Expiry date"
-                description="Ask for expiry date"
-                checked={typeForm.requires_expiry_date}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? { ...current, requires_expiry_date: value }
-                      : current,
-                  )
-                }
-              />
-              <Toggle
-                label="Allow no expiry"
-                description="Supports permanent qualifications"
-                checked={typeForm.allows_no_expiry}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? { ...current, allows_no_expiry: value }
-                      : current,
-                  )
-                }
-              />
+            ) : null}
+
+            <Section
+              title="Dynamic form fields"
+              description="Only enabled fields will appear on Add Record."
+            />
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+
               <Toggle
                 label="Certificate number"
                 description="Ask for licence or certificate number"
@@ -1004,16 +1297,36 @@ export default function TrainingConfigurationPage() {
                   )
                 }
               />
-              <Toggle
-                label="Document"
-                description="Evidence upload is mandatory"
-                checked={typeForm.requires_document}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current ? { ...current, requires_document: value } : current,
-                  )
-                }
-              />
+              <div className="sm:col-span-2 lg:col-span-1">
+                <LabeledSelect
+                  label="Document upload"
+                  value={typeForm.document_upload_type}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            document_upload_type: value as DocumentUploadType,
+                            requires_document: value !== "none",
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "none", label: "No document required" },
+                    { value: "single", label: "Single document" },
+                    {
+                      value: "front_back",
+                      label: "Front and back documents",
+                    },
+                  ]}
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Single document accepts one original file, including a
+                  multi-page PDF. Front and back requires two separate files and
+                  adds FRONT and BACK to their SharePoint filenames.
+                </p>
+              </div>
               <Toggle
                 label="Multiple current"
                 description="Allow more than one current record"
@@ -1021,15 +1334,7 @@ export default function TrainingConfigurationPage() {
                 onChange={(value) =>
                   setTypeForm((current) =>
                     current
-                      ? {
-                          ...current,
-                          allows_multiple_current: value,
-                          supersede_scope: value
-                            ? "never"
-                            : current.supersede_scope === "never"
-                              ? "type"
-                              : current.supersede_scope,
-                        }
+                      ? { ...current, allows_multiple_current: value }
                       : current,
                   )
                 }
@@ -1047,13 +1352,13 @@ export default function TrainingConfigurationPage() {
             </div>
 
             <Section
-              title="Options and superseding"
-              description="Options are used for classes such as DG, RB, RI, RA and driver licence classes."
+              title="Classes and current records"
+              description="Choose whether the record has no classes, one class, or several classes on the same document."
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <LabeledSelect
-                label="Option selection"
+                label="Class selection"
                 value={typeForm.subtype_mode}
                 onChange={(value) =>
                   setTypeForm((current) =>
@@ -1066,71 +1371,65 @@ export default function TrainingConfigurationPage() {
                   )
                 }
                 options={[
-                  { value: "none", label: "No options" },
-                  { value: "single", label: "Single option" },
-                  { value: "multiple", label: "Multiple options" },
+                  { value: "none", label: "No classes or endorsements" },
+                  { value: "single", label: "One class per record" },
+                  {
+                    value: "multiple",
+                    label: "Multiple classes on one record",
+                  },
                 ]}
               />
 
-              <LabeledSelect
-                label="Supersede matching rule"
-                value={
-                  typeForm.allows_multiple_current
-                    ? "never"
-                    : typeForm.supersede_scope
-                }
-                disabled={typeForm.allows_multiple_current}
-                onChange={(value) =>
-                  setTypeForm((current) =>
-                    current
-                      ? {
-                          ...current,
-                          supersede_scope:
-                            value as RecordType["supersede_scope"],
-                        }
-                      : current,
-                  )
-                }
-                options={[
-                  { value: "type", label: "Same employee + record type" },
-                  {
-                    value: "type_and_option",
-                    label: "Same employee + type + option",
-                  },
-                  {
-                    value: "type_option_and_project",
-                    label: "Same employee + type + option + project",
-                  },
-                  { value: "never", label: "Never supersede automatically" },
-                ]}
-              />
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-bold text-slate-800">
+                  Existing record handling
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  When a document is uploaded, TTTracker will show any current
+                  matching records and ask whether the new upload should renew
+                  and supersede one of them or be added as another current
+                  record.
+                </p>
+              </div>
             </div>
 
             <Section
-              title="SharePoint filename"
-              description="The file extension is added automatically."
+              title="Generated SharePoint filename"
+              description="The filename is built automatically from enabled fields. Empty or disabled values are omitted."
             />
 
-            <Field
-              label="Filename pattern"
-              value={typeForm.filename_pattern}
-              onChange={(value) =>
-                setTypeForm((current) =>
-                  current ? { ...current, filename_pattern: value } : current,
-                )
-              }
-              required
-            />
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs leading-6 text-slate-600">
-              Tokens: <code>{"{employee_id}"}</code>,{" "}
-              <code>{"{employee_name}"}</code>,{" "}
-              <code>{"{record_code}"}</code>,{" "}
-              <code>{"{option_code}"}</code>,{" "}
-              <code>{"{project_code}"}</code>,{" "}
-              <code>{"{issue_date}"}</code>,{" "}
-              <code>{"{expiry_date}"}</code>,{" "}
-              <code>{"{document_side}"}</code>.
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Example
+              </div>
+              {buildFilenamePreview({
+                ...typeForm,
+                filename_components: filenameComponentsFor(typeForm),
+              }).length ? (
+                <div className="mt-2 space-y-2">
+                  {buildFilenamePreview({
+                    ...typeForm,
+                    filename_components: filenameComponentsFor(typeForm),
+                  }).map((filename) => (
+                    <code
+                      key={filename}
+                      className="block break-all text-sm font-semibold text-slate-900"
+                    >
+                      {filename}
+                    </code>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 text-sm font-semibold text-slate-500">
+                  No document filename required
+                </div>
+              )}
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                This preview uses generic field codes and updates from the
+                selected configuration. Employee details are populated from
+                Supabase during upload. For automatic renewals, the expiry date
+                is calculated from the issue date and the configured interval.
+              </p>
             </div>
 
             <Actions
@@ -1210,15 +1509,6 @@ export default function TrainingConfigurationPage() {
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <NumberField
-                label="Sort order"
-                value={optionForm.sort_order}
-                onChange={(value) =>
-                  setOptionForm((current) =>
-                    current ? { ...current, sort_order: value } : current,
-                  )
-                }
-              />
               <Toggle
                 label="Active"
                 description="Available when adding a record"
@@ -1250,6 +1540,7 @@ function TypesTable({
   onEdit,
   onToggle,
   onAddOption,
+  onMove,
 }: {
   items: RecordType[];
   categoryById: Map<string, Category>;
@@ -1257,6 +1548,7 @@ function TypesTable({
   onEdit: (item: RecordType) => void;
   onToggle: (item: RecordType) => void;
   onAddOption: (id: string) => void;
+  onMove: (item: RecordType, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No record types found." />;
 
@@ -1269,7 +1561,7 @@ function TypesTable({
             <th className="px-5 py-3 font-semibold">Category</th>
             <th className="px-5 py-3 font-semibold">Fields</th>
             <th className="px-5 py-3 font-semibold">Options</th>
-            <th className="px-5 py-3 font-semibold">Superseding</th>
+            <th className="px-5 py-3 font-semibold">Current Records</th>
             <th className="px-5 py-3 font-semibold">Status</th>
             <th className="px-5 py-3 text-right font-semibold">Actions</th>
           </tr>
@@ -1277,12 +1569,24 @@ function TypesTable({
         <tbody className="divide-y divide-slate-100">
           {items.map((item) => {
             const fields = [
-              item.requires_issue_date ? "Issue" : null,
-              item.requires_expiry_date ? "Expiry" : null,
+              item.validity_mode === "automatic"
+                ? `Auto ${item.validity_interval_value ?? "?"} ${item.validity_interval_unit ?? ""}`
+                : item.validity_mode === "manual"
+                  ? "Manual expiry"
+                  : "Never expires",
+              item.filename_date_field === "expiry_date"
+                ? "Filename: expiry"
+                : item.filename_date_field === "issue_date"
+                  ? "Filename: issue"
+                  : null,
               item.requires_certificate_number ? "Number" : null,
               item.requires_issuer ? "Issuer" : null,
               item.requires_project ? "Project" : null,
-              item.requires_document ? "Document" : null,
+              item.document_upload_type === "front_back"
+                ? "Front + back"
+                : item.document_upload_type === "single"
+                  ? "Single document"
+                  : "No document",
             ].filter(Boolean);
 
             return (
@@ -1324,14 +1628,24 @@ function TypesTable({
                 </td>
                 <td className="px-5 py-4 text-xs text-slate-600">
                   {item.allows_multiple_current
-                    ? "Multiple current"
-                    : item.supersede_scope.replaceAll("_", " ")}
+                    ? "Multiple current allowed"
+                    : "Prompt on upload / renewal"}
                 </td>
                 <td className="px-5 py-4">
                   <Status active={item.active} />
                 </td>
                 <td className="px-5 py-4">
                   <div className="flex justify-end gap-2">
+                    <IconButton
+                      title="Move earlier"
+                      onClick={() => onMove(item, "up")}
+                      icon={<ArrowUp size={15} />}
+                    />
+                    <IconButton
+                      title="Move later"
+                      onClick={() => onMove(item, "down")}
+                      icon={<ArrowDown size={15} />}
+                    />
                     <IconButton
                       title="Add option"
                       onClick={() => onAddOption(item.id)}
@@ -1369,11 +1683,13 @@ function CategoriesTable({
   typeCount,
   onEdit,
   onToggle,
+  onMove,
 }: {
   items: Category[];
   typeCount: (id: string) => number;
   onEdit: (item: Category) => void;
   onToggle: (item: Category) => void;
+  onMove: (item: Category, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No categories found." />;
 
@@ -1415,6 +1731,16 @@ function CategoriesTable({
               <td className="px-5 py-4">
                 <div className="flex justify-end gap-2">
                   <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
+                  <IconButton
                     title="Edit"
                     onClick={() => onEdit(item)}
                     icon={<Pencil size={15} />}
@@ -1446,12 +1772,14 @@ function OptionsTable({
   onEdit,
   onToggle,
   onDelete,
+  onMove,
 }: {
   items: RecordOption[];
   typeById: Map<string, RecordType>;
   onEdit: (item: RecordOption) => void;
   onToggle: (item: RecordOption) => void;
   onDelete: (item: RecordOption) => void;
+  onMove: (item: RecordOption, direction: "up" | "down") => void;
 }) {
   if (!items.length) return <Empty text="No options found." />;
 
@@ -1485,6 +1813,16 @@ function OptionsTable({
               </td>
               <td className="px-5 py-4">
                 <div className="flex justify-end gap-2">
+                  <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
                   <IconButton
                     title="Edit"
                     onClick={() => onEdit(item)}
@@ -1667,41 +2005,28 @@ function Field({
   value,
   onChange,
   required = false,
+  type = "text",
+  min,
+  step,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
+  type?: "text" | "number";
+  min?: string;
+  step?: string;
 }) {
   return (
     <label className="block">
       <span className="text-sm font-semibold text-slate-700">{label}</span>
       <input
+        type={type}
+        min={min}
+        step={step}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
-        className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-      />
-    </label>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="text-sm font-semibold text-slate-700">{label}</span>
-      <input
-        type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value) || 0)}
         className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
       />
     </label>
