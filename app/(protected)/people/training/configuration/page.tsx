@@ -88,28 +88,28 @@ function normaliseFilenameComponents(value: unknown): string[] {
 }
 
 function buildFilenamePreview(recordType: RecordType): string {
-  const values: Record<string, string> = {
-    employee_id: "EMP003",
-    employee_name: "JAYLEN-DALE",
-    record_code: recordType.code || "RECORD",
+  const previewValues: Record<string, string> = {
+    employee_id: "EMP###",
+    employee_name: "SURNAME_FIRSTNAME",
+    record_code: clean(recordType.code) || "RECORD_CODE",
     option_code:
       recordType.subtype_mode === "multiple"
-        ? "DG-RA-LF-CO"
+        ? "CLASS-CLASS-CLASS"
         : recordType.subtype_mode === "single"
-          ? "DG"
+          ? "CLASS"
           : "",
-    project_code: recordType.requires_project ? "PROJECT" : "",
-    issue_date: recordType.requires_issue_date ? "2026-07-30" : "",
-    expiry_date: recordType.requires_expiry_date ? "2029-07-30" : "",
+    project_code: recordType.requires_project ? "PROJECT_CODE" : "",
+    issue_date: recordType.requires_issue_date ? "ISSUE_DATE" : "",
+    expiry_date: recordType.requires_expiry_date ? "EXPIRY_DATE" : "",
     document_side: "",
   };
 
   const parts = recordType.filename_components
-    .map((component) => values[component] ?? "")
+    .map((component) => previewValues[component] ?? "")
     .map((value) => value.trim())
     .filter(Boolean);
 
-  return `${parts.join("_") || "EMP003_RECORD"}.pdf`;
+  return `${parts.join("_") || "EMP###_SURNAME_FIRSTNAME_RECORD_CODE"}.pdf`;
 }
 
 function filenameComponentsFor(recordType: RecordType): string[] {
@@ -1196,9 +1196,11 @@ export default function TrainingConfigurationPage() {
                 })}
               </code>
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                The employee’s full name is always included. Multiple selected
-                classes are joined with hyphens, for example DG-RA-LF-CO.
-                Expiry is only included when the record type asks for one.
+                This preview uses generic field codes and updates as you change
+                the record code and enabled fields. The employee ID and full name
+                are populated from Supabase during upload. Multiple selected
+                classes are joined with hyphens, and optional fields are omitted
+                when they do not apply.
               </p>
             </div>
 
