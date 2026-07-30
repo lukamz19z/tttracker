@@ -96,8 +96,8 @@ function normaliseFilenameComponents(value: unknown): string[] {
 
 function buildFilenamePreview(recordType: RecordType): string[] {
   const previewValues: Record<string, string> = {
-    employee_id: "EMP1029",
-    employee_name: "ZETOVIC_LUKA",
+    employee_id: "EMP000001",
+    employee_name: "EMPLOYEE_NAME",
     record_code: clean(recordType.code) || "RECORD_CODE",
     option_code:
       recordType.subtype_mode === "multiple"
@@ -118,19 +118,24 @@ function buildFilenamePreview(recordType: RecordType): string[] {
       ...previewValues,
       document_side: side,
     };
+
     const parts = filenameComponentsFor(recordType)
       .map((component) => values[component] ?? "")
       .map((value) => value.trim())
       .filter(Boolean);
 
-    const extension = recordType.document_upload_type === "front_back" ? "jpg" : "pdf";
-    return `${parts.join("_") || "EMP1029_ZETOVIC_LUKA_RECORD_CODE"}.${extension}`;
+    const extension =
+      recordType.document_upload_type === "front_back" ? "jpg" : "pdf";
+
+    return `${parts.join("_") || "EMP000001_EMPLOYEE_NAME_RECORD_CODE"}.${extension}`;
   };
 
   if (recordType.document_upload_type === "none") return [];
+
   if (recordType.document_upload_type === "front_back") {
     return [build("FRONT"), build("BACK")];
   }
+
   return [build("")];
 }
 
