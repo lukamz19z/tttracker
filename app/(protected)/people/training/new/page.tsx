@@ -33,7 +33,7 @@ type ReplaceChoice = "replace" | "add" | "cancel" | null;
 
 type Employee = {
   id: string;
-  employeeCode: string;
+  payrollId: string;
   firstName: string;
   lastName: string;
   displayName: string;
@@ -168,14 +168,15 @@ function normaliseEmployee(row: Record<string, unknown>): Employee {
 
   return {
     id: clean(row.id),
-    employeeCode:
+    payrollId:
       firstNonEmpty(row, [
+        "payroll_id",
         "employee_id",
         "employee_code",
         "employee_number",
         "staff_id",
         "code",
-      ]) || "EMP###",
+      ]) || "",
     firstName:
       firstName || storedName.split(/\s+/).slice(0, -1).join(" "),
     lastName:
@@ -282,7 +283,7 @@ function buildFilename(params: {
   }
 
   const values: Record<string, string> = {
-    employee_id: safeFilenamePart(employee?.employeeCode || "EMP###"),
+    employee_id: safeFilenamePart(employee?.payrollId || "PAYROLL"),
     employee_name: employeeFilenameName(employee),
     record_code: safeFilenamePart(trainingType.code || "RECORD_CODE"),
     option_code: selectedOptions
@@ -503,7 +504,7 @@ export default function NewTrainingRecordPage() {
 
     return employees.filter((employee) =>
       [
-        employee.employeeCode,
+        employee.payrollId,
         employee.displayName,
         employee.firstName,
         employee.lastName,
@@ -773,7 +774,7 @@ export default function NewTrainingRecordPage() {
       const payload = new FormData();
 
       payload.set("employeeId", selectedEmployee.id);
-      payload.set("employeeCode", selectedEmployee.employeeCode);
+      payload.set("payrollId", selectedEmployee.payrollId);
       payload.set("employeeFirstName", selectedEmployee.firstName);
       payload.set("employeeLastName", selectedEmployee.lastName);
       payload.set("trainingTypeId", selectedType.id);
@@ -931,7 +932,7 @@ export default function NewTrainingRecordPage() {
                   <input
                     value={employeeSearch}
                     onChange={(event) => setEmployeeSearch(event.target.value)}
-                    placeholder="Search by employee ID or name"
+                    placeholder="Search by payroll ID or employee name"
                     className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   />
                 </label>
@@ -950,7 +951,7 @@ export default function NewTrainingRecordPage() {
                 <option value="">Select employee</option>
                 {filteredEmployees.map((employee) => (
                   <option key={employee.id} value={employee.id}>
-                    {employee.employeeCode} — {employee.displayName}
+                    {employee.payrollId || 'No Payroll ID'} — {employee.displayName}
                   </option>
                 ))}
               </select>
@@ -1306,7 +1307,7 @@ export default function NewTrainingRecordPage() {
                 label="Employee"
                 value={
                   selectedEmployee
-                    ? `${selectedEmployee.employeeCode} — ${selectedEmployee.displayName}`
+                    ? `${selectedEmployee.payrollId || 'No Payroll ID'} — ${selectedEmployee.displayName}`
                     : "Not selected"
                 }
               />
