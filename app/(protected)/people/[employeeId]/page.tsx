@@ -15,6 +15,7 @@ import {
   FileText,
   FolderKanban,
   HardHat,
+  Link2,
   Loader2,
   Plus,
   RefreshCw,
@@ -40,6 +41,7 @@ type TrainingStatus =
 
 type Employee = {
   id: string;
+  payroll_id: string | null;
   full_name: string;
   role: string | null;
   crew_id: string | null;
@@ -70,6 +72,27 @@ type Project = {
 
 type ProjectAccessRow = {
   project_id: string;
+};
+
+type ApiUser = {
+  user_id?: string | null;
+  id?: string | null;
+  email?: string | null;
+  employee?: { id?: string | null; full_name?: string | null } | null;
+  employee_id?: string | null;
+  employee_name?: string | null;
+};
+
+type UsersResponse = {
+  users?: ApiUser[];
+  error?: string;
+};
+
+type LoginAccount = {
+  userId: string;
+  email: string;
+  linkedEmployeeId: string | null;
+  linkedEmployeeName: string | null;
 };
 
 type TrainingType = {
@@ -125,6 +148,7 @@ type TrainingDocument = {
 };
 
 type ProfileForm = {
+  payrollId: string;
   fullName: string;
   role: string;
   crewId: string;
@@ -134,6 +158,7 @@ type ProfileForm = {
   jacketSize: string;
   gloveSize: string;
   pantsSize: string;
+  userId: string;
 };
 
 type TrainingForm = {
@@ -276,6 +301,21 @@ function addMonths(dateValue: string, months: number | null) {
   return date.toISOString().slice(0, 10);
 }
 
+
+function mapApiUser(user: ApiUser): LoginAccount | null {
+  const userId = clean(user.user_id ?? user.id);
+  if (!userId) return null;
+
+  return {
+    userId,
+    email: clean(user.email) || "Email not available",
+    linkedEmployeeId:
+      clean(user.employee?.id) || clean(user.employee_id) || null,
+    linkedEmployeeName:
+      clean(user.employee?.full_name) || clean(user.employee_name) || null,
+  };
+}
+
 export default function EmployeeProfilePage() {
   const params = useParams<{ employeeId: string }>();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
@@ -283,6 +323,7 @@ export default function EmployeeProfilePage() {
 
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [crews, setCrews] = useState<Crew[]>([]);
+  const [loginAccounts, setLoginAccounts] = useState<LoginAccount[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [trainingTypes, setTrainingTypes] = useState<TrainingType[]>([]);
@@ -303,6 +344,7 @@ export default function EmployeeProfilePage() {
     useState<TrainingForm>(EMPTY_TRAINING_FORM);
 
   const [form, setForm] = useState<ProfileForm>({
+    payrollId: "",
     fullName: "",
     role: "",
     crewId: "",
@@ -312,6 +354,7 @@ export default function EmployeeProfilePage() {
     jacketSize: "",
     gloveSize: "",
     pantsSize: "",
+    userId: "",
   });
 
   const [message, setMessage] = useState<{
@@ -327,6 +370,15 @@ export default function EmployeeProfilePage() {
   const assignedProjects = useMemo(
     () => projects.filter((project) => projectIds.includes(project.id)),
     [projectIds, projects],
+  );
+
+  const availableLoginAccounts = useMemo(
+    () =>
+      loginAccounts.filter((account) => {
+        if (account.userId === employee?.user_id) return true;
+        return !account.linkedEmployeeId;
+      }),
+    [employee?.user_id, loginAccounts],
   );
 
   const activeTrainingRecords = useMemo(
@@ -370,11 +422,45 @@ export default function EmployeeProfilePage() {
     (record) => (trainingDocumentsByRecord.get(record.id) ?? []).length === 0,
   ).length;
 
+  const apiFetch = useCallback(
+    async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+
+      return fetch(input, { ...init, headers, cache: "no-store" });
+    },
+    [supabase],
+  );
+
+  const loadLoginAccounts = useCallback(async () => {
+    const response = await apiFetch("/api/admin/users");
+    const payload = (await response.json()) as UsersResponse;
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? "Unable to load login accounts.");
+    }
+
+    setLoginAccounts(
+      (payload.users ?? [])
+        .map(mapApiUser)
+        .filter((account): account is LoginAccount => Boolean(account))
+        .sort((a, b) => a.email.localeCompare(b.email)),
+    );
+  }, [apiFetch]);
+
   const loadData = useCallback(async () => {
     const employeeResult = await supabase
       .from("employees")
       .select(
-        "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
+        "id, payroll_id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
       )
       .eq("id", employeeId)
       .single();
@@ -386,6 +472,13 @@ export default function EmployeeProfilePage() {
     }
 
     const loadedEmployee = employeeResult.data as Employee;
+
+    try {
+      await loadLoginAccounts();
+    } catch (error) {
+      console.warn("Login accounts could not be loaded", error);
+      setLoginAccounts([]);
+    }
 
     const [
       crewResult,
@@ -470,6 +563,7 @@ export default function EmployeeProfilePage() {
     setTrainingDocuments(loadedDocuments);
 
     setForm({
+      payrollId: clean(loadedEmployee.payroll_id),
       fullName: clean(loadedEmployee.full_name),
       role: clean(loadedEmployee.role),
       crewId: clean(loadedEmployee.crew_id),
@@ -479,8 +573,9 @@ export default function EmployeeProfilePage() {
       jacketSize: clean(loadedEmployee.jacket_size),
       gloveSize: clean(loadedEmployee.glove_size),
       pantsSize: clean(loadedEmployee.pants_size),
+      userId: clean(loadedEmployee.user_id),
     });
-  }, [employeeId, supabase]);
+  }, [employeeId, loadLoginAccounts, supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -508,6 +603,7 @@ export default function EmployeeProfilePage() {
     if (!employee) return;
 
     setForm({
+      payrollId: clean(employee.payroll_id),
       fullName: clean(employee.full_name),
       role: clean(employee.role),
       crewId: clean(employee.crew_id),
@@ -517,6 +613,7 @@ export default function EmployeeProfilePage() {
       jacketSize: clean(employee.jacket_size),
       gloveSize: clean(employee.glove_size),
       pantsSize: clean(employee.pants_size),
+      userId: clean(employee.user_id),
     });
     setEditing(false);
   }
@@ -524,7 +621,16 @@ export default function EmployeeProfilePage() {
   async function saveProfile() {
     if (!employee) return;
 
+    const payrollId = form.payrollId.trim().toUpperCase();
     const fullName = form.fullName.trim();
+
+    if (!payrollId) {
+      setMessage({
+        tone: "error",
+        text: "Enter the payroll ID used in your other business systems.",
+      });
+      return;
+    }
 
     if (!fullName) {
       setMessage({ tone: "error", text: "Enter the person's full name." });
@@ -538,6 +644,7 @@ export default function EmployeeProfilePage() {
       const { error } = await supabase
         .from("employees")
         .update({
+          payroll_id: payrollId,
           full_name: fullName,
           role: form.role.trim() || null,
           crew_id: form.crewId || null,
@@ -547,6 +654,7 @@ export default function EmployeeProfilePage() {
           jacket_size: form.jacketSize || null,
           glove_size: form.gloveSize || null,
           pants_size: form.pantsSize.trim() || null,
+          user_id: form.userId || null,
         })
         .eq("id", employee.id);
 
@@ -812,9 +920,14 @@ export default function EmployeeProfilePage() {
                     <StatusBadge active={employee.active !== false} />
                   </div>
 
-                  <p className="mt-1 text-sm text-slate-500">
-                    {employee.role || "Position not set"}
-                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                      Payroll ID: {employee.payroll_id || "Not set"}
+                    </span>
+                    <span className="text-sm text-slate-500">
+                      {employee.role || "Position not set"}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -902,8 +1015,8 @@ export default function EmployeeProfilePage() {
             value={employee.user_id ? "Linked" : "Not linked"}
             detail={
               employee.user_id
-                ? "System login assigned"
-                : "Assign a login from Admin"
+                ? "Mobile account linked"
+                : "Link in Edit Profile"
             }
           />
           <SummaryCard
@@ -963,6 +1076,7 @@ export default function EmployeeProfilePage() {
                 editing={editing}
                 form={form}
                 setForm={setForm}
+                availableLoginAccounts={availableLoginAccounts}
               />
             ) : null}
 
@@ -1550,17 +1664,23 @@ function OverviewTab({
   editing,
   form,
   setForm,
+  availableLoginAccounts,
 }: {
   employee: Employee;
   crews: Crew[];
   editing: boolean;
   form: ProfileForm;
   setForm: React.Dispatch<React.SetStateAction<ProfileForm>>;
+  availableLoginAccounts: LoginAccount[];
 }) {
   if (!editing) {
     return (
       <div className="grid gap-5 lg:grid-cols-2">
         <InfoSection title="Operational Profile" icon={<HardHat size={19} />}>
+          <InfoRow
+            label="Payroll ID"
+            value={employee.payroll_id || "Not set"}
+          />
           <InfoRow label="Full name" value={employee.full_name} />
           <InfoRow
             label="Position / trade"
@@ -1610,11 +1730,30 @@ function OverviewTab({
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-        Operational information only. Do not enter medical, payroll, home
-        address, emergency-contact or personal identification information.
+        Use the payroll ID from your approved business systems. Do not enter
+        pay rates, bank details, tax information, medical details, home addresses
+        or other sensitive personal information.
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
+        <Field label="Payroll ID">
+          <input
+            value={form.payrollId}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                payrollId: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Enter payroll ID"
+            autoComplete="off"
+            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold uppercase outline-none ring-slate-200 focus:ring-2"
+          />
+          <p className="mt-2 text-xs leading-5 text-slate-500">
+            Use the exact identifier from payroll and your other business systems.
+          </p>
+        </Field>
+
         <Field label="Full name">
           <input
             value={form.fullName}
@@ -1678,6 +1817,35 @@ function OverviewTab({
             ]}
           />
         </Field>
+
+        <div className="md:col-span-2 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-bold text-blue-900">
+            <Link2 size={17} />
+            Link TTTracker mobile account
+          </div>
+          <Field label="Mobile login account">
+            <SelectField
+              value={form.userId}
+              onChange={(value) =>
+                setForm((current) => ({
+                  ...current,
+                  userId: value,
+                }))
+              }
+              options={[
+                { value: "", label: "No mobile account linked" },
+                ...availableLoginAccounts.map((account) => ({
+                  value: account.userId,
+                  label: account.email,
+                })),
+              ]}
+            />
+          </Field>
+          <p className="mt-2 text-xs leading-5 text-blue-800">
+            Only unassigned login accounts are shown. The selected account will
+            be linked to this employee for the TTTracker mobile app.
+          </p>
+        </div>
       </div>
 
       <Field label="Operational notes">

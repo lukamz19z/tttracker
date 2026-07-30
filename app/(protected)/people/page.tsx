@@ -29,6 +29,7 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 
 type Employee = {
   id: string;
+  payroll_id: string | null;
   full_name: string;
   role: string | null;
   crew_id: string | null;
@@ -72,6 +73,7 @@ type LoginAccount = {
 };
 
 type EmployeeForm = {
+  payrollId: string;
   fullName: string;
   role: string;
   crewId: string;
@@ -85,6 +87,7 @@ type EmployeeForm = {
 };
 
 const EMPTY_FORM: EmployeeForm = {
+  payrollId: "",
   fullName: "",
   role: "",
   crewId: "",
@@ -250,7 +253,7 @@ export default function PeoplePage() {
       supabase
         .from("employees")
         .select(
-          "id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
+          "id, payroll_id, full_name, role, crew_id, active, user_id, notes, shirt_size, jacket_size, glove_size, pants_size, created_at",
         )
         .order("full_name", { ascending: true }),
       supabase
@@ -352,6 +355,7 @@ export default function PeoplePage() {
       if (!query) return true;
 
       const searchable = [
+        employee.payroll_id,
         employee.full_name,
         employee.role,
         employee.notes,
@@ -413,6 +417,7 @@ export default function PeoplePage() {
   function openEdit(employee: Employee) {
     setEditingEmployee(employee);
     setForm({
+      payrollId: clean(employee.payroll_id),
       fullName: clean(employee.full_name),
       role: clean(employee.role),
       crewId: clean(employee.crew_id),
@@ -439,7 +444,30 @@ export default function PeoplePage() {
   async function saveEmployee() {
     setMessage(null);
 
+    const payrollId = form.payrollId.trim().toUpperCase();
     const fullName = form.fullName.trim();
+
+    if (!payrollId) {
+      setMessage({
+        tone: "error",
+        text: "Enter the payroll ID used in your other business systems.",
+      });
+      return;
+    }
+
+    const duplicatePayrollId = employees.some(
+      (employee) =>
+        employee.id !== editingEmployee?.id &&
+        clean(employee.payroll_id).toUpperCase() === payrollId,
+    );
+
+    if (duplicatePayrollId) {
+      setMessage({
+        tone: "error",
+        text: `Payroll ID ${payrollId} is already assigned to another employee.`,
+      });
+      return;
+    }
 
     if (!fullName) {
       setMessage({
@@ -482,6 +510,7 @@ export default function PeoplePage() {
     setSaving(true);
 
     const payload = {
+      payroll_id: payrollId,
       full_name: fullName,
       role: form.role.trim() || null,
       crew_id: form.crewId || null,
@@ -569,6 +598,7 @@ export default function PeoplePage() {
 
   function exportRegister() {
     const headers = [
+      "Payroll ID",
       "Name",
       "Position / Trade",
       "Crew",
@@ -584,6 +614,7 @@ export default function PeoplePage() {
     ];
 
     const rows = filteredEmployees.map((employee) => [
+      employee.payroll_id,
       employee.full_name,
       employee.role,
       crewLabel(crewById.get(clean(employee.crew_id))),
@@ -636,8 +667,9 @@ export default function PeoplePage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Manage employee profiles, crew allocation, linked login accounts
-                and PPE sizing. Open a person to manage their detailed profile.
+                Manage payroll IDs, employee profiles, crew allocation, linked
+                mobile login accounts and PPE sizing. Open a person to manage
+                their detailed profile.
               </p>
             </div>
 
@@ -718,7 +750,7 @@ export default function PeoplePage() {
           <KpiCard
             label="No login"
             value={String(noLoginCount)}
-            detail="Assign from employee profile"
+            detail="Link in Quick Edit or profile"
             icon={<UserRoundX size={20} />}
           />
           <KpiCard
@@ -762,7 +794,7 @@ export default function PeoplePage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search name, login email, trade, crew or PPE size..."
+                placeholder="Search payroll ID, name, login email, trade, crew or PPE size..."
                 className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
               />
             </label>
@@ -930,8 +962,11 @@ function EmployeeRow({
           />
         </Link>
 
-        <div className="mt-1">
+        <div className="mt-1 flex flex-wrap items-center gap-2">
           <StatusBadge active={active} />
+          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+            Payroll ID: {employee.payroll_id || "Not set"}
+          </span>
         </div>
 
         <p className="mt-1 text-sm text-slate-500">
@@ -1100,8 +1135,8 @@ function EmployeeModal({
               {employee ? "Edit Person" : "Add Person"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Manage the operational profile and optionally assign an existing
-              login account created in Admin.
+              Enter the payroll ID used across your other systems and link the
+              employee to an existing mobile login account created in Admin.
             </p>
           </div>
 
@@ -1122,6 +1157,25 @@ function EmployeeModal({
             </h3>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field label="Payroll ID">
+                <input
+                  value={form.payrollId}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      payrollId: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="Enter payroll ID"
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold uppercase outline-none ring-slate-200 focus:ring-2"
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Use the exact payroll ID from your payroll and other business
+                  systems. It must be unique.
+                </p>
+              </Field>
+
               <Field label="Full name">
                 <input
                   value={form.fullName}
@@ -1189,7 +1243,7 @@ function EmployeeModal({
             </div>
 
             <div className="mt-4">
-              <Field label="Linked login account">
+              <Field label="Linked mobile account">
                 <SelectField
                   value={form.userId}
                   onChange={(value) =>
@@ -1207,8 +1261,9 @@ function EmployeeModal({
                   ]}
                 />
                 <p className="mt-2 text-xs leading-5 text-slate-500">
-                  Only unassigned login accounts are shown. Create new accounts
-                  and manage roles or passwords from Admin.
+                  Select the login used by this employee in the TTTracker mobile
+                  app. Only unassigned accounts are shown. Create new accounts and
+                  manage roles or passwords from Admin.
                 </p>
               </Field>
             </div>
