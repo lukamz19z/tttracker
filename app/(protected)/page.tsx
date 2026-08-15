@@ -1,766 +1,713 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowRight,
-  BriefcaseBusiness,
+  ArrowLeft,
   Building2,
-  ClipboardCheck,
+  CalendarDays,
+  CheckCircle2,
   FolderKanban,
-  Gauge,
-  HardHat,
-  LayoutDashboard,
-  PackageSearch,
+  Hash,
+  MapPin,
   Plus,
-  RefreshCw,
+  RadioTower,
   ShieldCheck,
-  Truck,
-  UserCog,
-  Users,
-  Wrench,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { getUserRole } from "@/lib/roles";
 
-type Project = {
-  id: string;
-  name: string;
-  status: string | null;
-  location?: string | null;
-  project_number?: string | null;
+type CreateProjectResponse = {
+  success?: boolean;
+  projectId?: string;
+  projectNumber?: string;
+  error?: string;
+  sharePoint?: {
+    siteId?: string;
+    driveId?: string;
+    folderId?: string;
+    url?: string | null;
+  };
 };
 
-type ProjectAccessRow = {
-  project_id: string;
-};
+function buildProjectNumber(
+  clientCode: string,
+  year: string,
+  sequence: string,
+) {
+  const cleanClient = clientCode.trim().toUpperCase();
+  const cleanYear = year.trim().slice(-2);
+  const sequenceNumber = Number(sequence || 1);
 
-type ModuleCard = {
-  title: string;
-  description: string;
-  href: string;
-  icon: React.ReactNode;
-  accent: "blue" | "emerald" | "amber" | "violet" | "rose" | "slate";
-  badge?: string;
-};
-
-function normaliseRole(role: string | null): string {
-  if (!role) return "viewer";
-
-  const value = role.trim().toLowerCase();
-
-  if (["admin", "administrator"].includes(value)) return "admin";
-  if (["site_admin", "site admin", "site-administrator"].includes(value)) {
-    return "site_admin";
-  }
-  if (["safety_manager", "safety manager", "safety"].includes(value)) {
-    return "safety_manager";
-  }
-  if (["asset_manager", "asset manager", "assets"].includes(value)) {
-    return "asset_manager";
-  }
   if (
-    ["commercial", "commercial_manager", "commercial manager"].includes(value)
+    !cleanClient ||
+    !cleanYear ||
+    !Number.isFinite(sequenceNumber) ||
+    sequenceNumber < 1
   ) {
-    return "commercial";
-  }
-  if (
-    ["crew", "leading_hand", "leading hand", "field", "editor"].includes(value)
-  ) {
-    return "crew";
-  }
-  if (["viewer", "client", "read_only", "read only"].includes(value)) {
-    return "viewer";
+    return "";
   }
 
-  return value;
+  const cleanSequence = String(sequenceNumber).padStart(3, "0");
+
+  return `P-${cleanClient}-${cleanYear}-${cleanSequence}`;
 }
 
-function roleLabel(role: string): string {
-  return role
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-function getStatusClasses(status: string | null) {
-  const value = String(status ?? "").trim().toLowerCase();
-
-  if (["ongoing", "active", "in progress"].includes(value)) {
-    return "bg-emerald-100 text-emerald-700";
-  }
-
-  if (["tendering", "planning"].includes(value)) {
-    return "bg-amber-100 text-amber-700";
-  }
-
-  if (["complete", "completed"].includes(value)) {
-    return "bg-blue-100 text-blue-700";
-  }
-
-  if (["on hold", "paused"].includes(value)) {
-    return "bg-rose-100 text-rose-700";
-  }
-
-  return "bg-slate-100 text-slate-600";
-}
-
-function getAccentClasses(accent: ModuleCard["accent"]) {
-  switch (accent) {
-    case "blue":
-      return {
-        border: "border-blue-100",
-        background: "bg-blue-50",
-        icon: "bg-blue-100 text-blue-700",
-        text: "text-blue-700",
-      };
-    case "emerald":
-      return {
-        border: "border-emerald-100",
-        background: "bg-emerald-50",
-        icon: "bg-emerald-100 text-emerald-700",
-        text: "text-emerald-700",
-      };
-    case "amber":
-      return {
-        border: "border-amber-100",
-        background: "bg-amber-50",
-        icon: "bg-amber-100 text-amber-700",
-        text: "text-amber-700",
-      };
-    case "violet":
-      return {
-        border: "border-violet-100",
-        background: "bg-violet-50",
-        icon: "bg-violet-100 text-violet-700",
-        text: "text-violet-700",
-      };
-    case "rose":
-      return {
-        border: "border-rose-100",
-        background: "bg-rose-50",
-        icon: "bg-rose-100 text-rose-700",
-        text: "text-rose-700",
-      };
+function statusLabel(value: string) {
+  switch (value) {
+    case "tendering":
+      return "Tendering";
+    case "mobilising":
+      return "Mobilising";
+    case "ongoing":
+      return "Ongoing";
+    case "demobilising":
+      return "Demobilising";
+    case "completed":
+      return "Completed";
     default:
-      return {
-        border: "border-slate-200",
-        background: "bg-slate-50",
-        icon: "bg-slate-100 text-slate-700",
-        text: "text-slate-700",
-      };
+      return value;
   }
 }
 
-function getModulesForRole(role: string): ModuleCard[] {
-  switch (role) {
-    case "admin":
-      return [
-        {
-          title: "Projects",
-          description:
-            "Open project dashboards, towers, progress, dockets and delivery tracking.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "People",
-          description:
-            "Manage operational employee profiles, crews, PPE sizing and workforce records.",
-          href: "/people",
-          icon: <Users size={21} />,
-          accent: "violet",
-        },
-        {
-          title: "Admin",
-          description:
-            "Create login accounts, manage website and mobile roles, permissions and passwords.",
-          href: "/admin",
-          icon: <UserCog size={21} />,
-          accent: "slate",
-          badge: "Admin",
-        },
-        {
-          title: "Assets",
-          description:
-            "Review plant, vehicles, equipment, prestarts, fleet jobs and compliance.",
-          href: "/assets",
-          icon: <Truck size={21} />,
-          accent: "emerald",
-        },
-        {
-          title: "Commercial",
-          description:
-            "Open commercial reporting, delivery performance and project summaries.",
-          href: "/commercial",
-          icon: <BriefcaseBusiness size={21} />,
-          accent: "amber",
-        },
-        {
-          title: "Safety",
-          description:
-            "Access safety systems, workpacks, compliance documents and field controls.",
-          href: "/safety",
-          icon: <ShieldCheck size={21} />,
-          accent: "rose",
-        },
-        {
-          title: "Create Project",
-          description:
-            "Set up a new project and prepare its dashboard, towers and permissions.",
-          href: "/projects/create",
-          icon: <Plus size={21} />,
-          accent: "slate",
-        },
-      ];
-
-    case "site_admin":
-      return [
-        {
-          title: "People",
-          description:
-            "Manage employee profiles, crew allocation, PPE sizing and operational workforce records.",
-          href: "/people",
-          icon: <Users size={21} />,
-          accent: "violet",
-        },
-        {
-          title: "Crews",
-          description:
-            "Create crews and allocate active workers to operational crew structures.",
-          href: "/people/crews",
-          icon: <Users size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "My Projects",
-          description:
-            "Open assigned projects, towers, daily dockets and delivery information.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "emerald",
-        },
-        {
-          title: "Safety",
-          description:
-            "Open safety systems, training compliance and site controls.",
-          href: "/safety",
-          icon: <ShieldCheck size={21} />,
-          accent: "amber",
-        },
-      ];
-
-    case "safety_manager":
-      return [
-        {
-          title: "Safety Dashboard",
-          description:
-            "Open safety management, workpacks, permits and compliance controls.",
-          href: "/safety",
-          icon: <ShieldCheck size={21} />,
-          accent: "emerald",
-        },
-        {
-          title: "Workpacks",
-          description:
-            "Review workpack documents, ITCs, lift studies and site records.",
-          href: "/safety/workpacks",
-          icon: <ClipboardCheck size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "Lessons Learnt",
-          description:
-            "Review field feedback and lessons recorded across active projects.",
-          href: "/lessons-learnt",
-          icon: <Gauge size={21} />,
-          accent: "amber",
-        },
-        {
-          title: "People",
-          description:
-            "Review operational personnel, crews, PPE and training records.",
-          href: "/people",
-          icon: <Users size={21} />,
-          accent: "violet",
-        },
-        {
-          title: "My Projects",
-          description:
-            "Open your assigned projects and review project safety information.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "slate",
-        },
-      ];
-
-    case "asset_manager":
-      return [
-        {
-          title: "Assets Dashboard",
-          description:
-            "Review fleet status, maintenance, prestarts, documents and compliance.",
-          href: "/assets",
-          icon: <Truck size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "Vehicles",
-          description:
-            "Manage vehicles, registration, insurance, service history and inspections.",
-          href: "/assets/vehicles",
-          icon: <Truck size={21} />,
-          accent: "emerald",
-        },
-        {
-          title: "Fleet Jobs",
-          description:
-            "Review open defects, maintenance work and completed fleet jobs.",
-          href: "/assets/fleet-jobs",
-          icon: <Wrench size={21} />,
-          accent: "amber",
-        },
-        {
-          title: "My Projects",
-          description:
-            "Open assigned projects where fleet and plant support is required.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "slate",
-        },
-      ];
-
-    case "commercial":
-      return [
-        {
-          title: "Commercial Dashboard",
-          description:
-            "Open commercial summaries, project delivery and performance reporting.",
-          href: "/commercial",
-          icon: <BriefcaseBusiness size={21} />,
-          accent: "amber",
-        },
-        {
-          title: "Project Reporting",
-          description:
-            "Review project-level summaries, production trends and forecasting.",
-          href: "/commercial/reports",
-          icon: <Gauge size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "Variations & Claims",
-          description:
-            "Track variation and claim workflows across live projects.",
-          href: "/commercial/claims",
-          icon: <ClipboardCheck size={21} />,
-          accent: "rose",
-        },
-        {
-          title: "My Projects",
-          description:
-            "Open assigned projects and detailed operational dashboards.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "slate",
-        },
-      ];
-
-    case "crew":
-      return [
-        {
-          title: "My Projects",
-          description:
-            "Open assigned projects and tower dashboards for current field work.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "blue",
-        },
-        {
-          title: "Daily Dockets",
-          description:
-            "Open daily reporting, labour hours and progress capture.",
-          href: "/crew/dockets",
-          icon: <ClipboardCheck size={21} />,
-          accent: "emerald",
-        },
-        {
-          title: "Deliveries",
-          description:
-            "Review truck deliveries, bundles and outstanding delivery items.",
-          href: "/crew/deliveries",
-          icon: <Truck size={21} />,
-          accent: "amber",
-        },
-        {
-          title: "Materials",
-          description:
-            "Search bundles, drawing marks and material availability.",
-          href: "/crew/materials",
-          icon: <PackageSearch size={21} />,
-          accent: "violet",
-        },
-      ];
-
-    default:
-      return [
-        {
-          title: "My Projects",
-          description:
-            "Browse projects you have permission to view and open their dashboards.",
-          href: "/",
-          icon: <FolderKanban size={21} />,
-          accent: "blue",
-        },
-      ];
-  }
-}
-
-export default function ProjectsPage() {
-  const supabase = useMemo(() => createSupabaseBrowser(), []);
+export default function CreateProjectPage() {
   const router = useRouter();
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [role, setRole] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const currentYear = new Date().getFullYear();
 
-  const loadData = useCallback(async () => {
+  const [name, setName] = useState("");
+  const [client, setClient] = useState("");
+  const [clientCode, setClientCode] = useState("");
+  const [projectYear, setProjectYear] = useState(String(currentYear));
+  const [projectSequence, setProjectSequence] = useState("1");
+  const [location, setLocation] = useState("");
+  const [status, setStatus] = useState("ongoing");
+  const [totalTowers, setTotalTowers] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const projectNumber = useMemo(() => {
+    return buildProjectNumber(
+      clientCode,
+      projectYear,
+      projectSequence,
+    );
+  }, [clientCode, projectYear, projectSequence]);
+
+  const sharePointFolderName = useMemo(() => {
+    if (!projectNumber) return "";
+
+    if (!name.trim()) {
+      return projectNumber;
+    }
+
+    return `${projectNumber} ${name.trim()}`;
+  }, [projectNumber, name]);
+
+  async function createProject(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    if (loading) {
+      return;
+    }
+
     setLoading(true);
+    setMsg("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+      if (userError || !user) {
+        setMsg("You must be logged in to create a project.");
+        return;
+      }
 
-    const [loadedRole, accessResult] = await Promise.all([
-      getUserRole(),
-      supabase
-        .from("project_access")
-        .select("project_id")
-        .eq("user_id", user.id),
-    ]);
+      const cleanName = name.trim();
+      const cleanClient = client.trim();
+      const cleanClientCode = clientCode.trim().toUpperCase();
+      const cleanLocation = location.trim();
 
-    setRole(loadedRole);
+      const numericYear = Number(projectYear);
+      const numericSequence = Number(projectSequence);
 
-    if (accessResult.error) {
-      console.error("project_access load error", accessResult.error);
-      setProjects([]);
+      const numericTotalTowers =
+        totalTowers.trim() === ""
+          ? null
+          : Number(totalTowers);
+
+      if (!cleanName) {
+        setMsg("Project name is required.");
+        return;
+      }
+
+      if (!cleanClientCode) {
+        setMsg("Client code is required.");
+        return;
+      }
+
+      if (
+        !Number.isInteger(numericYear) ||
+        numericYear < 2000 ||
+        numericYear > 2100
+      ) {
+        setMsg("Enter a valid project year.");
+        return;
+      }
+
+      if (
+        !Number.isInteger(numericSequence) ||
+        numericSequence < 1
+      ) {
+        setMsg("Enter a valid project sequence.");
+        return;
+      }
+
+      if (
+        numericTotalTowers !== null &&
+        (!Number.isFinite(numericTotalTowers) ||
+          numericTotalTowers < 0)
+      ) {
+        setMsg("Total towers must be a valid number.");
+        return;
+      }
+
+      const response = await fetch("/api/projects/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: cleanName,
+          client: cleanClient,
+          clientCode: cleanClientCode,
+          projectYear: numericYear,
+          projectSequence: numericSequence,
+          location: cleanLocation,
+          status,
+          totalTowers: numericTotalTowers,
+        }),
+      });
+
+      let result: CreateProjectResponse;
+
+      try {
+        result =
+          (await response.json()) as CreateProjectResponse;
+      } catch {
+        setMsg(
+          "The project creation service returned an invalid response.",
+        );
+        return;
+      }
+
+      if (!response.ok) {
+        setMsg(
+          result.error ||
+            "The project could not be created.",
+        );
+        return;
+      }
+
+      if (!result.projectId) {
+        setMsg(
+          "The project was created but no project ID was returned.",
+        );
+        return;
+      }
+
+      router.push(`/project/${result.projectId}`);
+      router.refresh();
+    } catch (error) {
+      console.error("CREATE PROJECT CLIENT ERROR:", error);
+
+      setMsg(
+        error instanceof Error
+          ? error.message
+          : "An unexpected error occurred while creating the project.",
+      );
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const projectIds =
-      (accessResult.data as ProjectAccessRow[] | null)?.map(
-        (row) => row.project_id,
-      ) ?? [];
-
-    if (projectIds.length === 0) {
-      setProjects([]);
-      setLoading(false);
-      return;
-    }
-
-    const { data: projectData, error: projectError } = await supabase
-      .from("projects")
-      .select("id, name, project_number, status, location")
-      .in("id", projectIds)
-      .order("name");
-
-    if (projectError) {
-      console.error("projects load error", projectError);
-      setProjects([]);
-      setLoading(false);
-      return;
-    }
-
-    setProjects((projectData as Project[] | null) ?? []);
-    setLoading(false);
-  }, [router, supabase]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadData();
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [loadData]);
-
-  async function refreshPage() {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
   }
-
-  const normalisedRole = useMemo(() => normaliseRole(role), [role]);
-  const modules = useMemo(
-    () => getModulesForRole(normalisedRole),
-    [normalisedRole],
-  );
-
-  const activeProjects = projects.filter((project) =>
-    ["ongoing", "active", "in progress"].includes(
-      String(project.status ?? "").trim().toLowerCase(),
-    ),
-  ).length;
 
   return (
     <AppShell>
       <div className="mx-auto max-w-7xl space-y-6">
+        {/* Header */}
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-950 text-white shadow-sm">
           <div className="grid gap-8 p-7 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300">
-                <HardHat size={14} />
-                TTTracker Operations
+              <Link
+                href="/"
+                className="inline-flex items-center gap-2 text-sm font-semibold text-slate-300 transition hover:text-white"
+              >
+                <ArrowLeft size={16} />
+                Back to Projects
+              </Link>
+
+              <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300">
+                <FolderKanban size={14} />
+                Project Setup
               </div>
 
-              <h1 className="mt-5 text-3xl font-bold tracking-tight sm:text-4xl">
-                Welcome back
+              <h1 className="mt-4 text-3xl font-bold tracking-tight sm:text-4xl">
+                Create New Project
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
-                Open your projects, access the tools relevant to your role and
-                review the areas that need attention.
+                Set up a new TTTracker project and automatically
+                provision its Project Delivery structure in
+                SharePoint.
               </p>
+            </div>
 
-              <div className="mt-6 flex flex-wrap gap-3">
-                {projects[0] ? (
-                  <Link
-                    href={`/project/${projects[0].id}`}
-                    className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-slate-100"
-                  >
-                    Open first project
-                    <ArrowRight size={16} />
-                  </Link>
-                ) : null}
+            <div className="hidden rounded-2xl border border-white/10 bg-white/5 p-5 lg:block">
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl bg-white/10 p-3">
+                  <ShieldCheck size={24} />
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => void refreshPage()}
-                  disabled={refreshing}
-                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 disabled:opacity-60"
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    SharePoint Integration
+                  </p>
+                  <p className="mt-1 font-semibold text-white">
+                    Project Delivery
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-4 max-w-[250px] text-xs leading-5 text-slate-400">
+                The standard BC Contracting folder structure will
+                be created automatically after submission.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <form
+          onSubmit={createProject}
+          className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
+        >
+          {/* Main form */}
+          <div className="space-y-6">
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl bg-blue-50 p-3 text-blue-700">
+                  <Building2 size={21} />
+                </div>
+
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    Project Details
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Enter the primary details used across
+                    TTTracker and SharePoint.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-5 md:grid-cols-2">
+                <Field
+                  label="Project Name"
+                  required
+                  className="md:col-span-2"
                 >
-                  <RefreshCw
-                    size={16}
-                    className={refreshing ? "animate-spin" : ""}
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(event) =>
+                      setName(event.target.value)
+                    }
+                    placeholder="e.g. Maragle Transmission Line"
+                    disabled={loading}
+                    required
+                    className={inputClasses}
                   />
-                  Refresh
-                </button>
-              </div>
-            </div>
+                </Field>
 
-            <div className="grid min-w-[260px] grid-cols-2 gap-3">
-              <HeroMetric
-                label="Access level"
-                value={role ? roleLabel(normalisedRole) : "Loading"}
-              />
-              <HeroMetric label="Projects" value={String(projects.length)} />
-              <HeroMetric label="Active" value={String(activeProjects)} />
-              <HeroMetric
-                label="Modules"
-                value={String(modules.length)}
-              />
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-slate-500">
-                <LayoutDashboard size={18} />
-                <span className="text-sm font-semibold">Workspace</span>
-              </div>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">
-                Quick Access
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Shortcuts based on your assigned system role.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {modules.map((module) => (
-              <ModuleCardItem
-                key={`${module.title}-${module.href}`}
-                module={module}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-slate-500">
-                <Building2 size={18} />
-                <span className="text-sm font-semibold">Assigned Projects</span>
-              </div>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">
-                My Projects
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Open a project to view progress, towers, dockets and supporting
-                information.
-              </p>
-            </div>
-
-            <div className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-600">
-              {projects.length} assigned
-            </div>
-          </div>
-
-          <div className="mt-6">
-            {loading ? (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {[0, 1, 2].map((item) => (
-                  <div
-                    key={item}
-                    className="h-48 animate-pulse rounded-2xl border border-slate-200 bg-slate-100"
+                <Field label="Client">
+                  <input
+                    type="text"
+                    value={client}
+                    onChange={(event) =>
+                      setClient(event.target.value)
+                    }
+                    placeholder="e.g. UGL"
+                    disabled={loading}
+                    className={inputClasses}
                   />
-                ))}
-              </div>
-            ) : projects.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                <FolderKanban
-                  size={28}
-                  className="mx-auto text-slate-400"
-                />
-                <h3 className="mt-4 text-lg font-bold text-slate-900">
-                  No projects assigned
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  An administrator needs to assign project access to your
-                  account.
-                </p>
+                </Field>
 
-                {normalisedRole === "admin" ? (
-                  <Link
-                    href="/admin"
-                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white"
+                <Field label="Location">
+                  <div className="relative">
+                    <MapPin
+                      size={17}
+                      className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+
+                    <input
+                      type="text"
+                      value={location}
+                      onChange={(event) =>
+                        setLocation(event.target.value)
+                      }
+                      placeholder="e.g. Tumbarumba, NSW"
+                      disabled={loading}
+                      className={`${inputClasses} pl-10`}
+                    />
+                  </div>
+                </Field>
+              </div>
+            </section>
+
+            {/* Numbering */}
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl bg-violet-50 p-3 text-violet-700">
+                  <Hash size={21} />
+                </div>
+
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    Project Number
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    TTTracker will generate the project number from
+                    the client, year and sequence.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-5 md:grid-cols-3">
+                <Field label="Client Code" required>
+                  <input
+                    type="text"
+                    value={clientCode}
+                    onChange={(event) =>
+                      setClientCode(
+                        event.target.value.toUpperCase(),
+                      )
+                    }
+                    placeholder="UGL"
+                    disabled={loading}
+                    required
+                    className={`${inputClasses} uppercase`}
+                  />
+                </Field>
+
+                <Field label="Project Year" required>
+                  <div className="relative">
+                    <CalendarDays
+                      size={17}
+                      className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+
+                    <input
+                      type="number"
+                      min="2000"
+                      max="2100"
+                      value={projectYear}
+                      onChange={(event) =>
+                        setProjectYear(event.target.value)
+                      }
+                      disabled={loading}
+                      required
+                      className={`${inputClasses} pl-10`}
+                    />
+                  </div>
+                </Field>
+
+                <Field label="Sequence" required>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={projectSequence}
+                    onChange={(event) =>
+                      setProjectSequence(event.target.value)
+                    }
+                    placeholder="1"
+                    disabled={loading}
+                    required
+                    className={inputClasses}
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">
+                      Generated Project Number
+                    </p>
+
+                    <p className="mt-2 text-2xl font-bold tracking-tight text-slate-950">
+                      {projectNumber || "P-CLIENT-YY-001"}
+                    </p>
+                  </div>
+
+                  {projectNumber ? (
+                    <div className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm">
+                      <CheckCircle2 size={14} />
+                      Ready
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+
+            {/* Delivery setup */}
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700">
+                  <RadioTower size={21} />
+                </div>
+
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    Delivery Setup
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Set the initial project status and tower count.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-5 md:grid-cols-2">
+                <Field label="Total Towers">
+                  <div className="relative">
+                    <RadioTower
+                      size={17}
+                      className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+
+                    <input
+                      type="number"
+                      min="0"
+                      value={totalTowers}
+                      onChange={(event) =>
+                        setTotalTowers(event.target.value)
+                      }
+                      placeholder="e.g. 75"
+                      disabled={loading}
+                      className={`${inputClasses} pl-10`}
+                    />
+                  </div>
+                </Field>
+
+                <Field label="Project Status" required>
+                  <select
+                    value={status}
+                    onChange={(event) =>
+                      setStatus(event.target.value)
+                    }
+                    disabled={loading}
+                    className={inputClasses}
                   >
-                    Manage User Access
-                    <ArrowRight size={16} />
-                  </Link>
-                ) : null}
+                    <option value="tendering">
+                      Tendering
+                    </option>
+                    <option value="mobilising">
+                      Mobilising
+                    </option>
+                    <option value="ongoing">
+                      Ongoing
+                    </option>
+                    <option value="demobilising">
+                      Demobilising
+                    </option>
+                    <option value="completed">
+                      Completed
+                    </option>
+                  </select>
+                </Field>
               </div>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {projects.map((project) => (
-                  <ProjectCard key={project.id} project={project} />
-                ))}
+            </section>
+
+            {msg ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm font-medium text-red-700">
+                  {msg}
+                </p>
               </div>
-            )}
+            ) : null}
+
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Link
+                href="/"
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Cancel
+              </Link>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Plus size={17} />
+
+                {loading
+                  ? "Creating Project & SharePoint..."
+                  : "Create Project"}
+              </button>
+            </div>
           </div>
-        </section>
+
+          {/* Summary */}
+          <aside className="space-y-5 xl:sticky xl:top-6 xl:self-start">
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Project Preview
+              </p>
+
+              <h2 className="mt-3 text-xl font-bold text-slate-900">
+                {name.trim() || "New Project"}
+              </h2>
+
+              <p className="mt-1 text-sm font-semibold text-blue-700">
+                {projectNumber || "Project number pending"}
+              </p>
+
+              <div className="mt-6 space-y-4">
+                <SummaryRow
+                  label="Client"
+                  value={client.trim() || "Not set"}
+                />
+
+                <SummaryRow
+                  label="Location"
+                  value={location.trim() || "Not set"}
+                />
+
+                <SummaryRow
+                  label="Status"
+                  value={statusLabel(status)}
+                />
+
+                <SummaryRow
+                  label="Towers"
+                  value={
+                    totalTowers.trim()
+                      ? totalTowers
+                      : "Not set"
+                  }
+                />
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl bg-white p-2.5 text-slate-700 shadow-sm">
+                  <FolderKanban size={19} />
+                </div>
+
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    SharePoint Folder
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Project Delivery
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
+                <p className="break-words text-sm font-semibold text-slate-800">
+                  {sharePointFolderName ||
+                    "Project folder name will appear here"}
+                </p>
+              </div>
+
+              <div className="mt-5 space-y-2.5 text-sm text-slate-600">
+                <FolderLine name="01 Programme & Scheduling" />
+                <FolderLine name="02 Commercial" />
+                <FolderLine name="03 Quality" />
+                <FolderLine name="04 HSEQ" />
+                <FolderLine name="05 Drawings" />
+                <FolderLine name="06 Onboarding" />
+                <FolderLine name="100 Incoming" />
+                <FolderLine name="200 Outgoing" />
+                <FolderLine name="999 Project Completion" />
+              </div>
+            </section>
+          </aside>
+        </form>
       </div>
     </AppShell>
   );
 }
 
-function ModuleCardItem({ module }: { module: ModuleCard }) {
-  const styles = getAccentClasses(module.accent);
+const inputClasses =
+  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
+function Field({
+  label,
+  required = false,
+  className = "",
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Link
-      href={module.href}
-      className={`group rounded-2xl border p-5 transition hover:-translate-y-0.5 hover:shadow-md ${styles.border} ${styles.background}`}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div className={`rounded-xl p-2.5 ${styles.icon}`}>
-          {module.icon}
-        </div>
-
-        {module.badge ? (
-          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 shadow-sm">
-            {module.badge}
-          </span>
-        ) : null}
-      </div>
-
-      <h3 className="mt-5 text-lg font-bold text-slate-900">{module.title}</h3>
-      <p className="mt-2 text-sm leading-6 text-slate-600">
-        {module.description}
-      </p>
-
-      <div
-        className={`mt-5 inline-flex items-center gap-2 text-sm font-semibold ${styles.text}`}
-      >
-        Open
-        <ArrowRight
-          size={15}
-          className="transition-transform group-hover:translate-x-1"
-        />
-      </div>
-    </Link>
-  );
-}
-
-function ProjectCard({ project }: { project: Project }) {
-  return (
-    <Link
-      href={`/project/${project.id}`}
-      className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="rounded-xl bg-slate-100 p-2.5 text-slate-700">
-          <Building2 size={20} />
-        </div>
-
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusClasses(
-            project.status,
-          )}`}
-        >
-          {project.status || "Unknown"}
-        </span>
-      </div>
-
-      <div className="mt-5">
-        {project.project_number ? (
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            {project.project_number}
-          </div>
-        ) : null}
-
-        <h3 className="mt-1 text-xl font-bold text-slate-900">
-          {project.name}
-        </h3>
-
-        <p className="mt-2 text-sm text-slate-500">
-          {project.location || "Location not set"}
-        </p>
-      </div>
-
-      <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-4">
-        <span className="text-sm font-semibold text-slate-700">
-          Open dashboard
-        </span>
-        <ArrowRight
-          size={16}
-          className="text-slate-400 transition-transform group-hover:translate-x-1"
-        />
-      </div>
-    </Link>
-  );
-}
-
-function HeroMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <label className={`block ${className}`}>
+      <span className="mb-2 block text-sm font-semibold text-slate-700">
         {label}
-      </div>
-      <div className="mt-2 text-xl font-bold text-white">{value}</div>
+        {required ? (
+          <span className="ml-1 text-red-500">*</span>
+        ) : null}
+      </span>
+
+      {children}
+    </label>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+      <span className="text-sm text-slate-500">
+        {label}
+      </span>
+
+      <span className="max-w-[190px] text-right text-sm font-semibold text-slate-900">
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function FolderLine({ name }: { name: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <FolderKanban
+        size={14}
+        className="shrink-0 text-slate-400"
+      />
+      <span>{name}</span>
     </div>
   );
 }
