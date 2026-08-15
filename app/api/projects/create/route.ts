@@ -3,13 +3,19 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
 import {
-  createProjectSharePointStructure,
   deleteProjectSharePointFolders,
+  renameProjectSharePointFolders,
 } from "@/lib/sharepoint/projects";
 
 export const runtime = "nodejs";
 
-type CreateProjectBody = {
+type RouteContext = {
+  params: Promise<{
+    projectId: string;
+  }>;
+};
+
+type UpdateProjectBody = {
   name?: string;
   client?: string;
   clientCode?: string;
@@ -32,24 +38,48 @@ function buildProjectNumber(
   return `P-${cleanClient}-${cleanYear}-${cleanSequence}`;
 }
 
-export async function POST(request: Request) {
+function sanitiseSharePointName(value: string) {
+  return value
+    .replace(/["*:<>?/\\|]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/\.+$/g, "")
+    .trim();
+}
+
+function buildUpdatedSharePointUrl(
+  currentUrl: string | null | undefined,
+  projectNumber: string,
+  projectName: string,
+) {
+  if (!currentUrl) return null;
+
+  try {
+    const url = new URL(currentUrl);
+    const cleanFolderName = sanitiseSharePointName(
+      `${projectNumber} ${projectName}`,
+    );
+
+    const segments = url.pathname.split("/");
+    segments[segments.length - 1] = encodeURIComponent(cleanFolderName);
+
+    url.pathname = segments.join("/");
+    return url.toString();
+  } catch {
+    return currentUrl;
+  }
+}
+
+async function createRouteSupabase() {
   const cookieStore = await cookies();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json(
-      {
-        error: "Supabase server configuration is missing.",
-      },
-      {
-        status: 500,
-      },
-    );
+    throw new Error("Supabase server configuration is missing.");
   }
 
-  const supabase = createServerClient(
+  return createServerClient(
     supabaseUrl,
     supabaseAnonKey,
     {
@@ -57,43 +87,28 @@ export async function POST(request: Request) {
         getAll() {
           return cookieStore.getAll();
         },
-
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(
-              ({
-                name,
-                value,
-                options,
-              }) => {
-                cookieStore.set(
-                  name,
-                  value,
-                  options,
-                );
-              },
-            );
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
           } catch {
-            // Cookie writes are not always available
-            // in every server execution context.
+            // Ignore cookie writes in server contexts where unavailable.
           }
         },
       },
     },
   );
+}
 
-  let createdProjectId: string | null = null;
-
-  let createdDeliveryDriveId: string | null = null;
-  let createdDeliveryFolderId: string | null = null;
-
-  let createdTenderDriveId: string | null = null;
-  let createdTenderFolderId: string | null = null;
+export async function PATCH(
+  request: Request,
+  context: RouteContext,
+) {
+  const { projectId } = await context.params;
 
   try {
-    // --------------------------------------------------
-    // 1. Confirm logged-in TTTracker user
-    // --------------------------------------------------
+    const supabase = await createRouteSupabase();
 
     const {
       data: { user },
@@ -102,25 +117,16 @@ export async function POST(request: Request) {
 
     if (userError || !user) {
       return NextResponse.json(
-        {
-          error: "You must be logged in to create a project.",
-        },
-        {
-          status: 401,
-        },
+        { error: "You must be logged in." },
+        { status: 401 },
       );
     }
 
-    // --------------------------------------------------
-    // 2. Read request body
-    // --------------------------------------------------
-
-    const body = (await request.json()) as CreateProjectBody;
+    const body = (await request.json()) as UpdateProjectBody;
 
     const name = body.name?.trim() ?? "";
     const client = body.client?.trim() ?? "";
-    const clientCode =
-      body.clientCode?.trim().toUpperCase() ?? "";
+    const clientCode = body.clientCode?.trim().toUpperCase() ?? "";
     const location = body.location?.trim() ?? "";
     const status = body.status?.trim() || "ongoing";
 
@@ -134,29 +140,17 @@ export async function POST(request: Request) {
         ? null
         : Number(body.totalTowers);
 
-    // --------------------------------------------------
-    // 3. Validate
-    // --------------------------------------------------
-
     if (!name) {
       return NextResponse.json(
-        {
-          error: "Project name is required.",
-        },
-        {
-          status: 400,
-        },
+        { error: "Project name is required." },
+        { status: 400 },
       );
     }
 
     if (!clientCode) {
       return NextResponse.json(
-        {
-          error: "Client code is required.",
-        },
-        {
-          status: 400,
-        },
+        { error: "Client code is required." },
+        { status: 400 },
       );
     }
 
@@ -166,12 +160,8 @@ export async function POST(request: Request) {
       projectYear > 2100
     ) {
       return NextResponse.json(
-        {
-          error: "A valid project year is required.",
-        },
-        {
-          status: 400,
-        },
+        { error: "A valid project year is required." },
+        { status: 400 },
       );
     }
 
@@ -180,29 +170,44 @@ export async function POST(request: Request) {
       projectSequence < 1
     ) {
       return NextResponse.json(
-        {
-          error: "A valid project sequence is required.",
-        },
-        {
-          status: 400,
-        },
+        { error: "A valid project sequence is required." },
+        { status: 400 },
       );
     }
 
     if (
       totalTowers !== null &&
-      (
-        !Number.isFinite(totalTowers) ||
-        totalTowers < 0
-      )
+      (!Number.isFinite(totalTowers) || totalTowers < 0)
     ) {
       return NextResponse.json(
-        {
-          error: "Total towers must be a valid number.",
-        },
-        {
-          status: 400,
-        },
+        { error: "Total towers must be a valid number." },
+        { status: 400 },
+      );
+    }
+
+    const {
+      data: currentProject,
+      error: currentProjectError,
+    } = await supabase
+      .from("projects")
+      .select(`
+        id,
+        name,
+        project_number,
+        sharepoint_drive_id,
+        sharepoint_folder_id,
+        sharepoint_tender_drive_id,
+        sharepoint_tender_folder_id,
+        sharepoint_url,
+        sharepoint_tender_url
+      `)
+      .eq("id", projectId)
+      .single();
+
+    if (currentProjectError || !currentProject) {
+      return NextResponse.json(
+        { error: "Project could not be found." },
+        { status: 404 },
       );
     }
 
@@ -212,254 +217,209 @@ export async function POST(request: Request) {
       projectSequence,
     );
 
-    // --------------------------------------------------
-    // 4. Create project in Supabase
-    // --------------------------------------------------
+    const folderNameChanged =
+      currentProject.name !== name ||
+      currentProject.project_number !== projectNumber;
 
-    const {
-      data: project,
-      error: projectError,
-    } = await supabase
-      .from("projects")
-      .insert({
-        name,
-        client,
-        client_code: clientCode,
-        project_year: projectYear,
-        project_sequence: projectSequence,
-        project_number: projectNumber,
-        location,
-        status,
-        total_towers: totalTowers,
-      })
-      .select()
-      .single();
+    let deliveryUrl =
+      (currentProject.sharepoint_url as string | null) ?? null;
 
-    if (projectError || !project) {
-      throw new Error(
-        projectError?.message ??
-          "Could not create project.",
-      );
-    }
+    let tenderingUrl =
+      (currentProject.sharepoint_tender_url as string | null) ?? null;
 
-    createdProjectId = project.id;
+    let renamedSharePoint = false;
 
-    // --------------------------------------------------
-    // 5. Give creator access to project
-    // --------------------------------------------------
-
-    const {
-      error: accessError,
-    } = await supabase
-      .from("project_access")
-      .insert({
-        user_id: user.id,
-        project_id: project.id,
-      });
-
-    if (accessError) {
-      throw new Error(
-        `Project access could not be created: ${accessError.message}`,
-      );
-    }
-
-    // --------------------------------------------------
-    // 6. Create SharePoint Project Delivery
-    //    + Tendering structures
-    // --------------------------------------------------
-
-    const sharePoint =
-      await createProjectSharePointStructure({
+    if (
+      folderNameChanged &&
+      currentProject.sharepoint_drive_id &&
+      currentProject.sharepoint_folder_id
+    ) {
+      await renameProjectSharePointFolders({
+        deliveryDriveId: currentProject.sharepoint_drive_id,
+        deliveryFolderId: currentProject.sharepoint_folder_id,
+        tenderingDriveId: currentProject.sharepoint_tender_drive_id,
+        tenderingFolderId: currentProject.sharepoint_tender_folder_id,
         projectNumber,
         projectName: name,
       });
 
-    createdDeliveryDriveId =
-      sharePoint.delivery.driveId;
+      deliveryUrl = buildUpdatedSharePointUrl(
+        deliveryUrl,
+        projectNumber,
+        name,
+      );
 
-    createdDeliveryFolderId =
-      sharePoint.delivery.folderId;
+      tenderingUrl = buildUpdatedSharePointUrl(
+        tenderingUrl,
+        projectNumber,
+        name,
+      );
 
-    createdTenderDriveId =
-      sharePoint.tendering.driveId;
+      renamedSharePoint = true;
+    }
 
-    createdTenderFolderId =
-      sharePoint.tendering.folderId;
+    const updatePayload = {
+      name,
+      client,
+      client_code: clientCode,
+      project_year: projectYear,
+      project_sequence: projectSequence,
+      project_number: projectNumber,
+      location,
+      status,
+      total_towers: totalTowers,
+      sharepoint_url: deliveryUrl,
+      sharepoint_tender_url: tenderingUrl,
+      ...(renamedSharePoint
+        ? { sharepoint_synced_at: new Date().toISOString() }
+        : {}),
+    };
 
-    // --------------------------------------------------
-    // 7. Save SharePoint references in Supabase
-    // --------------------------------------------------
+    const { data: updatedProject, error: updateError } =
+      await supabase
+        .from("projects")
+        .update(updatePayload)
+        .eq("id", projectId)
+        .select(`
+          id,
+          name,
+          status,
+          client,
+          client_code,
+          project_year,
+          project_sequence,
+          project_number,
+          location,
+          total_towers,
+          sharepoint_url,
+          sharepoint_tender_url
+        `)
+        .single();
 
-    const {
-      error: updateError,
-    } = await supabase
-      .from("projects")
-      .update({
-        sharepoint_site_id:
-          sharePoint.siteId,
+    if (updateError || !updatedProject) {
+      if (
+        renamedSharePoint &&
+        currentProject.sharepoint_drive_id &&
+        currentProject.sharepoint_folder_id &&
+        currentProject.project_number &&
+        currentProject.name
+      ) {
+        try {
+          await renameProjectSharePointFolders({
+            deliveryDriveId: currentProject.sharepoint_drive_id,
+            deliveryFolderId: currentProject.sharepoint_folder_id,
+            tenderingDriveId: currentProject.sharepoint_tender_drive_id,
+            tenderingFolderId: currentProject.sharepoint_tender_folder_id,
+            projectNumber: currentProject.project_number,
+            projectName: currentProject.name,
+          });
+        } catch (rollbackError) {
+          console.error("PROJECT RENAME ROLLBACK ERROR:", rollbackError);
+        }
+      }
 
-        sharepoint_drive_id:
-          sharePoint.delivery.driveId,
-
-        sharepoint_folder_id:
-          sharePoint.delivery.folderId,
-
-        sharepoint_url:
-          sharePoint.delivery.url,
-
-        sharepoint_tender_drive_id:
-          sharePoint.tendering.driveId,
-
-        sharepoint_tender_folder_id:
-          sharePoint.tendering.folderId,
-
-        sharepoint_tender_url:
-          sharePoint.tendering.url,
-
-        sharepoint_synced_at:
-          new Date().toISOString(),
-      })
-      .eq("id", project.id);
-
-    if (updateError) {
       throw new Error(
-        `SharePoint was created but could not be linked to TTTracker: ${updateError.message}`,
+        updateError?.message ?? "Could not update project.",
       );
     }
 
-    // --------------------------------------------------
-    // 8. Success
-    // --------------------------------------------------
-
-    return NextResponse.json(
-      {
-        success: true,
-
-        projectId: project.id,
-
-        projectNumber,
-
-        sharePoint: {
-          siteId: sharePoint.siteId,
-
-          delivery: {
-            driveId:
-              sharePoint.delivery.driveId,
-
-            folderId:
-              sharePoint.delivery.folderId,
-
-            folderName:
-              sharePoint.delivery.folderName,
-
-            url:
-              sharePoint.delivery.url,
-          },
-
-          tendering: {
-            driveId:
-              sharePoint.tendering.driveId,
-
-            folderId:
-              sharePoint.tendering.folderId,
-
-            folderName:
-              sharePoint.tendering.folderName,
-
-            url:
-              sharePoint.tendering.url,
-          },
-        },
-      },
-      {
-        status: 201,
-      },
-    );
+    return NextResponse.json({
+      success: true,
+      project: updatedProject,
+    });
   } catch (error) {
-    console.error(
-      "PROJECT CREATION ERROR:",
-      error,
-    );
-
-    // --------------------------------------------------
-    // Best-effort SharePoint rollback
-    // --------------------------------------------------
-
-    if (
-      (
-        createdDeliveryDriveId &&
-        createdDeliveryFolderId
-      ) ||
-      (
-        createdTenderDriveId &&
-        createdTenderFolderId
-      )
-    ) {
-      try {
-        await deleteProjectSharePointFolders({
-          deliveryDriveId:
-            createdDeliveryDriveId,
-
-          deliveryFolderId:
-            createdDeliveryFolderId,
-
-          tenderingDriveId:
-            createdTenderDriveId,
-
-          tenderingFolderId:
-            createdTenderFolderId,
-        });
-      } catch (sharePointRollbackError) {
-        console.error(
-          "SHAREPOINT ROLLBACK ERROR:",
-          sharePointRollbackError,
-        );
-      }
-    }
-
-    // --------------------------------------------------
-    // Best-effort Supabase rollback
-    // --------------------------------------------------
-
-    if (createdProjectId) {
-      try {
-        await supabase
-          .from("project_access")
-          .delete()
-          .eq(
-            "project_id",
-            createdProjectId,
-          );
-
-        await supabase
-          .from("projects")
-          .delete()
-          .eq(
-            "id",
-            createdProjectId,
-          );
-      } catch (supabaseRollbackError) {
-        console.error(
-          "SUPABASE ROLLBACK ERROR:",
-          supabaseRollbackError,
-        );
-      }
-    }
-
-    // --------------------------------------------------
-    // Return useful error to client
-    // --------------------------------------------------
+    console.error("UPDATE PROJECT ERROR:", error);
 
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "An unexpected error occurred while creating the project.",
+            : "Could not update project.",
       },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: RouteContext,
+) {
+  const { projectId } = await context.params;
+
+  try {
+    const supabase = await createRouteSupabase();
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return NextResponse.json(
+        { error: "You must be logged in." },
+        { status: 401 },
+      );
+    }
+
+    const { data: project, error: projectError } =
+      await supabase
+        .from("projects")
+        .select(`
+          id,
+          sharepoint_drive_id,
+          sharepoint_folder_id,
+          sharepoint_tender_drive_id,
+          sharepoint_tender_folder_id
+        `)
+        .eq("id", projectId)
+        .single();
+
+    if (projectError || !project) {
+      return NextResponse.json(
+        { error: "Project could not be found." },
+        { status: 404 },
+      );
+    }
+
+    await deleteProjectSharePointFolders({
+      deliveryDriveId: project.sharepoint_drive_id,
+      deliveryFolderId: project.sharepoint_folder_id,
+      tenderingDriveId: project.sharepoint_tender_drive_id,
+      tenderingFolderId: project.sharepoint_tender_folder_id,
+    });
+
+    const { error: accessDeleteError } = await supabase
+      .from("project_access")
+      .delete()
+      .eq("project_id", projectId);
+
+    if (accessDeleteError) {
+      throw new Error(accessDeleteError.message);
+    }
+
+    const { error: projectDeleteError } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId);
+
+    if (projectDeleteError) {
+      throw new Error(projectDeleteError.message);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("DELETE PROJECT ERROR:", error);
+
+    return NextResponse.json(
       {
-        status: 500,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Could not delete project.",
       },
+      { status: 500 },
     );
   }
 }

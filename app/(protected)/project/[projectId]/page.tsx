@@ -11,7 +11,14 @@ type Project = {
   name: string;
   status?: string | null;
   client?: string | null;
+  client_code?: string | null;
+  project_year?: number | null;
+  project_sequence?: number | null;
+  project_number?: string | null;
   location?: string | null;
+  total_towers?: number | null;
+  sharepoint_url?: string | null;
+  sharepoint_tender_url?: string | null;
 };
 
 type Tower = {
@@ -187,6 +194,27 @@ type ProjectStats = {
   deliveryPercent: number;
   latestDocketDate: string | null;
 };
+
+function buildProjectNumber(
+  clientCode: string,
+  year: string | number,
+  sequence: string | number,
+) {
+  const cleanClient = String(clientCode || "").trim().toUpperCase();
+  const cleanYear = String(year || "").trim().slice(-2);
+  const sequenceNumber = Number(sequence || 1);
+
+  if (
+    !cleanClient ||
+    !cleanYear ||
+    !Number.isInteger(sequenceNumber) ||
+    sequenceNumber < 1
+  ) {
+    return "";
+  }
+
+  return `P-${cleanClient}-${cleanYear}-${String(sequenceNumber).padStart(3, "0")}`;
+}
 
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
@@ -825,7 +853,16 @@ export default function ProjectDashboard() {
 
   const [editingProject, setEditingProject] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
-  const [projectForm, setProjectForm] = useState({ name: "", location: "", status: "", client: "" });
+  const [projectForm, setProjectForm] = useState({
+    name: "",
+    client: "",
+    clientCode: "",
+    projectYear: String(new Date().getFullYear()),
+    projectSequence: "1",
+    location: "",
+    totalTowers: "",
+    status: "ongoing",
+  });
 
   const isAdmin = role === "admin";
 
@@ -845,7 +882,7 @@ export default function ProjectDashboard() {
 
     const { data: projectData, error: projectError } = await supabase
       .from("projects")
-      .select("id, name, status, client, location")
+      .select("id, name, status, client, client_code, project_year, project_sequence, project_number, location, total_towers, sharepoint_url, sharepoint_tender_url")
       .eq("id", projectId)
       .single();
 
@@ -950,9 +987,21 @@ export default function ProjectDashboard() {
     setProject(loadedProject);
     setProjectForm({
       name: loadedProject?.name || "",
-      location: loadedProject?.location || "",
-      status: loadedProject?.status || "",
       client: loadedProject?.client || "",
+      clientCode: loadedProject?.client_code || "",
+      projectYear: loadedProject?.project_year
+        ? String(loadedProject.project_year)
+        : String(new Date().getFullYear()),
+      projectSequence: loadedProject?.project_sequence
+        ? String(loadedProject.project_sequence)
+        : "1",
+      location: loadedProject?.location || "",
+      totalTowers:
+        loadedProject?.total_towers !== null &&
+        loadedProject?.total_towers !== undefined
+          ? String(loadedProject.total_towers)
+          : "",
+      status: loadedProject?.status || "ongoing",
     });
     setTowers(loadedTowers);
     setDockets(loadedDockets);
@@ -1794,57 +1843,131 @@ export default function ProjectDashboard() {
     setDocketLookupSearch("");
   }
 
+  function getProjectFormFromProject(value: Project) {
+    return {
+      name: value.name || "",
+      client: value.client || "",
+      clientCode: value.client_code || "",
+      projectYear: value.project_year
+        ? String(value.project_year)
+        : String(new Date().getFullYear()),
+      projectSequence: value.project_sequence
+        ? String(value.project_sequence)
+        : "1",
+      location: value.location || "",
+      totalTowers:
+        value.total_towers !== null && value.total_towers !== undefined
+          ? String(value.total_towers)
+          : "",
+      status: value.status || "ongoing",
+    };
+  }
+
   function startEditingProject() {
     if (!project) return;
-    setProjectForm({
-      name: project.name || "",
-      location: project.location || "",
-      status: project.status || "",
-      client: project.client || "",
-    });
+    setProjectForm(getProjectFormFromProject(project));
     setEditingProject(true);
   }
 
   function cancelEditingProject() {
     if (project) {
-      setProjectForm({
-        name: project.name || "",
-        location: project.location || "",
-        status: project.status || "",
-        client: project.client || "",
-      });
+      setProjectForm(getProjectFormFromProject(project));
     }
     setEditingProject(false);
   }
 
+  const editedProjectNumber = buildProjectNumber(
+    projectForm.clientCode,
+    projectForm.projectYear,
+    projectForm.projectSequence,
+  );
+
   async function saveProjectDetails() {
-    if (!project) return;
-    setSavingProject(true);
+    if (!project || savingProject) return;
 
-    const payload = {
-      name: projectForm.name.trim(),
-      location: projectForm.location.trim(),
-      status: projectForm.status.trim(),
-      client: projectForm.client.trim(),
-    };
+    const cleanName = projectForm.name.trim();
+    const cleanClientCode = projectForm.clientCode.trim().toUpperCase();
+    const projectYear = Number(projectForm.projectYear);
+    const projectSequence = Number(projectForm.projectSequence);
+    const totalTowers =
+      projectForm.totalTowers.trim() === ""
+        ? null
+        : Number(projectForm.totalTowers);
 
-    const { data, error } = await supabase
-      .from("projects")
-      .update(payload)
-      .eq("id", project.id)
-      .select("id, name, status, client, location")
-      .single();
-
-    setSavingProject(false);
-
-    if (error) {
-      console.error("project update error", error);
-      alert("Failed to update project details.");
+    if (!cleanName) {
+      alert("Project name is required.");
       return;
     }
 
-    setProject((data as Project) || null);
-    setEditingProject(false);
+    if (!cleanClientCode) {
+      alert("Client code is required.");
+      return;
+    }
+
+    if (
+      !Number.isInteger(projectYear) ||
+      projectYear < 2000 ||
+      projectYear > 2100
+    ) {
+      alert("Enter a valid project year.");
+      return;
+    }
+
+    if (!Number.isInteger(projectSequence) || projectSequence < 1) {
+      alert("Enter a valid project sequence.");
+      return;
+    }
+
+    if (
+      totalTowers !== null &&
+      (!Number.isFinite(totalTowers) || totalTowers < 0)
+    ) {
+      alert("Total towers must be a valid number.");
+      return;
+    }
+
+    setSavingProject(true);
+
+    try {
+      const response = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: cleanName,
+          client: projectForm.client.trim(),
+          clientCode: cleanClientCode,
+          projectYear,
+          projectSequence,
+          location: projectForm.location.trim(),
+          totalTowers,
+          status: projectForm.status,
+        }),
+      });
+
+      const result = (await response.json()) as {
+        project?: Project;
+        error?: string;
+      };
+
+      if (!response.ok || !result.project) {
+        throw new Error(result.error || "Failed to update project details.");
+      }
+
+      setProject(result.project);
+      setProjectForm(getProjectFormFromProject(result.project));
+      setEditingProject(false);
+    } catch (error) {
+      console.error("project update error", error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to update project details.",
+      );
+    } finally {
+      setSavingProject(false);
+    }
   }
 
   function goToTowerAction(towerId: string) {
@@ -1881,64 +2004,276 @@ export default function ProjectDashboard() {
     <div className="min-h-screen bg-slate-50 p-6 md:p-8 space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         {!editingProject ? (
-          <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900">{project?.name || `Project ${projectId}`}</h1>
-              <p className="mt-2 text-slate-600">Project-wide overview across all assigned towers.</p>
+          <div className="space-y-5">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                {project?.project_number ? (
+                  <div className="text-sm font-bold uppercase tracking-[0.12em] text-blue-600">
+                    {project.project_number}
+                  </div>
+                ) : null}
+
+                <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+                  {project?.name || `Project ${projectId}`}
+                </h1>
+
+                <p className="mt-2 text-slate-600">
+                  Project-wide overview across all assigned towers.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {project?.sharepoint_url ? (
+                  <a
+                    href={project.sharepoint_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                  >
+                    Project Delivery
+                  </a>
+                ) : null}
+
+                {project?.sharepoint_tender_url ? (
+                  <a
+                    href={project.sharepoint_tender_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+                  >
+                    Tendering
+                  </a>
+                ) : null}
+
+                {isAdmin ? (
+                  <button
+                    onClick={startEditingProject}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Edit Project
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="flex flex-wrap gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Status</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">{project?.status || "-"}</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Client
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.client || "-"}
+                </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Location</div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">{project?.location || "-"}</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Status
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.status || "-"}
+                </div>
               </div>
 
-              {isAdmin && (
-                <button onClick={startEditingProject} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium hover:bg-slate-50">
-                  Edit Project
-                </button>
-              )}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Location
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.location || "-"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Total Towers
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">
+                  {project?.total_towers ?? stats.totalTowers}
+                </div>
+              </div>
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-bold tracking-tight text-slate-900">Edit Project Details</h1>
-                <p className="mt-2 text-slate-600">Update project name, location and other high-level details.</p>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                  Edit Project Details
+                </h1>
+                <p className="mt-2 text-sm text-slate-600">
+                  Project numbering and SharePoint Project Delivery and Tendering folders
+                  will stay synchronised with these details.
+                </p>
               </div>
 
-              <div className="flex gap-2 flex-wrap">
-                <button onClick={cancelEditingProject} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={cancelEditingProject}
+                  disabled={savingProject}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
                   Cancel
                 </button>
-                <button onClick={saveProjectDetails} disabled={savingProject} className="rounded-xl bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-60">
-                  {savingProject ? "Saving..." : "Save Changes"}
+
+                <button
+                  onClick={saveProjectDetails}
+                  disabled={savingProject}
+                  className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {savingProject ? "Saving & Syncing..." : "Save Changes"}
                 </button>
               </div>
             </div>
 
-            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Project Name</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.name} onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))} />
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Project Name
+                </label>
+                <input
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.name}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                />
               </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Location</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.location} onChange={(e) => setProjectForm((prev) => ({ ...prev, location: e.target.value }))} />
+
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Client
+                </label>
+                <input
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.client}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({ ...prev, client: e.target.value }))
+                  }
+                />
               </div>
+
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Status</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.status} onChange={(e) => setProjectForm((prev) => ({ ...prev, status: e.target.value }))} />
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Client Code
+                </label>
+                <input
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5 uppercase"
+                  value={projectForm.clientCode}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      clientCode: e.target.value.toUpperCase(),
+                    }))
+                  }
+                />
               </div>
+
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Client</label>
-                <input className="w-full border border-slate-300 rounded-xl px-3 py-2.5" value={projectForm.client} onChange={(e) => setProjectForm((prev) => ({ ...prev, client: e.target.value }))} />
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Project Year
+                </label>
+                <input
+                  type="number"
+                  min="2000"
+                  max="2100"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.projectYear}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      projectYear: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Project No.
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.projectSequence}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      projectSequence: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Total Towers
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.totalTowers}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      totalTowers: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Location
+                </label>
+                <input
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={projectForm.location}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      location: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Project Status
+                </label>
+                <select
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5"
+                  value={projectForm.status}
+                  onChange={(e) =>
+                    setProjectForm((prev) => ({
+                      ...prev,
+                      status: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="tendering">Tendering</option>
+                  <option value="mobilising">Mobilising</option>
+                  <option value="ongoing">Ongoing</option>
+                  <option value="demobilising">Demobilising</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">
+                Project Number
+              </div>
+              <div className="mt-1 text-xl font-bold text-slate-950">
+                {editedProjectNumber || "P-CLIENT-YY-001"}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                Saving a changed project number or project name will rename both
+                SharePoint project folders.
               </div>
             </div>
           </div>
