@@ -103,7 +103,9 @@ export async function getBCContractingSite() {
 
 export async function getSiteDrives(siteId: string) {
   return graphRequest<GraphDriveList>(
-    `/sites/${encodeURIComponent(siteId)}/drives?$select=id,name,webUrl`,
+    `/sites/${encodeURIComponent(
+      siteId,
+    )}/drives?$select=id,name,webUrl`,
   );
 }
 
@@ -171,6 +173,23 @@ export async function renameDriveItem({
       body: JSON.stringify({
         name,
       }),
+    },
+  );
+}
+
+export async function deleteDriveItem({
+  driveId,
+  itemId,
+}: {
+  driveId: string;
+  itemId: string;
+}) {
+  await graphRequest<void>(
+    `/drives/${encodeURIComponent(
+      driveId,
+    )}/items/${encodeURIComponent(itemId)}`,
+    {
+      method: "DELETE",
     },
   );
 }

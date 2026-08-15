@@ -1,9 +1,16 @@
 import {
   createDriveFolder,
+  deleteDriveItem,
   getBCContractingSite,
   getDriveByName,
   renameDriveItem,
 } from "@/lib/sharepoint/graph";
+
+import {
+  PROJECT_DELIVERY_TEMPLATE,
+  TENDERING_TEMPLATE,
+  type SharePointFolderTemplate,
+} from "@/lib/sharepoint/templates";
 
 export type ProjectSharePointInput = {
   projectNumber: string;
@@ -12,156 +19,29 @@ export type ProjectSharePointInput = {
 
 export type ProjectSharePointResult = {
   siteId: string;
-  driveId: string;
-  folderId: string;
-  folderName: string;
-  url: string | null;
-};
 
-type FolderTemplate = {
-  name: string;
-  children?: FolderTemplate[];
+  delivery: {
+    driveId: string;
+    folderId: string;
+    folderName: string;
+    url: string | null;
+  };
+
+  tendering: {
+    driveId: string;
+    folderId: string;
+    folderName: string;
+    url: string | null;
+  };
 };
 
 const PROJECT_DELIVERY_LIBRARY =
   process.env.SHAREPOINT_PROJECT_DELIVERY_LIBRARY ??
   "Project Delivery";
 
-/**
- * This is the standard BC Contracting Project Delivery folder structure.
- *
- * Keep this as the single source of truth for automatically-created
- * project folders.
- */
-const PROJECT_FOLDER_TEMPLATE: FolderTemplate[] = [
-  {
-    name: "01 Programme & Scheduling",
-    children: [
-      {
-        name: "Programme",
-      },
-      {
-        name: "Look Aheads",
-      },
-      {
-        name: "Progress Reports",
-      },
-      {
-        name: "Weekly Reports",
-      },
-      {
-        name: "Meeting Minutes",
-      },
-    ],
-  },
-
-  {
-    name: "02 Commercial",
-    children: [
-      {
-        name: "Dayworks",
-      },
-      {
-        name: "Daily Dockets",
-      },
-      {
-        name: "Monthly Claims",
-      },
-      {
-        name: "Reports & Meetings",
-      },
-      {
-        name: "Claims",
-        children: [
-          {
-            name: "NDO",
-          },
-          {
-            name: "DOV",
-          },
-          {
-            name: "Variations",
-          },
-          {
-            name: "EOT",
-          },
-        ],
-      },
-    ],
-  },
-
-  {
-    name: "03 Quality",
-    children: [
-      {
-        name: "ITCs",
-      },
-      {
-        name: "ITPs",
-      },
-    ],
-  },
-
-  {
-    name: "04 HSEQ",
-    children: [
-      {
-        name: "SWMS",
-      },
-      {
-        name: "Workpacks",
-      },
-      {
-        name: "Registers",
-      },
-      {
-        name: "Toolbox Talks",
-      },
-      {
-        name: "Client Documents",
-      },
-      {
-        name: "Management Plans",
-      },
-      {
-        name: "Lift Studies",
-      },
-    ],
-  },
-
-  {
-    name: "05 Drawings",
-  },
-
-  {
-    name: "06 Onboarding",
-    children: [
-      {
-        name: "Personnel",
-      },
-      {
-        name: "Plant & Equipment",
-      },
-    ],
-  },
-
-  {
-    name: "100 Incoming",
-  },
-
-  {
-    name: "200 Outgoing",
-  },
-
-  {
-    name: "999 Project Completion",
-    children: [
-      {
-        name: "Lessons Learnt",
-      },
-    ],
-  },
-];
+const TENDERING_LIBRARY =
+  process.env.SHAREPOINT_TENDERING_LIBRARY ??
+  "Tendering";
 
 export function sanitiseSharePointName(value: string) {
   return value
@@ -175,8 +55,11 @@ export function buildSharePointProjectFolderName({
   projectNumber,
   projectName,
 }: ProjectSharePointInput) {
-  const cleanNumber = sanitiseSharePointName(projectNumber);
-  const cleanName = sanitiseSharePointName(projectName);
+  const cleanNumber =
+    sanitiseSharePointName(projectNumber);
+
+  const cleanName =
+    sanitiseSharePointName(projectName);
 
   if (!cleanNumber) {
     throw new Error(
@@ -200,7 +83,7 @@ async function createFolderTree({
 }: {
   driveId: string;
   parentFolderId: string;
-  folders: FolderTemplate[];
+  folders: SharePointFolderTemplate[];
 }) {
   for (const folder of folders) {
     const createdFolder = await createDriveFolder({
@@ -224,58 +107,150 @@ export async function createProjectSharePointStructure(
 ): Promise<ProjectSharePointResult> {
   const site = await getBCContractingSite();
 
-  const drive = await getDriveByName(
-    site.id,
-    PROJECT_DELIVERY_LIBRARY,
-  );
+  const [deliveryDrive, tenderingDrive] =
+    await Promise.all([
+      getDriveByName(
+        site.id,
+        PROJECT_DELIVERY_LIBRARY,
+      ),
+      getDriveByName(
+        site.id,
+        TENDERING_LIBRARY,
+      ),
+    ]);
 
   const folderName =
     buildSharePointProjectFolderName(input);
 
-  /*
-   * Create the main project folder at the root of:
-   *
-   * Project Delivery
-   * └── P-UGL-26-001 Project Name
-   */
-  const projectFolder = await createDriveFolder({
-    driveId: drive.id,
-    parentItemId: null,
-    name: folderName,
-  });
+  let deliveryFolder:
+    | Awaited<ReturnType<typeof createDriveFolder>>
+    | null = null;
 
-  /*
-   * Create the agreed standard project structure.
-   */
-  await createFolderTree({
-    driveId: drive.id,
-    parentFolderId: projectFolder.id,
-    folders: PROJECT_FOLDER_TEMPLATE,
-  });
+  let tenderingFolder:
+    | Awaited<ReturnType<typeof createDriveFolder>>
+    | null = null;
 
-  return {
-    siteId: site.id,
-    driveId: drive.id,
-    folderId: projectFolder.id,
-    folderName: projectFolder.name,
-    url: projectFolder.webUrl ?? null,
-  };
+  try {
+    /*
+     * --------------------------------------------------
+     * PROJECT DELIVERY
+     * --------------------------------------------------
+     */
+
+    deliveryFolder =
+      await createDriveFolder({
+        driveId: deliveryDrive.id,
+        parentItemId: null,
+        name: folderName,
+      });
+
+    await createFolderTree({
+      driveId: deliveryDrive.id,
+      parentFolderId: deliveryFolder.id,
+      folders: PROJECT_DELIVERY_TEMPLATE,
+    });
+
+    /*
+     * --------------------------------------------------
+     * TENDERING
+     * --------------------------------------------------
+     */
+
+    tenderingFolder =
+      await createDriveFolder({
+        driveId: tenderingDrive.id,
+        parentItemId: null,
+        name: folderName,
+      });
+
+    await createFolderTree({
+      driveId: tenderingDrive.id,
+      parentFolderId: tenderingFolder.id,
+      folders: TENDERING_TEMPLATE,
+    });
+
+    /*
+     * --------------------------------------------------
+     * RETURN SHAREPOINT REFERENCES
+     * --------------------------------------------------
+     */
+
+    return {
+      siteId: site.id,
+
+      delivery: {
+        driveId: deliveryDrive.id,
+        folderId: deliveryFolder.id,
+        folderName: deliveryFolder.name,
+        url: deliveryFolder.webUrl ?? null,
+      },
+
+      tendering: {
+        driveId: tenderingDrive.id,
+        folderId: tenderingFolder.id,
+        folderName: tenderingFolder.name,
+        url: tenderingFolder.webUrl ?? null,
+      },
+    };
+  } catch (error) {
+    /*
+     * --------------------------------------------------
+     * ROLLBACK PARTIAL SHAREPOINT CREATION
+     * --------------------------------------------------
+     *
+     * If either structure fails to create, remove
+     * anything that was already created so TTTracker
+     * doesn't leave half-built SharePoint projects.
+     */
+
+    const rollbackOperations: Promise<void>[] = [];
+
+    if (deliveryFolder) {
+      rollbackOperations.push(
+        deleteDriveItem({
+          driveId: deliveryDrive.id,
+          itemId: deliveryFolder.id,
+        }).catch((rollbackError) => {
+          console.error(
+            "PROJECT DELIVERY SHAREPOINT ROLLBACK ERROR:",
+            rollbackError,
+          );
+        }),
+      );
+    }
+
+    if (tenderingFolder) {
+      rollbackOperations.push(
+        deleteDriveItem({
+          driveId: tenderingDrive.id,
+          itemId: tenderingFolder.id,
+        }).catch((rollbackError) => {
+          console.error(
+            "TENDERING SHAREPOINT ROLLBACK ERROR:",
+            rollbackError,
+          );
+        }),
+      );
+    }
+
+    await Promise.all(rollbackOperations);
+
+    throw error;
+  }
 }
 
-/**
- * Used later when the project number/name is edited in TTTracker.
- *
- * Because we store the SharePoint drive ID and folder ID,
- * we do NOT need to search for the folder by name.
- */
-export async function renameProjectSharePointFolder({
-  driveId,
-  folderId,
+export async function renameProjectSharePointFolders({
+  deliveryDriveId,
+  deliveryFolderId,
+  tenderingDriveId,
+  tenderingFolderId,
   projectNumber,
   projectName,
 }: {
-  driveId: string;
-  folderId: string;
+  deliveryDriveId: string;
+  deliveryFolderId: string;
+  tenderingDriveId?: string | null;
+  tenderingFolderId?: string | null;
   projectNumber: string;
   projectName: string;
 }) {
@@ -285,9 +260,76 @@ export async function renameProjectSharePointFolder({
       projectName,
     });
 
-  return renameDriveItem({
-    driveId,
-    itemId: folderId,
+  /*
+   * Rename Project Delivery folder.
+   */
+  await renameDriveItem({
+    driveId: deliveryDriveId,
+    itemId: deliveryFolderId,
     name: newFolderName,
   });
+
+  /*
+   * Rename Tendering folder if linked.
+   */
+  if (
+    tenderingDriveId &&
+    tenderingFolderId
+  ) {
+    await renameDriveItem({
+      driveId: tenderingDriveId,
+      itemId: tenderingFolderId,
+      name: newFolderName,
+    });
+  }
+}
+
+export async function deleteProjectSharePointFolders({
+  deliveryDriveId,
+  deliveryFolderId,
+  tenderingDriveId,
+  tenderingFolderId,
+}: {
+  deliveryDriveId?: string | null;
+  deliveryFolderId?: string | null;
+  tenderingDriveId?: string | null;
+  tenderingFolderId?: string | null;
+}) {
+  const deleteOperations: Promise<void>[] = [];
+
+  /*
+   * Project Delivery
+   */
+  if (
+    deliveryDriveId &&
+    deliveryFolderId
+  ) {
+    deleteOperations.push(
+      deleteDriveItem({
+        driveId: deliveryDriveId,
+        itemId: deliveryFolderId,
+      }),
+    );
+  }
+
+  /*
+   * Tendering
+   */
+  if (
+    tenderingDriveId &&
+    tenderingFolderId
+  ) {
+    deleteOperations.push(
+      deleteDriveItem({
+        driveId: tenderingDriveId,
+        itemId: tenderingFolderId,
+      }),
+    );
+  }
+
+  if (deleteOperations.length === 0) {
+    return;
+  }
+
+  await Promise.all(deleteOperations);
 }
