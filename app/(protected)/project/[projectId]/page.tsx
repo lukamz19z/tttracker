@@ -853,6 +853,7 @@ export default function ProjectDashboard() {
 
   const [editingProject, setEditingProject] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
   const [projectForm, setProjectForm] = useState({
     name: "",
     client: "",
@@ -1970,6 +1971,75 @@ export default function ProjectDashboard() {
     }
   }
 
+  async function deleteProject() {
+    if (!project || !isAdmin || deletingProject) return;
+
+    const projectLabel =
+      project.project_number && project.name
+        ? `${project.project_number} ${project.name}`
+        : project.name || "this project";
+
+    const firstConfirmation = window.confirm(
+      `Delete ${projectLabel}?\n\n` +
+        "This will remove the project from TTTracker and move its linked Project Delivery and Tendering folders in SharePoint to the recycle bin.",
+    );
+
+    if (!firstConfirmation) return;
+
+    const typedConfirmation = window.prompt(
+      `To confirm permanent removal from TTTracker, type DELETE.\n\nProject: ${projectLabel}`,
+    );
+
+    if (typedConfirmation !== "DELETE") {
+      if (typedConfirmation !== null) {
+        alert("Project deletion cancelled. You must type DELETE exactly.");
+      }
+      return;
+    }
+
+    setDeletingProject(true);
+
+    try {
+      const response = await fetch(`/api/projects/${project.id}`, {
+        method: "DELETE",
+      });
+
+      let result: {
+        success?: boolean;
+        error?: string;
+      } = {};
+
+      try {
+        result = (await response.json()) as {
+          success?: boolean;
+          error?: string;
+        };
+      } catch {
+        // Keep generic error below if the API returns a non-JSON response.
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          result.error || "Failed to delete project.",
+        );
+      }
+
+      router.push("/");
+      router.refresh();
+    } catch (error) {
+      console.error("project delete error", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to delete project.",
+      );
+    } finally {
+      setDeletingProject(false);
+    }
+  }
+
+
   function goToTowerAction(towerId: string) {
     if (!actionType) return;
     if (actionType === "docket") router.push(`/project/${projectId}/tower/${towerId}/dockets`);
@@ -2276,6 +2346,37 @@ export default function ProjectDashboard() {
                 SharePoint project folders.
               </div>
             </div>
+
+            {isAdmin ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-[0.12em] text-red-600">
+                      Danger Zone
+                    </div>
+
+                    <h3 className="mt-1 text-lg font-bold text-red-950">
+                      Delete Project
+                    </h3>
+
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-red-800">
+                      This removes the project from TTTracker and sends the linked
+                      Project Delivery and Tendering SharePoint folders to the
+                      SharePoint recycle bin. This action is only available to admins.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={deleteProject}
+                    disabled={savingProject || deletingProject}
+                    className="shrink-0 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {deletingProject ? "Deleting..." : "Delete Project"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
