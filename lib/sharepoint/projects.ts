@@ -35,6 +35,20 @@ export type ProjectSharePointResult = {
   };
 };
 
+export type ProjectSharePointRenameResult = {
+  delivery: {
+    id: string;
+    name: string;
+    webUrl?: string;
+  };
+
+  tendering: {
+    id: string;
+    name: string;
+    webUrl?: string;
+  } | null;
+};
+
 const PROJECT_DELIVERY_LIBRARY =
   process.env.SHAREPOINT_PROJECT_DELIVERY_LIBRARY ??
   "Project Delivery";
@@ -86,11 +100,12 @@ async function createFolderTree({
   folders: SharePointFolderTemplate[];
 }) {
   for (const folder of folders) {
-    const createdFolder = await createDriveFolder({
-      driveId,
-      parentItemId: parentFolderId,
-      name: folder.name,
-    });
+    const createdFolder =
+      await createDriveFolder({
+        driveId,
+        parentItemId: parentFolderId,
+        name: folder.name,
+      });
 
     if (folder.children?.length) {
       await createFolderTree({
@@ -105,7 +120,8 @@ async function createFolderTree({
 export async function createProjectSharePointStructure(
   input: ProjectSharePointInput,
 ): Promise<ProjectSharePointResult> {
-  const site = await getBCContractingSite();
+  const site =
+    await getBCContractingSite();
 
   const [deliveryDrive, tenderingDrive] =
     await Promise.all([
@@ -113,6 +129,7 @@ export async function createProjectSharePointStructure(
         site.id,
         PROJECT_DELIVERY_LIBRARY,
       ),
+
       getDriveByName(
         site.id,
         TENDERING_LIBRARY,
@@ -123,11 +140,15 @@ export async function createProjectSharePointStructure(
     buildSharePointProjectFolderName(input);
 
   let deliveryFolder:
-    | Awaited<ReturnType<typeof createDriveFolder>>
+    | Awaited<
+        ReturnType<typeof createDriveFolder>
+      >
     | null = null;
 
   let tenderingFolder:
-    | Awaited<ReturnType<typeof createDriveFolder>>
+    | Awaited<
+        ReturnType<typeof createDriveFolder>
+      >
     | null = null;
 
   try {
@@ -146,8 +167,10 @@ export async function createProjectSharePointStructure(
 
     await createFolderTree({
       driveId: deliveryDrive.id,
-      parentFolderId: deliveryFolder.id,
-      folders: PROJECT_DELIVERY_TEMPLATE,
+      parentFolderId:
+        deliveryFolder.id,
+      folders:
+        PROJECT_DELIVERY_TEMPLATE,
     });
 
     /*
@@ -165,7 +188,8 @@ export async function createProjectSharePointStructure(
 
     await createFolderTree({
       driveId: tenderingDrive.id,
-      parentFolderId: tenderingFolder.id,
+      parentFolderId:
+        tenderingFolder.id,
       folders: TENDERING_TEMPLATE,
     });
 
@@ -179,17 +203,33 @@ export async function createProjectSharePointStructure(
       siteId: site.id,
 
       delivery: {
-        driveId: deliveryDrive.id,
-        folderId: deliveryFolder.id,
-        folderName: deliveryFolder.name,
-        url: deliveryFolder.webUrl ?? null,
+        driveId:
+          deliveryDrive.id,
+
+        folderId:
+          deliveryFolder.id,
+
+        folderName:
+          deliveryFolder.name,
+
+        url:
+          deliveryFolder.webUrl ??
+          null,
       },
 
       tendering: {
-        driveId: tenderingDrive.id,
-        folderId: tenderingFolder.id,
-        folderName: tenderingFolder.name,
-        url: tenderingFolder.webUrl ?? null,
+        driveId:
+          tenderingDrive.id,
+
+        folderId:
+          tenderingFolder.id,
+
+        folderName:
+          tenderingFolder.name,
+
+        url:
+          tenderingFolder.webUrl ??
+          null,
       },
     };
   } catch (error) {
@@ -197,43 +237,52 @@ export async function createProjectSharePointStructure(
      * --------------------------------------------------
      * ROLLBACK PARTIAL SHAREPOINT CREATION
      * --------------------------------------------------
-     *
-     * If either structure fails to create, remove
-     * anything that was already created so TTTracker
-     * doesn't leave half-built SharePoint projects.
      */
 
-    const rollbackOperations: Promise<void>[] = [];
+    const rollbackOperations:
+      Promise<void>[] = [];
 
     if (deliveryFolder) {
       rollbackOperations.push(
         deleteDriveItem({
-          driveId: deliveryDrive.id,
-          itemId: deliveryFolder.id,
-        }).catch((rollbackError) => {
-          console.error(
-            "PROJECT DELIVERY SHAREPOINT ROLLBACK ERROR:",
-            rollbackError,
-          );
-        }),
+          driveId:
+            deliveryDrive.id,
+
+          itemId:
+            deliveryFolder.id,
+        }).catch(
+          (rollbackError) => {
+            console.error(
+              "PROJECT DELIVERY SHAREPOINT ROLLBACK ERROR:",
+              rollbackError,
+            );
+          },
+        ),
       );
     }
 
     if (tenderingFolder) {
       rollbackOperations.push(
         deleteDriveItem({
-          driveId: tenderingDrive.id,
-          itemId: tenderingFolder.id,
-        }).catch((rollbackError) => {
-          console.error(
-            "TENDERING SHAREPOINT ROLLBACK ERROR:",
-            rollbackError,
-          );
-        }),
+          driveId:
+            tenderingDrive.id,
+
+          itemId:
+            tenderingFolder.id,
+        }).catch(
+          (rollbackError) => {
+            console.error(
+              "TENDERING SHAREPOINT ROLLBACK ERROR:",
+              rollbackError,
+            );
+          },
+        ),
       );
     }
 
-    await Promise.all(rollbackOperations);
+    await Promise.all(
+      rollbackOperations,
+    );
 
     throw error;
   }
@@ -249,11 +298,15 @@ export async function renameProjectSharePointFolders({
 }: {
   deliveryDriveId: string;
   deliveryFolderId: string;
-  tenderingDriveId?: string | null;
-  tenderingFolderId?: string | null;
+  tenderingDriveId?:
+    | string
+    | null;
+  tenderingFolderId?:
+    | string
+    | null;
   projectNumber: string;
   projectName: string;
-}) {
+}): Promise<ProjectSharePointRenameResult> {
   const newFolderName =
     buildSharePointProjectFolderName({
       projectNumber,
@@ -261,27 +314,66 @@ export async function renameProjectSharePointFolders({
     });
 
   /*
-   * Rename Project Delivery folder.
+   * --------------------------------------------------
+   * RENAME PROJECT DELIVERY
+   * --------------------------------------------------
    */
-  await renameDriveItem({
-    driveId: deliveryDriveId,
-    itemId: deliveryFolderId,
-    name: newFolderName,
-  });
+
+  const delivery =
+    await renameDriveItem({
+      driveId:
+        deliveryDriveId,
+
+      itemId:
+        deliveryFolderId,
+
+      name:
+        newFolderName,
+    });
 
   /*
-   * Rename Tendering folder if linked.
+   * --------------------------------------------------
+   * RENAME TENDERING
+   * --------------------------------------------------
    */
+
+  let tendering:
+    | Awaited<
+        ReturnType<
+          typeof renameDriveItem
+        >
+      >
+    | null = null;
+
   if (
     tenderingDriveId &&
     tenderingFolderId
   ) {
-    await renameDriveItem({
-      driveId: tenderingDriveId,
-      itemId: tenderingFolderId,
-      name: newFolderName,
-    });
+    tendering =
+      await renameDriveItem({
+        driveId:
+          tenderingDriveId,
+
+        itemId:
+          tenderingFolderId,
+
+        name:
+          newFolderName,
+      });
   }
+
+  /*
+   * Return the renamed DriveItems.
+   *
+   * Microsoft Graph returns the authoritative
+   * webUrl after the rename. The project API
+   * can then save these URLs back to Supabase.
+   */
+
+  return {
+    delivery,
+    tendering,
+  };
 }
 
 export async function deleteProjectSharePointFolders({
@@ -290,46 +382,74 @@ export async function deleteProjectSharePointFolders({
   tenderingDriveId,
   tenderingFolderId,
 }: {
-  deliveryDriveId?: string | null;
-  deliveryFolderId?: string | null;
-  tenderingDriveId?: string | null;
-  tenderingFolderId?: string | null;
+  deliveryDriveId?:
+    | string
+    | null;
+
+  deliveryFolderId?:
+    | string
+    | null;
+
+  tenderingDriveId?:
+    | string
+    | null;
+
+  tenderingFolderId?:
+    | string
+    | null;
 }) {
-  const deleteOperations: Promise<void>[] = [];
+  const deleteOperations:
+    Promise<void>[] = [];
 
   /*
-   * Project Delivery
+   * --------------------------------------------------
+   * PROJECT DELIVERY
+   * --------------------------------------------------
    */
+
   if (
     deliveryDriveId &&
     deliveryFolderId
   ) {
     deleteOperations.push(
       deleteDriveItem({
-        driveId: deliveryDriveId,
-        itemId: deliveryFolderId,
+        driveId:
+          deliveryDriveId,
+
+        itemId:
+          deliveryFolderId,
       }),
     );
   }
 
   /*
-   * Tendering
+   * --------------------------------------------------
+   * TENDERING
+   * --------------------------------------------------
    */
+
   if (
     tenderingDriveId &&
     tenderingFolderId
   ) {
     deleteOperations.push(
       deleteDriveItem({
-        driveId: tenderingDriveId,
-        itemId: tenderingFolderId,
+        driveId:
+          tenderingDriveId,
+
+        itemId:
+          tenderingFolderId,
       }),
     );
   }
 
-  if (deleteOperations.length === 0) {
+  if (
+    deleteOperations.length === 0
+  ) {
     return;
   }
 
-  await Promise.all(deleteOperations);
+  await Promise.all(
+    deleteOperations,
+  );
 }

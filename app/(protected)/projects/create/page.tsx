@@ -26,9 +26,18 @@ type CreateProjectResponse = {
   error?: string;
   sharePoint?: {
     siteId?: string;
-    driveId?: string;
-    folderId?: string;
-    url?: string | null;
+    delivery?: {
+      driveId?: string;
+      folderId?: string;
+      folderName?: string;
+      url?: string | null;
+    };
+    tendering?: {
+      driveId?: string;
+      folderId?: string;
+      folderName?: string;
+      url?: string | null;
+    };
   };
 };
 
@@ -265,8 +274,8 @@ export default function CreateProjectPage() {
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
                 Set up a new TTTracker project and automatically
-                provision its Project Delivery structure in
-                SharePoint.
+                provision its Project Delivery and restricted Tendering
+                structures in SharePoint.
               </p>
             </div>
 
@@ -281,14 +290,15 @@ export default function CreateProjectPage() {
                     SharePoint Integration
                   </p>
                   <p className="mt-1 font-semibold text-white">
-                    Project Delivery
+                    Project Delivery + Tendering
                   </p>
                 </div>
               </div>
 
               <p className="mt-4 max-w-[250px] text-xs leading-5 text-slate-400">
-                The standard BC Contracting folder structure will
-                be created automatically after submission.
+                Both SharePoint structures will be created automatically.
+                Tendering remains a separate library so its permissions can
+                be restricted independently.
               </p>
             </div>
           </div>
@@ -618,7 +628,7 @@ export default function CreateProjectPage() {
 
                 <div>
                   <p className="text-sm font-bold text-slate-900">
-                    SharePoint Folder
+                    SharePoint Structure
                   </p>
                   <p className="text-xs text-slate-500">
                     Project Delivery
@@ -643,6 +653,51 @@ export default function CreateProjectPage() {
                 <FolderLine name="100 Incoming" />
                 <FolderLine name="200 Outgoing" />
                 <FolderLine name="999 Project Completion" />
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-amber-200 bg-amber-50 p-6">
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl bg-white p-2.5 text-amber-700 shadow-sm">
+                  <ShieldCheck size={19} />
+                </div>
+
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Tendering Structure
+                  </p>
+                  <p className="text-xs text-amber-700">
+                    Separate restricted SharePoint library
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-xl border border-amber-200 bg-white p-4">
+                <p className="break-words text-sm font-semibold text-slate-800">
+                  {sharePointFolderName ||
+                    "Tender folder name will appear here"}
+                </p>
+              </div>
+
+              <div className="mt-5 space-y-2.5 text-sm text-slate-700">
+                <FolderLine name="01 RFQ & Scope" tone="amber" />
+                <FolderLine name="02 Estimating" tone="amber" />
+                <FolderLine name="03 Planning" tone="amber" />
+                <FolderLine name="04 Pricing" tone="amber" />
+                <FolderLine name="05 Supplier & Subcontractor Quotes" tone="amber" />
+                <FolderLine name="06 Clarifications" tone="amber" />
+                <FolderLine name="07 Submission" tone="amber" />
+                <FolderLine name="08 Contract" tone="amber" />
+                <FolderLine name="100 Incoming" tone="amber" />
+                <FolderLine name="200 Outgoing" tone="amber" />
+              </div>
+
+              <div className="mt-5 rounded-xl border border-amber-200 bg-white/70 p-3">
+                <p className="text-xs leading-5 text-amber-900">
+                  Tendering is created separately from Project Delivery so confidential
+                  estimating, pricing, supplier quotes and contract information can have
+                  tighter SharePoint permissions.
+                </p>
               </div>
             </section>
           </aside>
@@ -700,12 +755,22 @@ function SummaryRow({
   );
 }
 
-function FolderLine({ name }: { name: string }) {
+function FolderLine({
+  name,
+  tone = "slate",
+}: {
+  name: string;
+  tone?: "slate" | "amber";
+}) {
   return (
     <div className="flex items-center gap-2">
       <FolderKanban
         size={14}
-        className="shrink-0 text-slate-400"
+        className={
+          tone === "amber"
+            ? "shrink-0 text-amber-500"
+            : "shrink-0 text-slate-400"
+        }
       />
       <span>{name}</span>
     </div>
