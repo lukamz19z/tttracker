@@ -7,6 +7,10 @@ import {
   type SupabaseClient,
 } from "@supabase/supabase-js";
 
+import {
+  reconcileSharePointPermissions,
+} from "@/lib/sharepoint/permissions";
+
 export const runtime = "nodejs";
 
 type PermissionInput = {
@@ -319,12 +323,6 @@ export async function GET(
         ),
       );
 
-    /*
-     * Filter the view through live access_areas.is_active.
-     * This guarantees that a SharePoint folder removed during sync
-     * immediately disappears from the Roles & Permissions page even
-     * if the SQL view itself does not filter inactive areas.
-     */
     const matrix =
       (
         (
@@ -494,8 +492,49 @@ export async function POST(
       );
     }
 
+    /*
+     * Only reconcile areas touched by this save. TTTracker remains the
+     * source of truth even if Microsoft Graph has a temporary failure.
+     * The permission save therefore succeeds and returns sync details
+     * separately, allowing a later full reconcile to retry.
+     */
+    let sharePointSync:
+      Awaited<
+        ReturnType<
+          typeof reconcileSharePointPermissions
+        >
+      > | null =
+      null;
+
+    let sharePointSyncError:
+      string | null =
+      null;
+
+    try {
+      sharePointSync =
+        await reconcileSharePointPermissions(
+          service,
+          rows.map(
+            (row) =>
+              row.access_area_id,
+          ),
+        );
+    } catch (syncError) {
+      sharePointSyncError =
+        syncError instanceof Error
+          ? syncError.message
+          : "SharePoint reconciliation failed.";
+
+      console.error(
+        "SHAREPOINT PERMISSION AUTO-SYNC ERROR:",
+        syncError,
+      );
+    }
+
     return NextResponse.json({
       success: true,
+      sharePointSync,
+      sharePointSyncError,
     });
   } catch (error) {
     console.error(
