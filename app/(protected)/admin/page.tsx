@@ -2,12 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Check,
   CheckCircle2,
   ChevronDown,
   KeyRound,
   Loader2,
-  LockKeyhole,
   Plus,
   RefreshCw,
   Search,
@@ -20,6 +18,7 @@ import {
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { AdminPermissionsPanel } from "@/components/admin/admin-permissions-panel";
 
 type WebsiteRole =
   | "admin"
@@ -93,44 +92,6 @@ type AdminUser = {
   isActive: boolean;
   employee: EmployeeSummary | null;
   projectIds: string[];
-};
-
-type RoleRecord = {
-  id: string;
-  code: string;
-  name: string;
-  description?: string | null;
-  is_system?: boolean | null;
-  is_active?: boolean | null;
-};
-
-type AccessMatrixRow = {
-  role_id: string;
-  role_code: string;
-  role_name: string;
-  role_description?: string | null;
-  group_id?: string | null;
-  group_code?: string | null;
-  group_name?: string | null;
-  group_sort_order?: number | null;
-  access_area_id: string;
-  access_code: string;
-  access_name: string;
-  access_description?: string | null;
-  access_type: string;
-  permission_level?: string | null;
-  route?: string | null;
-  sharepoint_library?: string | null;
-  source?: string | null;
-  source_identifier?: string | null;
-  access_sort_order?: number | null;
-  allowed: boolean;
-};
-
-type AccessResponse = {
-  roles?: RoleRecord[];
-  matrix?: AccessMatrixRow[];
-  error?: string;
 };
 
 type CreateForm = {
@@ -276,13 +237,10 @@ function mapApiUser(user: ApiUser): AdminUser | null {
 
 export default function AdminPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const [adminTab, setAdminTab] = useState<"users" | "permissions">("users");
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [roles, setRoles] = useState<RoleRecord[]>([]);
-  const [accessMatrix, setAccessMatrix] = useState<AccessMatrixRow[]>([]);
-  const [selectedRoleId, setSelectedRoleId] = useState("");
-  const [permissionSaving, setPermissionSaving] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkingRole, setCheckingRole] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -333,7 +291,7 @@ export default function AdminPage() {
     [supabase],
   );
 
-  const loadUsers = useCallback(async () => {
+  const loadAll = useCallback(async () => {
     const response = await apiFetch("/api/admin/users");
     const payload = (await response.json()) as UsersResponse;
 
@@ -365,35 +323,6 @@ export default function AdminPage() {
       setProjects((projectResult.data ?? []) as Project[]);
     }
   }, [apiFetch, supabase]);
-
-  const loadAccess = useCallback(async () => {
-    const response = await apiFetch("/api/admin/access");
-    const payload = (await response.json()) as AccessResponse;
-
-    if (!response.ok) {
-      throw new Error(payload.error ?? "Failed to load roles and permissions.");
-    }
-
-    const loadedRoles = [...(payload.roles ?? [])].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
-
-    setRoles(loadedRoles);
-    setAccessMatrix(payload.matrix ?? []);
-
-    setSelectedRoleId((current) => {
-      if (current && loadedRoles.some((role) => role.id === current)) {
-        return current;
-      }
-
-      const adminRole = loadedRoles.find((role) => role.code === "admin");
-      return adminRole?.id ?? loadedRoles[0]?.id ?? "";
-    });
-  }, [apiFetch]);
-
-  const loadAll = useCallback(async () => {
-    await Promise.all([loadUsers(), loadAccess()]);
-  }, [loadAccess, loadUsers]);
 
   const checkAdminAndLoad = useCallback(async () => {
     setCheckingRole(true);
@@ -498,38 +427,6 @@ export default function AdminPage() {
     (user) => user.websiteRole === "admin",
   ).length;
   const unlinkedCount = users.filter((user) => !user.employee).length;
-
-  const selectedRole =
-    roles.find((role) => role.id === selectedRoleId) ?? null;
-
-  const selectedRoleRows = useMemo(() => {
-    return accessMatrix
-      .filter((row) => row.role_id === selectedRoleId)
-      .sort((a, b) => {
-        const groupDiff =
-          Number(a.group_sort_order ?? 999) - Number(b.group_sort_order ?? 999);
-
-        if (groupDiff !== 0) return groupDiff;
-
-        return (
-          Number(a.access_sort_order ?? 999) -
-          Number(b.access_sort_order ?? 999)
-        );
-      });
-  }, [accessMatrix, selectedRoleId]);
-
-  const permissionGroups = useMemo(() => {
-    const grouped = new Map<string, AccessMatrixRow[]>();
-
-    for (const row of selectedRoleRows) {
-      const key = row.group_name || "Other";
-      const current = grouped.get(key) ?? [];
-      current.push(row);
-      grouped.set(key, current);
-    }
-
-    return Array.from(grouped.entries());
-  }, [selectedRoleRows]);
 
   function openEdit(user: AdminUser) {
     setEditingUser(user);
@@ -717,108 +614,6 @@ export default function AdminPage() {
     }
   }
 
-  async function saveRolePermission(
-    row: AccessMatrixRow,
-    allowed: boolean,
-  ) {
-    if (!selectedRoleId || permissionSaving) return;
-
-    const previous = accessMatrix;
-    setPermissionSaving(row.access_area_id);
-    setMessage(null);
-
-    setAccessMatrix((current) =>
-      current.map((item) =>
-        item.role_id === selectedRoleId &&
-        item.access_area_id === row.access_area_id
-          ? { ...item, allowed }
-          : item,
-      ),
-    );
-
-    try {
-      const response = await apiFetch("/api/admin/access", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role_id: selectedRoleId,
-          access_area_id: row.access_area_id,
-          allowed,
-        }),
-      });
-
-      const payload = (await response.json()) as { error?: string };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to save permission.");
-      }
-    } catch (error) {
-      setAccessMatrix(previous);
-      setMessage({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed to save permission.",
-      });
-    } finally {
-      setPermissionSaving(null);
-    }
-  }
-
-  async function setPermissionGroup(
-    rows: AccessMatrixRow[],
-    allowed: boolean,
-  ) {
-    if (!selectedRoleId || permissionSaving || rows.length === 0) return;
-
-    const previous = accessMatrix;
-    const accessIds = new Set(rows.map((row) => row.access_area_id));
-    const savingKey = `group:${rows[0]?.group_id ?? "other"}`;
-
-    setPermissionSaving(savingKey);
-    setMessage(null);
-
-    setAccessMatrix((current) =>
-      current.map((item) =>
-        item.role_id === selectedRoleId && accessIds.has(item.access_area_id)
-          ? { ...item, allowed }
-          : item,
-      ),
-    );
-
-    try {
-      const response = await apiFetch("/api/admin/access", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role_id: selectedRoleId,
-          permissions: rows.map((row) => ({
-            access_area_id: row.access_area_id,
-            allowed,
-          })),
-        }),
-      });
-
-      const payload = (await response.json()) as { error?: string };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to save permissions.");
-      }
-    } catch (error) {
-      setAccessMatrix(previous);
-      setMessage({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed to save permissions.",
-      });
-    } finally {
-      setPermissionSaving(null);
-    }
-  }
-
   if (checkingRole) {
     return (
       <AppShell>
@@ -843,13 +638,13 @@ export default function AdminPage() {
               </div>
 
               <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
-                Users, Roles & Access
+                Users & Access
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
                 Create login accounts, assign website and mobile roles, manage
-                project access, configure role permissions and control TTTracker
-                and SharePoint access from one administration page.
+                project access and reset passwords. Employee profiles, crews,
+                PPE and training remain managed through People.
               </p>
             </div>
 
@@ -882,6 +677,36 @@ export default function AdminPage() {
           </div>
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={() => setAdminTab("users")}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold ${
+                adminTab === "users"
+                  ? "bg-slate-950 text-white"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Users size={16} />
+              Users
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAdminTab("permissions")}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold ${
+                adminTab === "permissions"
+                  ? "bg-slate-950 text-white"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <SlidersHorizontal size={16} />
+              Roles & Permissions
+            </button>
+          </div>
+        </section>
+
         {message ? (
           <section
             className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
@@ -901,6 +726,8 @@ export default function AdminPage() {
           </section>
         ) : null}
 
+        {adminTab === "users" ? (
+          <>
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             label="Login accounts"
@@ -999,121 +826,10 @@ export default function AdminPage() {
             </div>
           )}
         </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-slate-400">
-                <SlidersHorizontal size={17} />
-                <span className="text-xs font-bold uppercase tracking-[0.12em]">
-                  Access Control
-                </span>
-              </div>
-
-              <h2 className="mt-2 text-xl font-bold text-slate-950">
-                Roles & Permissions
-              </h2>
-
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-                Select a role and control the TTTracker capabilities and SharePoint
-                areas it receives by default. Project assignment is still managed
-                against each individual login above.
-              </p>
-            </div>
-
-            <div className="w-full lg:w-72">
-              <SelectField
-                value={selectedRoleId}
-                onChange={setSelectedRoleId}
-                options={roles.map((role) => ({
-                  value: role.id,
-                  label: role.name,
-                }))}
-              />
-            </div>
-          </div>
-
-          {selectedRole ? (
-            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <LockKeyhole size={16} className="text-slate-500" />
-                    <span className="font-bold text-slate-900">
-                      {selectedRole.name}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {selectedRole.description || selectedRole.code}
-                  </p>
-                </div>
-
-                <div className="text-xs font-semibold text-slate-500">
-                  {selectedRoleRows.filter((row) => row.allowed).length} of {" "}
-                  {selectedRoleRows.length} permissions enabled
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {selectedRoleRows.length === 0 ? (
-            <div className="p-10 text-center">
-              <ShieldCheck size={30} className="mx-auto text-slate-300" />
-              <h3 className="mt-4 text-lg font-bold text-slate-900">
-                No permissions available
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Confirm the new access-control SQL has been run successfully.
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-200">
-              {permissionGroups.map(([groupName, rows]) => {
-                const allEnabled = rows.every((row) => row.allowed);
-
-                return (
-                  <div key={groupName}>
-                    <div className="flex items-center justify-between gap-3 bg-slate-50 px-5 py-3">
-                      <div>
-                        <div className="text-sm font-bold text-slate-900">
-                          {groupName}
-                        </div>
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          {rows.filter((row) => row.allowed).length} of {rows.length} enabled
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void setPermissionGroup(rows, !allEnabled)
-                        }
-                        disabled={Boolean(permissionSaving)}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                      >
-                        {allEnabled ? "Clear Group" : "Enable Group"}
-                      </button>
-                    </div>
-
-                    <div className="divide-y divide-slate-100">
-                      {rows.map((row) => (
-                        <PermissionRow
-                          key={row.access_area_id}
-                          row={row}
-                          saving={permissionSaving === row.access_area_id}
-                          disabled={Boolean(permissionSaving)}
-                          onChange={(allowed) =>
-                            void saveRolePermission(row, allowed)
-                          }
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+          </>
+        ) : (
+          <AdminPermissionsPanel />
+        )}
       </div>
 
       {createOpen ? (
@@ -1366,76 +1082,6 @@ export default function AdminPage() {
         </ModalShell>
       ) : null}
     </AppShell>
-  );
-}
-
-function PermissionRow({
-  row,
-  saving,
-  disabled,
-  onChange,
-}: {
-  row: AccessMatrixRow;
-  saving: boolean;
-  disabled: boolean;
-  onChange: (allowed: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-5 px-5 py-4">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-sm font-bold text-slate-900">
-            {row.access_name}
-          </h4>
-
-          {row.access_type === "sharepoint" ? (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">
-              SharePoint
-            </span>
-          ) : null}
-
-          {row.permission_level ? (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-              {roleLabel(row.permission_level)}
-            </span>
-          ) : null}
-        </div>
-
-        {row.access_description ? (
-          <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
-            {row.access_description}
-          </p>
-        ) : null}
-
-        {row.sharepoint_library ? (
-          <p className="mt-1 text-xs font-semibold text-amber-700">
-            Library: {row.sharepoint_library}
-          </p>
-        ) : null}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onChange(!row.allowed)}
-        disabled={disabled}
-        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition ${
-          row.allowed ? "bg-emerald-500" : "bg-slate-200"
-        } disabled:opacity-50`}
-        aria-label={`${row.allowed ? "Disable" : "Enable"} ${row.access_name}`}
-      >
-        <span
-          className={`inline-flex h-5 w-5 items-center justify-center rounded-full bg-white shadow-sm transition ${
-            row.allowed ? "translate-x-6" : "translate-x-1"
-          }`}
-        >
-          {saving ? (
-            <Loader2 size={11} className="animate-spin text-slate-400" />
-          ) : row.allowed ? (
-            <Check size={11} className="text-emerald-600" />
-          ) : null}
-        </span>
-      </button>
-    </div>
   );
 }
 

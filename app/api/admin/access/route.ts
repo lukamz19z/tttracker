@@ -1,231 +1,501 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+import {
+  createClient,
+  type SupabaseClient,
+} from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-type PermissionUpdate = {
-  access_area_id: string;
-  allowed: boolean;
+type PermissionInput = {
+  access_area_id?: unknown;
+  allowed?: unknown;
 };
 
 type SaveAccessBody = {
-  role_id?: string;
-  access_area_id?: string;
-  allowed?: boolean;
-  permissions?: PermissionUpdate[];
+  role_id?: unknown;
+  access_area_id?: unknown;
+  allowed?: unknown;
+  permissions?: unknown;
 };
 
-function getAdminClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+function requiredEnv(name: string) {
+  const value =
+    process.env[name];
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!value) {
     throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.",
+      `Missing environment variable: ${name}`,
     );
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
+  return value;
 }
 
-async function requireAdmin(request: NextRequest) {
-  const authorization = request.headers.get("authorization") ?? "";
-  const token = authorization.startsWith("Bearer ")
-    ? authorization.slice(7).trim()
-    : "";
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
 
-  if (!token) {
-    return {
-      error: NextResponse.json(
-        { error: "You must be logged in." },
-        { status: 401 },
-      ),
-      admin: null,
-    };
-  }
-
-  const supabase = getAdminClient();
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(token);
-
-  if (userError || !user) {
-    return {
-      error: NextResponse.json(
-        { error: "Your session is invalid or expired." },
-        { status: 401 },
-      ),
-      admin: null,
-    };
-  }
-
-  const { data: roleRow, error: roleError } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (roleError) {
-    return {
-      error: NextResponse.json(
-        { error: roleError.message },
-        { status: 500 },
-      ),
-      admin: null,
-    };
-  }
-
-  if (String(roleRow?.role ?? "").trim().toLowerCase() !== "admin") {
-    return {
-      error: NextResponse.json(
-        { error: "Administrator access is required." },
-        { status: 403 },
-      ),
-      admin: null,
-    };
+function parseSaveAccessBody(
+  value: unknown,
+): SaveAccessBody {
+  if (!isRecord(value)) {
+    return {};
   }
 
   return {
-    error: null,
-    admin: {
-      user,
-      supabase,
-    },
+    role_id:
+      value.role_id,
+
+    access_area_id:
+      value.access_area_id,
+
+    allowed:
+      value.allowed,
+
+    permissions:
+      value.permissions,
   };
 }
 
-export async function GET(request: NextRequest) {
+function parsePermissionInputs(
+  value: unknown,
+): PermissionInput[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      access_area_id:
+        item.access_area_id,
+
+      allowed:
+        item.allowed,
+    }));
+}
+
+async function getAdminService(
+  request: NextRequest,
+): Promise<SupabaseClient> {
+  const authHeader =
+    request.headers.get(
+      "authorization",
+    ) ?? "";
+
+  const token =
+    authHeader
+      .replace(
+        /^Bearer\s+/i,
+        "",
+      )
+      .trim();
+
+  if (!token) {
+    throw new Error(
+      "Missing authentication token.",
+    );
+  }
+
+  const supabaseUrl =
+    requiredEnv(
+      "NEXT_PUBLIC_SUPABASE_URL",
+    );
+
+  const anonKey =
+    requiredEnv(
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    );
+
+  const serviceKey =
+    requiredEnv(
+      "SUPABASE_SERVICE_ROLE_KEY",
+    );
+
+  const authClient =
+    createClient(
+      supabaseUrl,
+      anonKey,
+      {
+        global: {
+          headers: {
+            Authorization:
+              `Bearer ${token}`,
+          },
+        },
+        auth: {
+          persistSession:
+            false,
+
+          autoRefreshToken:
+            false,
+        },
+      },
+    );
+
+  const {
+    data: {
+      user,
+    },
+    error:
+      userError,
+  } =
+    await authClient.auth
+      .getUser(token);
+
+  if (
+    userError ||
+    !user
+  ) {
+    throw new Error(
+      "You must be logged in.",
+    );
+  }
+
+  /*
+   * Use the generic SupabaseClient type rather than `any`.
+   *
+   * Your generated Supabase database types do not yet include
+   * the new access-control tables, so deliberately avoid binding
+   * this service-role client to those stale generated table types.
+   */
+  const service:
+    SupabaseClient =
+    createClient(
+      supabaseUrl,
+      serviceKey,
+      {
+        auth: {
+          persistSession:
+            false,
+
+          autoRefreshToken:
+            false,
+        },
+      },
+    );
+
+  const {
+    data:
+      roleRow,
+    error:
+      roleError,
+  } =
+    await service
+      .from(
+        "user_roles",
+      )
+      .select(
+        "role",
+      )
+      .eq(
+        "user_id",
+        user.id,
+      )
+      .maybeSingle();
+
+  if (roleError) {
+    throw new Error(
+      roleError.message,
+    );
+  }
+
+  if (
+    String(
+      roleRow?.role ??
+        "",
+    )
+      .trim()
+      .toLowerCase() !==
+    "admin"
+  ) {
+    throw new Error(
+      "Administrator access is required.",
+    );
+  }
+
+  return service;
+}
+
+export async function GET(
+  request: NextRequest,
+) {
   try {
-    const auth = await requireAdmin(request);
-    if (auth.error || !auth.admin) return auth.error;
+    const service =
+      await getAdminService(
+        request,
+      );
 
-    const { supabase } = auth.admin;
+    const [
+      rolesResult,
+      matrixResult,
+    ] =
+      await Promise.all([
+        service
+          .from("roles")
+          .select(`
+            id,
+            code,
+            name,
+            description,
+            is_system,
+            is_active
+          `)
+          .eq(
+            "is_active",
+            true,
+          )
+          .order(
+            "name",
+          ),
 
-    const [rolesResult, matrixResult] = await Promise.all([
-      supabase
-        .from("roles")
-        .select("id, code, name, description, is_system, is_active")
-        .eq("is_active", true)
-        .order("name"),
+        service
+          .from(
+            "role_access_matrix",
+          )
+          .select("*")
+          .order(
+            "group_sort_order",
+            {
+              ascending:
+                true,
+              nullsFirst:
+                false,
+            },
+          )
+          .order(
+            "access_sort_order",
+            {
+              ascending:
+                true,
+              nullsFirst:
+                false,
+            },
+          ),
+      ]);
 
-      supabase
-        .from("role_access_matrix")
-        .select("*")
-        .order("group_sort_order", { ascending: true })
-        .order("access_sort_order", { ascending: true }),
-    ]);
-
-    if (rolesResult.error) {
-      throw new Error(rolesResult.error.message);
+    if (
+      rolesResult.error
+    ) {
+      throw new Error(
+        rolesResult.error.message,
+      );
     }
 
-    if (matrixResult.error) {
-      throw new Error(matrixResult.error.message);
+    if (
+      matrixResult.error
+    ) {
+      throw new Error(
+        matrixResult.error.message,
+      );
     }
 
     return NextResponse.json({
-      roles: rolesResult.data ?? [],
-      matrix: matrixResult.data ?? [],
+      roles:
+        rolesResult.data ??
+        [],
+
+      matrix:
+        matrixResult.data ??
+        [],
     });
   } catch (error) {
-    console.error("ADMIN ACCESS GET ERROR:", error);
+    console.error(
+      "ACCESS LOAD ERROR:",
+      error,
+    );
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Could not load access permissions.";
+
+    const status =
+      message.includes(
+        "logged in",
+      )
+        ? 401
+        : message.includes(
+              "Administrator",
+            )
+          ? 403
+          : 500;
 
     return NextResponse.json(
       {
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to load access configuration.",
+          message,
       },
-      { status: 500 },
+      {
+        status,
+      },
     );
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest,
+) {
   try {
-    const auth = await requireAdmin(request);
-    if (auth.error || !auth.admin) return auth.error;
+    const service =
+      await getAdminService(
+        request,
+      );
 
-    const { supabase } = auth.admin;
-    const body = (await request.json()) as SaveAccessBody;
+    const rawBody:
+      unknown =
+      await request.json();
 
-    const roleId = String(body.role_id ?? "").trim();
+    const body =
+      parseSaveAccessBody(
+        rawBody,
+      );
+
+    const roleId =
+      String(
+        body.role_id ??
+          "",
+      ).trim();
 
     if (!roleId) {
       return NextResponse.json(
-        { error: "role_id is required." },
-        { status: 400 },
+        {
+          error:
+            "role_id is required.",
+        },
+        {
+          status: 400,
+        },
       );
     }
 
-    let permissions: PermissionUpdate[] = [];
+    const suppliedPermissions =
+      parsePermissionInputs(
+        body.permissions,
+      );
 
-    if (Array.isArray(body.permissions)) {
-      permissions = body.permissions
-        .map((permission) => ({
-          access_area_id: String(permission.access_area_id ?? "").trim(),
-          allowed: Boolean(permission.allowed),
-        }))
-        .filter((permission) => permission.access_area_id);
-    } else {
-      const accessAreaId = String(body.access_area_id ?? "").trim();
+    const permissions:
+      PermissionInput[] =
+      suppliedPermissions.length >
+      0
+        ? suppliedPermissions
+        : [
+            {
+              access_area_id:
+                body.access_area_id,
 
-      if (accessAreaId) {
-        permissions = [
-          {
-            access_area_id: accessAreaId,
-            allowed: Boolean(body.allowed),
-          },
-        ];
-      }
-    }
+              allowed:
+                body.allowed,
+            },
+          ];
 
-    if (permissions.length === 0) {
+    const rows =
+      permissions
+        .map(
+          (
+            permission,
+          ) => ({
+            role_id:
+              roleId,
+
+            access_area_id:
+              String(
+                permission.access_area_id ??
+                  "",
+              ).trim(),
+
+            allowed:
+              permission.allowed ===
+              true,
+          }),
+        )
+        .filter(
+          (
+            row,
+          ) =>
+            Boolean(
+              row.access_area_id,
+            ),
+        );
+
+    if (
+      rows.length ===
+      0
+    ) {
       return NextResponse.json(
-        { error: "At least one permission is required." },
-        { status: 400 },
+        {
+          error:
+            "At least one permission is required.",
+        },
+        {
+          status: 400,
+        },
       );
     }
 
-    const rows = permissions.map((permission) => ({
-      role_id: roleId,
-      access_area_id: permission.access_area_id,
-      allowed: permission.allowed,
-    }));
+    const {
+      error,
+    } =
+      await service
+        .from(
+          "role_permissions",
+        )
+        .upsert(
+          rows,
+          {
+            onConflict:
+              "role_id,access_area_id",
+          },
+        );
 
-    const { error: upsertError } = await supabase
-      .from("role_permissions")
-      .upsert(rows, {
-        onConflict: "role_id,access_area_id",
-      });
-
-    if (upsertError) {
-      throw new Error(upsertError.message);
+    if (error) {
+      throw new Error(
+        error.message,
+      );
     }
 
     return NextResponse.json({
       success: true,
-      updated: rows.length,
     });
   } catch (error) {
-    console.error("ADMIN ACCESS POST ERROR:", error);
+    console.error(
+      "ACCESS SAVE ERROR:",
+      error,
+    );
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Could not save access permissions.";
+
+    const status =
+      message.includes(
+        "logged in",
+      )
+        ? 401
+        : message.includes(
+              "Administrator",
+            )
+          ? 403
+          : 500;
 
     return NextResponse.json(
       {
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to save access configuration.",
+          message,
       },
-      { status: 500 },
+      {
+        status,
+      },
     );
   }
 }
