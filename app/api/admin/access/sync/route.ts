@@ -30,8 +30,12 @@ type ProjectSharePointRow = {
   sharepoint_tender_folder_id?: string | null;
 };
 
-type AccessAreaCodeRow = {
-  code?: string | null;
+type ExistingSharePointAreaRow = {
+  id: string;
+  code: string;
+  source?: string | null;
+  source_identifier?: string | null;
+  is_active?: boolean | null;
 };
 
 type SharePointGroupRow = {
@@ -39,8 +43,7 @@ type SharePointGroupRow = {
 };
 
 function requiredEnv(name: string) {
-  const value =
-    process.env[name];
+  const value = process.env[name];
 
   if (!value) {
     throw new Error(
@@ -55,14 +58,8 @@ function slug(value: string) {
   return value
     .trim()
     .toLowerCase()
-    .replace(
-      /[^a-z0-9]+/g,
-      "_",
-    )
-    .replace(
-      /^_+|_+$/g,
-      "",
-    );
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 async function graphFetch<T>(
@@ -174,7 +171,6 @@ async function getAdminContext(
         auth: {
           persistSession:
             false,
-
           autoRefreshToken:
             false,
         },
@@ -197,13 +193,6 @@ async function getAdminContext(
     );
   }
 
-  /*
-   * Use the generic SupabaseClient type instead of `any`.
-   *
-   * The new access-control tables may not yet exist in your
-   * generated Supabase TypeScript definitions, so this service
-   * client intentionally isn't bound to stale generated DB types.
-   */
   const service:
     SupabaseClient =
     createClient(
@@ -213,7 +202,6 @@ async function getAdminContext(
         auth: {
           persistSession:
             false,
-
           autoRefreshToken:
             false,
         },
@@ -272,16 +260,12 @@ async function ensureSharePointGroup(
         {
           code:
             "sharepoint",
-
           name:
             "SharePoint",
-
           description:
             "Automatically discovered SharePoint libraries and controlled top-level folders.",
-
           sort_order:
             1000,
-
           is_active:
             true,
         },
@@ -290,9 +274,7 @@ async function ensureSharePointGroup(
             "code",
         },
       )
-      .select(
-        "id",
-      )
+      .select("id")
       .single();
 
   if (
@@ -311,6 +293,81 @@ async function ensureSharePointGroup(
   return String(
     group.id,
   );
+}
+
+async function deactivateMissingAreas(
+  service: SupabaseClient,
+  existingAreas:
+    ExistingSharePointAreaRow[],
+  discoveredCodes: Set<string>,
+): Promise<number> {
+  const missingIds =
+    existingAreas
+      .filter(
+        (area) =>
+          area.is_active !==
+            false &&
+          !discoveredCodes.has(
+            area.code,
+          ),
+      )
+      .map(
+        (area) =>
+          area.id,
+      );
+
+  if (
+    missingIds.length ===
+    0
+  ) {
+    return 0;
+  }
+
+  /*
+   * Mark missing SharePoint areas inactive rather than deleting
+   * the database rows. This preserves role-permission history and
+   * avoids FK issues. The normal permissions API only returns active
+   * access areas, so deleted SharePoint folders disappear from Admin.
+   */
+  const chunkSize = 100;
+
+  for (
+    let index = 0;
+    index <
+    missingIds.length;
+    index += chunkSize
+  ) {
+    const ids =
+      missingIds.slice(
+        index,
+        index +
+          chunkSize,
+      );
+
+    const {
+      error,
+    } =
+      await service
+        .from(
+          "access_areas",
+        )
+        .update({
+          is_active:
+            false,
+        })
+        .in(
+          "id",
+          ids,
+        );
+
+    if (error) {
+      throw new Error(
+        error.message,
+      );
+    }
+  }
+
+  return missingIds.length;
 }
 
 export async function POST(
@@ -356,9 +413,8 @@ export async function POST(
       );
 
     /*
-     * TTTracker project root folders are already associated with
-     * project access, so they should not become global role-level
-     * SharePoint permission areas.
+     * Project root folders are managed by project access, not the
+     * global role-level SharePoint permission matrix.
      */
     const {
       data: projectRows,
@@ -411,12 +467,6 @@ export async function POST(
       }
     }
 
-    let librariesCreated = 0;
-    let librariesUpdated = 0;
-
-    let foldersCreated = 0;
-    let foldersUpdated = 0;
-
     const {
       data: existingRows,
       error:
@@ -426,8 +476,19 @@ export async function POST(
         .from(
           "access_areas",
         )
-        .select(
-          "code",
+        .select(`
+          id,
+          code,
+          source,
+          source_identifier,
+          is_active
+        `)
+        .in(
+          "source",
+          [
+            "sharepoint_library",
+            "sharepoint_folder",
+          ],
         );
 
     if (
@@ -438,22 +499,34 @@ export async function POST(
       );
     }
 
+    const existingAreas =
+      (
+        existingRows ??
+        []
+      ) as ExistingSharePointAreaRow[];
+
     const existingCodes =
       new Set<string>(
-        (
-          (
-            existingRows ??
-            []
-          ) as AccessAreaCodeRow[]
-        ).map(
-          (
-            row,
-          ) =>
+        existingAreas.map(
+          (row) =>
             String(
               row.code ?? "",
             ),
         ),
       );
+
+    /*
+     * Every SharePoint area seen during this run is added here.
+     * At the end of the scan, any previously discovered area that
+     * is not in this set is treated as deleted/removed in SharePoint.
+     */
+    const discoveredCodes =
+      new Set<string>();
+
+    let librariesCreated = 0;
+    let librariesUpdated = 0;
+    let foldersCreated = 0;
+    let foldersUpdated = 0;
 
     let librarySort = 10;
 
@@ -465,6 +538,10 @@ export async function POST(
         `sp.library.${slug(
           drive.name,
         )}`;
+
+      discoveredCodes.add(
+        libraryCode,
+      );
 
       const libraryExisted =
         existingCodes.has(
@@ -483,41 +560,29 @@ export async function POST(
             {
               group_id:
                 sharePointGroupId,
-
               category:
                 "SharePoint",
-
               code:
                 libraryCode,
-
               name:
                 drive.name,
-
               description:
                 `Access to SharePoint library ${drive.name}.`,
-
               type:
                 "sharepoint",
-
               permission_level:
                 "access",
-
               sharepoint_library:
                 drive.name,
-
               source:
                 "sharepoint_library",
-
               source_identifier:
                 drive.id,
-
               discovered_at:
                 new Date()
                   .toISOString(),
-
               sort_order:
                 librarySort,
-
               is_active:
                 true,
             },
@@ -536,9 +601,11 @@ export async function POST(
       if (
         libraryExisted
       ) {
-        librariesUpdated += 1;
+        librariesUpdated +=
+          1;
       } else {
-        librariesCreated += 1;
+        librariesCreated +=
+          1;
 
         existingCodes.add(
           libraryCode,
@@ -546,11 +613,7 @@ export async function POST(
       }
 
       /*
-       * Discover non-project top-level folders.
-       *
-       * We intentionally don't recursively register all nested
-       * folders because project delivery structures can contain
-       * large numbers of folders and subfolders.
+       * Discover non-project top-level folders only.
        */
       const children =
         await graphFetch<{
@@ -583,6 +646,10 @@ export async function POST(
             item.name,
           )}`;
 
+        discoveredCodes.add(
+          folderCode,
+        );
+
         const folderExisted =
           existingCodes.has(
             folderCode,
@@ -600,41 +667,29 @@ export async function POST(
               {
                 group_id:
                   sharePointGroupId,
-
                 category:
                   `SharePoint · ${drive.name}`,
-
                 code:
                   folderCode,
-
                 name:
                   `${drive.name} / ${item.name}`,
-
                 description:
                   `Access to SharePoint folder ${item.name} in ${drive.name}.`,
-
                 type:
                   "sharepoint",
-
                 permission_level:
                   "access",
-
                 sharepoint_library:
                   drive.name,
-
                 source:
                   "sharepoint_folder",
-
                 source_identifier:
                   `${drive.id}:${item.id}`,
-
                 discovered_at:
                   new Date()
                     .toISOString(),
-
                 sort_order:
                   folderSort,
-
                 is_active:
                   true,
               },
@@ -655,9 +710,11 @@ export async function POST(
         if (
           folderExisted
         ) {
-          foldersUpdated += 1;
+          foldersUpdated +=
+            1;
         } else {
-          foldersCreated += 1;
+          foldersCreated +=
+            1;
 
           existingCodes.add(
             folderCode,
@@ -670,6 +727,22 @@ export async function POST(
       librarySort += 10;
     }
 
+    /*
+     * Two-way discovery:
+     * - new SharePoint areas are inserted
+     * - existing SharePoint areas are refreshed
+     * - deleted SharePoint libraries/folders are deactivated
+     *
+     * If a folder/library later reappears with the same code, the
+     * upsert above automatically reactivates it.
+     */
+    const areasDeactivated =
+      await deactivateMissingAreas(
+        service,
+        existingAreas,
+        discoveredCodes,
+      );
+
     return NextResponse.json({
       success: true,
 
@@ -677,12 +750,14 @@ export async function POST(
         libraries:
           drivesResult.value
             ?.length ?? 0,
+
+        permissionAreas:
+          discoveredCodes.size,
       },
 
       created: {
         libraries:
           librariesCreated,
-
         folders:
           foldersCreated,
       },
@@ -690,9 +765,13 @@ export async function POST(
       updated: {
         libraries:
           librariesUpdated,
-
         folders:
           foldersUpdated,
+      },
+
+      removed: {
+        permissionAreas:
+          areasDeactivated,
       },
     });
   } catch (error) {

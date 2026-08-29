@@ -21,6 +21,15 @@ type SaveAccessBody = {
   permissions?: unknown;
 };
 
+type ActiveAreaRow = {
+  id: string;
+};
+
+type MatrixRow = {
+  access_area_id?: string | null;
+  [key: string]: unknown;
+};
+
 function requiredEnv(name: string) {
   const value =
     process.env[name];
@@ -54,13 +63,10 @@ function parseSaveAccessBody(
   return {
     role_id:
       value.role_id,
-
     access_area_id:
       value.access_area_id,
-
     allowed:
       value.allowed,
-
     permissions:
       value.permissions,
   };
@@ -78,7 +84,6 @@ function parsePermissionInputs(
     .map((item) => ({
       access_area_id:
         item.access_area_id,
-
       allowed:
         item.allowed,
     }));
@@ -135,7 +140,6 @@ async function getAdminService(
         auth: {
           persistSession:
             false,
-
           autoRefreshToken:
             false,
         },
@@ -143,11 +147,8 @@ async function getAdminService(
     );
 
   const {
-    data: {
-      user,
-    },
-    error:
-      userError,
+    data: { user },
+    error: userError,
   } =
     await authClient.auth
       .getUser(token);
@@ -161,13 +162,6 @@ async function getAdminService(
     );
   }
 
-  /*
-   * Use the generic SupabaseClient type rather than `any`.
-   *
-   * Your generated Supabase database types do not yet include
-   * the new access-control tables, so deliberately avoid binding
-   * this service-role client to those stale generated table types.
-   */
   const service:
     SupabaseClient =
     createClient(
@@ -177,7 +171,6 @@ async function getAdminService(
         auth: {
           persistSession:
             false,
-
           autoRefreshToken:
             false,
         },
@@ -185,18 +178,14 @@ async function getAdminService(
     );
 
   const {
-    data:
-      roleRow,
-    error:
-      roleError,
+    data: roleRow,
+    error: roleError,
   } =
     await service
       .from(
         "user_roles",
       )
-      .select(
-        "role",
-      )
+      .select("role")
       .eq(
         "user_id",
         user.id,
@@ -211,8 +200,7 @@ async function getAdminService(
 
   if (
     String(
-      roleRow?.role ??
-        "",
+      roleRow?.role ?? "",
     )
       .trim()
       .toLowerCase() !==
@@ -238,6 +226,7 @@ export async function GET(
     const [
       rolesResult,
       matrixResult,
+      activeAreasResult,
     ] =
       await Promise.all([
         service
@@ -254,9 +243,7 @@ export async function GET(
             "is_active",
             true,
           )
-          .order(
-            "name",
-          ),
+          .order("name"),
 
         service
           .from(
@@ -281,6 +268,16 @@ export async function GET(
                 false,
             },
           ),
+
+        service
+          .from(
+            "access_areas",
+          )
+          .select("id")
+          .eq(
+            "is_active",
+            true,
+          ),
       ]);
 
     if (
@@ -299,14 +296,56 @@ export async function GET(
       );
     }
 
+    if (
+      activeAreasResult.error
+    ) {
+      throw new Error(
+        activeAreasResult.error.message,
+      );
+    }
+
+    const activeAreaIds =
+      new Set(
+        (
+          (
+            activeAreasResult.data ??
+            []
+          ) as ActiveAreaRow[]
+        ).map(
+          (row) =>
+            String(
+              row.id,
+            ),
+        ),
+      );
+
+    /*
+     * Filter the view through live access_areas.is_active.
+     * This guarantees that a SharePoint folder removed during sync
+     * immediately disappears from the Roles & Permissions page even
+     * if the SQL view itself does not filter inactive areas.
+     */
+    const matrix =
+      (
+        (
+          matrixResult.data ??
+          []
+        ) as MatrixRow[]
+      ).filter(
+        (row) =>
+          activeAreaIds.has(
+            String(
+              row.access_area_id ??
+                "",
+            ),
+          ),
+      );
+
     return NextResponse.json({
       roles:
         rolesResult.data ??
         [],
-
-      matrix:
-        matrixResult.data ??
-        [],
+      matrix,
     });
   } catch (error) {
     console.error(
@@ -362,8 +401,7 @@ export async function POST(
 
     const roleId =
       String(
-        body.role_id ??
-          "",
+        body.role_id ?? "",
       ).trim();
 
     if (!roleId) {
@@ -392,7 +430,6 @@ export async function POST(
             {
               access_area_id:
                 body.access_area_id,
-
               allowed:
                 body.allowed,
             },
@@ -401,27 +438,21 @@ export async function POST(
     const rows =
       permissions
         .map(
-          (
-            permission,
-          ) => ({
+          (permission) => ({
             role_id:
               roleId,
-
             access_area_id:
               String(
                 permission.access_area_id ??
                   "",
               ).trim(),
-
             allowed:
               permission.allowed ===
               true,
           }),
         )
         .filter(
-          (
-            row,
-          ) =>
+          (row) =>
             Boolean(
               row.access_area_id,
             ),
