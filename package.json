@@ -2,14 +2,12 @@
   "name": "tttracker",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "predev": "node scripts/generate-access-registry.mjs",
-    "dev": "next dev --webpack",
-    "prebuild": "node scripts/generate-access-registry.mjs",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
+"scripts": {
+  "dev": "next dev --webpack",
+  "build": "next build",
+  "start": "next start",
+  "lint": "eslint"
+},
   "dependencies": {
     "@azure/identity": "^4.13.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
