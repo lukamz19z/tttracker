@@ -307,20 +307,57 @@ function normaliseTowerKey(value: unknown): string {
     .replace(/\s+/g, "");
 }
 
+function addNumericTowerAlias(aliases: Set<string>, value: string) {
+  const clean = value.trim().toUpperCase();
+  if (!clean || !/^0*\d+[A-Z]?$/.test(clean)) return;
+
+  aliases.add(clean);
+
+  const match = clean.match(/^(0*)(\d+)([A-Z]?)$/);
+  if (match) aliases.add(`${Number(match[2])}${match[3]}`);
+}
+
 function towerAliases(value: unknown): string[] {
-  const key = normaliseTowerKey(value);
-  if (!key) return [];
+  const raw = safeString(value).trim().toUpperCase();
+  if (!raw) return [];
 
-  const aliases = new Set<string>([key]);
+  const aliases = new Set<string>();
+  const key = normaliseTowerKey(raw);
+  if (key) aliases.add(key);
+
+  // Handle full project tower references such as:
+  // 5C3/5C1-083, 5C3.5C1-083, 5C3-5C1-083.
+  const fullReferenceMatches = raw.match(
+    /[A-Z0-9]+(?:\/|\.)[A-Z0-9]+-0*\d+[A-Z]?/g,
+  );
+
+  fullReferenceMatches?.forEach((reference) => {
+    const compactReference = reference.replace(/\s+/g, "");
+    aliases.add(compactReference);
+    aliases.add(compactReference.replace(".", "/"));
+
+    const suffix = compactReference.match(/-([0-9]+[A-Z]?)$/)?.[1];
+    if (suffix) addNumericTowerAlias(aliases, suffix);
+  });
+
+  // Handle normal labels such as "Tower 083", "Twr 083" or
+  // "Structure 083 - VSL".
+  const labelledMatch = raw.match(
+    /(?:TOWER|TWR|STRUCTURE|STR)\s*(?:NO\.?|NUMBER)?\s*[:#-]?\s*(0*\d+[A-Z]?)/i,
+  );
+  if (labelledMatch?.[1]) addNumericTowerAlias(aliases, labelledMatch[1]);
+
+  // Existing/simple references: "083", "083A", "5C3/5C1-083".
   const suffix = key.includes("-") ? key.split("-").pop() || "" : key;
+  addNumericTowerAlias(aliases, suffix);
 
-  if (suffix) {
-    aliases.add(suffix);
-    if (/^0*\d+[A-Z]?$/.test(suffix)) {
-      const match = suffix.match(/^(0*)(\d+)([A-Z]?)$/);
-      if (match) aliases.add(`${Number(match[2])}${match[3]}`);
-    }
-  }
+  // Also recognise a tower number at the start/end of a descriptive label,
+  // e.g. "083 VSL" or "VSL - 083".
+  const startNumber = raw.match(/^\s*(0*\d+[A-Z]?)(?=\s|[-–—_/]|$)/)?.[1];
+  if (startNumber) addNumericTowerAlias(aliases, startNumber);
+
+  const endNumber = raw.match(/(?:^|\s|[-–—_/])(0*\d+[A-Z]?)\s*$/)?.[1];
+  if (endNumber) addNumericTowerAlias(aliases, endNumber);
 
   return Array.from(aliases);
 }
@@ -329,19 +366,25 @@ function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
   const keys = new Set<string>();
   if (!tower) return keys;
 
+  // Do not assume every project imports its tower number into exactly the same
+  // database column. Collect aliases from every primitive tower field and every
+  // primitive extra_data value. Non-tower values (UUIDs, statuses, etc.) simply
+  // produce aliases that will never match an Applicable Towers value.
+  const candidates: unknown[] = [];
+
+  Object.entries(tower).forEach(([field, value]) => {
+    if (field === "extra_data") return;
+    if (typeof value === "string" || typeof value === "number") {
+      candidates.push(value);
+    }
+  });
+
   const extra = tower.extra_data || {};
-  const candidates: unknown[] = [
-    tower.tower_number,
-    tower.structure_number,
-    tower.tower_no,
-    tower.name,
-    extra["Tower No"],
-    extra["Tower Number"],
-    extra["Structure Number"],
-    extra["Structure No"],
-    extra["Label"],
-    extra["label"],
-  ];
+  Object.values(extra).forEach((value) => {
+    if (typeof value === "string" || typeof value === "number") {
+      candidates.push(value);
+    }
+  });
 
   candidates.forEach((candidate) => {
     towerAliases(candidate).forEach((alias) => keys.add(alias));
@@ -1663,7 +1706,11 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
 
       if (restrictedRowsSeen > 0 && currentTowerKeys.size === 0) {
         alert(
-          "This member file contains tower-specific applicability, but TTTracker could not identify the current tower number. Add a Tower Number / Structure Number to the tower record before importing.",
+          [
+            "This member file contains tower-specific applicability, but TTTracker could not identify the current tower number.",
+            "",
+            "The importer now checks every tower field and extra_data value. If this still occurs, the tower record itself does not contain a usable tower/structure number.",
+          ].join("\n"),
         );
         return;
       }
@@ -1671,8 +1718,21 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
       const rows = Array.from(rowMap.values());
 
       if (!rows.length) {
+        const detectedTowerKeys = Array.from(currentTowerKeys).slice(0, 12).join(", ") || "none";
+        const requiredBundles = Array.from(requiredBundleKeys).join(", ") || "none";
+
         alert(
-          `No applicable member rows were found for this tower.\n\nRead: ${sourceRows.length}\nOther bundles: ${otherBundleRows}\nOther towers: ${otherTowerRows}\nMissing/invalid Qty/Tower: ${missingQtyRows}\nInvalid rows: ${invalidRows}`,
+          [
+            "No applicable member rows were found for this tower.",
+            "",
+            `Detected tower identifiers: ${detectedTowerKeys}`,
+            `Required bundles: ${requiredBundles}`,
+            `Source rows read: ${sourceRows.length}`,
+            `Other bundles: ${otherBundleRows}`,
+            `Other towers: ${otherTowerRows}`,
+            `Missing/invalid Qty/Tower: ${missingQtyRows}`,
+            `Invalid rows: ${invalidRows}`,
+          ].join("\n"),
         );
         return;
       }
@@ -1716,6 +1776,7 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
           `Other-bundle rows ignored: ${otherBundleRows}`,
           `Missing/invalid Qty/Tower rows ignored: ${missingQtyRows}`,
           `Invalid rows ignored: ${invalidRows}`,
+          `Tower match: ${Array.from(currentTowerKeys).filter((key) => /\d/.test(key)).slice(0, 6).join(", ") || "not detected"}`,
         ].join("\n"),
       );
     } catch (error) {
