@@ -1,10 +1,13 @@
-/* 
-  Materials page update:
-  - Adds qty_received to bundle checks.
-  - Adds bundle quantity +/- site check controls.
+/*
+  Materials page:
   - Keeps delivery-register quantities separate from site-confirmed received quantities.
-  - Outstanding section now uses site received qty against required bundle qty.
-  - Adds searchable bolts register with CSV import/export.
+  - Supports bundle, member and bolt site checks.
+  - Member records use: member number, bundle number, drawing number, section,
+    qty/tower and tower segment. Legacy PN is intentionally not used.
+  - Member imports are project-agnostic and accept CSV/XLSX/XLS.
+  - Member imports first match the tower's required bundle register, then optionally
+    apply tower-specific columns such as "Tower No(s)" / "Applicable Towers".
+  - Excel member imports automatically choose the worksheet containing member + bundle columns.
 */
 
 "use client";
@@ -46,9 +49,9 @@ type DbMemberRow = {
   bundle_reference: string;
   drawing_number: string | null;
   mark_no: string;
-  pn_final: string | null;
   qty_per_tower: number | null;
   section: string | null;
+  tower_segment: string | null;
 };
 
 type Member = {
@@ -58,9 +61,9 @@ type Member = {
   bundle_reference: string;
   drawing_number: string;
   mark_no: string;
-  pn_final: string;
-  qty_per_tower: number;
+  qty_per_tower: number | null;
   section: string;
+  tower_segment: string;
 };
 
 type DbBoltRow = {
@@ -163,6 +166,7 @@ type TowerRecord = {
 };
 
 type CsvRow = Record<string, string | undefined>;
+type ImportSourceRow = Record<string, unknown>;
 
 type BundleImportRow = {
   tower_id: string;
@@ -178,9 +182,9 @@ type MemberImportRow = {
   bundle_reference: string;
   drawing_number: string;
   mark_no: string;
-  pn_final: string;
-  qty_per_tower: number;
+  qty_per_tower: number | null;
   section: string;
+  tower_segment: string;
 };
 
 type BoltImportRow = {
@@ -262,6 +266,184 @@ function normaliseSegmentName(value: string): string {
 
 function normaliseSection(value: string): string {
   return normaliseSegmentName(value);
+}
+
+function normaliseMemberSection(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normaliseHeader(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[()]/g, "")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function getRowValue(row: ImportSourceRow, aliases: string[]): unknown {
+  const aliasKeys = new Set(aliases.map(normaliseHeader));
+
+  for (const [key, value] of Object.entries(row)) {
+    if (aliasKeys.has(normaliseHeader(key))) return value;
+  }
+
+  return undefined;
+}
+
+function normaliseBundleKey(value: unknown): string {
+  return safeString(value)
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+function normaliseTowerKey(value: unknown): string {
+  return safeString(value)
+    .trim()
+    .toUpperCase()
+    .replace(/^TOWER\s+/i, "")
+    .replace(/^STRUCTURE\s+/i, "")
+    .replace(/\s+/g, "");
+}
+
+function towerAliases(value: unknown): string[] {
+  const key = normaliseTowerKey(value);
+  if (!key) return [];
+
+  const aliases = new Set<string>([key]);
+  const suffix = key.includes("-") ? key.split("-").pop() || "" : key;
+
+  if (suffix) {
+    aliases.add(suffix);
+    if (/^0*\d+[A-Z]?$/.test(suffix)) {
+      const match = suffix.match(/^(0*)(\d+)([A-Z]?)$/);
+      if (match) aliases.add(`${Number(match[2])}${match[3]}`);
+    }
+  }
+
+  return Array.from(aliases);
+}
+
+function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
+  const keys = new Set<string>();
+  if (!tower) return keys;
+
+  const extra = tower.extra_data || {};
+  const candidates: unknown[] = [
+    tower.tower_number,
+    tower.structure_number,
+    tower.tower_no,
+    tower.name,
+    extra["Tower No"],
+    extra["Tower Number"],
+    extra["Structure Number"],
+    extra["Structure No"],
+    extra["Label"],
+    extra["label"],
+  ];
+
+  candidates.forEach((candidate) => {
+    towerAliases(candidate).forEach((alias) => keys.add(alias));
+  });
+
+  return keys;
+}
+
+function parseApplicableTowerKeys(value: unknown): Set<string> {
+  const keys = new Set<string>();
+  const raw = safeString(value).trim();
+  if (!raw) return keys;
+
+  raw
+    .split(/[,;|\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => {
+      towerAliases(item).forEach((alias) => keys.add(alias));
+    });
+
+  return keys;
+}
+
+function currentTowerMatchesApplicability(
+  towerKeys: Set<string>,
+  applicableTowerKeys: Set<string>,
+): boolean {
+  if (applicableTowerKeys.size === 0) return true;
+  if (towerKeys.size === 0) return false;
+
+  for (const key of towerKeys) {
+    if (applicableTowerKeys.has(key)) return true;
+  }
+
+  return false;
+}
+
+function memberSheetScore(row: ImportSourceRow): number {
+  const headers = Object.keys(row).map(normaliseHeader);
+  const has = (...aliases: string[]) =>
+    aliases.some((alias) => headers.includes(normaliseHeader(alias)));
+
+  let score = 0;
+  if (has("Member Mark", "Member Number", "Member No", "Mark No", "Mark No.")) score += 5;
+  if (has("Bundle No", "Bundle Number", "Bundle Reference", "Bundle Ref")) score += 5;
+  if (has("Tower No(s)", "Tower No", "Tower Number", "Applicable Towers", "Applicable Tower No(s)", "Tower Numbers")) score += 2;
+  if (has("Section", "Section(s)", "Profile", "Member Section", "Steel Section")) score += 1;
+  if (has("Tower Segment", "Member Segment", "Structure Segment")) score += 1;
+  if (has("Drawing Number", "Drawing No", "Drawing", "Drg No")) score += 1;
+  if (has("Qty/Tower", "QTY/Tower", "Qty per Tower", "Quantity per Tower")) score += 1;
+  return score;
+}
+
+async function parseMemberImportFile(file: File): Promise<ImportSourceRow[]> {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "csv") {
+    return new Promise((resolve, reject) => {
+      Papa.parse<ImportSourceRow>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (res: ParseResult<ImportSourceRow>) => resolve(res.data),
+        error: reject,
+      });
+    });
+  }
+
+  if (extension === "xlsx" || extension === "xls") {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+
+    let bestRows: ImportSourceRow[] = [];
+    let bestScore = -1;
+
+    workbook.SheetNames.forEach((sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json<ImportSourceRow>(sheet, {
+        defval: "",
+        raw: false,
+      });
+
+      if (!rows.length) return;
+
+      const score = memberSheetScore(rows[0]);
+      if (score > bestScore) {
+        bestScore = score;
+        bestRows = rows;
+      }
+    });
+
+    if (bestScore < 10) {
+      throw new Error(
+        "No worksheet contains both a member number/mark column and a bundle number/reference column.",
+      );
+    }
+
+    return bestRows;
+  }
+
+  throw new Error("Unsupported member file type. Upload CSV, XLSX or XLS.");
 }
 
 function normaliseBoltDiameter(value: string): string {
@@ -514,9 +696,14 @@ export default function MaterialsPage() {
       bundle_reference: safeString(row.bundle_reference),
       drawing_number: safeString(row.drawing_number),
       mark_no: safeString(row.mark_no),
-      pn_final: safeString(row.pn_final),
-      qty_per_tower: Math.max(safeNumber(row.qty_per_tower, 0), 0),
-      section: normaliseSection(safeString(row.section, "General")),
+      qty_per_tower:
+        row.qty_per_tower === null || row.qty_per_tower === undefined
+          ? null
+          : Math.max(safeNumber(row.qty_per_tower, 0), 0),
+      section: normaliseMemberSection(safeString(row.section)),
+      tower_segment: safeString(row.tower_segment).trim()
+        ? normaliseSection(safeString(row.tower_segment))
+        : "",
     }));
 
     const loadedBolts: Bolt[] = ((boltsRes.data || []) as DbBoltRow[]).map((row) => ({
@@ -570,7 +757,7 @@ export default function MaterialsPage() {
 
     deliveries.forEach((delivery) => {
       delivery.tower_bundle_delivery_items.forEach((item) => {
-        if (safeString(item.bundle_no).trim() === bundleNo.trim()) {
+        if (normaliseBundleKey(item.bundle_no) === normaliseBundleKey(bundleNo)) {
           total += Math.max(safeNumber(item.qty_delivered, 0), 0);
         }
       });
@@ -580,7 +767,7 @@ export default function MaterialsPage() {
   }
 
   function receivedQty(bundleNo: string): number {
-    return Math.max(safeNumber(bundleCheckMap[bundleNo.trim()]?.qty_received, 0), 0);
+    return Math.max(safeNumber(bundleCheckMap[normaliseBundleKey(bundleNo)]?.qty_received, 0), 0);
   }
 
   function remainingDeliveryQty(bundle: Bundle): number {
@@ -591,10 +778,6 @@ export default function MaterialsPage() {
     return Math.max(bundle.qty_required - receivedQty(bundle.bundle_no), 0);
   }
 
-  function overDeliveredQty(bundle: Bundle): number {
-    return Math.max(deliveredQty(bundle.bundle_no) - bundle.qty_required, 0);
-  }
-
   function overReceivedQty(bundle: Bundle): number {
     return Math.max(receivedQty(bundle.bundle_no) - bundle.qty_required, 0);
   }
@@ -603,7 +786,7 @@ export default function MaterialsPage() {
     const map: Record<string, Member[]> = {};
 
     members.forEach((member) => {
-      const key = member.bundle_reference.trim();
+      const key = normaliseBundleKey(member.bundle_reference);
       if (!map[key]) map[key] = [];
       map[key].push(member);
     });
@@ -612,11 +795,11 @@ export default function MaterialsPage() {
   }, [members]);
 
   function memberLinesForBundle(bundleNo: string): number {
-    return (membersByBundle[bundleNo.trim()] || []).length;
+    return (membersByBundle[normaliseBundleKey(bundleNo)] || []).length;
   }
 
   function memberQtyFromMemberList(bundleNo: string): number {
-    return (membersByBundle[bundleNo.trim()] || []).reduce(
+    return (membersByBundle[normaliseBundleKey(bundleNo)] || []).reduce(
       (sum, member) => sum + safeNumber(member.qty_per_tower, 0),
       0,
     );
@@ -626,7 +809,7 @@ export default function MaterialsPage() {
     const map: Record<string, Bundle> = {};
 
     bundles.forEach((bundle) => {
-      map[bundle.bundle_no.trim()] = bundle;
+      map[normaliseBundleKey(bundle.bundle_no)] = bundle;
     });
 
     return map;
@@ -636,7 +819,7 @@ export default function MaterialsPage() {
     const map: Record<string, BundleCheck> = {};
 
     bundleChecks.forEach((check) => {
-      map[check.bundle_no.trim()] = check;
+      map[normaliseBundleKey(check.bundle_no)] = check;
     });
 
     return map;
@@ -646,20 +829,20 @@ export default function MaterialsPage() {
     const map: Record<string, MemberCheck> = {};
 
     memberChecks.forEach((check) => {
-      map[`${check.bundle_no.trim()}__${check.mark_no.trim()}`] = check;
+      map[`${normaliseBundleKey(check.bundle_no)}__${check.mark_no.trim().toUpperCase()}`] = check;
     });
 
     return map;
   }, [memberChecks]);
 
   const matchedMembersForBoltSections = useMemo(() => {
-    return members.filter((member) => !!bundleMap[member.bundle_reference.trim()]);
+    return members.filter((member) => !!bundleMap[normaliseBundleKey(member.bundle_reference)]);
   }, [members, bundleMap]);
 
   const materialSectionSet = useMemo(() => {
     return new Set(
       matchedMembersForBoltSections
-        .map((member) => normaliseSection(member.section))
+        .map((member) => normaliseSection(member.tower_segment))
         .filter((section) => section !== "General"),
     );
   }, [matchedMembersForBoltSections]);
@@ -668,12 +851,14 @@ export default function MaterialsPage() {
     const set = new Set<string>();
 
     bundles.forEach((b) => set.add(normaliseSection(b.section)));
-    matchedMembersForBoltSections.forEach((m) => set.add(normaliseSection(m.section)));
+    matchedMembersForBoltSections.forEach((m) => {
+      if (m.tower_segment.trim()) set.add(normaliseSection(m.tower_segment));
+    });
 
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [bundles, matchedMembersForBoltSections]);
   function getMemberCheck(member: Member): MemberCheck | undefined {
-    return memberCheckMap[`${member.bundle_reference.trim()}__${member.mark_no.trim()}`];
+    return memberCheckMap[`${normaliseBundleKey(member.bundle_reference)}__${member.mark_no.trim().toUpperCase()}`];
   }
 
   function deriveStatusFromReceived(qtyReceived: number, qtyRequired: number): BundleCheckStatus {
@@ -683,8 +868,8 @@ export default function MaterialsPage() {
   }
 
   function deriveBundleStatus(bundleNo: string): BundleCheckStatus {
-    const bundle = bundleMap[bundleNo.trim()];
-    const manual = bundleCheckMap[bundleNo.trim()];
+    const bundle = bundleMap[normaliseBundleKey(bundleNo)];
+    const manual = bundleCheckMap[normaliseBundleKey(bundleNo)];
     const qtyReceived = Math.max(safeNumber(manual?.qty_received, 0), 0);
 
     if (manual?.status === "issue") return "issue";
@@ -696,7 +881,7 @@ export default function MaterialsPage() {
       }
     }
 
-    const relatedMembers = membersByBundle[bundleNo.trim()] || [];
+    const relatedMembers = membersByBundle[normaliseBundleKey(bundleNo)] || [];
 
     if (relatedMembers.length === 0) {
       return manual?.status || "not_checked";
@@ -790,11 +975,16 @@ export default function MaterialsPage() {
       .map((row) => ({
         tower_id: towerId,
         bundle_reference: row.bundle_reference.trim(),
-        drawing_number: safeString(row.drawing_number),
+        drawing_number: safeString(row.drawing_number).trim(),
         mark_no: row.mark_no.trim(),
-        pn_final: safeString(row.pn_final),
-        qty_per_tower: Math.max(safeNumber(row.qty_per_tower, 0), 0),
-        section: normaliseSection(row.section),
+        qty_per_tower:
+          row.qty_per_tower === null || row.qty_per_tower === undefined
+            ? null
+            : Math.max(safeNumber(row.qty_per_tower, 0), 0),
+        section: normaliseMemberSection(row.section),
+        tower_segment: row.tower_segment.trim()
+          ? normaliseSection(row.tower_segment)
+          : "",
       }));
 
     setSaving(true);
@@ -815,7 +1005,9 @@ export default function MaterialsPage() {
       .filter((row) => row.tower_segment.trim() !== "" || row.bolt_diameter.trim() !== "")
       .map((row) => ({
         tower_id: towerId,
-        tower_segment: normaliseSection(row.tower_segment),
+        tower_segment: row.tower_segment.trim()
+          ? normaliseSection(row.tower_segment)
+          : "",
         bolt_diameter: normaliseBoltDiameter(row.bolt_diameter),
         dn_sn: safeString(row.dn_sn).trim(),
         length: safeString(row.length).trim(),
@@ -900,9 +1092,9 @@ export default function MaterialsPage() {
         bundle_reference: "",
         drawing_number: "",
         mark_no: "",
-        pn_final: "",
-        qty_per_tower: 0,
-        section: "General",
+        qty_per_tower: null,
+        section: "",
+        tower_segment: "",
       },
     ]);
 
@@ -910,7 +1102,7 @@ export default function MaterialsPage() {
     setViewMode("members");
   }
 
-  function updateMemberRow(ui_id: string, field: keyof Member, value: string | number) {
+  function updateMemberRow(ui_id: string, field: keyof Member, value: string | number | null) {
     setMembers((prev) =>
       prev.map((row) => {
         if (row.ui_id !== ui_id) return row;
@@ -1030,7 +1222,7 @@ export default function MaterialsPage() {
       tower_id: towerId,
       bundle_no: bundle.bundle_no.trim(),
       status: autoStatus,
-      notes: bundleCheckMap[bundle.bundle_no.trim()]?.notes || "",
+      notes: bundleCheckMap[normaliseBundleKey(bundle.bundle_no)]?.notes || "",
       checked_by: "Site Check",
       checked_at: new Date().toISOString(),
       qty_received: clampedQty,
@@ -1293,92 +1485,250 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
     });
   }
 
-  async function importMembersCSV(file: File) {
+  async function importMembersFile(file: File) {
     setMemberImporting(true);
 
-    Papa.parse<CsvRow>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (res: ParseResult<CsvRow>) => {
-        const rows = res.data
-          .map((r): MemberImportRow | null => {
-            const markNo = r.mark_no || r["Mark No"] || r["Mark No."] || r.mark || r["Member Mark"];
-            const bundleReference =
-              r.bundle_reference || r["Bundle Reference"] || r.bundle_no || r["Bundle No"];
+    try {
+      if (bundles.length === 0) {
+        alert(
+          "Upload the tower bundle register first. Member imports are matched against the bundles already required for this tower.",
+        );
+        return;
+      }
 
-            if (!markNo || !bundleReference) return null;
+      const sourceRows = await parseMemberImportFile(file);
+      const requiredBundleKeys = new Set(
+        bundles
+          .map((bundle) => normaliseBundleKey(bundle.bundle_no))
+          .filter(Boolean),
+      );
+      const currentTowerKeys = getTowerIdentifierKeys(tower);
 
-            return {
-              tower_id: towerId,
-              bundle_reference: String(bundleReference).trim(),
-              drawing_number: safeString(r.drawing_number || r["Drawing Number"]),
-              mark_no: String(markNo).trim(),
-              pn_final: safeString(
-                r.pn_final ||
-                  r["Standardised PN FINAL"] ||
-                  r["Standardised PN Final"] ||
-                  r["PN"],
-              ),
-              qty_per_tower: Math.max(
-                safeNumber(r.qty_per_tower || r["Qty/Tower"] || r["QTY/tower"] || r["Qty"] || 0, 0),
-                0,
-              ),
-              section: normaliseSection(
-                safeString(
-                  r.segment ||
-                    r["Segment"] ||
-                    r["Tower Segment"] ||
-                    r["Member Segment"] ||
-                    r.section ||
-                    r["Section"] ||
-                    "General",
-                ),
-              ),
-            };
-          })
-          .filter((row): row is MemberImportRow => row !== null);
+      let invalidRows = 0;
+      let otherBundleRows = 0;
+      let otherTowerRows = 0;
+      let restrictedRowsSeen = 0;
 
-        if (!rows.length) {
-          alert("No valid member rows found in CSV.");
-          setMemberImporting(false);
+      const rowMap = new Map<string, MemberImportRow>();
+
+      sourceRows.forEach((r) => {
+        const markNo = safeString(
+          getRowValue(r, [
+            "mark_no",
+            "Mark No",
+            "Mark No.",
+            "Mark",
+            "Member Mark",
+            "Member Number",
+            "Member No",
+            "Member No.",
+          ]),
+        ).trim();
+
+        const bundleReference = safeString(
+          getRowValue(r, [
+            "bundle_reference",
+            "Bundle Reference",
+            "Bundle Ref",
+            "bundle_no",
+            "Bundle No",
+            "Bundle No.",
+            "Bundle Number",
+            "Package No",
+            "Package Number",
+          ]),
+        ).trim();
+
+        if (!markNo || !bundleReference) {
+          invalidRows += 1;
           return;
         }
 
-if (importMode === "replace") {
-  const deleteRes = await supabase
-    .from("tower_material_members")
-    .delete()
-    .eq("tower_id", towerId);
-
-  if (deleteRes.error) {
-    alert(`Could not clear existing members: ${deleteRes.error.message}`);
-    return;
-  }
-}
-
-const { error } = await supabase.from("tower_material_members").upsert(rows, {
-  onConflict: "tower_id,bundle_reference,mark_no",
-});
-
-        setMemberImporting(false);
-
-        if (error) {
-          console.error("member import error", error);
-          alert("Member CSV import failed.");
+        const bundleKey = normaliseBundleKey(bundleReference);
+        if (!requiredBundleKeys.has(bundleKey)) {
+          otherBundleRows += 1;
           return;
         }
 
-        await load();
-        alert("Members CSV imported.");
-      },
-      error: (err) => {
-        console.error("member parse error", err);
-        setMemberImporting(false);
-        alert("Failed to parse members CSV.");
-      },
-    });
-  }
+        const applicableTowerValue = getRowValue(r, [
+          "applicable_towers",
+          "Applicable Towers",
+          "Applicable Tower No(s)",
+          "Applicable Tower Nos",
+          "Tower No(s)",
+          "Tower No",
+          "Tower Nos",
+          "Tower Number",
+          "Tower Numbers",
+          "Structure No",
+          "Structure Number",
+          "Applicable Structures",
+        ]);
 
+        const applicableTowerKeys = parseApplicableTowerKeys(applicableTowerValue);
+
+        if (applicableTowerKeys.size > 0) {
+          restrictedRowsSeen += 1;
+
+          if (!currentTowerMatchesApplicability(currentTowerKeys, applicableTowerKeys)) {
+            otherTowerRows += 1;
+            return;
+          }
+        }
+
+        const drawingNumber = safeString(
+          getRowValue(r, [
+            "drawing_number",
+            "Drawing Number",
+            "Drawing No",
+            "Drawing No.",
+            "Drawing",
+            "Drg No",
+            "Drg No.",
+          ]),
+        ).trim();
+
+        const section = normaliseMemberSection(
+          safeString(
+            getRowValue(r, [
+              "section",
+              "Section",
+              "Section(s)",
+              "Profile",
+              "Member Section",
+              "Steel Section",
+              "Section / Profile",
+            ]),
+          ),
+        );
+
+        const towerSegmentRaw = safeString(
+          getRowValue(r, [
+            "tower_segment",
+            "Tower Segment",
+            "Member Segment",
+            "Structure Segment",
+            "Tower Section",
+            "Assembly Segment",
+          ]),
+        ).trim();
+
+        const qtyValue = getRowValue(r, [
+          "qty_per_tower",
+          "Qty/Tower",
+          "QTY/Tower",
+          "Qty per Tower",
+          "Quantity per Tower",
+          "QTY per Tower",
+          "Tower Qty",
+        ]);
+
+        const qtyText = safeString(qtyValue).trim();
+        const qtyPerTower =
+          qtyText === ""
+            ? null
+            : Math.max(safeNumber(qtyValue, 0), 0);
+
+        const candidate: MemberImportRow = {
+          tower_id: towerId,
+          bundle_reference: bundleReference,
+          drawing_number: drawingNumber,
+          mark_no: markNo,
+          qty_per_tower: qtyPerTower,
+          section,
+          tower_segment: towerSegmentRaw ? normaliseSection(towerSegmentRaw) : "",
+        };
+
+        const key = `${normaliseBundleKey(bundleReference)}__${markNo.trim().toUpperCase()}`;
+        const existing = rowMap.get(key);
+
+        if (!existing) {
+          rowMap.set(key, candidate);
+          return;
+        }
+
+        rowMap.set(key, {
+          ...existing,
+          drawing_number: existing.drawing_number || candidate.drawing_number,
+          section: existing.section || candidate.section,
+          tower_segment:
+            existing.tower_segment || candidate.tower_segment,
+          qty_per_tower:
+            existing.qty_per_tower === null
+              ? candidate.qty_per_tower
+              : candidate.qty_per_tower === null
+                ? existing.qty_per_tower
+                : Math.max(existing.qty_per_tower, candidate.qty_per_tower),
+        });
+      });
+
+      if (restrictedRowsSeen > 0 && currentTowerKeys.size === 0) {
+        alert(
+          "This member file contains tower-specific applicability, but TTTracker could not identify the current tower number. Add a Tower Number / Structure Number to the tower record before importing.",
+        );
+        return;
+      }
+
+      const rows = Array.from(rowMap.values());
+
+      if (!rows.length) {
+        alert(
+          `No applicable member rows were found for this tower.\n\nRead: ${sourceRows.length}\nOther bundles: ${otherBundleRows}\nOther towers: ${otherTowerRows}\nInvalid rows: ${invalidRows}`,
+        );
+        return;
+      }
+
+      if (importMode === "replace") {
+        const deleteRes = await supabase
+          .from("tower_material_members")
+          .delete()
+          .eq("tower_id", towerId);
+
+        if (deleteRes.error) {
+          alert(`Could not clear existing members: ${deleteRes.error.message}`);
+          return;
+        }
+      }
+
+      const { error } = await supabase.from("tower_material_members").upsert(rows, {
+        onConflict: "tower_id,bundle_reference,mark_no",
+      });
+
+      if (error) {
+        console.error("member import error", error);
+        alert(`Member import failed: ${error.message}`);
+        return;
+      }
+
+      await load();
+
+      const matchedBundleCount = new Set(
+        rows.map((row) => normaliseBundleKey(row.bundle_reference)),
+      ).size;
+
+      alert(
+        [
+          "Member import complete.",
+          "",
+          `Source rows read: ${sourceRows.length}`,
+          `Members imported: ${rows.length}`,
+          `Required bundles matched: ${matchedBundleCount}/${requiredBundleKeys.size}`,
+          `Other-tower rows ignored: ${otherTowerRows}`,
+          `Other-bundle rows ignored: ${otherBundleRows}`,
+          `Invalid rows ignored: ${invalidRows}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      console.error("member import error", error);
+      alert(
+        error instanceof Error
+          ? `Member import failed: ${error.message}`
+          : "Member import failed.",
+      );
+    } finally {
+      setMemberImporting(false);
+    }
+  }
 
   async function importBoltsCSV(file: File) {
     setBoltImporting(true);
@@ -1485,7 +1835,7 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     });
   }
 
-  const filteredBundles = useMemo(() => {
+  const filteredBundles = (() => {
     const q = normaliseSearch(search);
 
     return bundles.filter((bundle) => {
@@ -1506,65 +1856,81 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
         remainingReceiveQty(bundle),
         memberLinesForBundle(bundle.bundle_no),
         memberQtyFromMemberList(bundle.bundle_no),
-        ...((membersByBundle[bundle.bundle_no.trim()] || []).map((m) =>
-          [m.mark_no, m.pn_final, m.drawing_number, m.qty_per_tower].join(" "),
+        ...((membersByBundle[normaliseBundleKey(bundle.bundle_no)] || []).map((m) =>
+          [
+            m.mark_no,
+            m.drawing_number,
+            m.section,
+            m.qty_per_tower,
+            m.tower_segment,
+          ].join(" "),
         ) as string[]),
       );
 
       return text.includes(q);
     });
-  }, [bundles, search, sectionFilter, statusFilter, membersByBundle, deliveries, bundleChecks]);
+  })();
 
   const matchedMembers = matchedMembersForBoltSections;
 
   const unmatchedMembers = useMemo(
-    () => members.filter((member) => !bundleMap[member.bundle_reference.trim()]),
+    () => members.filter((member) => !bundleMap[normaliseBundleKey(member.bundle_reference)]),
     [members, bundleMap],
   );
 
-  const filteredMatchedMembers = useMemo(() => {
+  const filteredMatchedMembers = (() => {
     const q = normaliseSearch(search);
 
     return matchedMembers.filter((member) => {
-      if (sectionFilter !== "all" && member.section !== sectionFilter) return false;
+      if (
+        sectionFilter !== "all" &&
+        normaliseSection(member.tower_segment) !== sectionFilter
+      ) {
+        return false;
+      }
       if (!memberMatchesStatus(member, statusFilter)) return false;
 
       if (!q) return true;
 
       const text = matchesText(
         member.mark_no,
-        member.pn_final,
         member.drawing_number,
         member.bundle_reference,
         member.section,
         member.qty_per_tower,
+        member.tower_segment,
       );
 
       return text.includes(q);
     });
-  }, [matchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
+  })();
 
-  const filteredUnmatchedMembers = useMemo(() => {
+  const filteredUnmatchedMembers = (() => {
     const q = normaliseSearch(search);
 
     return unmatchedMembers.filter((member) => {
-      if (sectionFilter !== "all" && member.section !== sectionFilter) return false;
+      if (
+        sectionFilter !== "all" &&
+        normaliseSection(member.tower_segment) !== sectionFilter
+      ) {
+        return false;
+      }
       if (!memberMatchesStatus(member, statusFilter)) return false;
 
       if (!q) return true;
 
       const text = matchesText(
         member.mark_no,
-        member.pn_final,
         member.drawing_number,
         member.bundle_reference,
         member.section,
         member.qty_per_tower,
+        member.tower_segment,
       );
 
       return text.includes(q);
     });
-  }, [unmatchedMembers, search, sectionFilter, statusFilter, memberCheckMap]);
+  })();
 
   const applicableBolts = useMemo(() => {
     return bolts.filter((bolt) => materialSectionSet.has(normaliseSection(bolt.tower_segment)));
@@ -1607,14 +1973,14 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     [bundles],
   );
 
-  const overallDelivered = useMemo(
-    () => bundles.reduce((sum, row) => sum + deliveredQty(row.bundle_no), 0),
-    [bundles, deliveries],
+  const overallDelivered = bundles.reduce(
+    (sum, row) => sum + deliveredQty(row.bundle_no),
+    0,
   );
 
-  const overallReceived = useMemo(
-    () => bundles.reduce((sum, row) => sum + receivedQty(row.bundle_no), 0),
-    [bundles, bundleChecks],
+  const overallReceived = bundles.reduce(
+    (sum, row) => sum + receivedQty(row.bundle_no),
+    0,
   );
 
   const overallRemaining = Math.max(overallRequired - overallReceived, 0);
@@ -1625,67 +1991,63 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     [bundles],
   );
 
-  const bundleStatusCounts = useMemo(() => {
-    return bundles.reduce(
-      (acc, bundle) => {
-        const status = deriveBundleStatus(bundle.bundle_no);
-        acc[status] += 1;
-        return acc;
-      },
-      {
-        not_checked: 0,
-        arrived: 0,
-        partial: 0,
-        missing: 0,
-        issue: 0,
-      } as Record<BundleCheckStatus, number>,
-    );
-  }, [bundles, memberChecks, bundleChecks]);
+  const bundleStatusCounts = bundles.reduce(
+    (acc, bundle) => {
+      const status = deriveBundleStatus(bundle.bundle_no);
+      acc[status] += 1;
+      return acc;
+    },
+    {
+      not_checked: 0,
+      arrived: 0,
+      partial: 0,
+      missing: 0,
+      issue: 0,
+    } as Record<BundleCheckStatus, number>,
+  );
 
-  const outstandingBundles = useMemo<OutstandingBundle[]>(() => {
-    return bundles
-      .map((bundle) => {
-        const status = deriveBundleStatus(bundle.bundle_no);
-        const delivered = deliveredQty(bundle.bundle_no);
-        const received = receivedQty(bundle.bundle_no);
-        const required = Math.max(bundle.qty_required, 0);
-        const remainingToReceive = Math.max(required - received, 0);
-        const progress = percentage(received, required);
-        const isOutstanding =
-          remainingToReceive > 0 ||
-          status === "not_checked" ||
-          status === "partial" ||
-          status === "missing" ||
-          status === "issue";
+  const outstandingBundles: OutstandingBundle[] = bundles
+    .map((bundle) => {
+      const status = deriveBundleStatus(bundle.bundle_no);
+      const delivered = deliveredQty(bundle.bundle_no);
+      const received = receivedQty(bundle.bundle_no);
+      const required = Math.max(bundle.qty_required, 0);
+      const remainingToReceive = Math.max(required - received, 0);
+      const progress = percentage(received, required);
+      const isOutstanding =
+        remainingToReceive > 0 ||
+        status === "not_checked" ||
+        status === "partial" ||
+        status === "missing" ||
+        status === "issue";
 
-        if (!isOutstanding) return null;
+      if (!isOutstanding) return null;
 
-        return {
-          bundle,
-          status,
-          delivered,
-          received,
-          required,
-          remainingToReceive,
-          progress,
-          reason: getOutstandingReason(bundle, status),
-        };
-      })
-      .filter((item): item is OutstandingBundle => item !== null)
-      .sort((a, b) => {
-        if (a.remainingToReceive !== b.remainingToReceive) return b.remainingToReceive - a.remainingToReceive;
-        return a.bundle.bundle_no.localeCompare(b.bundle.bundle_no);
-      });
-  }, [bundles, deliveries, memberChecks, bundleChecks]);
+      return {
+        bundle,
+        status,
+        delivered,
+        received,
+        required,
+        remainingToReceive,
+        progress,
+        reason: getOutstandingReason(bundle, status),
+      };
+    })
+    .filter((item): item is OutstandingBundle => item !== null)
+    .sort((a, b) => {
+      if (a.remainingToReceive !== b.remainingToReceive) {
+        return b.remainingToReceive - a.remainingToReceive;
+      }
+      return a.bundle.bundle_no.localeCompare(b.bundle.bundle_no);
+    });
 
-  const completedBundles = useMemo(() => {
-    return bundles
-      .filter((bundle) => {
-        const status = deriveBundleStatus(bundle.bundle_no);
-        return remainingReceiveQty(bundle) === 0 && status === "arrived";
-      })
-      .sort((a, b) => a.bundle_no.localeCompare(b.bundle_no));
-  }, [bundles, deliveries, memberChecks, bundleChecks]);
+  const completedBundles = bundles
+    .filter((bundle) => {
+      const status = deriveBundleStatus(bundle.bundle_no);
+      return remainingReceiveQty(bundle) === 0 && status === "arrived";
+    })
+    .sort((a, b) => a.bundle_no.localeCompare(b.bundle_no));
 
   function exportCurrentViewCSV() {
     if (viewMode === "bundles") {
@@ -1739,14 +2101,22 @@ const { error } = await supabase.from("tower_material_bolts").upsert(rows, {
     }
 
     const rows = [
-      ["Mark No", "PN", "Drawing No", "Bundle Reference", "Qty", "Segment", "Status"],
+      [
+        "Member Number",
+        "Bundle Number",
+        "Drawing Number",
+        "Section",
+        "Qty/Tower",
+        "Tower Segment",
+        "Status",
+      ],
       ...filteredMatchedMembers.map((member) => [
         member.mark_no,
-        member.pn_final,
-        member.drawing_number,
         member.bundle_reference,
-        member.qty_per_tower,
+        member.drawing_number,
         member.section,
+        member.qty_per_tower ?? "",
+        member.tower_segment,
         statusLabel(getMemberCheck(member)?.status || "not_checked"),
       ]),
     ];
@@ -2156,11 +2526,11 @@ ${bodyHtml}
                   {memberImporting ? "Uploading Members..." : "Reupload Members"}
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".csv,.xlsx,.xls"
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) void importMembersCSV(file);
+                      if (file) void importMembersFile(file);
                       e.currentTarget.value = "";
                     }}
                   />
@@ -2232,7 +2602,7 @@ ${bodyHtml}
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search bundle, mark, PN, drawing, bolt, segment..."
+                placeholder="Search bundle, member, drawing, section, bolt, tower segment..."
                 className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
               />
 
@@ -2273,7 +2643,7 @@ ${bodyHtml}
                 onChange={(e) => setSectionFilter(e.target.value)}
                 className="border border-slate-300 rounded-xl px-3 py-2.5 text-sm bg-white"
               >
-                <option value="all">All Sections</option>
+                <option value="all">All Tower Segments</option>
                 {allSections.map((section) => (
                   <option key={section} value={section}>
                     {section}
@@ -2302,11 +2672,11 @@ ${bodyHtml}
                   {memberImporting ? "Uploading..." : "Reupload Members"}
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".csv,.xlsx,.xls"
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) void importMembersCSV(file);
+                      if (file) void importMembersFile(file);
                       e.currentTarget.value = "";
                     }}
                   />
@@ -2383,11 +2753,11 @@ ${bodyHtml}
                 <EmptyState text="No bundles match the current filters." />
               ) : (
                 filteredBundles.map((bundle) => {
-                  const relatedMembers = membersByBundle[bundle.bundle_no.trim()] || [];
+                  const relatedMembers = membersByBundle[normaliseBundleKey(bundle.bundle_no)] || [];
                   const status = deriveBundleStatus(bundle.bundle_no);
                   const expanded = expandedBundleNo === bundle.bundle_no;
                   const hasMemberStatuses = relatedMembers.some((member) => !!getMemberCheck(member));
-                  const hasBundleStatus = !!bundleCheckMap[bundle.bundle_no.trim()];
+                  const hasBundleStatus = !!bundleCheckMap[normaliseBundleKey(bundle.bundle_no)];
                   const delivered = deliveredQty(bundle.bundle_no);
                   const received = receivedQty(bundle.bundle_no);
                   const remainingToReceive = remainingReceiveQty(bundle);
@@ -2629,9 +2999,11 @@ ${bodyHtml}
                                             </div>
 
                                             <div className="text-xs text-slate-500 mt-1">
-                                              PN {member.pn_final || "—"} • Drawing{" "}
-                                              {member.drawing_number || "—"} • Qty{" "}
-                                              {member.qty_per_tower} • Segment {member.section}
+                                              Bundle {member.bundle_reference} • Drawing{" "}
+                                              {member.drawing_number || "—"} • Section{" "}
+                                              {member.section || "—"} • Qty/Tower{" "}
+                                              {member.qty_per_tower ?? "—"} • Tower Segment{" "}
+                                              {member.tower_segment || "—"}
                                             </div>
                                           </div>
 
@@ -2700,7 +3072,7 @@ ${bodyHtml}
               ) : (
                 filteredMatchedMembers.map((member) => {
                   const status = getMemberCheck(member)?.status || "not_checked";
-                  const matchingBundle = bundleMap[member.bundle_reference.trim()];
+                  const matchingBundle = bundleMap[normaliseBundleKey(member.bundle_reference)];
 
                   return (
                     <div
@@ -2744,9 +3116,10 @@ ${bodyHtml}
                               <div className="text-xs md:text-sm text-slate-500 mt-1 leading-5">
                                 Bundle {member.bundle_reference} • Required Bundle Qty{" "}
                                 {matchingBundle?.qty_required ?? "—"} • Site received{" "}
-                                {matchingBundle ? receivedQty(matchingBundle.bundle_no) : "—"} • PN{" "}
-                                {member.pn_final || "—"} • Drawing {member.drawing_number || "—"} • Qty{" "}
-                                {member.qty_per_tower} • Segment {member.section}
+                                {matchingBundle ? receivedQty(matchingBundle.bundle_no) : "—"} • Drawing{" "}
+                                {member.drawing_number || "—"} • Section {member.section || "—"} • Qty/Tower{" "}
+                                {member.qty_per_tower ?? "—"} • Tower Segment{" "}
+                                {member.tower_segment || "—"}
                               </div>
                             </div>
                           </div>
@@ -2797,40 +3170,40 @@ ${bodyHtml}
                         {manageMode && (
                           <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-slate-200">
                             <Field
-                              label="Bundle Ref"
-                              value={member.bundle_reference}
-                              onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
-                            />
-                            <Field
-                              label="Mark No"
+                              label="Member Number"
                               value={member.mark_no}
                               onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
                             />
                             <Field
-                              label="PN"
-                              value={member.pn_final}
-                              onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
+                              label="Bundle Number"
+                              value={member.bundle_reference}
+                              onChange={(v) => updateMemberRow(member.ui_id, "bundle_reference", v)}
                             />
                             <Field
-                              label="Drawing"
+                              label="Drawing Number"
                               value={member.drawing_number}
                               onChange={(v) => updateMemberRow(member.ui_id, "drawing_number", v)}
                             />
                             <Field
-                              label="Qty"
-                              value={member.qty_per_tower}
+                              label="Section"
+                              value={member.section}
+                              onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                            />
+                            <Field
+                              label="Qty/Tower"
+                              value={member.qty_per_tower ?? ""}
                               onChange={(v) =>
                                 updateMemberRow(
                                   member.ui_id,
                                   "qty_per_tower",
-                                  Math.max(safeNumber(v, 0), 0),
+                                  v === "" ? null : Math.max(safeNumber(v, 0), 0),
                                 )
                               }
                             />
                             <Field
-                              label="Segment"
-                              value={member.section}
-                              onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                              label="Tower Segment"
+                              value={member.tower_segment}
+                              onChange={(v) => updateMemberRow(member.ui_id, "tower_segment", v)}
                             />
                           </div>
                         )}
@@ -2906,9 +3279,10 @@ ${bodyHtml}
                                     </div>
 
                                     <div className="text-xs md:text-sm text-slate-600 mt-1 leading-5">
-                                      Bundle {member.bundle_reference} • PN {member.pn_final || "—"} •
-                                      Drawing {member.drawing_number || "—"} • Qty{" "}
-                                      {member.qty_per_tower} • Segment {member.section}
+                                      Bundle {member.bundle_reference} • Drawing{" "}
+                                      {member.drawing_number || "—"} • Section {member.section || "—"} •
+                                      Qty/Tower {member.qty_per_tower ?? "—"} • Tower Segment{" "}
+                                      {member.tower_segment || "—"}
                                     </div>
 
                                     <div className="text-xs text-rose-700 mt-1 font-medium">
@@ -2963,44 +3337,44 @@ ${bodyHtml}
                               {manageMode && (
                                 <div className="grid grid-cols-1 md:grid-cols-6 gap-2 pt-2 border-t border-rose-200">
                                   <Field
-                                    label="Bundle Ref"
+                                    label="Member Number"
+                                    value={member.mark_no}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
+                                  />
+                                  <Field
+                                    label="Bundle Number"
                                     value={member.bundle_reference}
                                     onChange={(v) =>
                                       updateMemberRow(member.ui_id, "bundle_reference", v)
                                     }
                                   />
                                   <Field
-                                    label="Mark No"
-                                    value={member.mark_no}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "mark_no", v)}
-                                  />
-                                  <Field
-                                    label="PN"
-                                    value={member.pn_final}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "pn_final", v)}
-                                  />
-                                  <Field
-                                    label="Drawing"
+                                    label="Drawing Number"
                                     value={member.drawing_number}
                                     onChange={(v) =>
                                       updateMemberRow(member.ui_id, "drawing_number", v)
                                     }
                                   />
                                   <Field
-                                    label="Qty"
-                                    value={member.qty_per_tower}
+                                    label="Section"
+                                    value={member.section}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                                  />
+                                  <Field
+                                    label="Qty/Tower"
+                                    value={member.qty_per_tower ?? ""}
                                     onChange={(v) =>
                                       updateMemberRow(
                                         member.ui_id,
                                         "qty_per_tower",
-                                        Math.max(safeNumber(v, 0), 0),
+                                        v === "" ? null : Math.max(safeNumber(v, 0), 0),
                                       )
                                     }
                                   />
                                   <Field
-                                    label="Segment"
-                                    value={member.section}
-                                    onChange={(v) => updateMemberRow(member.ui_id, "section", v)}
+                                    label="Tower Segment"
+                                    value={member.tower_segment}
+                                    onChange={(v) => updateMemberRow(member.ui_id, "tower_segment", v)}
                                   />
                                 </div>
                               )}
