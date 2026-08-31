@@ -5,8 +5,8 @@
   - Member records use: member number, bundle number, drawing number, section,
     qty/tower and tower segment. Legacy PN is intentionally not used.
   - Member imports are project-agnostic and accept CSV/XLSX/XLS.
-  - Member imports first match the tower's required bundle register, then optionally
-    apply tower-specific columns such as "Tower No(s)" / "Applicable Towers".
+  - Member imports apply tower-specific applicability first when provided, then
+    validate the member bundle against the tower's required bundle register.
   - Excel member imports automatically choose the worksheet containing member + bundle columns.
 */
 
@@ -298,96 +298,130 @@ function normaliseBundleKey(value: unknown): string {
     .replace(/\s+/g, "");
 }
 
-function normaliseTowerKey(value: unknown): string {
+function normaliseTowerText(value: unknown): string {
   return safeString(value)
     .trim()
     .toUpperCase()
-    .replace(/^TOWER\s+/i, "")
-    .replace(/^STRUCTURE\s+/i, "")
-    .replace(/\s+/g, "");
+    .replace(/[–—]/g, "-")
+    .replace(/\s*([/.\-])\s*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function addNumericTowerAlias(aliases: Set<string>, value: string) {
-  const clean = value.trim().toUpperCase();
-  if (!clean || !/^0*\d+[A-Z]?$/.test(clean)) return;
-
-  aliases.add(clean);
-
-  const match = clean.match(/^(0*)(\d+)([A-Z]?)$/);
-  if (match) aliases.add(`${Number(match[2])}${match[3]}`);
+function normaliseNumericTowerSuffix(value: string): string {
+  const match = value.trim().toUpperCase().match(/^0*(\d+)([A-Z]?)$/);
+  if (!match) return "";
+  return `${Number(match[1])}${match[2]}`;
 }
 
-function towerAliases(value: unknown): string[] {
-  const raw = safeString(value).trim().toUpperCase();
+function towerIdentifierTokens(value: unknown): string[] {
+  const raw = normaliseTowerText(value);
   if (!raw) return [];
 
-  const aliases = new Set<string>();
-  const key = normaliseTowerKey(raw);
-  if (key) aliases.add(key);
+  const tokens = new Set<string>();
 
-  // Handle full project tower references such as:
-  // 5C3/5C1-083, 5C3.5C1-083, 5C3-5C1-083.
-  const fullReferenceMatches = raw.match(
-    /[A-Z0-9]+(?:\/|\.)[A-Z0-9]+-0*\d+[A-Z]?/g,
-  );
+  // Full HumeLink-style/project-style references, e.g. 5C3/5C1-083 or
+  // 5C3.5C1-083. Store both the full identifier and a normalised suffix.
+  const fullMatches = raw.match(/[A-Z0-9]+(?:\/|\.)[A-Z0-9]+-0*\d+[A-Z]?/g) || [];
+  fullMatches.forEach((match) => {
+    const slashForm = match.replace(".", "/");
+    tokens.add(`FULL:${slashForm}`);
 
-  fullReferenceMatches?.forEach((reference) => {
-    const compactReference = reference.replace(/\s+/g, "");
-    aliases.add(compactReference);
-    aliases.add(compactReference.replace(".", "/"));
-
-    const suffix = compactReference.match(/-([0-9]+[A-Z]?)$/)?.[1];
-    if (suffix) addNumericTowerAlias(aliases, suffix);
+    const suffix = slashForm.match(/-([0-9]+[A-Z]?)$/)?.[1] || "";
+    const normalisedSuffix = normaliseNumericTowerSuffix(suffix);
+    if (normalisedSuffix) tokens.add(`NO:${normalisedSuffix}`);
   });
 
-  // Handle normal labels such as "Tower 083", "Twr 083" or
-  // "Structure 083 - VSL".
-  const labelledMatch = raw.match(
-    /(?:TOWER|TWR|STRUCTURE|STR)\s*(?:NO\.?|NUMBER)?\s*[:#-]?\s*(0*\d+[A-Z]?)/i,
+  // Explicit labels such as Tower 083, Twr. No: 083, Structure 083.
+  const labelledMatches = raw.matchAll(
+    /(?:TOWER|TWR|STRUCTURE|STR)\.?\s*(?:NO\.?|NUMBER|NUM)?\s*[:#-]?\s*(0*\d+(?:\.0+)?[A-Z]?)/g,
   );
-  if (labelledMatch?.[1]) addNumericTowerAlias(aliases, labelledMatch[1]);
+  for (const match of labelledMatches) {
+    const numericText = match[1].replace(/\.0+(?=[A-Z]?$)/, "");
+    const suffix = normaliseNumericTowerSuffix(numericText);
+    if (suffix) tokens.add(`NO:${suffix}`);
+  }
 
-  // Existing/simple references: "083", "083A", "5C3/5C1-083".
-  const suffix = key.includes("-") ? key.split("-").pop() || "" : key;
-  addNumericTowerAlias(aliases, suffix);
+  // A field that consists only of a tower number should also match. This
+  // intentionally does NOT extract arbitrary numbers from descriptive values.
+  const simple = raw.match(/^0*(\d+)(?:\.0+)?([A-Z]?)$/);
+  if (simple) tokens.add(`NO:${Number(simple[1])}${simple[2]}`);
 
-  // Also recognise a tower number at the start/end of a descriptive label,
-  // e.g. "083 VSL" or "VSL - 083".
-  const startNumber = raw.match(/^\s*(0*\d+[A-Z]?)(?=\s|[-–—_/]|$)/)?.[1];
-  if (startNumber) addNumericTowerAlias(aliases, startNumber);
+  return Array.from(tokens);
+}
 
-  const endNumber = raw.match(/(?:^|\s|[-–—_/])(0*\d+[A-Z]?)\s*$/)?.[1];
-  if (endNumber) addNumericTowerAlias(aliases, endNumber);
+function looksLikeTowerIdentifierField(fieldName: string): boolean {
+  const key = normaliseHeader(fieldName);
+  return (
+    key.includes("tower") ||
+    key.includes("twr") ||
+    key.includes("structure") ||
+    key === "label" ||
+    key === "name"
+  );
+}
 
-  return Array.from(aliases);
+function collectTowerCandidatesFromExtraData(
+  value: unknown,
+  path: string,
+  output: unknown[],
+) {
+  if (value === null || value === undefined) return;
+
+  if (typeof value === "string" || typeof value === "number") {
+    if (looksLikeTowerIdentifierField(path)) output.push(value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectTowerCandidatesFromExtraData(item, `${path} ${index}`, output),
+    );
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.entries(value as Record<string, unknown>).forEach(([key, nested]) => {
+      collectTowerCandidatesFromExtraData(nested, `${path} ${key}`, output);
+    });
+  }
 }
 
 function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
   const keys = new Set<string>();
   if (!tower) return keys;
 
-  // Do not assume every project imports its tower number into exactly the same
-  // database column. Collect aliases from every primitive tower field and every
-  // primitive extra_data value. Non-tower values (UUIDs, statuses, etc.) simply
-  // produce aliases that will never match an Applicable Towers value.
-  const candidates: unknown[] = [];
-
-  Object.entries(tower).forEach(([field, value]) => {
-    if (field === "extra_data") return;
-    if (typeof value === "string" || typeof value === "number") {
-      candidates.push(value);
-    }
-  });
+  // Only use fields that can genuinely identify the tower. The previous version
+  // scanned values such as line/progress; on Line 3 that could accidentally make
+  // Tower 083 match an Applicable Towers entry for Tower 003.
+  const candidates: unknown[] = [
+    tower.tower_number,
+    tower.structure_number,
+    tower.tower_no,
+    tower.name,
+  ];
 
   const extra = tower.extra_data || {};
-  Object.values(extra).forEach((value) => {
-    if (typeof value === "string" || typeof value === "number") {
-      candidates.push(value);
+  Object.entries(extra).forEach(([key, value]) => {
+    if (looksLikeTowerIdentifierField(key)) {
+      if (typeof value === "string" || typeof value === "number") {
+        candidates.push(value);
+      } else {
+        collectTowerCandidatesFromExtraData(value, key, candidates);
+      }
+      return;
+    }
+
+    // Some older imports nest the original CSV object under a generic key.
+    // Search nested objects, but still only collect values whose nested key/path
+    // identifies them as tower/structure information.
+    if (value && typeof value === "object") {
+      collectTowerCandidatesFromExtraData(value, key, candidates);
     }
   });
 
   candidates.forEach((candidate) => {
-    towerAliases(candidate).forEach((alias) => keys.add(alias));
+    towerIdentifierTokens(candidate).forEach((token) => keys.add(token));
   });
 
   return keys;
@@ -403,7 +437,7 @@ function parseApplicableTowerKeys(value: unknown): Set<string> {
     .map((item) => item.trim())
     .filter(Boolean)
     .forEach((item) => {
-      towerAliases(item).forEach((alias) => keys.add(alias));
+      towerIdentifierTokens(item).forEach((token) => keys.add(token));
     });
 
   return keys;
@@ -416,11 +450,35 @@ function currentTowerMatchesApplicability(
   if (applicableTowerKeys.size === 0) return true;
   if (towerKeys.size === 0) return false;
 
+  // Prefer full identifiers where both sides have them. Suffix matching is kept
+  // for projects that store only "083" in TTTracker.
+  const towerFull = new Set(Array.from(towerKeys).filter((key) => key.startsWith("FULL:")));
+  const applicableFull = new Set(
+    Array.from(applicableTowerKeys).filter((key) => key.startsWith("FULL:")),
+  );
+
+  if (towerFull.size > 0 && applicableFull.size > 0) {
+    for (const key of towerFull) {
+      if (applicableFull.has(key)) return true;
+    }
+    return false;
+  }
+
   for (const key of towerKeys) {
     if (applicableTowerKeys.has(key)) return true;
   }
 
   return false;
+}
+
+function getTowerMatchDisplay(towerKeys: Set<string>): string {
+  const full = Array.from(towerKeys).find((key) => key.startsWith("FULL:"));
+  if (full) return full.replace(/^FULL:/, "");
+
+  const number = Array.from(towerKeys).find((key) => key.startsWith("NO:"));
+  if (number) return number.replace(/^NO:/, "");
+
+  return "not detected";
 }
 
 function memberSheetScore(row: ImportSourceRow): number {
@@ -1543,14 +1601,20 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
           .filter(Boolean),
       );
       const currentTowerKeys = getTowerIdentifierKeys(tower);
+      const currentTowerDisplay = getTowerMatchDisplay(currentTowerKeys);
 
       let invalidRows = 0;
       let missingQtyRows = 0;
       let otherBundleRows = 0;
       let otherTowerRows = 0;
       let restrictedRowsSeen = 0;
+      let restrictedRowsMatched = 0;
 
       const rowMap = new Map<string, MemberImportRow>();
+      const selectionByMark = new Map<
+        string,
+        { selected: string[]; rejectedTower: string[]; rejectedBundle: string[] }
+      >();
 
       sourceRows.forEach((r) => {
         const markNo = safeString(
@@ -1585,11 +1649,13 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
           return;
         }
 
-        const bundleKey = normaliseBundleKey(bundleReference);
-        if (!requiredBundleKeys.has(bundleKey)) {
-          otherBundleRows += 1;
-          return;
-        }
+        const markKey = markNo.toUpperCase();
+        const trace = selectionByMark.get(markKey) || {
+          selected: [],
+          rejectedTower: [],
+          rejectedBundle: [],
+        };
+        selectionByMark.set(markKey, trace);
 
         const applicableTowerValue = getRowValue(r, [
           "applicable_towers",
@@ -1608,13 +1674,26 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
 
         const applicableTowerKeys = parseApplicableTowerKeys(applicableTowerValue);
 
+        // Tower applicability is authoritative when supplied. Do this BEFORE the
+        // bundle-number check because HumeLink can reuse the same bundle number
+        // for different packages (e.g. a structural 5/7 and a bolts 5/7).
         if (applicableTowerKeys.size > 0) {
           restrictedRowsSeen += 1;
 
           if (!currentTowerMatchesApplicability(currentTowerKeys, applicableTowerKeys)) {
             otherTowerRows += 1;
+            trace.rejectedTower.push(bundleReference);
             return;
           }
+
+          restrictedRowsMatched += 1;
+        }
+
+        const bundleKey = normaliseBundleKey(bundleReference);
+        if (!requiredBundleKeys.has(bundleKey)) {
+          otherBundleRows += 1;
+          trace.rejectedBundle.push(bundleReference);
+          return;
         }
 
         const drawingNumber = safeString(
@@ -1667,49 +1746,46 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
         const qtyText = safeString(qtyValue).trim();
         const qtyNumber = Number(qtyText);
 
-        // qty_per_tower is NOT NULL in Supabase. Do not invent a quantity for
-        // incomplete source rows; exclude them from the import and report them.
         if (qtyText === "" || !Number.isFinite(qtyNumber) || qtyNumber <= 0) {
           missingQtyRows += 1;
           return;
         }
-
-        const qtyPerTower = qtyNumber;
 
         const candidate: MemberImportRow = {
           tower_id: towerId,
           bundle_reference: bundleReference,
           drawing_number: drawingNumber,
           mark_no: markNo,
-          qty_per_tower: qtyPerTower,
+          qty_per_tower: qtyNumber,
           section,
           tower_segment: towerSegmentRaw ? normaliseSection(towerSegmentRaw) : "",
         };
 
-        const key = `${normaliseBundleKey(bundleReference)}__${markNo.trim().toUpperCase()}`;
+        const key = `${bundleKey}__${markKey}`;
         const existing = rowMap.get(key);
 
         if (!existing) {
           rowMap.set(key, candidate);
-          return;
+        } else {
+          rowMap.set(key, {
+            ...existing,
+            drawing_number: existing.drawing_number || candidate.drawing_number,
+            section: existing.section || candidate.section,
+            tower_segment: existing.tower_segment || candidate.tower_segment,
+            qty_per_tower: Math.max(existing.qty_per_tower, candidate.qty_per_tower),
+          });
         }
 
-        rowMap.set(key, {
-          ...existing,
-          drawing_number: existing.drawing_number || candidate.drawing_number,
-          section: existing.section || candidate.section,
-          tower_segment:
-            existing.tower_segment || candidate.tower_segment,
-          qty_per_tower: Math.max(existing.qty_per_tower, candidate.qty_per_tower),
-        });
+        trace.selected.push(bundleReference);
       });
 
       if (restrictedRowsSeen > 0 && currentTowerKeys.size === 0) {
         alert(
           [
-            "This member file contains tower-specific applicability, but TTTracker could not identify the current tower number.",
+            "This file contains tower-specific members, but TTTracker cannot identify the current tower number from this tower record.",
             "",
-            "The importer now checks every tower field and extra_data value. If this still occurs, the tower record itself does not contain a usable tower/structure number.",
+            `Displayed tower: ${getTowerPrintLabel(tower)}`,
+            "The member import has been stopped rather than guessing.",
           ].join("\n"),
         );
         return;
@@ -1718,18 +1794,18 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
       const rows = Array.from(rowMap.values());
 
       if (!rows.length) {
-        const detectedTowerKeys = Array.from(currentTowerKeys).slice(0, 12).join(", ") || "none";
         const requiredBundles = Array.from(requiredBundleKeys).join(", ") || "none";
 
         alert(
           [
             "No applicable member rows were found for this tower.",
             "",
-            `Detected tower identifiers: ${detectedTowerKeys}`,
+            `Tower resolved as: ${currentTowerDisplay}`,
             `Required bundles: ${requiredBundles}`,
             `Source rows read: ${sourceRows.length}`,
-            `Other bundles: ${otherBundleRows}`,
+            `Tower-specific rows matched: ${restrictedRowsMatched}/${restrictedRowsSeen}`,
             `Other towers: ${otherTowerRows}`,
+            `Other bundles: ${otherBundleRows}`,
             `Missing/invalid Qty/Tower: ${missingQtyRows}`,
             `Invalid rows: ${invalidRows}`,
           ].join("\n"),
@@ -1749,14 +1825,28 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
         }
       }
 
-      const { error } = await supabase.from("tower_material_members").upsert(rows, {
-        onConflict: "tower_id,bundle_reference,mark_no",
-      });
+      const { data: savedRows, error } = await supabase
+        .from("tower_material_members")
+        .upsert(rows, {
+          onConflict: "tower_id,bundle_reference,mark_no",
+        })
+        .select("tower_id,bundle_reference,mark_no");
 
       if (error) {
         console.error("member import error", error);
         alert(`Member import failed: ${error.message}`);
         return;
+      }
+
+      // Re-read from Supabase rather than assuming the local payload is what the
+      // UI will see. This catches RLS/conflict/schema issues immediately.
+      const verification = await supabase
+        .from("tower_material_members")
+        .select("bundle_reference,mark_no,drawing_number,section,qty_per_tower,tower_segment")
+        .eq("tower_id", towerId);
+
+      if (verification.error) {
+        console.error("member verification error", verification.error);
       }
 
       await load();
@@ -1765,18 +1855,36 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
         rows.map((row) => normaliseBundleKey(row.bundle_reference)),
       ).size;
 
+      const savedCount = savedRows?.length ?? rows.length;
+      const verifiedCount = verification.data?.length ?? savedCount;
+
+      // Helpful duplicate-mark diagnostic without hard-coding any project/member.
+      const duplicateMarks = Array.from(selectionByMark.entries())
+        .filter(([, trace]) =>
+          trace.selected.length + trace.rejectedTower.length + trace.rejectedBundle.length > 1,
+        )
+        .slice(0, 3)
+        .map(([mark, trace]) => {
+          const selected = Array.from(new Set(trace.selected)).join(", ") || "none";
+          return `${mark}: selected ${selected}`;
+        });
+
       alert(
         [
           "Member import complete.",
           "",
+          `Tower resolved as: ${currentTowerDisplay}`,
           `Source rows read: ${sourceRows.length}`,
-          `Members imported: ${rows.length}`,
+          `Members selected for this tower: ${rows.length}`,
+          `Rows returned by Supabase: ${savedCount}`,
+          `Members now stored on tower: ${verifiedCount}`,
           `Required bundles matched: ${matchedBundleCount}/${requiredBundleKeys.size}`,
+          `Tower-specific rows matched: ${restrictedRowsMatched}/${restrictedRowsSeen}`,
           `Other-tower rows ignored: ${otherTowerRows}`,
           `Other-bundle rows ignored: ${otherBundleRows}`,
           `Missing/invalid Qty/Tower rows ignored: ${missingQtyRows}`,
           `Invalid rows ignored: ${invalidRows}`,
-          `Tower match: ${Array.from(currentTowerKeys).filter((key) => /\d/.test(key)).slice(0, 6).join(", ") || "not detected"}`,
+          ...(duplicateMarks.length ? ["", "Duplicate-mark checks:", ...duplicateMarks] : []),
         ].join("\n"),
       );
     } catch (error) {
