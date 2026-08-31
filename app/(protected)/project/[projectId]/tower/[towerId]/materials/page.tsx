@@ -766,6 +766,62 @@ export default function MaterialsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [towerId]);
 
+  async function fetchAllTowerMembers(): Promise<{ data: DbMemberRow[]; error: unknown | null }> {
+    const pageSize = 1000;
+    const allRows: DbMemberRow[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("tower_material_members")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("section", { ascending: true })
+        .order("bundle_reference", { ascending: true })
+        .order("mark_no", { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) return { data: allRows, error };
+
+      const pageRows = (data || []) as DbMemberRow[];
+      allRows.push(...pageRows);
+
+      if (pageRows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return { data: allRows, error: null };
+  }
+
+  async function fetchAllTowerMemberChecks(): Promise<{
+    data: DbMemberCheckRow[];
+    error: unknown | null;
+  }> {
+    const pageSize = 1000;
+    const allRows: DbMemberCheckRow[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("tower_material_member_checks")
+        .select("*")
+        .eq("tower_id", towerId)
+        .order("bundle_no", { ascending: true })
+        .order("mark_no", { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) return { data: allRows, error };
+
+      const pageRows = (data || []) as DbMemberCheckRow[];
+      allRows.push(...pageRows);
+
+      if (pageRows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return { data: allRows, error: null };
+  }
+
   async function load() {
     setLoading(true);
 
@@ -786,13 +842,7 @@ export default function MaterialsPage() {
         .eq("tower_id", towerId)
         .order("section", { ascending: true })
         .order("bundle_no", { ascending: true }),
-      supabase
-        .from("tower_material_members")
-        .select("*")
-        .eq("tower_id", towerId)
-        .order("section", { ascending: true })
-        .order("bundle_reference", { ascending: true })
-        .order("mark_no", { ascending: true }),
+      fetchAllTowerMembers(),
       supabase
         .from("tower_material_bolts")
         .select("*")
@@ -814,10 +864,7 @@ export default function MaterialsPage() {
         .from("tower_material_bundle_checks")
         .select("*")
         .eq("tower_id", towerId),
-      supabase
-        .from("tower_material_member_checks")
-        .select("*")
-        .eq("tower_id", towerId),
+      fetchAllTowerMemberChecks(),
     ]);
 
     if (towerRes.error) console.error("tower load error", towerRes.error);
@@ -1896,10 +1943,10 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
 
       // Re-read from Supabase rather than assuming the local payload is what the
       // UI will see. This catches RLS/conflict/schema issues immediately.
-      const verification = await supabase
-        .from("tower_material_members")
-        .select("bundle_reference,mark_no,drawing_number,section,qty_per_tower,tower_segment")
-        .eq("tower_id", towerId);
+      // Re-read every member page, not just Supabase's default first 1,000 rows.
+      // This is the same paginated source used by the live page load, so the
+      // verification count now reflects what the search UI can actually see.
+      const verification = await fetchAllTowerMembers();
 
       if (verification.error) {
         console.error("member verification error", verification.error);
