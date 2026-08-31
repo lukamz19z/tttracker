@@ -274,6 +274,7 @@ function normaliseMemberSection(value: string): string {
 
 function normaliseHeader(value: string): string {
   return value
+    .replace(/^\uFEFF/, "")
     .trim()
     .toLowerCase()
     .replace(/[()]/g, "")
@@ -350,6 +351,57 @@ function towerIdentifierTokens(value: unknown): string[] {
   return Array.from(tokens);
 }
 
+function trustedTowerIdentifierTokens(value: unknown): string[] {
+  const tokens = new Set(towerIdentifierTokens(value));
+  const raw = normaliseTowerText(value);
+  if (!raw) return Array.from(tokens);
+
+  // These looser forms are only used for values coming from a field that is
+  // already known to identify a tower (tower_number, tower_no, name, etc.).
+  // This lets values such as "083 VSL", "VSL 083", "T083" and "T-083"
+  // resolve without ever treating unrelated values such as Line = 3 as towers.
+  const patterns = [
+    /^0*(\d{1,5})([A-Z]?)\b/,
+    /\b0*(\d{1,5})([A-Z]?)$/,
+    /^(?:T|TWR|TOWER|STRUCTURE|STR)[-\s:#.]*0*(\d{1,5})([A-Z]?)\b/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match) continue;
+    const suffix = normaliseNumericTowerSuffix(`${match[1]}${match[2] || ""}`);
+    if (suffix) tokens.add(`NO:${suffix}`);
+  }
+
+  return Array.from(tokens);
+}
+
+function collectFullTowerReferences(value: unknown, output: Set<string>) {
+  if (value === null || value === undefined) return;
+
+  if (typeof value === "string" || typeof value === "number") {
+    const tokens = towerIdentifierTokens(value);
+    // Full project references such as 5C3/5C1-083 are safe to discover from
+    // ANY tower field because they are unambiguous. Add the accompanying NO
+    // token too so a full reference can match an applicability suffix.
+    if (tokens.some((token) => token.startsWith("FULL:"))) {
+      tokens.forEach((token) => output.add(token));
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectFullTowerReferences(item, output));
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.values(value as Record<string, unknown>).forEach((nested) =>
+      collectFullTowerReferences(nested, output),
+    );
+  }
+}
+
 function looksLikeTowerIdentifierField(fieldName: string): boolean {
   const key = normaliseHeader(fieldName);
   return (
@@ -391,9 +443,13 @@ function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
   const keys = new Set<string>();
   if (!tower) return keys;
 
-  // Only use fields that can genuinely identify the tower. The previous version
-  // scanned values such as line/progress; on Line 3 that could accidentally make
-  // Tower 083 match an Applicable Towers entry for Tower 003.
+  // First scan the whole tower record for FULL project references only. This
+  // is safe even when a project imported the tower number under an unexpected
+  // column name inside extra_data.
+  collectFullTowerReferences(tower, keys);
+
+  // Then inspect known/semantic tower fields. Because these fields are trusted
+  // tower identifiers, they can also resolve compact labels such as 083 VSL.
   const candidates: unknown[] = [
     tower.tower_number,
     tower.structure_number,
@@ -412,16 +468,16 @@ function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
       return;
     }
 
-    // Some older imports nest the original CSV object under a generic key.
-    // Search nested objects, but still only collect values whose nested key/path
-    // identifies them as tower/structure information.
+    // Older imports can nest the original CSV object under a generic key.
+    // Only values reached through a tower/structure-named nested path are
+    // treated as trusted simple identifiers.
     if (value && typeof value === "object") {
       collectTowerCandidatesFromExtraData(value, key, candidates);
     }
   });
 
   candidates.forEach((candidate) => {
-    towerIdentifierTokens(candidate).forEach((token) => keys.add(token));
+    trustedTowerIdentifierTokens(candidate).forEach((token) => keys.add(token));
   });
 
   return keys;
