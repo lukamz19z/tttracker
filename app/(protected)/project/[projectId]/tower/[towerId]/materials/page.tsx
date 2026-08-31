@@ -182,7 +182,7 @@ type MemberImportRow = {
   bundle_reference: string;
   drawing_number: string;
   mark_no: string;
-  qty_per_tower: number | null;
+  qty_per_tower: number;
   section: string;
   tower_segment: string;
 };
@@ -977,10 +977,7 @@ export default function MaterialsPage() {
         bundle_reference: row.bundle_reference.trim(),
         drawing_number: safeString(row.drawing_number).trim(),
         mark_no: row.mark_no.trim(),
-        qty_per_tower:
-          row.qty_per_tower === null || row.qty_per_tower === undefined
-            ? null
-            : Math.max(safeNumber(row.qty_per_tower, 0), 0),
+        qty_per_tower: Math.max(safeNumber(row.qty_per_tower, 0), 0),
         section: normaliseMemberSection(row.section),
         tower_segment: row.tower_segment.trim()
           ? normaliseSection(row.tower_segment)
@@ -1092,7 +1089,7 @@ export default function MaterialsPage() {
         bundle_reference: "",
         drawing_number: "",
         mark_no: "",
-        qty_per_tower: null,
+        qty_per_tower: 0,
         section: "",
         tower_segment: "",
       },
@@ -1505,6 +1502,7 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
       const currentTowerKeys = getTowerIdentifierKeys(tower);
 
       let invalidRows = 0;
+      let missingQtyRows = 0;
       let otherBundleRows = 0;
       let otherTowerRows = 0;
       let restrictedRowsSeen = 0;
@@ -1624,10 +1622,16 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
         ]);
 
         const qtyText = safeString(qtyValue).trim();
-        const qtyPerTower =
-          qtyText === ""
-            ? null
-            : Math.max(safeNumber(qtyValue, 0), 0);
+        const qtyNumber = Number(qtyText);
+
+        // qty_per_tower is NOT NULL in Supabase. Do not invent a quantity for
+        // incomplete source rows; exclude them from the import and report them.
+        if (qtyText === "" || !Number.isFinite(qtyNumber) || qtyNumber <= 0) {
+          missingQtyRows += 1;
+          return;
+        }
+
+        const qtyPerTower = qtyNumber;
 
         const candidate: MemberImportRow = {
           tower_id: towerId,
@@ -1653,12 +1657,7 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
           section: existing.section || candidate.section,
           tower_segment:
             existing.tower_segment || candidate.tower_segment,
-          qty_per_tower:
-            existing.qty_per_tower === null
-              ? candidate.qty_per_tower
-              : candidate.qty_per_tower === null
-                ? existing.qty_per_tower
-                : Math.max(existing.qty_per_tower, candidate.qty_per_tower),
+          qty_per_tower: Math.max(existing.qty_per_tower, candidate.qty_per_tower),
         });
       });
 
@@ -1673,7 +1672,7 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
 
       if (!rows.length) {
         alert(
-          `No applicable member rows were found for this tower.\n\nRead: ${sourceRows.length}\nOther bundles: ${otherBundleRows}\nOther towers: ${otherTowerRows}\nInvalid rows: ${invalidRows}`,
+          `No applicable member rows were found for this tower.\n\nRead: ${sourceRows.length}\nOther bundles: ${otherBundleRows}\nOther towers: ${otherTowerRows}\nMissing/invalid Qty/Tower: ${missingQtyRows}\nInvalid rows: ${invalidRows}`,
         );
         return;
       }
@@ -1715,6 +1714,7 @@ const { error } = await supabase.from("tower_required_bundles").upsert(rows, {
           `Required bundles matched: ${matchedBundleCount}/${requiredBundleKeys.size}`,
           `Other-tower rows ignored: ${otherTowerRows}`,
           `Other-bundle rows ignored: ${otherBundleRows}`,
+          `Missing/invalid Qty/Tower rows ignored: ${missingQtyRows}`,
           `Invalid rows ignored: ${invalidRows}`,
         ].join("\n"),
       );
