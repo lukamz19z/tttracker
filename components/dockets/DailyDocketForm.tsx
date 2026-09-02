@@ -89,6 +89,8 @@ type MaterialEventItemDraft = {
   material_kind: "registered" | "manual";
   manual_category: string;
   search_query: string;
+  search_loading: boolean;
+  search_results: MaterialCatalogItem[];
   item_reference: string;
   item_description: string;
   quantity: string;
@@ -820,6 +822,8 @@ function blankMaterialItem(): MaterialEventItemDraft {
     material_kind: "registered",
     manual_category: "",
     search_query: "",
+    search_loading: false,
+    search_results: [],
     item_reference: "",
     item_description: "",
     quantity: "1",
@@ -1333,6 +1337,8 @@ export default function DailyDocketForm({
                     ? toStringValue(item.item_description).split(" · ")[0] || ""
                     : "",
                 search_query: "",
+                search_loading: false,
+                search_results: [],
                 item_reference: toStringValue(item.item_reference),
                 item_description: toStringValue(item.item_description),
                 quantity: toStringValue(item.quantity || 1),
@@ -2287,12 +2293,170 @@ export default function DailyDocketForm({
     );
   }
 
+  async function searchProjectMaterial(
+    eventIndex: number,
+    itemIndex: number,
+    query: string
+  ) {
+    const trimmed = query.trim();
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      search_query: query,
+      material_kind: "registered",
+      search_loading: trimmed.length >= 2,
+      search_results: trimmed.length >= 2 ? [] : [],
+    });
+
+    if (trimmed.length < 2) return;
+
+    const event = materialEvents[eventIndex];
+    if (!event) return;
+
+    const searchTowerId =
+      event.event_type === "taken_from_another_tower"
+        ? event.source_tower_id
+        : towerId;
+
+    if (!searchTowerId) {
+      updateMaterialItem(eventIndex, itemIndex, {
+        search_loading: false,
+        search_results: [],
+      });
+      return;
+    }
+
+    // Keep the search scoped to the relevant tower and query live material registers.
+    // This avoids depending on a large project-wide preload and mirrors the existing
+    // tower-linked material data model.
+    const safe = trimmed.replace(/[,%()]/g, " ").trim();
+    const pattern = `%${safe}%`;
+
+    const [membersRes, boltsRes, bundlesRes] = await Promise.all([
+      supabase
+        .from("tower_material_members")
+        .select(
+          "id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section"
+        )
+        .eq("tower_id", searchTowerId)
+        .or(
+          [
+            `mark_no.ilike.${pattern}`,
+            `pn_final.ilike.${pattern}`,
+            `bundle_reference.ilike.${pattern}`,
+            `drawing_number.ilike.${pattern}`,
+            `section.ilike.${pattern}`,
+          ].join(",")
+        )
+        .limit(20),
+      supabase
+        .from("tower_material_bolts")
+        .select("id, tower_id, tower_segment, bolt_diameter, dn_sn, length, qty")
+        .eq("tower_id", searchTowerId)
+        .or(
+          [
+            `bolt_diameter.ilike.${pattern}`,
+            `dn_sn.ilike.${pattern}`,
+            `length.ilike.${pattern}`,
+            `tower_segment.ilike.${pattern}`,
+          ].join(",")
+        )
+        .limit(12),
+      supabase
+        .from("tower_required_bundles")
+        .select("id, tower_id, bundle_no, section, qty_required, total_weight, member_qty")
+        .eq("tower_id", searchTowerId)
+        .or([`bundle_no.ilike.${pattern}`, `section.ilike.${pattern}`].join(","))
+        .limit(12),
+    ]);
+
+    const results: MaterialCatalogItem[] = [];
+
+    if (!membersRes.error) {
+      for (const row of membersRes.data || []) {
+        results.push({
+          source_table: "tower_material_members",
+          source_record_id: String(row.id),
+          tower_id: String(row.tower_id),
+          item_reference: String(
+            row.mark_no || row.pn_final || row.bundle_reference || "Member"
+          ),
+          item_description: [
+            row.drawing_number ? `Drawing ${row.drawing_number}` : "",
+            row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
+            row.section ? `Section ${row.section}` : "",
+            row.pn_final ? `Profile ${row.pn_final}` : "",
+            row.qty_per_tower != null ? `Qty/Tower ${row.qty_per_tower}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          unit: "ea",
+        });
+      }
+    }
+
+    if (!boltsRes.error) {
+      for (const row of boltsRes.data || []) {
+        results.push({
+          source_table: "tower_material_bolts",
+          source_record_id: String(row.id),
+          tower_id: String(row.tower_id),
+          item_reference:
+            [row.bolt_diameter, row.length, row.dn_sn].filter(Boolean).join(" ") ||
+            "Bolt",
+          item_description: [
+            row.tower_segment ? `Section ${row.tower_segment}` : "",
+            row.qty != null ? `Qty ${row.qty}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          unit: "ea",
+        });
+      }
+    }
+
+    if (!bundlesRes.error) {
+      for (const row of bundlesRes.data || []) {
+        results.push({
+          source_table: "tower_required_bundles",
+          source_record_id: String(row.id),
+          tower_id: String(row.tower_id),
+          item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
+          item_description: [
+            row.section ? `Section ${row.section}` : "",
+            row.qty_required != null ? `Required ${row.qty_required}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          unit: "bundle",
+        });
+      }
+    }
+
+    const searchError =
+      membersRes.error?.message || boltsRes.error?.message || bundlesRes.error?.message;
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      search_loading: false,
+      search_results: results,
+      item_description:
+        results.length === 0 && searchError
+          ? `Search error: ${searchError}`
+          : "",
+    });
+  }
+
   function chooseCatalogItem(
     eventIndex: number,
     itemIndex: number,
     catalogKey: string
   ) {
-    const catalogItem = materialCatalog.find(
+    const currentEvent = materialEvents[eventIndex];
+    const currentItem = currentEvent?.items[itemIndex];
+
+    const catalogItem = [
+      ...(currentItem?.search_results || []),
+      ...materialCatalog,
+    ].find(
       (item) => `${item.source_table}:${item.source_record_id}` === catalogKey
     );
 
@@ -2315,6 +2479,8 @@ export default function DailyDocketForm({
       material_kind: "registered",
       manual_category: "",
       search_query: catalogItem.item_reference,
+      search_loading: false,
+      search_results: [],
       item_reference: catalogItem.item_reference,
       item_description: catalogItem.item_description,
       unit: catalogItem.unit,
@@ -4421,12 +4587,13 @@ export default function DailyDocketForm({
                                 className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                                 value={item.search_query}
                                 disabled={locked || isView}
-                                placeholder="e.g. M1278, 23-04, M20x60..."
+                                placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
                                 onChange={(e) =>
-                                  updateMaterialItem(eventIndex, itemIndex, {
-                                    search_query: e.target.value,
-                                    material_kind: "registered",
-                                  })
+                                  void searchProjectMaterial(
+                                    eventIndex,
+                                    itemIndex,
+                                    e.target.value
+                                  )
                                 }
                               />
 
@@ -4435,16 +4602,14 @@ export default function DailyDocketForm({
                                 item.search_query.trim().length > 0 &&
                                 item.material_kind !== "manual" && (
                                   <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-                                    {availableCatalog
-                                      .filter((catalogItem) => {
-                                        const q = item.search_query.trim().toLowerCase();
-                                        return (
-                                          catalogItem.item_reference.toLowerCase().includes(q) ||
-                                          catalogItem.item_description.toLowerCase().includes(q)
-                                        );
-                                      })
-                                      .slice(0, 12)
-                                      .map((catalogItem) => (
+                                    {item.search_loading && (
+                                      <div className="p-3 text-sm text-slate-500">
+                                        Searching project material...
+                                      </div>
+                                    )}
+
+                                    {!item.search_loading &&
+                                      item.search_results.slice(0, 20).map((catalogItem) => (
                                         <button
                                           type="button"
                                           key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
@@ -4468,17 +4633,14 @@ export default function DailyDocketForm({
                                         </button>
                                       ))}
 
-                                    {availableCatalog.filter((catalogItem) => {
-                                      const q = item.search_query.trim().toLowerCase();
-                                      return (
-                                        catalogItem.item_reference.toLowerCase().includes(q) ||
-                                        catalogItem.item_description.toLowerCase().includes(q)
-                                      );
-                                    }).length === 0 && (
-                                      <div className="p-3 text-sm text-slate-500">
-                                        No registered material matched this search.
-                                      </div>
-                                    )}
+                                    {!item.search_loading &&
+                                      item.search_results.length === 0 && (
+                                        <div className="p-3 text-sm text-slate-500">
+                                          {item.item_description.startsWith("Search error:")
+                                            ? item.item_description
+                                            : "No registered member, bundle or bolt matched this search."}
+                                        </div>
+                                      )}
                                   </div>
                                 )}
 
@@ -4491,6 +4653,8 @@ export default function DailyDocketForm({
                                       source_table: "",
                                       source_record_id: "",
                                       search_query: "",
+                                      search_loading: false,
+                                      search_results: [],
                                       item_reference: "",
                                       item_description: "",
                                     })
@@ -4939,15 +5103,6 @@ export default function DailyDocketForm({
                     className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3"
                   >
                     {event.items.map((item, itemIndex) => {
-                      const q = item.search_query.trim().toLowerCase();
-                      const availableCatalog = materialCatalog.filter(
-                        (catalogItem) =>
-                          catalogItem.tower_id === towerId &&
-                          (!q ||
-                            catalogItem.item_reference.toLowerCase().includes(q) ||
-                            catalogItem.item_description.toLowerCase().includes(q))
-                      );
-
                       return (
                         <div
                           key={item.ui_id}
@@ -4974,29 +5129,45 @@ export default function DailyDocketForm({
                               item.search_query.trim() &&
                               item.material_kind !== "manual" && (
                                 <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border bg-white">
-                                  {availableCatalog.slice(0, 10).map((catalogItem) => (
-                                    <button
-                                      type="button"
-                                      key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
-                                      onClick={() =>
-                                        chooseCatalogItem(
-                                          eventIndex,
-                                          itemIndex,
-                                          `${catalogItem.source_table}:${catalogItem.source_record_id}`
-                                        )
-                                      }
-                                      className="block w-full border-b px-3 py-2 text-left text-sm hover:bg-emerald-50 last:border-b-0"
-                                    >
-                                      <span className="font-semibold">
-                                        {catalogItem.item_reference}
-                                      </span>
-                                      {catalogItem.item_description && (
-                                        <span className="text-slate-500">
-                                          {" — "}{catalogItem.item_description}
+                                  {item.search_loading && (
+                                    <div className="p-3 text-sm text-slate-500">
+                                      Searching project material...
+                                    </div>
+                                  )}
+
+                                  {!item.search_loading &&
+                                    item.search_results.slice(0, 20).map((catalogItem) => (
+                                      <button
+                                        type="button"
+                                        key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                        onClick={() =>
+                                          chooseCatalogItem(
+                                            eventIndex,
+                                            itemIndex,
+                                            `${catalogItem.source_table}:${catalogItem.source_record_id}`
+                                          )
+                                        }
+                                        className="block w-full border-b px-3 py-2 text-left text-sm hover:bg-emerald-50 last:border-b-0"
+                                      >
+                                        <span className="font-semibold">
+                                          {catalogItem.item_reference}
                                         </span>
-                                      )}
-                                    </button>
-                                  ))}
+                                        {catalogItem.item_description && (
+                                          <span className="text-slate-500">
+                                            {" — "}{catalogItem.item_description}
+                                          </span>
+                                        )}
+                                      </button>
+                                    ))}
+
+                                  {!item.search_loading &&
+                                    item.search_results.length === 0 && (
+                                      <div className="p-3 text-sm text-slate-500">
+                                        {item.item_description.startsWith("Search error:")
+                                          ? item.item_description
+                                          : "No registered member, bundle or bolt matched this search."}
+                                      </div>
+                                    )}
                                 </div>
                               )}
 
