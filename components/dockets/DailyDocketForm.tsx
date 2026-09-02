@@ -4476,33 +4476,38 @@ export default function DailyDocketForm({
                 );
 
                 return (
-                  <div key={event.ui_id} className="rounded-2xl border border-amber-200 bg-white p-4 space-y-4">
+                  <div
+                    key={event.ui_id}
+                    className="rounded-2xl border border-amber-200 bg-white p-4 md:p-5 space-y-5 shadow-sm"
+                  >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="grid md:grid-cols-[minmax(220px,360px)_1fr] gap-3 flex-1">
-                        <div>
-                          <label className="block text-sm font-medium mb-1">What happened?</label>
-                          <select
-                            className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                            value={event.event_type}
-                            disabled={locked || isView}
-                            onChange={(e) =>
-                              updateMaterialEvent(
-                                eventIndex,
-                                "event_type",
-                                e.target.value as MaterialEventType
-                              )
-                            }
-                          >
-                            <option value="missing">Missing material</option>
-                            <option value="found_received">Found / Received</option>
-                            <option value="taken_from_another_tower">Taken from another tower</option>
-                            <option value="sent_to_another_tower">Sent to another tower</option>
-                            <option value="damaged_incorrect">Damaged / Incorrect</option>
-                          </select>
-                        </div>
+                      <div className="flex-1">
+                        <div className="grid md:grid-cols-[minmax(240px,420px)_1fr] gap-3 items-end">
+                          <div>
+                            <label className="block text-sm font-semibold text-slate-900 mb-1">
+                              What happened?
+                            </label>
+                            <select
+                              className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                              value={event.event_type}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(
+                                  eventIndex,
+                                  "event_type",
+                                  e.target.value as MaterialEventType
+                                )
+                              }
+                            >
+                              <option value="missing">Missing material</option>
+                              <option value="found_received">Found / Received</option>
+                              <option value="taken_from_another_tower">Taken from another tower</option>
+                              <option value="sent_to_another_tower">Sent to another tower</option>
+                              <option value="damaged_incorrect">Damaged / Incorrect</option>
+                            </select>
+                          </div>
 
-                        <div className="flex items-end">
-                          <div className="text-sm font-semibold text-amber-800">
+                          <div className="pb-2 text-sm font-semibold text-amber-800">
                             {materialEventLabel(event.event_type)}
                           </div>
                         </div>
@@ -4512,7 +4517,7 @@ export default function DailyDocketForm({
                         <button
                           type="button"
                           onClick={() => removeMaterialEvent(eventIndex)}
-                          className="border px-3 py-2 rounded-lg hover:bg-slate-50"
+                          className="border border-red-200 text-red-700 px-3 py-2 rounded-xl hover:bg-red-50 text-sm font-semibold"
                         >
                           Remove
                         </button>
@@ -4524,9 +4529,9 @@ export default function DailyDocketForm({
                       <div className="grid md:grid-cols-2 gap-3">
                         {event.event_type === "taken_from_another_tower" && (
                           <div>
-                            <label className="block text-sm font-medium mb-1">Taken from tower</label>
+                            <label className="block text-sm font-semibold mb-1">Taken from tower</label>
                             <select
-                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                               value={event.source_tower_id}
                               disabled={locked || isView}
                               onChange={(e) =>
@@ -4545,9 +4550,9 @@ export default function DailyDocketForm({
 
                         {event.event_type === "sent_to_another_tower" && (
                           <div>
-                            <label className="block text-sm font-medium mb-1">Sent to tower</label>
+                            <label className="block text-sm font-semibold mb-1">Sent to tower</label>
                             <select
-                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                               value={event.destination_tower_id}
                               disabled={locked || isView}
                               onChange={(e) =>
@@ -4566,8 +4571,14 @@ export default function DailyDocketForm({
                       </div>
                     )}
 
-                    <div className="space-y-3">
-                      <div className="text-sm font-semibold text-slate-900">What material?</div>
+                    <div className="border-t border-slate-200 pt-4 space-y-4">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">What material?</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Search the live tower material register, or add an unlisted item.
+                        </div>
+                      </div>
+
                       {event.items.map((item, itemIndex) => {
                         const catalogValue =
                           item.source_table && item.source_record_id
@@ -4577,74 +4588,139 @@ export default function DailyDocketForm({
                         return (
                           <div
                             key={item.ui_id}
-                            className="grid md:grid-cols-[1.6fr_1fr_110px_100px_auto] gap-2 items-end"
+                            className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 md:p-4 space-y-3"
                           >
-                            <div className="relative">
-                              <label className="block text-sm font-medium mb-1">
-                                Search member / bundle / bolt
-                              </label>
-                              <input
-                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={item.search_query}
-                                disabled={locked || isView}
-                                placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
-                                onChange={(e) =>
-                                  void searchProjectMaterial(
-                                    eventIndex,
-                                    itemIndex,
-                                    e.target.value
-                                  )
-                                }
-                              />
+                            <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
+                              <div className="relative">
+                                <label className="block text-sm font-semibold mb-1">
+                                  Search member / bundle / bolt
+                                </label>
+                                <input
+                                  className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                  value={item.search_query}
+                                  disabled={locked || isView}
+                                  placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
+                                  onChange={(e) =>
+                                    void searchProjectMaterial(
+                                      eventIndex,
+                                      itemIndex,
+                                      e.target.value
+                                    )
+                                  }
+                                />
 
-                              {!locked &&
-                                !isView &&
-                                item.search_query.trim().length > 0 &&
-                                item.material_kind !== "manual" && (
-                                  <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-                                    {item.search_loading && (
-                                      <div className="p-3 text-sm text-slate-500">
-                                        Searching project material...
-                                      </div>
-                                    )}
-
-                                    {!item.search_loading &&
-                                      item.search_results.slice(0, 20).map((catalogItem) => (
-                                        <button
-                                          type="button"
-                                          key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
-                                          onClick={() =>
-                                            chooseCatalogItem(
-                                              eventIndex,
-                                              itemIndex,
-                                              `${catalogItem.source_table}:${catalogItem.source_record_id}`
-                                            )
-                                          }
-                                          className="block w-full border-b border-slate-100 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50"
-                                        >
-                                          <div className="text-sm font-semibold text-slate-900">
-                                            {catalogItem.item_reference}
-                                          </div>
-                                          {catalogItem.item_description && (
-                                            <div className="text-xs text-slate-500">
-                                              {catalogItem.item_description}
-                                            </div>
-                                          )}
-                                        </button>
-                                      ))}
-
-                                    {!item.search_loading &&
-                                      item.search_results.length === 0 && (
+                                {!locked &&
+                                  !isView &&
+                                  item.search_query.trim().length > 0 &&
+                                  item.material_kind !== "manual" && (
+                                    <div className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                                      {item.search_loading && (
                                         <div className="p-3 text-sm text-slate-500">
-                                          {item.item_description.startsWith("Search error:")
-                                            ? item.item_description
-                                            : "No registered member, bundle or bolt matched this search."}
+                                          Searching project material...
                                         </div>
                                       )}
-                                  </div>
-                                )}
+
+                                      {!item.search_loading &&
+                                        item.search_results.slice(0, 20).map((catalogItem) => (
+                                          <button
+                                            type="button"
+                                            key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                            onClick={() =>
+                                              chooseCatalogItem(
+                                                eventIndex,
+                                                itemIndex,
+                                                `${catalogItem.source_table}:${catalogItem.source_record_id}`
+                                              )
+                                            }
+                                            className="block w-full border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-blue-50"
+                                          >
+                                            <div className="text-sm font-semibold text-slate-900">
+                                              {catalogItem.item_reference}
+                                            </div>
+                                            {catalogItem.item_description && (
+                                              <div className="text-xs text-slate-500 mt-0.5">
+                                                {catalogItem.item_description}
+                                              </div>
+                                            )}
+                                          </button>
+                                        ))}
+
+                                      {!item.search_loading &&
+                                        item.search_results.length === 0 && (
+                                          <div className="p-3 text-sm text-slate-500">
+                                            {item.item_description.startsWith("Search error:")
+                                              ? item.item_description
+                                              : "No registered member, bundle or bolt matched this search."}
+                                          </div>
+                                        )}
+                                    </div>
+                                  )}
+                              </div>
+
+                              {item.material_kind === "manual" ? (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <Input
+                                    label="Item type"
+                                    value={item.manual_category}
+                                    onChange={(v) =>
+                                      updateMaterialItem(eventIndex, itemIndex, { manual_category: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  <Input
+                                    label="Item"
+                                    value={item.item_reference}
+                                    onChange={(v) =>
+                                      updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                </div>
+                              ) : (
+                                <Input
+                                  label="Selected item"
+                                  value={item.item_reference}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      item_reference: v,
+                                    })
+                                  }
+                                  disabled={locked || isView || Boolean(item.source_record_id)}
+                                />
+                              )}
+
+                              <Input
+                                label="Qty"
+                                type="number"
+                                value={item.quantity}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, { quantity: v })
+                                }
+                                disabled={locked || isView}
+                              />
+
+                              <Input
+                                label="Unit"
+                                value={item.unit}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, { unit: v })
+                                }
+                                disabled={locked || isView}
+                              />
 
                               {!locked && !isView && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeMaterialItem(eventIndex, itemIndex)}
+                                  className="border px-3 py-2.5 rounded-xl bg-white text-sm hover:bg-slate-50"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+
+                            {!locked && !isView && (
+                              <div className="flex items-center gap-3 flex-wrap">
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -4659,401 +4735,342 @@ export default function DailyDocketForm({
                                       item_description: "",
                                     })
                                   }
-                                  className="mt-2 text-xs font-semibold text-blue-700"
+                                  className="text-xs font-semibold text-blue-700"
                                 >
                                   + Add an unlisted item (mesh clips, loose hardware, etc.)
                                 </button>
-                              )}
-                            </div>
 
-                            {item.material_kind === "manual" ? (
-                              <div className="grid grid-cols-2 gap-2">
-                                <Input
-                                  label="Item type"
-                                  value={item.manual_category}
-                                  onChange={(v) =>
-                                    updateMaterialItem(eventIndex, itemIndex, { manual_category: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                <Input
-                                  label="Item"
-                                  value={item.item_reference}
-                                  onChange={(v) =>
-                                    updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
+                                <button
+                                  type="button"
+                                  onClick={() => addMaterialItem(eventIndex)}
+                                  className="text-xs font-semibold text-blue-700"
+                                >
+                                  + Add another item
+                                </button>
                               </div>
-                            ) : (
-                              <Input
-                                label="Selected item"
-                                value={item.item_reference}
-                                onChange={(v) =>
-                                  updateMaterialItem(eventIndex, itemIndex, {
-                                    item_reference: v,
-                                  })
-                                }
-                                disabled={locked || isView || Boolean(item.source_record_id)}
-                              />
-                            )}
-
-                            <Input
-                              label="Qty"
-                              type="number"
-                              value={item.quantity}
-                              onChange={(v) =>
-                                updateMaterialItem(eventIndex, itemIndex, { quantity: v })
-                              }
-                              disabled={locked || isView}
-                            />
-
-                            <Input
-                              label="Unit"
-                              value={item.unit}
-                              onChange={(v) =>
-                                updateMaterialItem(eventIndex, itemIndex, { unit: v })
-                              }
-                              disabled={locked || isView}
-                            />
-
-                            {!locked && !isView && (
-                              <button
-                                type="button"
-                                onClick={() => removeMaterialItem(eventIndex, itemIndex)}
-                                className="border px-3 py-2 rounded-lg"
-                              >
-                                Remove
-                              </button>
                             )}
                           </div>
                         );
                       })}
-
-                      {!locked && !isView && (
-                        <button
-                          type="button"
-                          onClick={() => addMaterialItem(eventIndex)}
-                          className="text-sm font-semibold text-blue-700"
-                        >
-                          + Add another item
-                        </button>
-                      )}
                     </div>
 
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium mb-2">Did this affect the work?</label>
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            disabled={locked || isView}
-                            onClick={() => updateMaterialEvent(eventIndex, "affected_work", false)}
-                            className={`px-4 py-2 rounded-xl border font-semibold ${
-                              !event.affected_work
-                                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                                : "bg-white border-slate-300"
-                            }`}
-                          >
-                            No
-                          </button>
-                          <button
-                            type="button"
-                            disabled={locked || isView}
-                            onClick={() => updateMaterialEvent(eventIndex, "affected_work", true)}
-                            className={`px-4 py-2 rounded-xl border font-semibold ${
-                              event.affected_work
-                                ? "bg-red-50 border-red-300 text-red-800"
-                                : "bg-white border-slate-300"
-                            }`}
-                          >
-                            Yes
-                          </button>
-                        </div>
-                      </div>
-
-                      {event.affected_work && (
-                        <>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-sm font-medium mb-1">What were you trying to do?</label>
-                              <select
-                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={event.affected_activity}
-                                disabled={locked || isView}
-                                onChange={(e) =>
-                                  updateMaterialEvent(eventIndex, "affected_activity", e.target.value)
-                                }
-                              >
-                                <option value="">Select...</option>
-                                <option value="Assembly">Assembly</option>
-                                <option value="Erection">Erection</option>
-                                <option value="Bolting">Bolting</option>
-                                <option value="Fit-off">Fit-off</option>
-                                <option value="Other">Other</option>
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="block text-sm font-medium mb-1">What section was affected?</label>
-                              <select
-                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={event.affected_section}
-                                disabled={locked || isView}
-                                onChange={(e) =>
-                                  updateMaterialEvent(eventIndex, "affected_section", e.target.value)
-                                }
-                              >
-                                <option value="">Select section...</option>
-                                {visibleProgressRows.map((row) => (
-                                  <option key={row.section_label} value={row.section_label}>
-                                    {row.section_label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-sm font-medium mb-1">What happened to the planned work?</label>
-                              <select
-                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={event.work_outcome}
-                                disabled={locked || isView}
-                                onChange={(e) =>
-                                  updateMaterialEvent(
-                                    eventIndex,
-                                    "work_outcome",
-                                    e.target.value as MaterialWorkOutcome
-                                  )
-                                }
-                              >
-                                <option value="">Select...</option>
-                                <option value="stopped_work">Couldn’t continue</option>
-                                <option value="slowed_down">Could continue but slower</option>
-                                <option value="changed_sequence">Moved onto another section / task</option>
-                                <option value="minor_impact">No meaningful effect</option>
-                              </select>
-                            </div>
-
-                            {event.work_outcome === "changed_sequence" ? (
-                              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-                                No delay start/finish is required because the crew resequenced the works. Record what they moved onto below and any personnel/plant time spent searching or verifying material.
-                              </div>
-                            ) : (
-                              <div className="grid grid-cols-2 gap-2">
-                                <Input
-                                  label="Impact started"
-                                  type="time"
-                                  value={event.impact_start_time}
-                                  onChange={(v) =>
-                                    updateMaterialEvent(eventIndex, "impact_start_time", v)
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                <Input
-                                  label="Impact finished"
-                                  type="time"
-                                  value={event.impact_finish_time}
-                                  onChange={(v) =>
-                                    updateMaterialEvent(eventIndex, "impact_finish_time", v)
-                                  }
-                                  disabled={locked || isView || event.impact_ongoing}
-                                />
-                              </div>
-                            )}
-                          </div>
-
-                          {event.work_outcome !== "changed_sequence" && (
-                            <label className="inline-flex items-center gap-2 text-sm font-medium">
-                              <input
-                                type="checkbox"
-                                checked={event.impact_ongoing}
-                                disabled={locked || isView}
-                                onChange={(e) =>
-                                  updateMaterialEvent(eventIndex, "impact_ongoing", e.target.checked)
-                                }
-                              />
-                              Still affecting the tower / work is ongoing
-                            </label>
-                          )}
-
-                          <div className="space-y-2">
-                            <div className="text-sm font-semibold">Who spent time searching / checking?</div>
-                            <div className="flex flex-wrap gap-2">
-                              {availableWorkerNames.map((name) => {
-                                const selected = event.people.some(
-                                  (person) => normalizeWorkerName(person.employee_name) === normalizeWorkerName(name)
-                                );
-                                return (
-                                  <button
-                                    key={`${event.ui_id}-person-${name}`}
-                                    type="button"
-                                    disabled={locked || isView || selected}
-                                    onClick={() => addMaterialPerson(eventIndex, name)}
-                                    className={`rounded-full border px-3 py-2 text-sm ${
-                                      selected
-                                        ? "bg-blue-600 text-white border-blue-600"
-                                        : "bg-white border-slate-300"
-                                    }`}
-                                  >
-                                    {selected ? "✓ " : "+ "}{name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {event.people.map((person, personIndex) => (
-                              <div
-                                key={person.ui_id}
-                                className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
-                              >
-                                <div className="text-sm font-medium py-2">{person.employee_name}</div>
-                                <Input
-                                  label="Started"
-                                  type="time"
-                                  value={person.started_at}
-                                  onChange={(v) =>
-                                    updateMaterialPerson(eventIndex, personIndex, { started_at: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                <Input
-                                  label="Finished"
-                                  type="time"
-                                  value={person.finished_at}
-                                  onChange={(v) =>
-                                    updateMaterialPerson(eventIndex, personIndex, { finished_at: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                {!locked && !isView && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeMaterialPerson(eventIndex, personIndex)}
-                                    className="border px-3 py-2 rounded-lg"
-                                  >
-                                    Remove
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="space-y-2">
-                            <div className="text-sm font-semibold">Was any plant tied up?</div>
-                            <div className="flex flex-wrap gap-2">
-                              {availablePlantNames.map((name) => {
-                                const selected = event.plant.some(
-                                  (row) => normalizeWorkerName(row.plant_name) === normalizeWorkerName(name)
-                                );
-                                return (
-                                  <button
-                                    key={`${event.ui_id}-event-plant-${name}`}
-                                    type="button"
-                                    disabled={locked || isView || selected}
-                                    onClick={() => addMaterialPlant(eventIndex, name)}
-                                    className={`rounded-full border px-3 py-2 text-sm ${
-                                      selected
-                                        ? "bg-purple-700 text-white border-purple-700"
-                                        : "bg-white border-slate-300"
-                                    }`}
-                                  >
-                                    {selected ? "✓ " : "+ "}{name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {event.plant.map((row, plantIndex) => (
-                              <div
-                                key={row.ui_id}
-                                className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
-                              >
-                                <div className="text-sm font-medium py-2">{row.plant_name}</div>
-                                <Input
-                                  label="Started"
-                                  type="time"
-                                  value={row.started_at}
-                                  onChange={(v) =>
-                                    updateMaterialPlant(eventIndex, plantIndex, { started_at: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                <Input
-                                  label="Finished"
-                                  type="time"
-                                  value={row.finished_at}
-                                  onChange={(v) =>
-                                    updateMaterialPlant(eventIndex, plantIndex, { finished_at: v })
-                                  }
-                                  disabled={locked || isView}
-                                />
-                                {!locked && !isView && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeMaterialPlant(eventIndex, plantIndex)}
-                                    className="border px-3 py-2 rounded-lg"
-                                  >
-                                    Remove
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-
-                          <div>
-                            <div className="text-sm font-semibold mb-2">What did you do instead / to reduce the impact?</div>
-                            <div className="flex flex-wrap gap-2">
-                              {[
-                                "Moved personnel to another activity",
-                                "Assembled another section",
-                                "Checked other bundles",
-                                "Resequenced planned work",
-                                "Assisted client to locate / verify material",
-                              ].map((action) => {
-                                const checked = event.mitigation_actions.includes(action);
-                                return (
-                                  <button
-                                    type="button"
-                                    key={`${event.ui_id}-${action}`}
-                                    disabled={locked || isView}
-                                    onClick={() => toggleMitigation(eventIndex, action)}
-                                    className={`rounded-full border px-3 py-2 text-sm ${
-                                      checked
-                                        ? "bg-emerald-700 text-white border-emerald-700"
-                                        : "bg-white border-slate-300"
-                                    }`}
-                                  >
-                                    {checked ? "✓ " : ""}{action}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium mb-1">What is happening now?</label>
-                            <select
-                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                              value={event.current_effect}
+                    <div className="border-t border-slate-200 pt-4">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+                        <div>
+                          <label className="block text-sm font-semibold mb-2">Did this affect the work?</label>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
                               disabled={locked || isView}
-                              onChange={(e) =>
-                                updateMaterialEvent(eventIndex, "current_effect", e.target.value)
-                              }
+                              onClick={() => updateMaterialEvent(eventIndex, "affected_work", false)}
+                              className={`px-4 py-2 rounded-xl border font-semibold ${
+                                !event.affected_work
+                                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                  : "bg-white border-slate-300"
+                              }`}
                             >
-                              <option value="">Select...</option>
-                              <option value="Waiting for material">Waiting for material</option>
-                              <option value="Erection stopped">Erection stopped</option>
-                              <option value="Working on another section">Working on another section</option>
-                              <option value="Resolved">Resolved</option>
-                              <option value="Unknown / awaiting confirmation">Unknown / awaiting confirmation</option>
-                            </select>
+                              No
+                            </button>
+                            <button
+                              type="button"
+                              disabled={locked || isView}
+                              onClick={() => updateMaterialEvent(eventIndex, "affected_work", true)}
+                              className={`px-4 py-2 rounded-xl border font-semibold ${
+                                event.affected_work
+                                  ? "bg-red-50 border-red-300 text-red-800"
+                                  : "bg-white border-slate-300"
+                              }`}
+                            >
+                              Yes
+                            </button>
                           </div>
-                        </>
-                      )}
+                        </div>
 
+                        {event.affected_work && (
+                          <>
+                            <div className="grid md:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-sm font-semibold mb-1">What were you trying to do?</label>
+                                <select
+                                  className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                  value={event.affected_activity}
+                                  disabled={locked || isView}
+                                  onChange={(e) =>
+                                    updateMaterialEvent(eventIndex, "affected_activity", e.target.value)
+                                  }
+                                >
+                                  <option value="">Select...</option>
+                                  <option value="Assembly">Assembly</option>
+                                  <option value="Erection">Erection</option>
+                                  <option value="Bolting">Bolting</option>
+                                  <option value="Fit-off">Fit-off</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-semibold mb-1">What section was affected?</label>
+                                <select
+                                  className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                  value={event.affected_section}
+                                  disabled={locked || isView}
+                                  onChange={(e) =>
+                                    updateMaterialEvent(eventIndex, "affected_section", e.target.value)
+                                  }
+                                >
+                                  <option value="">Select section...</option>
+                                  {visibleProgressRows.map((row) => (
+                                    <option key={row.section_label} value={row.section_label}>
+                                      {row.section_label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-sm font-semibold mb-1">What happened to the planned work?</label>
+                                <select
+                                  className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                  value={event.work_outcome}
+                                  disabled={locked || isView}
+                                  onChange={(e) =>
+                                    updateMaterialEvent(
+                                      eventIndex,
+                                      "work_outcome",
+                                      e.target.value as MaterialWorkOutcome
+                                    )
+                                  }
+                                >
+                                  <option value="">Select...</option>
+                                  <option value="stopped_work">Couldn’t continue</option>
+                                  <option value="slowed_down">Could continue but slower</option>
+                                  <option value="changed_sequence">Moved onto another section / task</option>
+                                  <option value="minor_impact">No meaningful effect</option>
+                                </select>
+                              </div>
+
+                              {event.work_outcome === "changed_sequence" ? (
+                                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 self-end">
+                                  No delay start/finish is required because the crew resequenced the works.
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <Input
+                                    label="Impact started"
+                                    type="time"
+                                    value={event.impact_start_time}
+                                    onChange={(v) =>
+                                      updateMaterialEvent(eventIndex, "impact_start_time", v)
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  <Input
+                                    label="Impact finished"
+                                    type="time"
+                                    value={event.impact_finish_time}
+                                    onChange={(v) =>
+                                      updateMaterialEvent(eventIndex, "impact_finish_time", v)
+                                    }
+                                    disabled={locked || isView || event.impact_ongoing}
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {event.work_outcome !== "changed_sequence" && (
+                              <label className="inline-flex items-center gap-2 text-sm font-medium">
+                                <input
+                                  type="checkbox"
+                                  checked={event.impact_ongoing}
+                                  disabled={locked || isView}
+                                  onChange={(e) =>
+                                    updateMaterialEvent(eventIndex, "impact_ongoing", e.target.checked)
+                                  }
+                                />
+                                Still affecting the tower / work is ongoing
+                              </label>
+                            )}
+
+                            <div className="space-y-2">
+                              <div className="text-sm font-semibold">Who spent time searching / checking?</div>
+                              <div className="flex flex-wrap gap-2">
+                                {availableWorkerNames.map((name) => {
+                                  const selected = event.people.some(
+                                    (person) => normalizeWorkerName(person.employee_name) === normalizeWorkerName(name)
+                                  );
+                                  return (
+                                    <button
+                                      key={`${event.ui_id}-person-${name}`}
+                                      type="button"
+                                      disabled={locked || isView || selected}
+                                      onClick={() => addMaterialPerson(eventIndex, name)}
+                                      className={`rounded-full border px-3 py-2 text-sm ${
+                                        selected
+                                          ? "bg-blue-600 text-white border-blue-600"
+                                          : "bg-white border-slate-300"
+                                      }`}
+                                    >
+                                      {selected ? "✓ " : "+ "}{name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {event.people.map((person, personIndex) => (
+                                <div
+                                  key={person.ui_id}
+                                  className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
+                                >
+                                  <div className="text-sm font-medium py-2">{person.employee_name}</div>
+                                  <Input
+                                    label="Started"
+                                    type="time"
+                                    value={person.started_at}
+                                    onChange={(v) =>
+                                      updateMaterialPerson(eventIndex, personIndex, { started_at: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  <Input
+                                    label="Finished"
+                                    type="time"
+                                    value={person.finished_at}
+                                    onChange={(v) =>
+                                      updateMaterialPerson(eventIndex, personIndex, { finished_at: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  {!locked && !isView && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMaterialPerson(eventIndex, personIndex)}
+                                      className="border px-3 py-2 rounded-lg"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="space-y-2">
+                              <div className="text-sm font-semibold">Was any plant tied up?</div>
+                              <div className="flex flex-wrap gap-2">
+                                {availablePlantNames.map((name) => {
+                                  const selected = event.plant.some(
+                                    (row) => normalizeWorkerName(row.plant_name) === normalizeWorkerName(name)
+                                  );
+                                  return (
+                                    <button
+                                      key={`${event.ui_id}-event-plant-${name}`}
+                                      type="button"
+                                      disabled={locked || isView || selected}
+                                      onClick={() => addMaterialPlant(eventIndex, name)}
+                                      className={`rounded-full border px-3 py-2 text-sm ${
+                                        selected
+                                          ? "bg-purple-700 text-white border-purple-700"
+                                          : "bg-white border-slate-300"
+                                      }`}
+                                    >
+                                      {selected ? "✓ " : "+ "}{name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {event.plant.map((row, plantIndex) => (
+                                <div
+                                  key={row.ui_id}
+                                  className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
+                                >
+                                  <div className="text-sm font-medium py-2">{row.plant_name}</div>
+                                  <Input
+                                    label="Started"
+                                    type="time"
+                                    value={row.started_at}
+                                    onChange={(v) =>
+                                      updateMaterialPlant(eventIndex, plantIndex, { started_at: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  <Input
+                                    label="Finished"
+                                    type="time"
+                                    value={row.finished_at}
+                                    onChange={(v) =>
+                                      updateMaterialPlant(eventIndex, plantIndex, { finished_at: v })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  {!locked && !isView && (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMaterialPlant(eventIndex, plantIndex)}
+                                      className="border px-3 py-2 rounded-lg"
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+
+                            <div>
+                              <div className="text-sm font-semibold mb-2">What did you do instead / to reduce the impact?</div>
+                              <div className="flex flex-wrap gap-2">
+                                {[
+                                  "Moved personnel to another activity",
+                                  "Assembled another section",
+                                  "Checked other bundles",
+                                  "Resequenced planned work",
+                                  "Assisted client to locate / verify material",
+                                ].map((action) => {
+                                  const checked = event.mitigation_actions.includes(action);
+                                  return (
+                                    <button
+                                      type="button"
+                                      key={`${event.ui_id}-${action}`}
+                                      disabled={locked || isView}
+                                      onClick={() => toggleMitigation(eventIndex, action)}
+                                      className={`rounded-full border px-3 py-2 text-sm ${
+                                        checked
+                                          ? "bg-emerald-700 text-white border-emerald-700"
+                                          : "bg-white border-slate-300"
+                                      }`}
+                                    >
+                                      {checked ? "✓ " : ""}{action}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-sm font-semibold mb-1">What is happening now?</label>
+                              <select
+                                className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                value={event.current_effect}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateMaterialEvent(eventIndex, "current_effect", e.target.value)
+                                }
+                              >
+                                <option value="">Select...</option>
+                                <option value="Waiting for material">Waiting for material</option>
+                                <option value="Erection stopped">Erection stopped</option>
+                                <option value="Working on another section">Working on another section</option>
+                                <option value="Resolved">Resolved</option>
+                                <option value="Unknown / awaiting confirmation">Unknown / awaiting confirmation</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-4">
                       <Input
                         label="Extra notes"
                         value={event.notes}
