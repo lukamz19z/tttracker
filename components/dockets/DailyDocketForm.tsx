@@ -86,6 +86,8 @@ type MaterialEventItemDraft = {
   ui_id: string;
   source_table: string;
   source_record_id: string;
+  material_kind: "registered" | "manual";
+  manual_category: string;
   item_reference: string;
   item_description: string;
   quantity: string;
@@ -128,6 +130,27 @@ type MaterialCatalogItem = {
 type TowerOption = {
   id: string;
   name: string;
+};
+
+type MobilisationStatus =
+  | "planning"
+  | "packing"
+  | "demobilising"
+  | "in_transit"
+  | "mobilising"
+  | "setup"
+  | "complete";
+
+type MobilisationDraft = {
+  enabled: boolean;
+  from_tower_id: string;
+  to_tower_id: string;
+  status: MobilisationStatus;
+  percent_complete: string;
+  started_date: string;
+  target_move_date: string;
+  completed_date: string;
+  notes: string;
 };
 
 type DbDelayRow = {
@@ -793,6 +816,8 @@ function blankMaterialItem(): MaterialEventItemDraft {
     ui_id: makeUiId(),
     source_table: "",
     source_record_id: "",
+    material_kind: "registered",
+    manual_category: "",
     item_reference: "",
     item_description: "",
     quantity: "1",
@@ -946,6 +971,17 @@ export default function DailyDocketForm({
   const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
+  const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
+    enabled: false,
+    from_tower_id: "",
+    to_tower_id: towerId,
+    status: "planning",
+    percent_complete: "0",
+    started_date: "",
+    target_move_date: "",
+    completed_date: "",
+    notes: "",
+  });
 
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
     initialProgressRows && initialProgressRows.length > 0
@@ -1158,7 +1194,41 @@ export default function DailyDocketForm({
         setOtherDelayHours(toStringValue(initialDocket.other_delay_hours));
         setOtherDelayReason(toStringValue(initialDocket.other_delay_reason));
         setMissingItemsBolts(toStringValue(initialDocket.missing_items_bolts));
-        setDelaysComments(toStringValue(initialDocket.delays_comments));
+        const initialDelayComments = toStringValue(initialDocket.delays_comments);
+        setDelaysComments(
+          initialDelayComments
+            .split("\n")
+            .filter((line) => !line.startsWith("MOBILISATION|"))
+            .join("\n")
+        );
+
+        const mobilisationLine = initialDelayComments
+          .split("\n")
+          .find((line) => line.startsWith("MOBILISATION|"));
+
+        if (mobilisationLine) {
+          const values = Object.fromEntries(
+            mobilisationLine
+              .split("|")
+              .slice(1)
+              .map((part) => {
+                const [key, ...rest] = part.split("=");
+                return [key, rest.join("=")];
+              })
+          );
+
+          setMobilisation({
+            enabled: true,
+            from_tower_id: values.from || "",
+            to_tower_id: values.to || towerId,
+            status: (values.status || "planning") as MobilisationStatus,
+            percent_complete: values.progress || "0",
+            started_date: values.started || "",
+            target_move_date: values.target || "",
+            completed_date: values.completed || "",
+            notes: values.notes || "",
+          });
+        }
 
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
         setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
@@ -1254,6 +1324,12 @@ export default function DailyDocketForm({
                 ui_id: makeUiId(),
                 source_table: toStringValue(item.source_table),
                 source_record_id: toStringValue(item.source_record_id),
+                material_kind:
+                  item.source_table || item.source_record_id ? "registered" : "manual",
+                manual_category:
+                  !item.source_table && !item.source_record_id
+                    ? toStringValue(item.item_description).split(" · ")[0] || ""
+                    : "",
                 item_reference: toStringValue(item.item_reference),
                 item_description: toStringValue(item.item_description),
                 quantity: toStringValue(item.quantity || 1),
@@ -2056,7 +2132,14 @@ export default function DailyDocketForm({
       toolbox_delay_hours: Number(toolboxDelayHours || delaySummaryByType.toolbox || 0),
       other_delay_hours: Number(otherDelayHours || delaySummaryByType.other || 0),
       other_delay_reason: otherDelayReason,
-      delays_comments: delaysComments,
+      delays_comments: [
+        delaysComments.trim(),
+        mobilisation.enabled
+          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
       missing_items_bolts:
         materialEvents
           .filter((event) => event.event_type === "missing")
@@ -2207,6 +2290,8 @@ export default function DailyDocketForm({
       updateMaterialItem(eventIndex, itemIndex, {
         source_table: "",
         source_record_id: "",
+        material_kind: "manual",
+        manual_category: "",
         item_reference: "",
         item_description: "",
         unit: "ea",
@@ -2217,6 +2302,8 @@ export default function DailyDocketForm({
     updateMaterialItem(eventIndex, itemIndex, {
       source_table: catalogItem.source_table,
       source_record_id: catalogItem.source_record_id,
+      material_kind: "registered",
+      manual_category: "",
       item_reference: catalogItem.item_reference,
       item_description: catalogItem.item_description,
       unit: catalogItem.unit,
@@ -2407,11 +2494,14 @@ export default function DailyDocketForm({
           work_outcome: event.affected_work ? event.work_outcome || null : null,
           affected_activity: event.affected_work ? event.affected_activity || null : null,
           affected_section: event.affected_work ? event.affected_section || null : null,
-          impact_started_at: event.affected_work
-            ? combineDocketDateTime(docketDate, event.impact_start_time)
-            : null,
+          impact_started_at:
+            event.affected_work && event.work_outcome !== "changed_sequence"
+              ? combineDocketDateTime(docketDate, event.impact_start_time)
+              : null,
           impact_finished_at:
-            event.affected_work && !event.impact_ongoing
+            event.affected_work &&
+            event.work_outcome !== "changed_sequence" &&
+            !event.impact_ongoing
               ? combineDocketDateTime(docketDate, event.impact_finish_time)
               : null,
           impact_ongoing: event.affected_work ? event.impact_ongoing : false,
@@ -2437,7 +2527,10 @@ export default function DailyDocketForm({
           source_table: item.source_table || null,
           source_record_id: item.source_record_id || null,
           item_reference: item.item_reference.trim(),
-          item_description: item.item_description || null,
+          item_description:
+            item.material_kind === "manual"
+              ? [item.manual_category, item.item_description].filter(Boolean).join(" · ") || null
+              : item.item_description || null,
           quantity: Number(item.quantity || 1),
           unit: item.unit || null,
         }))
@@ -3041,6 +3134,17 @@ export default function DailyDocketForm({
 
       setDelayRows([]);
       setMaterialEvents([]);
+      setMobilisation({
+        enabled: false,
+        from_tower_id: "",
+        to_tower_id: towerId,
+        status: "planning",
+        percent_complete: "0",
+        started_date: "",
+        target_move_date: "",
+        completed_date: "",
+        notes: "",
+      });
 
       if (progress && progress.length > 0) {
         setProgressRows(
@@ -3869,6 +3973,155 @@ export default function DailyDocketForm({
         </section>
       )}
 
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Mobilisation Progress</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Track a move over multiple days so the next docket continues from the same mobilisation rather than treating it as a one-day delay.
+            </p>
+          </div>
+
+          <label className="inline-flex items-center gap-2 text-sm font-semibold">
+            <input
+              type="checkbox"
+              checked={mobilisation.enabled}
+              disabled={locked || isView}
+              onChange={(e) =>
+                setMobilisation((prev) => ({ ...prev, enabled: e.target.checked }))
+              }
+            />
+            Crew is mobilising / demobilising
+          </label>
+        </div>
+
+        {mobilisation.enabled && (
+          <div className="space-y-4">
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">Moving from tower</label>
+                <select
+                  className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                  value={mobilisation.from_tower_id}
+                  disabled={locked || isView}
+                  onChange={(e) =>
+                    setMobilisation((prev) => ({
+                      ...prev,
+                      from_tower_id: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Project / laydown / other location</option>
+                  {projectTowers.map((tower) => (
+                    <option key={tower.id} value={tower.id}>
+                      {tower.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Moving to tower</label>
+                <select
+                  className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                  value={mobilisation.to_tower_id}
+                  disabled={locked || isView}
+                  onChange={(e) =>
+                    setMobilisation((prev) => ({
+                      ...prev,
+                      to_tower_id: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Select destination...</option>
+                  {projectTowers.map((tower) => (
+                    <option key={tower.id} value={tower.id}>
+                      {tower.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">Current stage</label>
+                <select
+                  className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                  value={mobilisation.status}
+                  disabled={locked || isView}
+                  onChange={(e) =>
+                    setMobilisation((prev) => ({
+                      ...prev,
+                      status: e.target.value as MobilisationStatus,
+                    }))
+                  }
+                >
+                  <option value="planning">Planning / preparing</option>
+                  <option value="packing">Packing / breaking down</option>
+                  <option value="demobilising">Demobilising current tower</option>
+                  <option value="in_transit">Moving between towers</option>
+                  <option value="mobilising">Mobilising destination tower</option>
+                  <option value="setup">Setting up / readying workfront</option>
+                  <option value="complete">Complete / ready to work</option>
+                </select>
+              </div>
+
+              <Input
+                label="Progress %"
+                type="number"
+                value={mobilisation.percent_complete}
+                onChange={(v) =>
+                  setMobilisation((prev) => ({ ...prev, percent_complete: v }))
+                }
+                disabled={locked || isView}
+              />
+
+              <Input
+                label="Started"
+                type="date"
+                value={mobilisation.started_date}
+                onChange={(v) =>
+                  setMobilisation((prev) => ({ ...prev, started_date: v }))
+                }
+                disabled={locked || isView}
+              />
+
+              <Input
+                label="Target move / ready date"
+                type="date"
+                value={mobilisation.target_move_date}
+                onChange={(v) =>
+                  setMobilisation((prev) => ({ ...prev, target_move_date: v }))
+                }
+                disabled={locked || isView}
+              />
+            </div>
+
+            {mobilisation.status === "complete" && (
+              <Input
+                label="Completed"
+                type="date"
+                value={mobilisation.completed_date}
+                onChange={(v) =>
+                  setMobilisation((prev) => ({ ...prev, completed_date: v }))
+                }
+                disabled={locked || isView}
+              />
+            )}
+
+            <Input
+              label="Mobilisation notes"
+              value={mobilisation.notes}
+              onChange={(v) =>
+                setMobilisation((prev) => ({ ...prev, notes: v }))
+              }
+              disabled={locked || isView}
+            />
+          </div>
+        )}
+      </section>
+
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
@@ -4186,14 +4439,27 @@ export default function DailyDocketForm({
                             className="grid md:grid-cols-[1.6fr_1fr_110px_100px_auto] gap-2 items-end"
                           >
                             <div>
-                              <label className="block text-sm font-medium mb-1">Search project material</label>
+                              <label className="block text-sm font-medium mb-1">Material source</label>
                               <select
                                 className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={catalogValue}
+                                value={item.material_kind === "manual" ? "__manual__" : catalogValue}
                                 disabled={locked || isView}
-                                onChange={(e) => chooseCatalogItem(eventIndex, itemIndex, e.target.value)}
+                                onChange={(e) => {
+                                  if (e.target.value === "__manual__") {
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      material_kind: "manual",
+                                      source_table: "",
+                                      source_record_id: "",
+                                      item_reference: "",
+                                      item_description: "",
+                                    });
+                                  } else {
+                                    chooseCatalogItem(eventIndex, itemIndex, e.target.value);
+                                  }
+                                }}
                               >
-                                <option value="">Manual / other material...</option>
+                                <option value="">Select project material...</option>
+                                <option value="__manual__">Other / unidentified item...</option>
                                 {availableCatalog.map((catalogItem) => (
                                   <option
                                     key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
@@ -4206,18 +4472,39 @@ export default function DailyDocketForm({
                               </select>
                             </div>
 
-                            <Input
-                              label="Reference / Description"
-                              value={item.item_reference}
-                              onChange={(v) =>
-                                updateMaterialItem(eventIndex, itemIndex, {
-                                  item_reference: v,
-                                  source_table: item.source_table,
-                                  source_record_id: item.source_record_id,
-                                })
-                              }
-                              disabled={locked || isView}
-                            />
+                            {item.material_kind === "manual" ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input
+                                  label="Item type"
+                                  value={item.manual_category}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, { manual_category: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Item"
+                                  value={item.item_reference}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                              </div>
+                            ) : (
+                              <Input
+                                label="Reference / Description"
+                                value={item.item_reference}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, {
+                                    item_reference: v,
+                                    source_table: item.source_table,
+                                    source_record_id: item.source_record_id,
+                                  })
+                                }
+                                disabled={locked || isView}
+                              />
+                            )}
 
                             <Input
                               label="Qty"
@@ -4358,39 +4645,47 @@ export default function DailyDocketForm({
                               </select>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <Input
-                                label="Impact started"
-                                type="time"
-                                value={event.impact_start_time}
-                                onChange={(v) =>
-                                  updateMaterialEvent(eventIndex, "impact_start_time", v)
-                                }
-                                disabled={locked || isView}
-                              />
-                              <Input
-                                label="Impact finished"
-                                type="time"
-                                value={event.impact_finish_time}
-                                onChange={(v) =>
-                                  updateMaterialEvent(eventIndex, "impact_finish_time", v)
-                                }
-                                disabled={locked || isView || event.impact_ongoing}
-                              />
-                            </div>
+                            {event.work_outcome === "changed_sequence" ? (
+                              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                                No delay start/finish is required because the crew resequenced the works. Record what they moved onto below and any personnel/plant time spent searching or verifying material.
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input
+                                  label="Impact started"
+                                  type="time"
+                                  value={event.impact_start_time}
+                                  onChange={(v) =>
+                                    updateMaterialEvent(eventIndex, "impact_start_time", v)
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Impact finished"
+                                  type="time"
+                                  value={event.impact_finish_time}
+                                  onChange={(v) =>
+                                    updateMaterialEvent(eventIndex, "impact_finish_time", v)
+                                  }
+                                  disabled={locked || isView || event.impact_ongoing}
+                                />
+                              </div>
+                            )}
                           </div>
 
-                          <label className="inline-flex items-center gap-2 text-sm font-medium">
-                            <input
-                              type="checkbox"
-                              checked={event.impact_ongoing}
-                              disabled={locked || isView}
-                              onChange={(e) =>
-                                updateMaterialEvent(eventIndex, "impact_ongoing", e.target.checked)
-                              }
-                            />
-                            Still affecting the tower / work is ongoing
-                          </label>
+                          {event.work_outcome !== "changed_sequence" && (
+                            <label className="inline-flex items-center gap-2 text-sm font-medium">
+                              <input
+                                type="checkbox"
+                                checked={event.impact_ongoing}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateMaterialEvent(eventIndex, "impact_ongoing", e.target.checked)
+                                }
+                              />
+                              Still affecting the tower / work is ongoing
+                            </label>
+                          )}
 
                           <div className="space-y-2">
                             <div className="text-sm font-semibold">Who spent time searching / checking?</div>
