@@ -18,10 +18,19 @@ export type SharePointDriveItem = {
   id: string;
   name: string;
   webUrl?: string;
+  parentReference?: {
+    driveId?: string;
+    id?: string;
+    path?: string;
+  };
 };
 
 type GraphDriveList = {
   value: SharePointDrive[];
+};
+
+type GraphDriveItemList = {
+  value: SharePointDriveItem[];
 };
 
 function getRequiredEnv(name: string) {
@@ -32,6 +41,10 @@ function getRequiredEnv(name: string) {
   }
 
   return value;
+}
+
+function graphUrl(path: string) {
+  return `${GRAPH_BASE_URL}${path}`;
 }
 
 export async function getGraphAccessToken() {
@@ -62,7 +75,7 @@ export async function graphRequest<T>(
 ): Promise<T> {
   const token = await getGraphAccessToken();
 
-  const response = await fetch(`${GRAPH_BASE_URL}${path}`, {
+  const response = await fetch(graphUrl(path), {
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -153,6 +166,134 @@ export async function createDriveFolder({
       "@microsoft.graph.conflictBehavior": "fail",
     }),
   });
+}
+
+export async function listDriveChildren({
+  driveId,
+  parentItemId,
+}: {
+  driveId: string;
+  parentItemId: string;
+}) {
+  return graphRequest<GraphDriveItemList>(
+    `/drives/${encodeURIComponent(
+      driveId,
+    )}/items/${encodeURIComponent(
+      parentItemId,
+    )}/children?$select=id,name,webUrl,parentReference`,
+  );
+}
+
+export async function getDriveChildByName({
+  driveId,
+  parentItemId,
+  name,
+}: {
+  driveId: string;
+  parentItemId: string;
+  name: string;
+}) {
+  const children = await listDriveChildren({
+    driveId,
+    parentItemId,
+  });
+
+  return (
+    children.value.find(
+      (item) =>
+        item.name.trim().toLowerCase() ===
+        name.trim().toLowerCase(),
+    ) ?? null
+  );
+}
+
+export async function ensureDriveFolder({
+  driveId,
+  parentItemId,
+  name,
+}: {
+  driveId: string;
+  parentItemId: string;
+  name: string;
+}) {
+  const existing = await getDriveChildByName({
+    driveId,
+    parentItemId,
+    name,
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    return await createDriveFolder({
+      driveId,
+      parentItemId,
+      name,
+    });
+  } catch (error) {
+    const afterConflict = await getDriveChildByName({
+      driveId,
+      parentItemId,
+      name,
+    });
+
+    if (afterConflict) {
+      return afterConflict;
+    }
+
+    throw error;
+  }
+}
+
+export async function uploadDriveItemContent({
+  driveId,
+  parentItemId,
+  fileName,
+  content,
+  contentType = "application/pdf",
+}: {
+  driveId: string;
+  parentItemId: string;
+  fileName: string;
+  content: Uint8Array | ArrayBuffer;
+  contentType?: string;
+}) {
+  const token = await getGraphAccessToken();
+  const encodedFileName = encodeURIComponent(fileName);
+
+  const response = await fetch(
+    graphUrl(
+      `/drives/${encodeURIComponent(
+        driveId,
+      )}/items/${encodeURIComponent(
+        parentItemId,
+      )}:/${encodedFileName}:/content`,
+    ),
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": contentType,
+      },
+      body:
+        content instanceof ArrayBuffer
+          ? content
+          : Buffer.from(content),
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+
+    throw new Error(
+      `Microsoft Graph file upload failed (${response.status} ${response.statusText}): ${responseBody}`,
+    );
+  }
+
+  return (await response.json()) as SharePointDriveItem;
 }
 
 export async function renameDriveItem({

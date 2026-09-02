@@ -58,9 +58,9 @@ type DbMemberRow = {
   bundle_reference: string;
   drawing_number: string | null;
   mark_no: string;
-  pn_final: string | null;
   qty_per_tower: number | null;
   section: string | null;
+  tower_segment: string | null;
 };
 
 type Member = {
@@ -69,9 +69,9 @@ type Member = {
   bundle_reference: string;
   drawing_number: string;
   mark_no: string;
-  pn_final: string;
   qty_per_tower: number;
   section: string;
+  tower_segment: string;
 };
 
 type DbBoltRow = {
@@ -344,12 +344,131 @@ function percentage(part: number, total: number): number {
   return Math.min((part / total) * 100, 100);
 }
 
+const MATERIAL_PAGE_SIZE = 1000;
+
+async function fetchAllTowerMembers(
+  towerId: string,
+): Promise<DbMemberRow[]> {
+  const allRows: DbMemberRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tower_material_members")
+      .select("*")
+      .eq("tower_id", towerId)
+      .order("tower_segment", { ascending: true })
+      .order("bundle_reference", { ascending: true })
+      .order("mark_no", { ascending: true })
+      .range(from, from + MATERIAL_PAGE_SIZE - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data ?? []) as DbMemberRow[];
+    allRows.push(...rows);
+
+    if (rows.length < MATERIAL_PAGE_SIZE) {
+      break;
+    }
+
+    from += MATERIAL_PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+async function fetchAllTowerBolts(
+  towerId: string,
+): Promise<DbBoltRow[]> {
+  const allRows: DbBoltRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tower_material_bolts")
+      .select("*")
+      .eq("tower_id", towerId)
+      .order("tower_segment", { ascending: true })
+      .order("bolt_diameter", { ascending: true })
+      .order("length", { ascending: true })
+      .range(from, from + MATERIAL_PAGE_SIZE - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data ?? []) as DbBoltRow[];
+    allRows.push(...rows);
+
+    if (rows.length < MATERIAL_PAGE_SIZE) {
+      break;
+    }
+
+    from += MATERIAL_PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+async function fetchAllMemberChecks(
+  towerId: string,
+): Promise<DbMemberCheckRow[]> {
+  const allRows: DbMemberCheckRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tower_material_member_checks")
+      .select("*")
+      .eq("tower_id", towerId)
+      .order("bundle_no", { ascending: true })
+      .order("mark_no", { ascending: true })
+      .range(from, from + MATERIAL_PAGE_SIZE - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data ?? []) as DbMemberCheckRow[];
+    allRows.push(...rows);
+
+    if (rows.length < MATERIAL_PAGE_SIZE) {
+      break;
+    }
+
+    from += MATERIAL_PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error
+  ) {
+    return safeString(
+      (error as { message?: unknown }).message,
+      "Unknown error",
+    );
+  }
+
+  return safeString(error, "Unknown error");
+}
+
 /* =========================================================
    PAGE
 ========================================================= */
 
 export default function MaterialsScreen() {
-  // UI VERSION: MATERIALS-GLOBAL-PROJECT-2026-07-12
+  // UI VERSION: MATERIALS-PAGINATED-COMPACT-2026-08-31
   const { profile } = useAuth();
 
   const selectedProjectId = profile?.projectId ?? "";
@@ -478,164 +597,148 @@ export default function MaterialsScreen() {
         setLoadingMaterials(true);
       }
 
-      const [
-        bundlesResponse,
-        membersResponse,
-        boltsResponse,
-        deliveriesResponse,
-        bundleChecksResponse,
-        memberChecksResponse,
-      ] = await Promise.all([
-        supabase
-          .from("tower_required_bundles")
-          .select("*")
-          .eq("tower_id", towerId)
-          .order("section", { ascending: true })
-          .order("bundle_no", { ascending: true }),
+      try {
+        const [
+          bundlesResponse,
+          memberRows,
+          boltRows,
+          deliveriesResponse,
+          bundleChecksResponse,
+          memberCheckRows,
+        ] = await Promise.all([
+          supabase
+            .from("tower_required_bundles")
+            .select("*")
+            .eq("tower_id", towerId)
+            .order("section", { ascending: true })
+            .order("bundle_no", { ascending: true }),
 
-        supabase
-          .from("tower_material_members")
-          .select("*")
-          .eq("tower_id", towerId)
-          .order("section", { ascending: true })
-          .order("bundle_reference", { ascending: true })
-          .order("mark_no", { ascending: true }),
+          fetchAllTowerMembers(towerId),
 
-        supabase
-          .from("tower_material_bolts")
-          .select("*")
-          .eq("tower_id", towerId)
-          .order("tower_segment", { ascending: true })
-          .order("bolt_diameter", { ascending: true })
-          .order("length", { ascending: true }),
+          fetchAllTowerBolts(towerId),
 
-        supabase
-          .from("tower_bundle_deliveries")
-          .select("tower_bundle_delivery_items(*)")
-          .eq("tower_id", towerId),
+          supabase
+            .from("tower_bundle_deliveries")
+            .select("tower_bundle_delivery_items(*)")
+            .eq("tower_id", towerId),
 
-        supabase
-          .from("tower_material_bundle_checks")
-          .select("*")
-          .eq("tower_id", towerId),
+          supabase
+            .from("tower_material_bundle_checks")
+            .select("*")
+            .eq("tower_id", towerId),
 
-        supabase
-          .from("tower_material_member_checks")
-          .select("*")
-          .eq("tower_id", towerId),
-      ]);
+          fetchAllMemberChecks(towerId),
+        ]);
 
-      const firstError =
-        bundlesResponse.error ||
-        membersResponse.error ||
-        boltsResponse.error ||
-        deliveriesResponse.error ||
-        bundleChecksResponse.error ||
-        memberChecksResponse.error;
+        const firstError =
+          bundlesResponse.error ||
+          deliveriesResponse.error ||
+          bundleChecksResponse.error;
 
-      if (firstError) {
-        console.error("Materials load error:", firstError);
-        Alert.alert("Could not load materials", firstError.message);
+        if (firstError) {
+          throw firstError;
+        }
 
+        const loadedBundles: Bundle[] = (
+          (bundlesResponse.data ?? []) as DbBundleRow[]
+        ).map((row) => ({
+          id: row.id,
+          tower_id: row.tower_id,
+          bundle_no: safeString(row.bundle_no),
+          section: normaliseSection(
+            safeString(row.section, "General"),
+          ),
+          qty_required: Math.max(
+            safeNumber(row.qty_required, 0),
+            0,
+          ),
+          member_qty: Math.max(
+            safeNumber(row.member_qty, 0),
+            0,
+          ),
+          total_weight:
+            row.total_weight === null ||
+            row.total_weight === undefined
+              ? null
+              : safeNumber(row.total_weight, 0),
+        }));
+
+        const loadedMembers: Member[] = memberRows.map((row) => ({
+          id: row.id,
+          tower_id: row.tower_id,
+          bundle_reference: safeString(row.bundle_reference),
+          drawing_number: safeString(row.drawing_number),
+          mark_no: safeString(row.mark_no),
+          qty_per_tower: Math.max(
+            safeNumber(row.qty_per_tower, 0),
+            0,
+          ),
+          section:
+            safeString(row.section, "General").trim() || "General",
+          tower_segment: normaliseSection(
+            safeString(row.tower_segment) ||
+              safeString(row.section, "General"),
+          ),
+        }));
+
+        const loadedBolts: Bolt[] = boltRows.map((row) => ({
+          id: row.id,
+          tower_id: row.tower_id,
+          tower_segment: normaliseSection(
+            safeString(row.tower_segment, "General"),
+          ),
+          bolt_diameter: normaliseBoltDiameter(
+            safeString(row.bolt_diameter),
+          ),
+          dn_sn: safeString(row.dn_sn),
+          length: safeString(row.length),
+          qty: Math.max(safeNumber(row.qty, 0), 0),
+        }));
+
+        const loadedBundleChecks: BundleCheck[] = (
+          (bundleChecksResponse.data ?? []) as DbBundleCheckRow[]
+        ).map((row) => ({
+          id: row.id,
+          tower_id: row.tower_id,
+          bundle_no: safeString(row.bundle_no),
+          status: row.status ?? "not_checked",
+          notes: safeString(row.notes),
+          checked_by: safeString(row.checked_by),
+          checked_at: row.checked_at,
+          qty_received: Math.max(
+            safeNumber(row.qty_received, 0),
+            0,
+          ),
+        }));
+
+        const loadedMemberChecks: MemberCheck[] =
+          memberCheckRows.map((row) => ({
+            id: row.id,
+            tower_id: row.tower_id,
+            bundle_no: safeString(row.bundle_no),
+            mark_no: safeString(row.mark_no),
+            status: row.status ?? "not_checked",
+            notes: safeString(row.notes),
+            checked_by: safeString(row.checked_by),
+            checked_at: row.checked_at,
+          }));
+
+        setBundles(loadedBundles);
+        setMembers(loadedMembers);
+        setBolts(loadedBolts);
+        setDeliveries(
+          (deliveriesResponse.data ?? []) as Delivery[],
+        );
+        setBundleChecks(loadedBundleChecks);
+        setMemberChecks(loadedMemberChecks);
+      } catch (error) {
+        const message = getErrorMessage(error);
+        console.error("Materials load error:", error);
+        Alert.alert("Could not load materials", message);
+      } finally {
         if (!silent) {
           setLoadingMaterials(false);
         }
-
-        return;
-      }
-
-      const loadedBundles: Bundle[] = (
-        (bundlesResponse.data ?? []) as DbBundleRow[]
-      ).map((row) => ({
-        id: row.id,
-        tower_id: row.tower_id,
-        bundle_no: safeString(row.bundle_no),
-        section: normaliseSection(
-          safeString(row.section, "General"),
-        ),
-        qty_required: Math.max(safeNumber(row.qty_required, 0), 0),
-        member_qty: Math.max(safeNumber(row.member_qty, 0), 0),
-        total_weight:
-          row.total_weight === null ||
-          row.total_weight === undefined
-            ? null
-            : safeNumber(row.total_weight, 0),
-      }));
-
-      const loadedMembers: Member[] = (
-        (membersResponse.data ?? []) as DbMemberRow[]
-      ).map((row) => ({
-        id: row.id,
-        tower_id: row.tower_id,
-        bundle_reference: safeString(row.bundle_reference),
-        drawing_number: safeString(row.drawing_number),
-        mark_no: safeString(row.mark_no),
-        pn_final: safeString(row.pn_final),
-        qty_per_tower: Math.max(
-          safeNumber(row.qty_per_tower, 0),
-          0,
-        ),
-        section: normaliseSection(
-          safeString(row.section, "General"),
-        ),
-      }));
-
-      const loadedBolts: Bolt[] = (
-        (boltsResponse.data ?? []) as DbBoltRow[]
-      ).map((row) => ({
-        id: row.id,
-        tower_id: row.tower_id,
-        tower_segment: normaliseSection(
-          safeString(row.tower_segment, "General"),
-        ),
-        bolt_diameter: normaliseBoltDiameter(
-          safeString(row.bolt_diameter),
-        ),
-        dn_sn: safeString(row.dn_sn),
-        length: safeString(row.length),
-        qty: Math.max(safeNumber(row.qty, 0), 0),
-      }));
-
-      const loadedBundleChecks: BundleCheck[] = (
-        (bundleChecksResponse.data ?? []) as DbBundleCheckRow[]
-      ).map((row) => ({
-        id: row.id,
-        tower_id: row.tower_id,
-        bundle_no: safeString(row.bundle_no),
-        status: row.status ?? "not_checked",
-        notes: safeString(row.notes),
-        checked_by: safeString(row.checked_by),
-        checked_at: row.checked_at,
-        qty_received: Math.max(
-          safeNumber(row.qty_received, 0),
-          0,
-        ),
-      }));
-
-      const loadedMemberChecks: MemberCheck[] = (
-        (memberChecksResponse.data ?? []) as DbMemberCheckRow[]
-      ).map((row) => ({
-        id: row.id,
-        tower_id: row.tower_id,
-        bundle_no: safeString(row.bundle_no),
-        mark_no: safeString(row.mark_no),
-        status: row.status ?? "not_checked",
-        notes: safeString(row.notes),
-        checked_by: safeString(row.checked_by),
-        checked_at: row.checked_at,
-      }));
-
-      setBundles(loadedBundles);
-      setMembers(loadedMembers);
-      setBolts(loadedBolts);
-      setDeliveries(
-        (deliveriesResponse.data ?? []) as Delivery[],
-      );
-      setBundleChecks(loadedBundleChecks);
-      setMemberChecks(loadedMemberChecks);
-
-      if (!silent) {
-        setLoadingMaterials(false);
       }
     },
     [],
@@ -843,12 +946,14 @@ export default function MaterialsScreen() {
     const sections = new Set<string>();
 
     bundles.forEach((bundle) => sections.add(bundle.section));
-    members.forEach((member) => sections.add(member.section));
+    members.forEach((member) =>
+      sections.add(member.tower_segment),
+    );
     bolts.forEach((bolt) => sections.add(bolt.tower_segment));
 
-    return Array.from(sections).sort((a, b) =>
-      a.localeCompare(b),
-    );
+    return Array.from(sections)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
   }, [bundles, members, bolts]);
 
   /* =========================================================
@@ -882,10 +987,11 @@ export default function MaterialsScreen() {
         ...relatedMembers.map((member) =>
           matchesText(
             member.mark_no,
-            member.pn_final,
             member.drawing_number,
             member.bundle_reference,
             member.section,
+            member.tower_segment,
+            member.qty_per_tower,
           ),
         ),
       ).includes(query);
@@ -938,38 +1044,23 @@ export default function MaterialsScreen() {
     return members.filter((member) => {
       if (
         sectionFilter !== "all" &&
-        member.section !== sectionFilter
+        member.tower_segment !== sectionFilter
       ) {
         return false;
-      }
-
-      if (showOutstandingOnly) {
-        const status =
-          getMemberCheck(member)?.status ?? "not_checked";
-
-        if (status === "arrived") {
-          return false;
-        }
       }
 
       if (!query) return true;
 
       return matchesText(
         member.mark_no,
-        member.pn_final,
         member.drawing_number,
         member.bundle_reference,
         member.section,
+        member.tower_segment,
         member.qty_per_tower,
       ).includes(query);
     });
-  }, [
-    getMemberCheck,
-    members,
-    search,
-    sectionFilter,
-    showOutstandingOnly,
-  ]);
+  }, [members, search, sectionFilter]);
 
   const filteredBolts = useMemo(() => {
     const query = normaliseSearch(search);
@@ -1314,11 +1405,11 @@ export default function MaterialsScreen() {
 
   function openSectionSelector() {
     openSelector(
-      "Filter by Section",
+      "Filter by Tower Segment",
       [
         {
           id: "all",
-          label: "All Sections",
+          label: "All Tower Segments",
         },
         ...allSections.map((section) => ({
           id: section,
@@ -1479,7 +1570,7 @@ export default function MaterialsScreen() {
           >
             <Ionicons
               name="remove"
-              size={23}
+              size={18}
               color={received <= 0 ? "#94A3B8" : "#0F172A"}
             />
           </Pressable>
@@ -1514,7 +1605,7 @@ export default function MaterialsScreen() {
           >
             <Ionicons
               name="add"
-              size={23}
+              size={18}
               color="#FFFFFF"
             />
           </Pressable>
@@ -1673,7 +1764,7 @@ export default function MaterialsScreen() {
 
             <Text style={styles.cardSubtitle}>
               Bundle {member.bundle_reference} ·{" "}
-              {member.section}
+              {member.tower_segment}
             </Text>
           </View>
 
@@ -1685,8 +1776,8 @@ export default function MaterialsScreen() {
 
         <View style={styles.memberDetailGrid}>
           <DetailItem
-            label="PN"
-            value={member.pn_final || "—"}
+            label="Section"
+            value={member.section || "—"}
           />
 
           <DetailItem
@@ -1695,7 +1786,7 @@ export default function MaterialsScreen() {
           />
 
           <DetailItem
-            label="Quantity"
+            label="Qty / Tower"
             value={String(member.qty_per_tower)}
           />
         </View>
@@ -1757,9 +1848,9 @@ export default function MaterialsScreen() {
             style={styles.searchInput}
             placeholder={
               viewMode === "bundles"
-                ? "Search bundle, mark, PN or drawing…"
+                ? "Search bundle, mark, section or drawing…"
                 : viewMode === "members"
-                  ? "Search mark, PN, drawing or bundle…"
+                  ? "Search mark, drawing, section or bundle…"
                   : "Search diameter, DN/SN or length…"
             }
             placeholderTextColor="#94A3B8"
@@ -1896,7 +1987,7 @@ export default function MaterialsScreen() {
         >
           <Ionicons name="filter-outline" size={17} color="#334155" />
           <Text numberOfLines={1} style={styles.sectionFilterText}>
-            {sectionFilter === "all" ? "All Sections" : sectionFilter}
+            {sectionFilter === "all" ? "All Tower Segments" : sectionFilter}
           </Text>
           <Ionicons name="chevron-down" size={16} color="#64748B" />
         </Pressable>
@@ -2182,7 +2273,7 @@ export default function MaterialsScreen() {
                   <EmptyList
                     icon="list-outline"
                     title="No members found"
-                    text="Try searching by mark number, PN, drawing or bundle."
+                    text="Try searching by mark number, drawing, section, segment or bundle."
                   />
                 }
               />
@@ -2484,7 +2575,7 @@ function SmallActionButton({
     >
       <Ionicons
         name={icon}
-        size={16}
+        size={14}
         color={toneStyle.color}
       />
 
@@ -2563,9 +2654,9 @@ function MemberCheckRow({
       </View>
 
       <Text style={styles.memberCheckMeta}>
-        PN {member.pn_final || "—"} · Drawing{" "}
+        {member.section || "—"} · Drawing{" "}
         {member.drawing_number || "—"} · Qty{" "}
-        {member.qty_per_tower}
+        {member.qty_per_tower} · {member.tower_segment}
       </Text>
 
       <MemberStatusButtons
@@ -3484,9 +3575,9 @@ const styles = StyleSheet.create({
     borderLeftWidth: 5,
     borderColor: "#E2E8F0",
     backgroundColor: "#FFFFFF",
-    borderRadius: 15,
-    padding: 13,
-    marginBottom: 9,
+    borderRadius: 13,
+    padding: 10,
+    marginBottom: 7,
   },
 
   cardHeader: {
@@ -3508,7 +3599,7 @@ const styles = StyleSheet.create({
 
   bundleTitle: {
     color: "#0F172A",
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "900",
   },
 
@@ -3539,16 +3630,16 @@ const styles = StyleSheet.create({
 
   bundleNumbers: {
     flexDirection: "row",
-    gap: 6,
-    marginTop: 12,
+    gap: 5,
+    marginTop: 8,
   },
 
   numberTile: {
     flex: 1,
     backgroundColor: "#F8FAFC",
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
+    borderRadius: 9,
+    paddingVertical: 5,
+    paddingHorizontal: 4,
     alignItems: "center",
   },
 
@@ -3558,16 +3649,16 @@ const styles = StyleSheet.create({
 
   numberTileLabel: {
     color: "#64748B",
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: "700",
     textTransform: "uppercase",
   },
 
   numberTileValue: {
     color: "#334155",
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "800",
-    marginTop: 2,
+    marginTop: 1,
   },
 
   numberTileValueStrong: {
@@ -3581,8 +3672,8 @@ const styles = StyleSheet.create({
   progressHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 12,
-    marginBottom: 5,
+    marginTop: 8,
+    marginBottom: 4,
   },
 
   progressLabel: {
@@ -3614,17 +3705,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#F8FAFC",
-    borderRadius: 14,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    padding: 7,
-    marginTop: 12,
+    padding: 4,
+    marginTop: 8,
   },
 
   quantityButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 13,
+    width: 34,
+    height: 34,
+    borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3641,38 +3732,38 @@ const styles = StyleSheet.create({
 
   quantityValueContainer: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 34,
     alignItems: "center",
     justifyContent: "center",
   },
 
   quantityValue: {
     color: "#0F172A",
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: "900",
   },
 
   quantityLabel: {
     color: "#64748B",
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: "600",
   },
 
   bundleActions: {
     flexDirection: "row",
-    gap: 5,
-    marginTop: 8,
+    gap: 4,
+    marginTop: 6,
   },
 
   smallActionButton: {
     flex: 1,
-    minHeight: 40,
-    borderRadius: 11,
+    minHeight: 34,
+    borderRadius: 9,
     borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 5,
+    paddingHorizontal: 4,
   },
 
   smallActionButtonPressed: {
@@ -3684,16 +3775,16 @@ const styles = StyleSheet.create({
   },
 
   smallActionButtonText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "800",
-    marginLeft: 4,
+    marginLeft: 3,
   },
 
   expandedSection: {
     borderTopWidth: 1,
     borderTopColor: "#E2E8F0",
-    marginTop: 13,
-    paddingTop: 12,
+    marginTop: 9,
+    paddingTop: 9,
   },
 
   expandedHeader: {

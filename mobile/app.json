@@ -2,7 +2,7 @@
   "expo": {
     "name": "TTTracker",
     "slug": "luka",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "tttracker",
@@ -55,6 +55,12 @@
         "projectId": "3b42e817-4840-47db-b737-1de206c24a27"
       }
     },
-    "owner": "lukamz19s-team"
+    "owner": "lukamz19s-team",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3b42e817-4840-47db-b737-1de206c24a27"
+    }
   }
 }
