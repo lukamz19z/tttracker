@@ -16,6 +16,11 @@ type TowerRecord = {
   extra_data?: Record<string, unknown> | null;
 };
 
+type ProjectTowerOption = {
+  id: string;
+  name: string;
+};
+
 type DocketRecord = {
   id: string;
   project_id: string;
@@ -27,16 +32,16 @@ type DocketRecord = {
   rate_type?: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
-  lunch_break_minutes?: number | null;
-  travel_in_minutes?: number | null;
-  travel_out_minutes?: number | null;
-  mobilisation_hours?: number | null;
   raw_manhours?: number | null;
   production_manhours?: number | null;
   bc_rep_name?: string | null;
   client_rep_name?: string | null;
   signed_date?: string | null;
   docket_file_url?: string | null;
+  delays_comments?: string | null;
+  sharepoint_sync_status?: string | null;
+  sharepoint_web_url?: string | null;
+  pdf_file_name?: string | null;
 };
 
 type LabourRow = {
@@ -67,6 +72,32 @@ type PlantRow = {
   asset_number?: string | null;
 };
 
+type MaterialEventItem = {
+  id: string;
+  event_id: string;
+  item_reference?: string | null;
+  item_description?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+};
+
+type MaterialEvent = {
+  id: string;
+  docket_id: string | null;
+  tower_id: string;
+  event_type: string;
+  source_tower_id?: string | null;
+  destination_tower_id?: string | null;
+  affected_work?: boolean | null;
+  work_outcome?: string | null;
+  affected_activity?: string | null;
+  affected_section?: string | null;
+  impact_ongoing?: boolean | null;
+  current_effect?: string | null;
+  notes?: string | null;
+  items?: MaterialEventItem[] | null;
+};
+
 type DocketTotals = {
   raw: number;
   production: number;
@@ -77,6 +108,27 @@ type DocketTotals = {
   delayEvents: number;
   plant: number;
   workers: number;
+};
+
+type MobilisationSummary = {
+  enabled: boolean;
+  fromTowerId: string;
+  toTowerId: string;
+  status: string;
+  progress: number;
+  startedDate: string;
+  targetDate: string;
+  completedDate: string;
+  notes: string;
+};
+
+type MaterialSummary = {
+  issues: number;
+  excess: number;
+  affectedWork: number;
+  ongoing: number;
+  issueItems: MaterialEventItem[];
+  excessItems: MaterialEventItem[];
 };
 
 function safeNumber(value: unknown, fallback = 0): number {
@@ -99,6 +151,13 @@ function formatDate(value: string | null | undefined): string {
   });
 }
 
+function formatShortDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("en-AU", { day: "2-digit", month: "short" });
+}
+
 function getAssembly(docket: DocketRecord): number {
   return Math.round(safeNumber(docket.assembly_percent, 0));
 }
@@ -112,8 +171,7 @@ function getProgress(docket: DocketRecord): number {
 }
 
 function getStatus(docket: DocketRecord): "closed" | "bc_signed" | "open" {
-  if (docket.client_rep_name?.trim() && docket.signed_date?.trim())
-    return "closed";
+  if (docket.client_rep_name?.trim() && docket.signed_date?.trim()) return "closed";
   if (docket.bc_rep_name?.trim()) return "bc_signed";
   return "open";
 }
@@ -125,17 +183,112 @@ function getStatusLabel(status: "closed" | "bc_signed" | "open") {
 }
 
 function getStatusClasses(status: "closed" | "bc_signed" | "open") {
-  if (status === "closed")
-    return "bg-emerald-100 text-emerald-700 border-emerald-200";
-  if (status === "bc_signed")
-    return "bg-blue-100 text-blue-700 border-blue-200";
+  if (status === "closed") return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (status === "bc_signed") return "bg-blue-100 text-blue-700 border-blue-200";
   return "bg-amber-100 text-amber-700 border-amber-200";
+}
+
+function getSharePointClasses(status: string | null | undefined) {
+  if (status === "published") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (status === "publishing") return "bg-blue-50 text-blue-700 border-blue-200";
+  if (status === "failed") return "bg-rose-50 text-rose-700 border-rose-200";
+  return "bg-slate-50 text-slate-600 border-slate-200";
+}
+
+function getSharePointLabel(status: string | null | undefined) {
+  if (status === "published") return "PDF Published";
+  if (status === "publishing") return "Publishing PDF";
+  if (status === "failed") return "PDF Failed";
+  return "PDF Not Published";
 }
 
 function buildTowerStatus(progress: number) {
   if (progress >= 100) return "Complete";
   if (progress > 0) return "In Progress";
   return "Not Started";
+}
+
+function parseMobilisation(delaysComments: string | null | undefined): MobilisationSummary {
+  const line = String(delaysComments || "")
+    .split("\n")
+    .find((entry) => entry.startsWith("MOBILISATION|"));
+
+  if (!line) {
+    return {
+      enabled: false,
+      fromTowerId: "",
+      toTowerId: "",
+      status: "",
+      progress: 0,
+      startedDate: "",
+      targetDate: "",
+      completedDate: "",
+      notes: "",
+    };
+  }
+
+  const values = Object.fromEntries(
+    line
+      .split("|")
+      .slice(1)
+      .map((part) => {
+        const [key, ...rest] = part.split("=");
+        return [key, rest.join("=")];
+      }),
+  );
+
+  return {
+    enabled: true,
+    fromTowerId: values.from || "",
+    toTowerId: values.to || "",
+    status: values.status || "",
+    progress: Math.max(0, Math.min(100, safeNumber(values.progress, 0))),
+    startedDate: values.started || "",
+    targetDate: values.target || "",
+    completedDate: values.completed || "",
+    notes: values.notes || "",
+  };
+}
+
+function mobilisationStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    planning: "Planning",
+    packing: "Packing",
+    demobilising: "Demobilising",
+    in_transit: "In Transit",
+    mobilising: "Mobilising",
+    setup: "Setting Up",
+    complete: "Complete",
+  };
+  return labels[status] || status || "Mobilising";
+}
+
+function materialEventLabel(type: string) {
+  const labels: Record<string, string> = {
+    missing: "Missing",
+    found_received: "Found / Received",
+    taken_from_another_tower: "Taken from Tower",
+    sent_to_another_tower: "Sent to Tower",
+    damaged_incorrect: "Damaged / Incorrect",
+    excess: "Excess",
+  };
+  return labels[type] || type;
+}
+
+function workOutcomeLabel(value: string | null | undefined) {
+  const labels: Record<string, string> = {
+    stopped_work: "Couldn’t continue",
+    slowed_down: "Slowed down",
+    changed_sequence: "Resequenced",
+    minor_impact: "Minor impact",
+  };
+  return value ? labels[value] || value : "—";
+}
+
+function itemLabel(item: MaterialEventItem) {
+  const qty = safeNumber(item.quantity, 1);
+  const qtyPrefix = qty !== 1 || item.unit ? `${qty}${item.unit ? ` ${item.unit}` : ""} × ` : "";
+  return `${qtyPrefix}${item.item_reference || "Unlisted item"}`;
 }
 
 export default function TowerDocketsPage() {
@@ -146,85 +299,129 @@ export default function TowerDocketsPage() {
   const towerId = params.towerId as string;
 
   const [tower, setTower] = useState<TowerRecord | null>(null);
+  const [projectTowers, setProjectTowers] = useState<ProjectTowerOption[]>([]);
   const [dockets, setDockets] = useState<DocketRecord[]>([]);
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
   const [delayRows, setDelayRows] = useState<DelayRow[]>([]);
   const [plantRows, setPlantRows] = useState<PlantRow[]>([]);
+  const [materialEvents, setMaterialEvents] = useState<MaterialEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-
   const [deletingDocketId, setDeletingDocketId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
 
-    const { data: towerData } = await supabase
-      .from("towers")
-      .select("*")
-      .eq("id", towerId)
-      .single();
-
-    const { data: docketData } = await supabase
-      .from("tower_daily_dockets")
-      .select("*")
-      .eq("tower_id", towerId)
-      .order("docket_date", { ascending: false });
-
-    const loadedDockets = (docketData || []) as DocketRecord[];
-    setTower((towerData as TowerRecord | null) || null);
-    setDockets(loadedDockets);
-
-    const docketIds = loadedDockets.map((docket) => docket.id);
-
-    if (docketIds.length > 0) {
-      const [{ data: labourData }, { data: delayData }, { data: plantData }] =
+    try {
+      const [{ data: towerData }, { data: projectTowerData }, { data: docketData }] =
         await Promise.all([
+          supabase.from("towers").select("*").eq("id", towerId).single(),
           supabase
-            .from("tower_docket_labour")
-            .select(
-              "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
-            )
-            .in("docket_id", docketIds),
+            .from("towers")
+            .select("id,name,extra_data")
+            .eq("project_id", projectId)
+            .order("name"),
           supabase
-            .from("tower_docket_delays")
-            .select(
-              "docket_id,delay_type,delay_hours,applies_to,worker_names",
-            )
-            .in("docket_id", docketIds),
-          supabase
-            .from("tower_docket_plant")
-            .select(
-              "docket_id,total_hours,plant_name,plant_type,asset_number",
-            )
-            .in("docket_id", docketIds),
+            .from("tower_daily_dockets")
+            .select("*")
+            .eq("tower_id", towerId)
+            .order("docket_date", { ascending: false }),
         ]);
+
+      const loadedDockets = (docketData || []) as DocketRecord[];
+      setTower((towerData as TowerRecord | null) || null);
+      setProjectTowers(
+        ((projectTowerData || []) as Array<{
+          id: string;
+          name?: string | null;
+          extra_data?: Record<string, unknown> | null;
+        }>).map((row) => ({
+          id: row.id,
+          name: String(
+            row.name ||
+              row.extra_data?.tower_number ||
+              row.extra_data?.structure_number ||
+              row.extra_data?.tower_no ||
+              "Tower",
+          ),
+        })),
+      );
+      setDockets(loadedDockets);
+
+      const docketIds = loadedDockets.map((docket) => docket.id);
+
+      if (docketIds.length === 0) {
+        setLabourRows([]);
+        setDelayRows([]);
+        setPlantRows([]);
+        setMaterialEvents([]);
+        return;
+      }
+
+      const [
+        { data: labourData },
+        { data: delayData },
+        { data: plantData },
+        { data: materialData },
+      ] = await Promise.all([
+        supabase
+          .from("tower_docket_labour")
+          .select(
+            "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
+          )
+          .in("docket_id", docketIds),
+        supabase
+          .from("tower_docket_delays")
+          .select("docket_id,delay_type,delay_hours,applies_to,worker_names")
+          .in("docket_id", docketIds),
+        supabase
+          .from("tower_docket_plant")
+          .select("docket_id,total_hours,plant_name,plant_type,asset_number")
+          .in("docket_id", docketIds),
+        supabase
+          .from("tower_material_events")
+          .select(
+            `
+              id,
+              docket_id,
+              tower_id,
+              event_type,
+              source_tower_id,
+              destination_tower_id,
+              affected_work,
+              work_outcome,
+              affected_activity,
+              affected_section,
+              impact_ongoing,
+              current_effect,
+              notes,
+              items:tower_material_event_items(
+                id,
+                event_id,
+                item_reference,
+                item_description,
+                quantity,
+                unit
+              )
+            `,
+          )
+          .in("docket_id", docketIds)
+          .order("created_at", { ascending: true }),
+      ]);
 
       setLabourRows((labourData || []) as LabourRow[]);
       setDelayRows((delayData || []) as DelayRow[]);
       setPlantRows((plantData || []) as PlantRow[]);
-    } else {
-      setLabourRows([]);
-      setDelayRows([]);
-      setPlantRows([]);
+      setMaterialEvents((materialData || []) as MaterialEvent[]);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-  }, [supabase, towerId]);
+  }, [projectId, supabase, towerId]);
 
   useEffect(() => {
-    let isMounted = true;
-
-    const timer = window.setTimeout(() => {
-      void fetchData().finally(() => {
-        if (!isMounted) return;
-      });
-    }, 0);
-
-    return () => {
-      isMounted = false;
-      window.clearTimeout(timer);
-    };
+    const timer = window.setTimeout(() => void fetchData(), 0);
+    return () => window.clearTimeout(timer);
   }, [fetchData]);
 
   async function recalcTowerProgressAndStatus() {
@@ -259,6 +456,52 @@ export default function TowerDocketsPage() {
     }
   }
 
+  const towerNameById = useMemo(
+    () => Object.fromEntries(projectTowers.map((row) => [row.id, row.name])),
+    [projectTowers],
+  );
+
+  const eventsByDocket = useMemo(() => {
+    const grouped: Record<string, MaterialEvent[]> = {};
+    materialEvents.forEach((event) => {
+      if (!event.docket_id) return;
+      if (!grouped[event.docket_id]) grouped[event.docket_id] = [];
+      grouped[event.docket_id].push(event);
+    });
+    return grouped;
+  }, [materialEvents]);
+
+  const materialSummaryByDocket = useMemo(() => {
+    const summaries: Record<string, MaterialSummary> = {};
+
+    dockets.forEach((docket) => {
+      const events = eventsByDocket[docket.id] || [];
+      const issues = events.filter((event) => event.event_type !== "excess");
+      const excess = events.filter((event) => event.event_type === "excess");
+
+      summaries[docket.id] = {
+        issues: issues.length,
+        excess: excess.length,
+        affectedWork: issues.filter((event) => event.affected_work).length,
+        ongoing: issues.filter(
+          (event) => event.impact_ongoing || event.current_effect === "Waiting for material",
+        ).length,
+        issueItems: issues.flatMap((event) => event.items || []),
+        excessItems: excess.flatMap((event) => event.items || []),
+      };
+    });
+
+    return summaries;
+  }, [dockets, eventsByDocket]);
+
+  const mobilisationByDocket = useMemo(
+    () =>
+      Object.fromEntries(
+        dockets.map((docket) => [docket.id, parseMobilisation(docket.delays_comments)]),
+      ),
+    [dockets],
+  );
+
   const docketTotals = useMemo(() => {
     const totals: Record<string, DocketTotals> = {};
 
@@ -282,14 +525,10 @@ export default function TowerDocketsPage() {
       totals[row.docket_id].raw +=
         totals[row.docket_id].raw > 0 ? 0 : safeNumber(row.total_hours, 0);
       totals[row.docket_id].production +=
-        totals[row.docket_id].production > 0
-          ? 0
-          : safeNumber(row.production_hours, 0);
+        totals[row.docket_id].production > 0 ? 0 : safeNumber(row.production_hours, 0);
       totals[row.docket_id].lunch += safeNumber(row.lunch_minutes, 0) / 60;
       totals[row.docket_id].travel +=
-        (safeNumber(row.travel_in_minutes, 0) +
-          safeNumber(row.travel_out_minutes, 0)) /
-        60;
+        (safeNumber(row.travel_in_minutes, 0) + safeNumber(row.travel_out_minutes, 0)) / 60;
       totals[row.docket_id].prestartHours += safeNumber(row.mobilisation_hours, 0);
       totals[row.docket_id].delay += safeNumber(row.delay_hours, 0);
       if (row.worker_name?.trim()) totals[row.docket_id].workers += 1;
@@ -300,9 +539,7 @@ export default function TowerDocketsPage() {
 
       const delayHours = safeNumber(row.delay_hours, 0);
       const people =
-        row.applies_to === "selected_workers"
-          ? row.worker_names?.length || 0
-          : 1;
+        row.applies_to === "selected_workers" ? row.worker_names?.length || 0 : 1;
 
       totals[row.docket_id].delayEvents += delayHours;
 
@@ -319,39 +556,55 @@ export default function TowerDocketsPage() {
     return totals;
   }, [dockets, labourRows, delayRows, plantRows]);
 
-  const summary = useMemo(() => {
-    return dockets.reduce(
-      (acc, docket) => {
-        const totals = docketTotals[docket.id];
-        acc.raw += totals?.raw || 0;
-        acc.production += totals?.production || 0;
-        acc.delay += totals?.delay || 0;
-        acc.lunch += totals?.lunch || 0;
-        acc.travel += totals?.travel || 0;
-        acc.prestartHours += totals?.prestartHours || 0;
-        acc.plant += totals?.plant || 0;
+  const summary = useMemo(
+    () =>
+      dockets.reduce(
+        (acc, docket) => {
+          const totals = docketTotals[docket.id];
+          const material = materialSummaryByDocket[docket.id];
 
-        return acc;
-      },
-      {
-        raw: 0,
-        production: 0,
-        delay: 0,
-        lunch: 0,
-        travel: 0,
-        prestartHours: 0,
-        plant: 0,
-      },
-    );
-  }, [dockets, docketTotals]);
+          acc.raw += totals?.raw || 0;
+          acc.production += totals?.production || 0;
+          acc.delay += totals?.delay || 0;
+          acc.materialIssues += material?.issues || 0;
+          acc.excessRecords += material?.excess || 0;
+          return acc;
+        },
+        {
+          raw: 0,
+          production: 0,
+          delay: 0,
+          materialIssues: 0,
+          excessRecords: 0,
+        },
+      ),
+    [dockets, docketTotals, materialSummaryByDocket],
+  );
 
   const filteredDockets = useMemo(() => {
     const q = search.trim().toLowerCase();
-
     if (!q) return dockets;
 
     return dockets.filter((docket) => {
       const totals = docketTotals[docket.id];
+      const material = materialSummaryByDocket[docket.id];
+      const mobilisation = mobilisationByDocket[docket.id];
+      const events = eventsByDocket[docket.id] || [];
+
+      const materialText = events
+        .flatMap((event) => [
+          materialEventLabel(event.event_type),
+          event.affected_activity,
+          event.affected_section,
+          event.current_effect,
+          event.notes,
+          ...(event.items || []).flatMap((item) => [
+            item.item_reference,
+            item.item_description,
+          ]),
+        ])
+        .filter(Boolean)
+        .join(" ");
 
       return [
         docket.docket_date,
@@ -364,20 +617,30 @@ export default function TowerDocketsPage() {
         totals?.raw,
         totals?.production,
         totals?.workers,
-        totals?.plant,
-        docket.rate_type === "schedule_of_rates"
-          ? "Schedule of Rates SOR plant"
-          : "Tonnage Rate",
+        material?.issues,
+        material?.excess,
+        materialText,
+        mobilisation.enabled ? mobilisationStatusLabel(mobilisation.status) : "",
+        towerNameById[mobilisation.fromTowerId],
+        towerNameById[mobilisation.toTowerId],
       ]
         .join(" ")
         .toLowerCase()
         .includes(q);
     });
-  }, [dockets, search, docketTotals]);
+  }, [
+    dockets,
+    search,
+    docketTotals,
+    materialSummaryByDocket,
+    mobilisationByDocket,
+    eventsByDocket,
+    towerNameById,
+  ]);
 
   async function deleteDocket(id: string) {
     const confirmed = window.confirm(
-      "Delete this daily docket? This will also remove its labour, delay, plant and progress rows, then recalculate the tower totals.",
+      "Delete this daily docket? This will remove its labour, delay, plant, progress and linked material-event records, then recalculate the tower totals.",
     );
     if (!confirmed) return;
 
@@ -395,19 +658,12 @@ export default function TowerDocketsPage() {
         labourRes.error || delayRes.error || plantRes.error || progressRes.error;
 
       if (childError) {
-        throw new Error(
-          childError.message || "Failed to delete one or more docket detail rows.",
-        );
+        throw new Error(childError.message || "Failed to delete one or more docket detail rows.");
       }
 
-      const { error } = await supabase
-        .from("tower_daily_dockets")
-        .delete()
-        .eq("id", id);
+      const { error } = await supabase.from("tower_daily_dockets").delete().eq("id", id);
 
-      if (error) {
-        throw new Error(error.message || "Failed to delete docket.");
-      }
+      if (error) throw new Error(error.message || "Failed to delete docket.");
 
       await recalcTowerProgressAndStatus();
       await fetchData();
@@ -420,9 +676,7 @@ export default function TowerDocketsPage() {
     }
   }
 
-  if (loading) {
-    return <div className="p-8">Loading Daily Dockets...</div>;
-  }
+  if (loading) return <div className="p-8">Loading Daily Dockets...</div>;
 
   return (
     <div className="p-3 md:p-8 space-y-4 bg-slate-50 min-h-screen">
@@ -432,12 +686,10 @@ export default function TowerDocketsPage() {
         <div className="p-4 md:p-6 border-b border-slate-200">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-                Daily Dockets
-              </h1>
+              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Daily Dockets</h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
-                Review raw hours, production hours, delays and progress for this
-                tower.
+                Quick register of progress, labour, delays, material issues,
+                mobilisation and submitted docket records for this tower.
               </p>
             </div>
 
@@ -449,33 +701,28 @@ export default function TowerDocketsPage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 md:gap-3 mt-5">
-            <KpiCard label="Dockets Submitted" value={dockets.length} />
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 md:gap-3 mt-5">
+            <KpiCard label="Dockets" value={dockets.length} />
             <KpiCard label="Raw Hrs" value={formatNumber(summary.raw)} />
+            <KpiCard label="Prod Hrs" value={formatNumber(summary.production)} tone="green" />
+            <KpiCard label="Delay MH" value={formatNumber(summary.delay)} tone="amber" />
             <KpiCard
-              label="Prod Hrs"
-              value={formatNumber(summary.production)}
-              tone="green"
+              label="Material Issues"
+              value={summary.materialIssues}
+              tone={summary.materialIssues > 0 ? "amber" : "slate"}
             />
             <KpiCard
-              label="Delay MH"
-              value={formatNumber(summary.delay)}
-              tone="amber"
+              label="Excess Records"
+              value={summary.excessRecords}
+              tone={summary.excessRecords > 0 ? "green" : "slate"}
             />
-            <KpiCard label="Lunch Hrs" value={formatNumber(summary.lunch)} />
-            <KpiCard label="Travel Hrs" value={formatNumber(summary.travel)} />
-            <KpiCard
-              label="Prestart Hrs"
-              value={formatNumber(summary.prestartHours)}
-            />
-            <KpiCard label="Plant Hrs" value={formatNumber(summary.plant)} />
           </div>
 
           <div className="mt-4">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search date, crew, leading hand, weather or status..."
+              placeholder="Search date, crew, member, bundle, delay, mobilisation, weather or status..."
               className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -504,7 +751,16 @@ export default function TowerDocketsPage() {
                   plant: 0,
                   workers: 0,
                 };
-
+                const material = materialSummaryByDocket[docket.id] || {
+                  issues: 0,
+                  excess: 0,
+                  affectedWork: 0,
+                  ongoing: 0,
+                  issueItems: [],
+                  excessItems: [],
+                };
+                const mobilisation = mobilisationByDocket[docket.id];
+                const docketMaterialEvents = eventsByDocket[docket.id] || [];
                 const isOpen = openDocketId === docket.id;
 
                 return (
@@ -518,24 +774,45 @@ export default function TowerDocketsPage() {
                       className="w-full text-left p-3 md:p-4 hover:bg-slate-50 transition"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <div className="font-bold text-base md:text-lg text-slate-900">
                               {formatDate(docket.docket_date)}
                             </div>
 
                             <span
-                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusClasses(
-                                status,
-                              )}`}
+                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusClasses(status)}`}
                             >
                               {getStatusLabel(status)}
                             </span>
+
+                            {material.issues > 0 && (
+                              <span className="inline-flex rounded-full border border-amber-200 bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                                {material.issues} Material Issue{material.issues === 1 ? "" : "s"}
+                              </span>
+                            )}
+
+                            {material.excess > 0 && (
+                              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                                {material.excess} Excess Record{material.excess === 1 ? "" : "s"}
+                              </span>
+                            )}
+
+                            {mobilisation?.enabled && (
+                              <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                                {mobilisationStatusLabel(mobilisation.status)} {Math.round(mobilisation.progress)}%
+                              </span>
+                            )}
+
+                            {material.ongoing > 0 && (
+                              <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">
+                                Ongoing Material Impact
+                              </span>
+                            )}
                           </div>
 
                           <div className="text-sm text-slate-500 mt-1">
-                            {docket.leading_hand || "No leading hand"} • Crew{" "}
-                            {docket.crew || "—"} •{" "}
+                            {docket.leading_hand || "No leading hand"} • Crew {docket.crew || "—"} •{" "}
                             {docket.weather || "No weather"}
                           </div>
 
@@ -551,102 +828,226 @@ export default function TowerDocketsPage() {
                                 ? "Schedule of Rates"
                                 : "Tonnage Rate"}
                             </span>
+
                             <span className="inline-flex rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
                               {totals.workers} workers
                             </span>
+
+                            {docket.sharepoint_sync_status && (
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getSharePointClasses(docket.sharepoint_sync_status)}`}
+                              >
+                                {getSharePointLabel(docket.sharepoint_sync_status)}
+                              </span>
+                            )}
                           </div>
+
+                          {material.issueItems.length > 0 && (
+                            <div className="mt-2 text-xs text-slate-600 line-clamp-1">
+                              <span className="font-semibold text-amber-800">Material:</span>{" "}
+                              {material.issueItems.slice(0, 3).map(itemLabel).join(" • ")}
+                              {material.issueItems.length > 3
+                                ? ` • +${material.issueItems.length - 3} more`
+                                : ""}
+                            </div>
+                          )}
+
+                          {mobilisation?.enabled && (
+                            <div className="mt-2 text-xs text-blue-700">
+                              <span className="font-semibold">Move:</span>{" "}
+                              {towerNameById[mobilisation.fromTowerId] || "Other / Project"} →{" "}
+                              {towerNameById[mobilisation.toTowerId] || "Destination not set"}
+                            </div>
+                          )}
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="text-2xl font-black text-slate-900">
-                            {progress}%
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Overall
-                          </div>
+                          <div className="text-2xl font-black text-slate-900">{progress}%</div>
+                          <div className="text-[11px] text-slate-500">Overall</div>
                         </div>
                       </div>
 
-                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-center justify-between gap-3 mb-2">
-                          <div className="text-sm font-bold text-slate-800">
-                            Progress Breakdown
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            50% Assembly + 50% Erection
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <ProgressLine
-                            label="Assembly"
-                            value={assembly}
-                            tone="blue"
-                          />
-                          <ProgressLine
-                            label="Erection"
-                            value={erection}
-                            tone="emerald"
-                          />
-                          <ProgressLine
-                            label="Overall"
-                            value={progress}
-                            tone="slate"
-                            strong
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 md:grid-cols-6 xl:grid-cols-8 gap-2 mt-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mt-3">
                         <MiniMetric label="Workers" value={totals.workers} />
+                        <MiniMetric label="Raw" value={formatNumber(totals.raw)} />
+                        <MiniMetric label="Prod" value={formatNumber(totals.production)} />
                         <MiniMetric
-                          label="Raw"
-                          value={formatNumber(totals.raw)}
-                        />
-                        <MiniMetric
-                          label="Prod"
-                          value={formatNumber(totals.production)}
-                        />
-                        <MiniMetric
-                          label="Delay"
+                          label="Delay MH"
                           value={formatNumber(totals.delay)}
+                          tone={totals.delay > 0 ? "amber" : "slate"}
                         />
                         <MiniMetric
-                          label="Lunch"
-                          value={formatNumber(totals.lunch)}
+                          label="Material"
+                          value={material.issues}
+                          tone={material.issues > 0 ? "amber" : "slate"}
                         />
                         <MiniMetric
-                          label="Travel"
-                          value={formatNumber(totals.travel)}
+                          label="Excess"
+                          value={material.excess}
+                          tone={material.excess > 0 ? "green" : "slate"}
                         />
-                        <MiniMetric
-                          label="Prestart Hrs"
-                          value={formatNumber(totals.prestartHours)}
-                        />
-                        <MiniMetric
-                          label="Plant"
-                          value={formatNumber(totals.plant)}
-                        />
+                        <MiniMetric label="Plant Hrs" value={formatNumber(totals.plant)} />
                       </div>
                     </button>
 
                     {isOpen && (
                       <div className="border-t border-slate-200 bg-slate-50 p-3 md:p-4 space-y-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          <DetailCard
-                            label="Delay Events"
-                            value={formatNumber(totals.delayEvents)}
-                          />
-                          <DetailCard label="Workers" value={totals.workers} />
-                          <DetailCard
-                            label="Prestart Hrs"
-                            value={formatNumber(totals.prestartHours)}
-                          />
-                          <DetailCard
-                            label="Uploaded"
-                            value={docket.docket_file_url ? "Yes" : "No"}
-                          />
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <div className="text-sm font-bold text-slate-800">Progress Breakdown</div>
+                            <div className="text-xs text-slate-500">50% Assembly + 50% Erection</div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <ProgressLine label="Assembly" value={assembly} tone="blue" />
+                            <ProgressLine label="Erection" value={erection} tone="emerald" />
+                            <ProgressLine label="Overall" value={progress} tone="slate" strong />
+                          </div>
                         </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <DetailCard label="General Delay Events" value={formatNumber(totals.delayEvents)} />
+                          <DetailCard label="Workers" value={totals.workers} />
+                          <DetailCard label="Material Issues" value={material.issues} />
+                          <DetailCard label="Excess Records" value={material.excess} />
+                        </div>
+
+                        {docketMaterialEvents.filter((event) => event.event_type !== "excess").length > 0 && (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 md:p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                              <div>
+                                <div className="text-sm font-bold text-amber-900">
+                                  Steel / Material Issues & Movements
+                                </div>
+                                <div className="text-xs text-amber-700 mt-1">
+                                  Key material information recorded on this docket.
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xl font-black text-amber-900">{material.issues}</div>
+                                <div className="text-[11px] text-amber-700">Records</div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              {docketMaterialEvents
+                                .filter((event) => event.event_type !== "excess")
+                                .map((event) => (
+                                  <div key={event.id} className="rounded-xl border border-amber-200 bg-white p-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <div className="font-semibold text-sm text-slate-900">
+                                          {materialEventLabel(event.event_type)}
+                                          {event.affected_section ? ` • ${event.affected_section}` : ""}
+                                        </div>
+
+                                        {(event.items || []).length > 0 && (
+                                          <div className="text-sm text-slate-700 mt-1">
+                                            {(event.items || []).slice(0, 4).map(itemLabel).join(" • ")}
+                                            {(event.items || []).length > 4
+                                              ? ` • +${(event.items || []).length - 4} more`
+                                              : ""}
+                                          </div>
+                                        )}
+
+                                        {event.affected_work && (
+                                          <div className="text-xs text-slate-500 mt-1">
+                                            Work impact:{" "}
+                                            <span className="font-semibold text-slate-700">
+                                              {workOutcomeLabel(event.work_outcome)}
+                                            </span>
+                                            {event.affected_activity ? ` • ${event.affected_activity}` : ""}
+                                            {event.current_effect ? ` • ${event.current_effect}` : ""}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {event.affected_work && (
+                                        <span className="shrink-0 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                                          Affected Work
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {material.excess > 0 && (
+                          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 md:p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                              <div>
+                                <div className="text-sm font-bold text-emerald-900">
+                                  Excess Steel / Materials
+                                </div>
+                                <div className="text-xs text-emerald-700 mt-1">
+                                  Excess items remain separate from delays and missing-material issues.
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xl font-black text-emerald-900">{material.excess}</div>
+                                <div className="text-[11px] text-emerald-700">Records</div>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              {material.excessItems.map((item) => (
+                                <span
+                                  key={item.id}
+                                  className="rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800"
+                                >
+                                  {itemLabel(item)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {mobilisation?.enabled && (
+                          <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3 md:p-4">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-bold text-blue-900">Mobilisation Progress</div>
+                                <div className="text-sm text-blue-800 mt-1">
+                                  {towerNameById[mobilisation.fromTowerId] || "Other / Project"} →{" "}
+                                  {towerNameById[mobilisation.toTowerId] || "Destination not set"}
+                                </div>
+                                <div className="text-xs text-blue-700 mt-1">
+                                  {mobilisationStatusLabel(mobilisation.status)}
+                                  {mobilisation.startedDate
+                                    ? ` • Started ${formatShortDate(mobilisation.startedDate)}`
+                                    : ""}
+                                  {mobilisation.targetDate
+                                    ? ` • Target ${formatShortDate(mobilisation.targetDate)}`
+                                    : ""}
+                                  {mobilisation.completedDate
+                                    ? ` • Completed ${formatShortDate(mobilisation.completedDate)}`
+                                    : ""}
+                                </div>
+                              </div>
+
+                              <div className="md:w-64">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs font-semibold text-blue-800">Progress</span>
+                                  <span className="text-sm font-black text-blue-900">
+                                    {Math.round(mobilisation.progress)}%
+                                  </span>
+                                </div>
+                                <div className="h-3 rounded-full bg-white border border-blue-200 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-blue-600"
+                                    style={{ width: `${mobilisation.progress}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {mobilisation.notes && (
+                              <div className="mt-3 text-xs text-blue-800">{mobilisation.notes}</div>
+                            )}
+                          </div>
+                        )}
 
                         {docket.rate_type === "schedule_of_rates" && (
                           <div className="rounded-2xl border border-purple-200 bg-purple-50 p-3">
@@ -656,17 +1057,14 @@ export default function TowerDocketsPage() {
                                   Schedule of Rates Plant
                                 </div>
                                 <div className="text-xs text-purple-700 mt-1">
-                                  Plant and equipment hours captured against
-                                  this docket.
+                                  Plant and equipment hours captured against this docket.
                                 </div>
                               </div>
                               <div className="text-right">
                                 <div className="text-xl font-black text-purple-900">
                                   {formatNumber(totals.plant)}
                                 </div>
-                                <div className="text-[11px] text-purple-700">
-                                  Plant Hrs
-                                </div>
+                                <div className="text-[11px] text-purple-700">Plant Hrs</div>
                               </div>
                             </div>
                           </div>
@@ -698,6 +1096,17 @@ export default function TowerDocketsPage() {
                             {deletingDocketId === docket.id ? "Deleting..." : "Delete"}
                           </button>
                         </div>
+
+                        {docket.sharepoint_web_url && (
+                          <a
+                            href={docket.sharepoint_web_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block text-center border border-slate-300 bg-white text-slate-800 px-4 py-3 rounded-xl text-sm font-semibold hover:bg-slate-50"
+                          >
+                            Open Published PDF
+                          </a>
+                        )}
                       </div>
                     )}
                   </div>
@@ -746,13 +1155,13 @@ function ProgressLine({
         >
           {label}
         </div>
-        <div className={`text-sm font-black ${labelColour[tone]}`}>
-          {clamped}%
-        </div>
+        <div className={`text-sm font-black ${labelColour[tone]}`}>{clamped}%</div>
       </div>
 
       <div
-        className={`${strong ? "h-4" : "h-3"} rounded-full bg-white border border-slate-200 overflow-hidden`}
+        className={`${
+          strong ? "h-4" : "h-3"
+        } rounded-full bg-white border border-slate-200 overflow-hidden`}
       >
         <div
           className={`h-full rounded-full ${barColour[tone]}`}
@@ -781,9 +1190,7 @@ function KpiCard({
   return (
     <div className={`rounded-xl px-3 py-3 min-w-0 ${tones[tone]}`}>
       <div className="text-[11px] opacity-75 truncate">{label}</div>
-      <div className="font-bold text-base md:text-lg mt-1 truncate">
-        {value}
-      </div>
+      <div className="font-bold text-base md:text-lg mt-1 truncate">{value}</div>
     </div>
   );
 }
@@ -791,15 +1198,21 @@ function KpiCard({
 function MiniMetric({
   label,
   value,
+  tone = "slate",
 }: {
   label: string;
   value: string | number;
+  tone?: "slate" | "amber" | "green";
 }) {
+  const tones: Record<string, string> = {
+    slate: "bg-slate-100 text-slate-900",
+    amber: "bg-amber-100 text-amber-900",
+    green: "bg-emerald-100 text-emerald-900",
+  };
+
   return (
-    <div className="rounded-xl bg-slate-100 px-3 py-2 min-w-0">
-      <div className="text-[10px] uppercase tracking-wide text-slate-500 truncate">
-        {label}
-      </div>
+    <div className={`rounded-xl px-3 py-2 min-w-0 ${tones[tone]}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-65 truncate">{label}</div>
       <div className="font-semibold text-sm mt-1 truncate">{value}</div>
     </div>
   );
