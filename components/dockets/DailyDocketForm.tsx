@@ -49,6 +49,87 @@ type DelayRow = {
   plant_names: string[];
 };
 
+
+type MaterialEventType =
+  | "missing"
+  | "found_received"
+  | "taken_from_another_tower"
+  | "sent_to_another_tower"
+  | "excess"
+  | "damaged_incorrect";
+
+type MaterialWorkOutcome =
+  | ""
+  | "stopped_work"
+  | "slowed_down"
+  | "changed_sequence"
+  | "minor_impact";
+
+type MaterialEventPersonDraft = {
+  ui_id: string;
+  employee_id: string;
+  employee_name: string;
+  employee_role: string;
+  started_at: string;
+  finished_at: string;
+};
+
+type MaterialEventPlantDraft = {
+  ui_id: string;
+  plant_name: string;
+  asset_number: string;
+  started_at: string;
+  finished_at: string;
+};
+
+type MaterialEventItemDraft = {
+  ui_id: string;
+  source_table: string;
+  source_record_id: string;
+  item_reference: string;
+  item_description: string;
+  quantity: string;
+  unit: string;
+};
+
+type MaterialEventDraft = {
+  ui_id: string;
+  id?: string;
+  event_type: MaterialEventType;
+  source_tower_id: string;
+  destination_tower_id: string;
+  source_location: string;
+  destination_location: string;
+  occurred_time: string;
+  affected_work: boolean;
+  affected_activity: string;
+  affected_section: string;
+  work_outcome: MaterialWorkOutcome;
+  impact_start_time: string;
+  impact_finish_time: string;
+  impact_ongoing: boolean;
+  current_effect: string;
+  mitigation_actions: string[];
+  notes: string;
+  items: MaterialEventItemDraft[];
+  people: MaterialEventPersonDraft[];
+  plant: MaterialEventPlantDraft[];
+};
+
+type MaterialCatalogItem = {
+  source_table: string;
+  source_record_id: string;
+  item_reference: string;
+  item_description: string;
+  unit: string;
+  tower_id: string;
+};
+
+type TowerOption = {
+  id: string;
+  name: string;
+};
+
 type DbDelayRow = {
   id?: string;
   docket_id: string;
@@ -706,6 +787,78 @@ function delayIncludesPlant(delay: DelayRow) {
 }
 
 
+
+function blankMaterialItem(): MaterialEventItemDraft {
+  return {
+    ui_id: makeUiId(),
+    source_table: "",
+    source_record_id: "",
+    item_reference: "",
+    item_description: "",
+    quantity: "1",
+    unit: "ea",
+  };
+}
+
+function blankMaterialEvent(): MaterialEventDraft {
+  return {
+    ui_id: makeUiId(),
+    event_type: "missing",
+    source_tower_id: "",
+    destination_tower_id: "",
+    source_location: "",
+    destination_location: "",
+    occurred_time: "",
+    affected_work: false,
+    affected_activity: "",
+    affected_section: "",
+    work_outcome: "",
+    impact_start_time: "",
+    impact_finish_time: "",
+    impact_ongoing: false,
+    current_effect: "",
+    mitigation_actions: [],
+    notes: "",
+    items: [blankMaterialItem()],
+    people: [],
+    plant: [],
+  };
+}
+
+function materialEventLabel(type: MaterialEventType) {
+  switch (type) {
+    case "missing": return "Missing material";
+    case "found_received": return "Found / Received";
+    case "taken_from_another_tower": return "Taken from another tower";
+    case "sent_to_another_tower": return "Sent to another tower";
+    case "excess": return "Excess material";
+    case "damaged_incorrect": return "Damaged / Incorrect";
+  }
+}
+
+function workOutcomeCommercialType(outcome: MaterialWorkOutcome) {
+  switch (outcome) {
+    case "stopped_work": return "Delayed";
+    case "slowed_down": return "Disrupted";
+    case "changed_sequence": return "Resequenced";
+    case "minor_impact": return "No material impact";
+    default: return null;
+  }
+}
+
+function combineDocketDateTime(date: string, time: string) {
+  if (!date || !time) return null;
+  const value = new Date(`${date}T${time}:00`);
+  return Number.isNaN(value.getTime()) ? null : value.toISOString();
+}
+
+function timeFromIso(value: unknown) {
+  if (!value) return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export default function DailyDocketForm({
   mode,
   projectId,
@@ -788,6 +941,11 @@ export default function DailyDocketForm({
       ? initialDelayRows.map((r) => makeDelayRow(r))
       : []
   );
+
+
+  const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
+  const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
+  const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
 
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
     initialProgressRows && initialProgressRows.length > 0
@@ -883,6 +1041,106 @@ export default function DailyDocketForm({
     return () => window.clearTimeout(timer);
   }, [supabase, towerId]);
 
+
+  useEffect(() => {
+    async function loadMaterialContext() {
+      const { data: towerData } = await supabase
+        .from("towers")
+        .select("id, name, line, extra_data")
+        .eq("project_id", projectId)
+        .order("name");
+
+      const towersForProject = ((towerData || []) as any[]).map((tower) => ({
+        id: String(tower.id),
+        name: String(
+          tower.name ||
+          tower.extra_data?.tower_number ||
+          tower.extra_data?.structure_number ||
+          tower.extra_data?.tower_no ||
+          "Tower"
+        ),
+      }));
+
+      setProjectTowers(towersForProject);
+
+      const towerIds = towersForProject.map((tower) => tower.id);
+      if (towerIds.length === 0) {
+        setMaterialCatalog([]);
+        return;
+      }
+
+      const [membersRes, boltsRes, bundlesRes] = await Promise.all([
+        supabase
+          .from("tower_material_members")
+          .select("id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section")
+          .in("tower_id", towerIds),
+        supabase
+          .from("tower_material_bolts")
+          .select("id, tower_id, tower_segment, bolt_diameter, dn_sn, length, qty")
+          .in("tower_id", towerIds),
+        supabase
+          .from("tower_required_bundles")
+          .select("id, tower_id, bundle_no, section, qty_required, total_weight, member_qty")
+          .in("tower_id", towerIds),
+      ]);
+
+      const catalog: MaterialCatalogItem[] = [];
+
+      if (!membersRes.error) {
+        for (const row of membersRes.data || []) {
+          catalog.push({
+            source_table: "tower_material_members",
+            source_record_id: String(row.id),
+            tower_id: String(row.tower_id),
+            item_reference: String(row.mark_no || row.pn_final || row.bundle_reference || "Member"),
+            item_description: [
+              row.drawing_number ? `Drawing ${row.drawing_number}` : "",
+              row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
+              row.section ? `Section ${row.section}` : "",
+              row.pn_final ? `Profile ${row.pn_final}` : "",
+            ].filter(Boolean).join(" · "),
+            unit: "ea",
+          });
+        }
+      }
+
+      if (!boltsRes.error) {
+        for (const row of boltsRes.data || []) {
+          catalog.push({
+            source_table: "tower_material_bolts",
+            source_record_id: String(row.id),
+            tower_id: String(row.tower_id),
+            item_reference: [
+              row.bolt_diameter,
+              row.length,
+              row.dn_sn,
+            ].filter(Boolean).join(" "),
+            item_description: row.tower_segment ? `Section ${row.tower_segment}` : "Bolt assembly",
+            unit: "ea",
+          });
+        }
+      }
+
+      if (!bundlesRes.error) {
+        for (const row of bundlesRes.data || []) {
+          catalog.push({
+            source_table: "tower_required_bundles",
+            source_record_id: String(row.id),
+            tower_id: String(row.tower_id),
+            item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
+            item_description: row.section ? `Section ${row.section}` : "Bundle",
+            unit: "bundle",
+          });
+        }
+      }
+
+      setMaterialCatalog(catalog);
+    }
+
+    const timer = window.setTimeout(() => void loadMaterialContext(), 0);
+    return () => window.clearTimeout(timer);
+  }, [projectId, supabase]);
+
   useEffect(() => {
     if (!docketId && !initialDocket) return;
 
@@ -960,6 +1218,66 @@ export default function DailyDocketForm({
           );
         }
 
+        if (docketId) {
+          const { data: events } = await supabase
+            .from("tower_material_events")
+            .select(`
+              *,
+              items:tower_material_event_items(*),
+              people:tower_material_event_people(*),
+              plant:tower_material_event_plant(*)
+            `)
+            .eq("docket_id", docketId)
+            .order("occurred_at", { ascending: true });
+
+          if (events?.length) {
+            setMaterialEvents(events.map((event: any) => ({
+              ui_id: makeUiId(),
+              id: String(event.id),
+              event_type: (event.event_type || "missing") as MaterialEventType,
+              source_tower_id: toStringValue(event.source_tower_id),
+              destination_tower_id: toStringValue(event.destination_tower_id),
+              source_location: toStringValue(event.source_location),
+              destination_location: toStringValue(event.destination_location),
+              occurred_time: timeFromIso(event.occurred_at),
+              affected_work: Boolean(event.affected_work),
+              affected_activity: toStringValue(event.affected_activity),
+              affected_section: toStringValue(event.affected_section),
+              work_outcome: (event.work_outcome || "") as MaterialWorkOutcome,
+              impact_start_time: timeFromIso(event.impact_started_at),
+              impact_finish_time: timeFromIso(event.impact_finished_at),
+              impact_ongoing: Boolean(event.impact_ongoing),
+              current_effect: toStringValue(event.current_effect),
+              mitigation_actions: Array.isArray(event.mitigation_actions) ? event.mitigation_actions : [],
+              notes: toStringValue(event.notes),
+              items: (event.items || []).map((item: any) => ({
+                ui_id: makeUiId(),
+                source_table: toStringValue(item.source_table),
+                source_record_id: toStringValue(item.source_record_id),
+                item_reference: toStringValue(item.item_reference),
+                item_description: toStringValue(item.item_description),
+                quantity: toStringValue(item.quantity || 1),
+                unit: toStringValue(item.unit || "ea"),
+              })),
+              people: (event.people || []).map((person: any) => ({
+                ui_id: makeUiId(),
+                employee_id: toStringValue(person.employee_id),
+                employee_name: toStringValue(person.employee_name),
+                employee_role: toStringValue(person.employee_role),
+                started_at: timeFromIso(person.started_at),
+                finished_at: timeFromIso(person.finished_at),
+              })),
+              plant: (event.plant || []).map((plantRow: any) => ({
+                ui_id: makeUiId(),
+                plant_name: toStringValue(plantRow.plant_name),
+                asset_number: toStringValue(plantRow.asset_number),
+                started_at: timeFromIso(plantRow.started_at),
+                finished_at: timeFromIso(plantRow.finished_at),
+              })),
+            })));
+          }
+        }
+
         return;
       }
 
@@ -1002,11 +1320,27 @@ export default function DailyDocketForm({
       setSharePointStatus(toStringValue(data.sharepoint_sync_status));
       setPublishedPdfName(toStringValue(data.pdf_file_name));
 
-      const [{ data: labour }, { data: delays }, { data: plant }, { data: progress }] = await Promise.all([
+      const [
+        { data: labour },
+        { data: delays },
+        { data: plant },
+        { data: progress },
+        { data: structuredMaterialEvents },
+      ] = await Promise.all([
         supabase.from("tower_docket_labour").select("*").eq("docket_id", docketId),
         supabase.from("tower_docket_delays").select("*").eq("docket_id", docketId),
         supabase.from("tower_docket_plant").select("*").eq("docket_id", docketId),
         supabase.from("tower_docket_progress").select("*").eq("docket_id", docketId),
+        supabase
+          .from("tower_material_events")
+          .select(`
+            *,
+            items:tower_material_event_items(*),
+            people:tower_material_event_people(*),
+            plant:tower_material_event_plant(*)
+          `)
+          .eq("docket_id", docketId)
+          .order("occurred_at", { ascending: true }),
       ]);
 
       if (labour && labour.length > 0) setLabourRows(labour.map((r) => makeLabourRow(r)));
@@ -1039,6 +1373,54 @@ export default function DailyDocketForm({
             erected_qty: toStringValue(r.erected_qty),
           }))
         );
+      }
+
+
+      if (structuredMaterialEvents && structuredMaterialEvents.length > 0) {
+        setMaterialEvents(structuredMaterialEvents.map((event: any) => ({
+          ui_id: makeUiId(),
+          id: String(event.id),
+          event_type: (event.event_type || "missing") as MaterialEventType,
+          source_tower_id: toStringValue(event.source_tower_id),
+          destination_tower_id: toStringValue(event.destination_tower_id),
+          source_location: toStringValue(event.source_location),
+          destination_location: toStringValue(event.destination_location),
+          occurred_time: timeFromIso(event.occurred_at),
+          affected_work: Boolean(event.affected_work),
+          affected_activity: toStringValue(event.affected_activity),
+          affected_section: toStringValue(event.affected_section),
+          work_outcome: (event.work_outcome || "") as MaterialWorkOutcome,
+          impact_start_time: timeFromIso(event.impact_started_at),
+          impact_finish_time: timeFromIso(event.impact_finished_at),
+          impact_ongoing: Boolean(event.impact_ongoing),
+          current_effect: toStringValue(event.current_effect),
+          mitigation_actions: Array.isArray(event.mitigation_actions) ? event.mitigation_actions : [],
+          notes: toStringValue(event.notes),
+          items: (event.items || []).map((item: any) => ({
+            ui_id: makeUiId(),
+            source_table: toStringValue(item.source_table),
+            source_record_id: toStringValue(item.source_record_id),
+            item_reference: toStringValue(item.item_reference),
+            item_description: toStringValue(item.item_description),
+            quantity: toStringValue(item.quantity || 1),
+            unit: toStringValue(item.unit || "ea"),
+          })),
+          people: (event.people || []).map((person: any) => ({
+            ui_id: makeUiId(),
+            employee_id: toStringValue(person.employee_id),
+            employee_name: toStringValue(person.employee_name),
+            employee_role: toStringValue(person.employee_role),
+            started_at: timeFromIso(person.started_at),
+            finished_at: timeFromIso(person.finished_at),
+          })),
+          plant: (event.plant || []).map((plantRow: any) => ({
+            ui_id: makeUiId(),
+            plant_name: toStringValue(plantRow.plant_name),
+            asset_number: toStringValue(plantRow.asset_number),
+            started_at: timeFromIso(plantRow.started_at),
+            finished_at: timeFromIso(plantRow.finished_at),
+          })),
+        })));
       }
     }
 
@@ -1675,7 +2057,15 @@ export default function DailyDocketForm({
       other_delay_hours: Number(otherDelayHours || delaySummaryByType.other || 0),
       other_delay_reason: otherDelayReason,
       delays_comments: delaysComments,
-      missing_items_bolts: missingItemsBolts,
+      missing_items_bolts:
+        materialEvents
+          .filter((event) => event.event_type === "missing")
+          .flatMap((event) =>
+            event.items
+              .filter((item) => item.item_reference.trim())
+              .map((item) => `${item.quantity || "1"} × ${item.item_reference.trim()}`)
+          )
+          .join("; ") || missingItemsBolts,
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
@@ -1759,6 +2149,340 @@ export default function DailyDocketForm({
           ? 0
           : Number(row.erected_qty || 0),
     }));
+  }
+
+
+  function addMaterialEvent() {
+    if (isView || locked) return;
+    setMaterialEvents((prev) => [...prev, blankMaterialEvent()]);
+  }
+
+  function removeMaterialEvent(index: number) {
+    if (isView || locked) return;
+    setMaterialEvents((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateMaterialEvent<K extends keyof MaterialEventDraft>(
+    index: number,
+    key: K,
+    value: MaterialEventDraft[K]
+  ) {
+    if (isView || locked) return;
+    setMaterialEvents((prev) =>
+      prev.map((event, i) => (i === index ? { ...event, [key]: value } : event))
+    );
+  }
+
+  function updateMaterialItem(
+    eventIndex: number,
+    itemIndex: number,
+    patch: Partial<MaterialEventItemDraft>
+  ) {
+    if (isView || locked) return;
+
+    setMaterialEvents((prev) =>
+      prev.map((event, eIndex) =>
+        eIndex !== eventIndex
+          ? event
+          : {
+              ...event,
+              items: event.items.map((item, iIndex) =>
+                iIndex === itemIndex ? { ...item, ...patch } : item
+              ),
+            }
+      )
+    );
+  }
+
+  function chooseCatalogItem(
+    eventIndex: number,
+    itemIndex: number,
+    catalogKey: string
+  ) {
+    const catalogItem = materialCatalog.find(
+      (item) => `${item.source_table}:${item.source_record_id}` === catalogKey
+    );
+
+    if (!catalogItem) {
+      updateMaterialItem(eventIndex, itemIndex, {
+        source_table: "",
+        source_record_id: "",
+        item_reference: "",
+        item_description: "",
+        unit: "ea",
+      });
+      return;
+    }
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      source_table: catalogItem.source_table,
+      source_record_id: catalogItem.source_record_id,
+      item_reference: catalogItem.item_reference,
+      item_description: catalogItem.item_description,
+      unit: catalogItem.unit,
+    });
+  }
+
+  function addMaterialItem(eventIndex: number) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) =>
+        index === eventIndex
+          ? { ...event, items: [...event.items, blankMaterialItem()] }
+          : event
+      )
+    );
+  }
+
+  function removeMaterialItem(eventIndex: number, itemIndex: number) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) => {
+        if (index !== eventIndex) return event;
+        const nextItems = event.items.filter((_, i) => i !== itemIndex);
+        return { ...event, items: nextItems.length ? nextItems : [blankMaterialItem()] };
+      })
+    );
+  }
+
+  function addMaterialPerson(eventIndex: number, employeeName: string) {
+    const employee = employees.find(
+      (row) => normalizeWorkerName(row.full_name) === normalizeWorkerName(employeeName)
+    );
+
+    if (!employee) return;
+
+    setMaterialEvents((prev) =>
+      prev.map((event, index) => {
+        if (index !== eventIndex) return event;
+        if (event.people.some((person) => person.employee_id === employee.id)) return event;
+
+        return {
+          ...event,
+          people: [
+            ...event.people,
+            {
+              ui_id: makeUiId(),
+              employee_id: employee.id,
+              employee_name: employee.full_name,
+              employee_role: employee.role || "",
+              started_at: event.impact_start_time,
+              finished_at: event.impact_finish_time,
+            },
+          ],
+        };
+      })
+    );
+  }
+
+  function updateMaterialPerson(
+    eventIndex: number,
+    personIndex: number,
+    patch: Partial<MaterialEventPersonDraft>
+  ) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) =>
+        index !== eventIndex
+          ? event
+          : {
+              ...event,
+              people: event.people.map((person, i) =>
+                i === personIndex ? { ...person, ...patch } : person
+              ),
+            }
+      )
+    );
+  }
+
+  function removeMaterialPerson(eventIndex: number, personIndex: number) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) =>
+        index !== eventIndex
+          ? event
+          : { ...event, people: event.people.filter((_, i) => i !== personIndex) }
+      )
+    );
+  }
+
+  function addMaterialPlant(eventIndex: number, plantName: string) {
+    const sourceIndex = availablePlantNames.findIndex(
+      (name) => normalizeWorkerName(name) === normalizeWorkerName(plantName)
+    );
+    if (sourceIndex < 0) return;
+
+    const source = plantRowsWithTotals[sourceIndex];
+    setMaterialEvents((prev) =>
+      prev.map((event, index) => {
+        if (index !== eventIndex) return event;
+        if (event.plant.some((row) => normalizeWorkerName(row.plant_name) === normalizeWorkerName(plantName))) {
+          return event;
+        }
+
+        return {
+          ...event,
+          plant: [
+            ...event.plant,
+            {
+              ui_id: makeUiId(),
+              plant_name: plantName,
+              asset_number: source?.asset_id || "",
+              started_at: event.impact_start_time,
+              finished_at: event.impact_finish_time,
+            },
+          ],
+        };
+      })
+    );
+  }
+
+  function updateMaterialPlant(
+    eventIndex: number,
+    plantIndex: number,
+    patch: Partial<MaterialEventPlantDraft>
+  ) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) =>
+        index !== eventIndex
+          ? event
+          : {
+              ...event,
+              plant: event.plant.map((row, i) =>
+                i === plantIndex ? { ...row, ...patch } : row
+              ),
+            }
+      )
+    );
+  }
+
+  function removeMaterialPlant(eventIndex: number, plantIndex: number) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) =>
+        index !== eventIndex
+          ? event
+          : { ...event, plant: event.plant.filter((_, i) => i !== plantIndex) }
+      )
+    );
+  }
+
+  function toggleMitigation(eventIndex: number, action: string) {
+    setMaterialEvents((prev) =>
+      prev.map((event, index) => {
+        if (index !== eventIndex) return event;
+        const exists = event.mitigation_actions.includes(action);
+        return {
+          ...event,
+          mitigation_actions: exists
+            ? event.mitigation_actions.filter((item) => item !== action)
+            : [...event.mitigation_actions, action],
+        };
+      })
+    );
+  }
+
+  async function syncMaterialEvents(docketIdValue: string) {
+    const { error: deleteError } = await supabase
+      .from("tower_material_events")
+      .delete()
+      .eq("docket_id", docketIdValue);
+
+    if (deleteError) {
+      throw new Error(`Daily Docket saved, but material events could not be refreshed: ${deleteError.message}`);
+    }
+
+    for (const event of materialEvents) {
+      const meaningfulItems = event.items.filter((item) => item.item_reference.trim());
+      if (meaningfulItems.length === 0) continue;
+
+      const eventInsert = await supabase
+        .from("tower_material_events")
+        .insert({
+          project_id: projectId,
+          docket_id: docketIdValue,
+          tower_id: towerId,
+          event_type: event.event_type,
+          source_tower_id: event.source_tower_id || null,
+          destination_tower_id: event.destination_tower_id || null,
+          source_location: event.source_location || null,
+          destination_location: event.destination_location || null,
+          occurred_at: combineDocketDateTime(docketDate, event.occurred_time) || `${docketDate}T12:00:00`,
+          affected_work: event.affected_work,
+          work_outcome: event.affected_work ? event.work_outcome || null : null,
+          affected_activity: event.affected_work ? event.affected_activity || null : null,
+          affected_section: event.affected_work ? event.affected_section || null : null,
+          impact_started_at: event.affected_work
+            ? combineDocketDateTime(docketDate, event.impact_start_time)
+            : null,
+          impact_finished_at:
+            event.affected_work && !event.impact_ongoing
+              ? combineDocketDateTime(docketDate, event.impact_finish_time)
+              : null,
+          impact_ongoing: event.affected_work ? event.impact_ongoing : false,
+          current_effect: event.affected_work ? event.current_effect || null : null,
+          mitigation_actions: event.affected_work ? event.mitigation_actions : [],
+          commercial_impact_type: event.affected_work
+            ? workOutcomeCommercialType(event.work_outcome)
+            : null,
+          notes: event.notes || null,
+        })
+        .select("id")
+        .single();
+
+      if (eventInsert.error || !eventInsert.data) {
+        throw new Error(`Daily Docket saved, but a material event could not be saved: ${eventInsert.error?.message || "Unknown error"}`);
+      }
+
+      const eventId = eventInsert.data.id;
+
+      const itemInsert = await supabase.from("tower_material_event_items").insert(
+        meaningfulItems.map((item) => ({
+          event_id: eventId,
+          source_table: item.source_table || null,
+          source_record_id: item.source_record_id || null,
+          item_reference: item.item_reference.trim(),
+          item_description: item.item_description || null,
+          quantity: Number(item.quantity || 1),
+          unit: item.unit || null,
+        }))
+      );
+
+      if (itemInsert.error) {
+        throw new Error(`Daily Docket saved, but material event items could not be saved: ${itemInsert.error.message}`);
+      }
+
+      if (event.people.length) {
+        const peopleInsert = await supabase.from("tower_material_event_people").insert(
+          event.people.map((person) => ({
+            event_id: eventId,
+            employee_id: person.employee_id || null,
+            employee_name: person.employee_name,
+            employee_role: person.employee_role || null,
+            involvement_type: "search_verify",
+            started_at: combineDocketDateTime(docketDate, person.started_at),
+            finished_at: combineDocketDateTime(docketDate, person.finished_at),
+          }))
+        );
+
+        if (peopleInsert.error) {
+          throw new Error(`Daily Docket saved, but material event personnel could not be saved: ${peopleInsert.error.message}`);
+        }
+      }
+
+      if (event.plant.length) {
+        const plantInsert = await supabase.from("tower_material_event_plant").insert(
+          event.plant.map((row) => ({
+            event_id: eventId,
+            plant_asset_id: null,
+            plant_name: row.plant_name,
+            asset_number: row.asset_number || null,
+            involvement_type: "affected",
+            started_at: combineDocketDateTime(docketDate, row.started_at),
+            finished_at: combineDocketDateTime(docketDate, row.finished_at),
+          }))
+        );
+
+        if (plantInsert.error) {
+          throw new Error(`Daily Docket saved, but material event plant could not be saved: ${plantInsert.error.message}`);
+        }
+      }
+    }
   }
 
   async function getNextDayworkSequence() {
@@ -2076,6 +2800,7 @@ export default function DailyDocketForm({
       }
     }
 
+    await syncMaterialEvents(docket.id);
     await syncDelayDayworks(docket.id);
     await recalcTowerProgressAndStatus();
 
@@ -2168,6 +2893,7 @@ export default function DailyDocketForm({
       if (progressInsertRes.error) throw new Error("Failed to save progress rows.");
     }
 
+    await syncMaterialEvents(docketId);
     await syncDelayDayworks(docketId);
     await recalcTowerProgressAndStatus();
     await publishDailyDocketToSharePoint(docketId);
@@ -2314,6 +3040,7 @@ export default function DailyDocketForm({
       }
 
       setDelayRows([]);
+      setMaterialEvents([]);
 
       if (progress && progress.length > 0) {
         setProgressRows(
@@ -3142,263 +3869,724 @@ export default function DailyDocketForm({
         </section>
       )}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Delays & Issues</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Delays, Missing Steel & Material Movements</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Add delay events for commercial tracking. Choose labour only or labour + plant for items such as moving blocks, access issues, bogged plant, or standby.
+              Record what happened on site. TTTracker calculates the affected labour/plant time and keeps the formal commercial wording out of the site form.
             </p>
           </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-right">
-            <MiniSummary label="Delay Events" value={totalDelayEvents.toFixed(2)} />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <MiniSummary label="General Delay Hrs" value={totalDelayEvents.toFixed(2)} />
             <MiniSummary label="Delay MH" value={totalDelayManhours.toFixed(2)} />
-            <MiniSummary label="Plant Delay" value={totalPlantDelayHours.toFixed(2)} />
-            <MiniSummary label="Rows" value={String(delayRows.length)} />
+            <MiniSummary label="Material Events" value={String(materialEvents.length)} />
+            <MiniSummary label="Plant Delay Hrs" value={totalPlantDelayHours.toFixed(2)} />
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="Missing Items / Bolts"
-            value={missingItemsBolts}
-            onChange={setMissingItemsBolts}
-            disabled={locked || isView}
-          />
-          <Input
-            label="General Delay / Site Comment"
-            value={delaysComments}
-            onChange={setDelaysComments}
-            disabled={locked || isView}
-          />
-        </div>
-
-        <div className="space-y-3">
-          {delayRows.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-              No delay events added. Add one if weather, access, plant, materials, or selected workers were delayed.
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-slate-900">General Site Delays</h3>
+              <p className="text-sm text-slate-500">
+                Use this for weather, lightning, toolbox, access, plant breakdowns and other non-material delays.
+              </p>
             </div>
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={addDelayRow}
+                className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-semibold"
+              >
+                + Add General Delay
+              </button>
+            )}
+          </div>
+
+          {delayRows.length === 0 ? (
+            <div className="text-sm text-slate-500">No general delays recorded.</div>
           ) : (
-            delayRows.map((delay, index) => {
-              const affectedCount =
-                delay.applies_to === "entire_crew"
-                  ? availableWorkerNames.length
-                  : delay.worker_names.length;
-
-              const delayManhours = toNumber(delay.delay_hours) * affectedCount;
-              const plantDelayHours = delayIncludesPlant(delay)
-                ? toNumber(delay.delay_hours) * delay.plant_names.length
-                : 0;
-
-              return (
-                <div
-                  key={delay.ui_id}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3"
-                >
-                  <div className="grid md:grid-cols-[150px_150px_120px_1fr_170px_auto] gap-3 items-end">
+            <div className="space-y-3">
+              {delayRows.map((delay, index) => (
+                <div key={delay.ui_id} className="rounded-xl border border-slate-200 bg-white p-3 space-y-3">
+                  <div className="grid md:grid-cols-[180px_120px_1fr_170px_auto] gap-3 items-end">
                     <div>
-                      <label className="block text-sm font-medium mb-1">Delay Type</label>
+                      <label className="block text-sm font-medium mb-1">What happened?</label>
                       <select
-                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
+                        className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                         value={delay.delay_type}
                         disabled={locked || isView}
-                        onChange={(e) =>
-                          updateDelayRow(index, "delay_type", e.target.value)
-                        }
+                        onChange={(e) => updateDelayRow(index, "delay_type", e.target.value)}
                       >
                         <option value="weather">Weather</option>
                         <option value="lightning">Lightning</option>
                         <option value="toolbox">Toolbox</option>
-                        <option value="mobilisation">Mobilisation</option>
+                        <option value="mobilisation">Prestart / Mobilisation</option>
                         <option value="access">Access / Bogged</option>
                         <option value="plant">Plant / Equipment</option>
-                        <option value="materials">Materials</option>
                         <option value="other">Other</option>
                       </select>
                     </div>
-
-                    <div>
-                      <label className="block text-sm font-medium mb-1">
-                        Commercial Tracking
-                      </label>
-                      <select
-                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
-                        value={delay.delay_applies_mode}
-                        disabled={locked || isView}
-                        onChange={(e) =>
-                          updateDelayRow(index, "delay_applies_mode", e.target.value)
-                        }
-                      >
-                        <option value="labour_only">Labour Only</option>
-                        <option value="labour_and_plant">Labour + Plant</option>
-                      </select>
-                    </div>
-
                     <Input
-                      label="Delay Hrs"
+                      label="How long? (hrs)"
                       type="number"
                       value={delay.delay_hours}
                       onChange={(v) => updateDelayRow(index, "delay_hours", v)}
                       disabled={locked || isView}
                     />
-
                     <Input
-                      label="Reason"
+                      label="What caused it?"
                       value={delay.delay_reason}
                       onChange={(v) => updateDelayRow(index, "delay_reason", v)}
                       disabled={locked || isView}
                     />
-
                     <div>
-                      <label className="block text-sm font-medium mb-1">
-                        Labour Applies To
-                      </label>
+                      <label className="block text-sm font-medium mb-1">Who was affected?</label>
                       <select
-                        className="border rounded-lg p-2 w-full text-sm disabled:bg-slate-100"
+                        className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                         value={delay.applies_to}
                         disabled={locked || isView}
-                        onChange={(e) =>
-                          updateDelayRow(index, "applies_to", e.target.value)
-                        }
+                        onChange={(e) => updateDelayRow(index, "applies_to", e.target.value)}
                       >
-                        <option value="entire_crew">Entire Crew</option>
-                        <option value="selected_workers">Selected Workers</option>
+                        <option value="entire_crew">Entire crew</option>
+                        <option value="selected_workers">Selected workers</option>
                       </select>
                     </div>
-
-                    {!locked && !isView ? (
+                    {!locked && !isView && (
                       <button
                         type="button"
                         onClick={() => removeDelayRow(index)}
-                        className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50"
+                        className="border px-3 py-2 rounded-lg hover:bg-slate-50"
                       >
                         Remove
                       </button>
-                    ) : (
-                      <div />
                     )}
                   </div>
 
                   {delay.applies_to === "selected_workers" && (
-                    <div className="rounded-xl border border-slate-200 bg-white p-3">
-                      <div className="text-sm font-medium mb-2">Affected Workers</div>
-
-                      {availableWorkerNames.length === 0 ? (
-                        <div className="text-sm text-slate-500">
-                          Add workers in the labour section first.
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {availableWorkerNames.map((name) => {
-                            const checked = delay.worker_names.some(
-                              (worker) =>
-                                normalizeWorkerName(worker) ===
-                                normalizeWorkerName(name)
-                            );
-
-                            return (
-                              <label
-                                key={`${delay.ui_id}-${name}`}
-                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm cursor-pointer ${
-                                  checked
-                                    ? "bg-slate-900 text-white border-slate-900"
-                                    : "bg-white text-slate-700 border-slate-300"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="hidden"
-                                  checked={checked}
-                                  disabled={locked || isView}
-                                  onChange={() => toggleDelayWorker(index, name)}
-                                />
-                                {name}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
+                    <div className="flex flex-wrap gap-2">
+                      {availableWorkerNames.map((name) => {
+                        const checked = delay.worker_names.some(
+                          (worker) => normalizeWorkerName(worker) === normalizeWorkerName(name)
+                        );
+                        return (
+                          <button
+                            type="button"
+                            key={`${delay.ui_id}-${name}`}
+                            disabled={locked || isView}
+                            onClick={() => toggleDelayWorker(index, name)}
+                            className={`rounded-full border px-3 py-2 text-sm ${
+                              checked
+                                ? "bg-slate-900 text-white border-slate-900"
+                                : "bg-white text-slate-700 border-slate-300"
+                            }`}
+                          >
+                            {name}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
 
-                  {delayIncludesPlant(delay) && (
-                    <div className="rounded-xl border border-purple-200 bg-white p-3">
-                      <div className="text-sm font-medium mb-2 text-purple-900">
-                        Affected Plant
-                      </div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={delay.delay_applies_mode === "labour_and_plant"}
+                        disabled={locked || isView}
+                        onChange={(e) =>
+                          updateDelayRow(
+                            index,
+                            "delay_applies_mode",
+                            e.target.checked ? "labour_and_plant" : "labour_only"
+                          )
+                        }
+                      />
+                      Plant was also affected
+                    </label>
 
-                      {availablePlantNames.length === 0 ? (
-                        <div className="text-sm text-slate-500">
-                          Add plant or vehicles in the Plant & Vehicles Used section above first.
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {availablePlantNames.map((name) => {
-                            const checked = delay.plant_names.some(
-                              (plant) =>
-                                normalizeWorkerName(plant) ===
-                                normalizeWorkerName(name)
-                            );
-
-                            return (
-                              <label
-                                key={`${delay.ui_id}-plant-${name}`}
-                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm cursor-pointer ${
-                                  checked
-                                    ? "bg-purple-700 text-white border-purple-700"
-                                    : "bg-white text-slate-700 border-slate-300"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="hidden"
-                                  checked={checked}
-                                  disabled={locked || isView}
-                                  onChange={() => toggleDelayPlant(index, name)}
-                                />
-                                {name}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="text-xs text-slate-500 space-y-1">
-                    <div>
-                      Labour delay tracking: {toNumber(delay.delay_hours).toFixed(2)} hrs ×{" "}
-                      {affectedCount} people = {delayManhours.toFixed(2)} delay manhours.
-                    </div>
-
-                    {delayIncludesPlant(delay) && (
-                      <div>
-                        Plant delay tracking: {toNumber(delay.delay_hours).toFixed(2)} hrs ×{" "}
-                        {delay.plant_names.length} plant item(s) = {plantDelayHours.toFixed(2)}{" "}
-                        plant delay hours.
-                      </div>
-                    )}
-
-                    <div className="font-medium text-slate-600">
-                      Plant delay is commercial tracking only and does not change production MH/t.
-                    </div>
+                    {delayIncludesPlant(delay) &&
+                      availablePlantNames.map((name) => {
+                        const checked = delay.plant_names.some(
+                          (plant) => normalizeWorkerName(plant) === normalizeWorkerName(name)
+                        );
+                        return (
+                          <button
+                            type="button"
+                            key={`${delay.ui_id}-plant-${name}`}
+                            disabled={locked || isView}
+                            onClick={() => toggleDelayPlant(index, name)}
+                            className={`rounded-full border px-3 py-2 text-sm ${
+                              checked
+                                ? "bg-purple-700 text-white border-purple-700"
+                                : "bg-white text-slate-700 border-slate-300"
+                            }`}
+                          >
+                            {name}
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
-              );
-            })
+              ))}
+            </div>
           )}
         </div>
 
-        {!locked && !isView && (
-          <button
-            type="button"
-            onClick={addDelayRow}
-            className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-black"
-          >
-            Add Delay Event
-          </button>
-        )}
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-slate-900">Steel / Material Events</h3>
+              <p className="text-sm text-slate-600">
+                Missing steel, received items, transfers between towers, excess material, damaged or incorrect material.
+              </p>
+            </div>
+
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={addMaterialEvent}
+                className="bg-amber-500 text-slate-950 px-4 py-2 rounded-xl text-sm font-black hover:bg-amber-400"
+              >
+                + Record Steel / Material Event
+              </button>
+            )}
+          </div>
+
+          {materialEvents.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-amber-300 bg-white/70 p-4 text-sm text-slate-600">
+              No missing steel or material movements recorded for this docket.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {materialEvents.map((event, eventIndex) => {
+                const catalogTowerId =
+                  event.event_type === "taken_from_another_tower"
+                    ? event.source_tower_id
+                    : event.event_type === "sent_to_another_tower"
+                    ? towerId
+                    : towerId;
+
+                const availableCatalog = materialCatalog.filter(
+                  (item) => !catalogTowerId || item.tower_id === catalogTowerId
+                );
+
+                return (
+                  <div key={event.ui_id} className="rounded-2xl border border-amber-200 bg-white p-4 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="grid md:grid-cols-3 gap-3 flex-1">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">What happened?</label>
+                          <select
+                            className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                            value={event.event_type}
+                            disabled={locked || isView}
+                            onChange={(e) =>
+                              updateMaterialEvent(
+                                eventIndex,
+                                "event_type",
+                                e.target.value as MaterialEventType
+                              )
+                            }
+                          >
+                            <option value="missing">Missing material</option>
+                            <option value="found_received">Found / Received</option>
+                            <option value="taken_from_another_tower">Taken from another tower</option>
+                            <option value="sent_to_another_tower">Sent to another tower</option>
+                            <option value="excess">Excess material</option>
+                            <option value="damaged_incorrect">Damaged / Incorrect</option>
+                          </select>
+                        </div>
+
+                        <Input
+                          label="Time"
+                          type="time"
+                          value={event.occurred_time}
+                          onChange={(v) => updateMaterialEvent(eventIndex, "occurred_time", v)}
+                          disabled={locked || isView}
+                        />
+
+                        <div className="flex items-end">
+                          <div className="text-sm font-semibold text-amber-800">
+                            {materialEventLabel(event.event_type)}
+                          </div>
+                        </div>
+                      </div>
+
+                      {!locked && !isView && (
+                        <button
+                          type="button"
+                          onClick={() => removeMaterialEvent(eventIndex)}
+                          className="border px-3 py-2 rounded-lg hover:bg-slate-50"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+
+                    {(event.event_type === "taken_from_another_tower" ||
+                      event.event_type === "sent_to_another_tower") && (
+                      <div className="grid md:grid-cols-2 gap-3">
+                        {event.event_type === "taken_from_another_tower" && (
+                          <div>
+                            <label className="block text-sm font-medium mb-1">Taken from tower</label>
+                            <select
+                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              value={event.source_tower_id}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(eventIndex, "source_tower_id", e.target.value)
+                              }
+                            >
+                              <option value="">Select tower...</option>
+                              {projectTowers
+                                .filter((tower) => tower.id !== towerId)
+                                .map((tower) => (
+                                  <option key={tower.id} value={tower.id}>{tower.name}</option>
+                                ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {event.event_type === "sent_to_another_tower" && (
+                          <div>
+                            <label className="block text-sm font-medium mb-1">Sent to tower</label>
+                            <select
+                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              value={event.destination_tower_id}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(eventIndex, "destination_tower_id", e.target.value)
+                              }
+                            >
+                              <option value="">Select tower...</option>
+                              {projectTowers
+                                .filter((tower) => tower.id !== towerId)
+                                .map((tower) => (
+                                  <option key={tower.id} value={tower.id}>{tower.name}</option>
+                                ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      <div className="text-sm font-semibold text-slate-900">What material?</div>
+                      {event.items.map((item, itemIndex) => {
+                        const catalogValue =
+                          item.source_table && item.source_record_id
+                            ? `${item.source_table}:${item.source_record_id}`
+                            : "";
+
+                        return (
+                          <div
+                            key={item.ui_id}
+                            className="grid md:grid-cols-[1.6fr_1fr_110px_100px_auto] gap-2 items-end"
+                          >
+                            <div>
+                              <label className="block text-sm font-medium mb-1">Search project material</label>
+                              <select
+                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                                value={catalogValue}
+                                disabled={locked || isView}
+                                onChange={(e) => chooseCatalogItem(eventIndex, itemIndex, e.target.value)}
+                              >
+                                <option value="">Manual / other material...</option>
+                                {availableCatalog.map((catalogItem) => (
+                                  <option
+                                    key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                    value={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                  >
+                                    {catalogItem.item_reference}
+                                    {catalogItem.item_description ? ` — ${catalogItem.item_description}` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <Input
+                              label="Reference / Description"
+                              value={item.item_reference}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, {
+                                  item_reference: v,
+                                  source_table: item.source_table,
+                                  source_record_id: item.source_record_id,
+                                })
+                              }
+                              disabled={locked || isView}
+                            />
+
+                            <Input
+                              label="Qty"
+                              type="number"
+                              value={item.quantity}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, { quantity: v })
+                              }
+                              disabled={locked || isView}
+                            />
+
+                            <Input
+                              label="Unit"
+                              value={item.unit}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, { unit: v })
+                              }
+                              disabled={locked || isView}
+                            />
+
+                            {!locked && !isView && (
+                              <button
+                                type="button"
+                                onClick={() => removeMaterialItem(eventIndex, itemIndex)}
+                                className="border px-3 py-2 rounded-lg"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {!locked && !isView && (
+                        <button
+                          type="button"
+                          onClick={() => addMaterialItem(eventIndex)}
+                          className="text-sm font-semibold text-blue-700"
+                        >
+                          + Add another item
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Did this affect the work?</label>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={locked || isView}
+                            onClick={() => updateMaterialEvent(eventIndex, "affected_work", false)}
+                            className={`px-4 py-2 rounded-xl border font-semibold ${
+                              !event.affected_work
+                                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                                : "bg-white border-slate-300"
+                            }`}
+                          >
+                            No
+                          </button>
+                          <button
+                            type="button"
+                            disabled={locked || isView}
+                            onClick={() => updateMaterialEvent(eventIndex, "affected_work", true)}
+                            className={`px-4 py-2 rounded-xl border font-semibold ${
+                              event.affected_work
+                                ? "bg-red-50 border-red-300 text-red-800"
+                                : "bg-white border-slate-300"
+                            }`}
+                          >
+                            Yes
+                          </button>
+                        </div>
+                      </div>
+
+                      {event.affected_work && (
+                        <>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium mb-1">What were you trying to do?</label>
+                              <select
+                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                                value={event.affected_activity}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateMaterialEvent(eventIndex, "affected_activity", e.target.value)
+                                }
+                              >
+                                <option value="">Select...</option>
+                                <option value="Assembly">Assembly</option>
+                                <option value="Erection">Erection</option>
+                                <option value="Bolting">Bolting</option>
+                                <option value="Fit-off">Fit-off</option>
+                                <option value="Other">Other</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block text-sm font-medium mb-1">What section was affected?</label>
+                              <select
+                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                                value={event.affected_section}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateMaterialEvent(eventIndex, "affected_section", e.target.value)
+                                }
+                              >
+                                <option value="">Select section...</option>
+                                {visibleProgressRows.map((row) => (
+                                  <option key={row.section_label} value={row.section_label}>
+                                    {row.section_label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium mb-1">What happened to the planned work?</label>
+                              <select
+                                className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                                value={event.work_outcome}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateMaterialEvent(
+                                    eventIndex,
+                                    "work_outcome",
+                                    e.target.value as MaterialWorkOutcome
+                                  )
+                                }
+                              >
+                                <option value="">Select...</option>
+                                <option value="stopped_work">Couldn’t continue</option>
+                                <option value="slowed_down">Could continue but slower</option>
+                                <option value="changed_sequence">Moved onto another section / task</option>
+                                <option value="minor_impact">No meaningful effect</option>
+                              </select>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input
+                                label="Impact started"
+                                type="time"
+                                value={event.impact_start_time}
+                                onChange={(v) =>
+                                  updateMaterialEvent(eventIndex, "impact_start_time", v)
+                                }
+                                disabled={locked || isView}
+                              />
+                              <Input
+                                label="Impact finished"
+                                type="time"
+                                value={event.impact_finish_time}
+                                onChange={(v) =>
+                                  updateMaterialEvent(eventIndex, "impact_finish_time", v)
+                                }
+                                disabled={locked || isView || event.impact_ongoing}
+                              />
+                            </div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2 text-sm font-medium">
+                            <input
+                              type="checkbox"
+                              checked={event.impact_ongoing}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(eventIndex, "impact_ongoing", e.target.checked)
+                              }
+                            />
+                            Still affecting the tower / work is ongoing
+                          </label>
+
+                          <div className="space-y-2">
+                            <div className="text-sm font-semibold">Who spent time searching / checking?</div>
+                            <div className="flex flex-wrap gap-2">
+                              {availableWorkerNames.map((name) => {
+                                const selected = event.people.some(
+                                  (person) => normalizeWorkerName(person.employee_name) === normalizeWorkerName(name)
+                                );
+                                return (
+                                  <button
+                                    key={`${event.ui_id}-person-${name}`}
+                                    type="button"
+                                    disabled={locked || isView || selected}
+                                    onClick={() => addMaterialPerson(eventIndex, name)}
+                                    className={`rounded-full border px-3 py-2 text-sm ${
+                                      selected
+                                        ? "bg-blue-600 text-white border-blue-600"
+                                        : "bg-white border-slate-300"
+                                    }`}
+                                  >
+                                    {selected ? "✓ " : "+ "}{name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {event.people.map((person, personIndex) => (
+                              <div
+                                key={person.ui_id}
+                                className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
+                              >
+                                <div className="text-sm font-medium py-2">{person.employee_name}</div>
+                                <Input
+                                  label="Started"
+                                  type="time"
+                                  value={person.started_at}
+                                  onChange={(v) =>
+                                    updateMaterialPerson(eventIndex, personIndex, { started_at: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Finished"
+                                  type="time"
+                                  value={person.finished_at}
+                                  onChange={(v) =>
+                                    updateMaterialPerson(eventIndex, personIndex, { finished_at: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                {!locked && !isView && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMaterialPerson(eventIndex, personIndex)}
+                                    className="border px-3 py-2 rounded-lg"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="text-sm font-semibold">Was any plant tied up?</div>
+                            <div className="flex flex-wrap gap-2">
+                              {availablePlantNames.map((name) => {
+                                const selected = event.plant.some(
+                                  (row) => normalizeWorkerName(row.plant_name) === normalizeWorkerName(name)
+                                );
+                                return (
+                                  <button
+                                    key={`${event.ui_id}-event-plant-${name}`}
+                                    type="button"
+                                    disabled={locked || isView || selected}
+                                    onClick={() => addMaterialPlant(eventIndex, name)}
+                                    className={`rounded-full border px-3 py-2 text-sm ${
+                                      selected
+                                        ? "bg-purple-700 text-white border-purple-700"
+                                        : "bg-white border-slate-300"
+                                    }`}
+                                  >
+                                    {selected ? "✓ " : "+ "}{name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {event.plant.map((row, plantIndex) => (
+                              <div
+                                key={row.ui_id}
+                                className="grid md:grid-cols-[1fr_140px_140px_auto] gap-2 items-end"
+                              >
+                                <div className="text-sm font-medium py-2">{row.plant_name}</div>
+                                <Input
+                                  label="Started"
+                                  type="time"
+                                  value={row.started_at}
+                                  onChange={(v) =>
+                                    updateMaterialPlant(eventIndex, plantIndex, { started_at: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Finished"
+                                  type="time"
+                                  value={row.finished_at}
+                                  onChange={(v) =>
+                                    updateMaterialPlant(eventIndex, plantIndex, { finished_at: v })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                {!locked && !isView && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMaterialPlant(eventIndex, plantIndex)}
+                                    className="border px-3 py-2 rounded-lg"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          <div>
+                            <div className="text-sm font-semibold mb-2">What did you do instead / to reduce the impact?</div>
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                "Moved personnel to another activity",
+                                "Assembled another section",
+                                "Checked other bundles",
+                                "Resequenced planned work",
+                                "Assisted client to locate / verify material",
+                              ].map((action) => {
+                                const checked = event.mitigation_actions.includes(action);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={`${event.ui_id}-${action}`}
+                                    disabled={locked || isView}
+                                    onClick={() => toggleMitigation(eventIndex, action)}
+                                    className={`rounded-full border px-3 py-2 text-sm ${
+                                      checked
+                                        ? "bg-emerald-700 text-white border-emerald-700"
+                                        : "bg-white border-slate-300"
+                                    }`}
+                                  >
+                                    {checked ? "✓ " : ""}{action}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium mb-1">What is happening now?</label>
+                            <select
+                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              value={event.current_effect}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(eventIndex, "current_effect", e.target.value)
+                              }
+                            >
+                              <option value="">Select...</option>
+                              <option value="Waiting for material">Waiting for material</option>
+                              <option value="Erection stopped">Erection stopped</option>
+                              <option value="Working on another section">Working on another section</option>
+                              <option value="Resolved">Resolved</option>
+                              <option value="Unknown / awaiting confirmation">Unknown / awaiting confirmation</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+
+                      <Input
+                        label="Extra notes"
+                        value={event.notes}
+                        onChange={(v) => updateMaterialEvent(eventIndex, "notes", v)}
+                        disabled={locked || isView}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <Input
+          label="General Site Comment"
+          value={delaysComments}
+          onChange={setDelaysComments}
+          disabled={locked || isView}
+        />
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
