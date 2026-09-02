@@ -88,6 +88,7 @@ type MaterialEventItemDraft = {
   source_record_id: string;
   material_kind: "registered" | "manual";
   manual_category: string;
+  search_query: string;
   item_reference: string;
   item_description: string;
   quantity: string;
@@ -818,6 +819,7 @@ function blankMaterialItem(): MaterialEventItemDraft {
     source_record_id: "",
     material_kind: "registered",
     manual_category: "",
+    search_query: "",
     item_reference: "",
     item_description: "",
     quantity: "1",
@@ -1330,6 +1332,7 @@ export default function DailyDocketForm({
                   !item.source_table && !item.source_record_id
                     ? toStringValue(item.item_description).split(" · ")[0] || ""
                     : "",
+                search_query: "",
                 item_reference: toStringValue(item.item_reference),
                 item_description: toStringValue(item.item_description),
                 quantity: toStringValue(item.quantity || 1),
@@ -2235,9 +2238,16 @@ export default function DailyDocketForm({
   }
 
 
-  function addMaterialEvent() {
+  function addMaterialEvent(eventType: MaterialEventType = "missing") {
     if (isView || locked) return;
-    setMaterialEvents((prev) => [...prev, blankMaterialEvent()]);
+    setMaterialEvents((prev) => [
+      ...prev,
+      {
+        ...blankMaterialEvent(),
+        event_type: eventType,
+        affected_work: eventType === "excess" ? false : false,
+      },
+    ]);
   }
 
   function removeMaterialEvent(index: number) {
@@ -2304,6 +2314,7 @@ export default function DailyDocketForm({
       source_record_id: catalogItem.source_record_id,
       material_kind: "registered",
       manual_category: "",
+      search_query: catalogItem.item_reference,
       item_reference: catalogItem.item_reference,
       item_description: catalogItem.item_description,
       unit: catalogItem.unit,
@@ -3775,7 +3786,7 @@ export default function DailyDocketForm({
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Plant & Vehicles Used</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Crew-assigned plant and vehicles are auto-added from Assets. Use this list for Labour + Plant delays. Schedule of Rates uses the same list for plant hours.
+              Crew-assigned assets are auto-added. Keep this as a quick register of what was used; hours are only required for Schedule of Rates.
             </p>
           </div>
 
@@ -3847,7 +3858,7 @@ export default function DailyDocketForm({
                   key={index}
                   className="border border-purple-100 bg-purple-50/40 rounded-xl p-3 space-y-3"
                 >
-                  <div className="grid grid-cols-2 md:grid-cols-[1.2fr_1fr_1fr_1fr] gap-2 items-end">
+                  <div className="grid grid-cols-2 md:grid-cols-[1.3fr_1fr_1fr] gap-2 items-end">
                     <LabourInput
                       label="Plant / Vehicle Name"
                       value={row.plant_name}
@@ -3866,16 +3877,10 @@ export default function DailyDocketForm({
                       disabled={locked || isView}
                       onChange={(v) => updatePlantRow(index, "asset_id", v)}
                     />
-                    <LabourInput
-                      label="Operator"
-                      value={row.operator_name}
-                      disabled={locked || isView}
-                      onChange={(v) => updatePlantRow(index, "operator_name", v)}
-                    />
                   </div>
 
-                  {rateType === "schedule_of_rates" ? (
-                    <div className="grid grid-cols-2 md:grid-cols-[120px_120px_110px_1fr_auto] gap-2 items-end">
+                  {rateType === "schedule_of_rates" && (
+                    <div className="grid grid-cols-3 md:grid-cols-[120px_120px_110px] gap-2 items-end">
                       <LabourInput
                         label="Time In"
                         type="time"
@@ -3897,45 +3902,18 @@ export default function DailyDocketForm({
                         disabled={locked || isView}
                         onChange={(v) => updatePlantRow(index, "total_hours", v)}
                       />
-                      <LabourInput
-                        label="Notes"
-                        value={row.notes}
-                        disabled={locked || isView}
-                        onChange={(v) => updatePlantRow(index, "notes", v)}
-                      />
-
-                      {!locked && !isView ? (
-                        <button
-                          type="button"
-                          onClick={() => removePlantRow(index)}
-                          className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50"
-                        >
-                          Remove
-                        </button>
-                      ) : (
-                        <div />
-                      )}
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
-                      <LabourInput
-                        label="Notes"
-                        value={row.notes}
-                        disabled={locked || isView}
-                        onChange={(v) => updatePlantRow(index, "notes", v)}
-                      />
+                  )}
 
-                      {!locked && !isView ? (
-                        <button
-                          type="button"
-                          onClick={() => removePlantRow(index)}
-                          className="border px-4 py-2 rounded-lg h-10 bg-white hover:bg-slate-50"
-                        >
-                          Remove
-                        </button>
-                      ) : (
-                        <div />
-                      )}
+                  {!locked && !isView && (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removePlantRow(index)}
+                        className="border px-3 py-1.5 rounded-lg bg-white text-sm hover:bg-slate-50"
+                      >
+                        Remove
+                      </button>
                     </div>
                   )}
                 </div>
@@ -4133,7 +4111,10 @@ export default function DailyDocketForm({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <MiniSummary label="General Delay Hrs" value={totalDelayEvents.toFixed(2)} />
             <MiniSummary label="Delay MH" value={totalDelayManhours.toFixed(2)} />
-            <MiniSummary label="Material Events" value={String(materialEvents.length)} />
+            <MiniSummary
+              label="Material Issues"
+              value={String(materialEvents.filter((event) => event.event_type !== "excess").length)}
+            />
             <MiniSummary label="Plant Delay Hrs" value={totalPlantDelayHours.toFixed(2)} />
           </div>
         </div>
@@ -4290,30 +4271,33 @@ export default function DailyDocketForm({
         <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <h3 className="font-semibold text-slate-900">Steel / Material Events</h3>
+              <h3 className="font-semibold text-slate-900">Steel / Material Issues & Movements</h3>
               <p className="text-sm text-slate-600">
-                Missing steel, received items, transfers between towers, excess material, damaged or incorrect material.
+                Record missing or incorrect steel, material received, and material moved between towers. Excess material is recorded separately below.
               </p>
             </div>
 
             {!locked && !isView && (
               <button
                 type="button"
-                onClick={addMaterialEvent}
+                onClick={() => addMaterialEvent("missing")}
                 className="bg-amber-500 text-slate-950 px-4 py-2 rounded-xl text-sm font-black hover:bg-amber-400"
               >
-                + Record Steel / Material Event
+                + Record Issue / Movement
               </button>
             )}
           </div>
 
-          {materialEvents.length === 0 ? (
+          {materialEvents.filter((event) => event.event_type !== "excess").length === 0 ? (
             <div className="rounded-xl border border-dashed border-amber-300 bg-white/70 p-4 text-sm text-slate-600">
-              No missing steel or material movements recorded for this docket.
+              No steel/material issues or movements recorded for this docket.
             </div>
           ) : (
             <div className="space-y-4">
-              {materialEvents.map((event, eventIndex) => {
+              {materialEvents
+                .map((event, eventIndex) => ({ event, eventIndex }))
+                .filter(({ event }) => event.event_type !== "excess")
+                .map(({ event, eventIndex }) => {
                 const catalogTowerId =
                   event.event_type === "taken_from_another_tower"
                     ? event.source_tower_id
@@ -4328,7 +4312,7 @@ export default function DailyDocketForm({
                 return (
                   <div key={event.ui_id} className="rounded-2xl border border-amber-200 bg-white p-4 space-y-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="grid md:grid-cols-3 gap-3 flex-1">
+                      <div className="grid md:grid-cols-[minmax(220px,360px)_1fr] gap-3 flex-1">
                         <div>
                           <label className="block text-sm font-medium mb-1">What happened?</label>
                           <select
@@ -4347,18 +4331,9 @@ export default function DailyDocketForm({
                             <option value="found_received">Found / Received</option>
                             <option value="taken_from_another_tower">Taken from another tower</option>
                             <option value="sent_to_another_tower">Sent to another tower</option>
-                            <option value="excess">Excess material</option>
                             <option value="damaged_incorrect">Damaged / Incorrect</option>
                           </select>
                         </div>
-
-                        <Input
-                          label="Time"
-                          type="time"
-                          value={event.occurred_time}
-                          onChange={(v) => updateMaterialEvent(eventIndex, "occurred_time", v)}
-                          disabled={locked || isView}
-                        />
 
                         <div className="flex items-end">
                           <div className="text-sm font-semibold text-amber-800">
@@ -4438,38 +4413,93 @@ export default function DailyDocketForm({
                             key={item.ui_id}
                             className="grid md:grid-cols-[1.6fr_1fr_110px_100px_auto] gap-2 items-end"
                           >
-                            <div>
-                              <label className="block text-sm font-medium mb-1">Material source</label>
-                              <select
+                            <div className="relative">
+                              <label className="block text-sm font-medium mb-1">
+                                Search member / bundle / bolt
+                              </label>
+                              <input
                                 className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                                value={item.material_kind === "manual" ? "__manual__" : catalogValue}
+                                value={item.search_query}
                                 disabled={locked || isView}
-                                onChange={(e) => {
-                                  if (e.target.value === "__manual__") {
+                                placeholder="e.g. M1278, 23-04, M20x60..."
+                                onChange={(e) =>
+                                  updateMaterialItem(eventIndex, itemIndex, {
+                                    search_query: e.target.value,
+                                    material_kind: "registered",
+                                  })
+                                }
+                              />
+
+                              {!locked &&
+                                !isView &&
+                                item.search_query.trim().length > 0 &&
+                                item.material_kind !== "manual" && (
+                                  <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                                    {availableCatalog
+                                      .filter((catalogItem) => {
+                                        const q = item.search_query.trim().toLowerCase();
+                                        return (
+                                          catalogItem.item_reference.toLowerCase().includes(q) ||
+                                          catalogItem.item_description.toLowerCase().includes(q)
+                                        );
+                                      })
+                                      .slice(0, 12)
+                                      .map((catalogItem) => (
+                                        <button
+                                          type="button"
+                                          key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                          onClick={() =>
+                                            chooseCatalogItem(
+                                              eventIndex,
+                                              itemIndex,
+                                              `${catalogItem.source_table}:${catalogItem.source_record_id}`
+                                            )
+                                          }
+                                          className="block w-full border-b border-slate-100 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50"
+                                        >
+                                          <div className="text-sm font-semibold text-slate-900">
+                                            {catalogItem.item_reference}
+                                          </div>
+                                          {catalogItem.item_description && (
+                                            <div className="text-xs text-slate-500">
+                                              {catalogItem.item_description}
+                                            </div>
+                                          )}
+                                        </button>
+                                      ))}
+
+                                    {availableCatalog.filter((catalogItem) => {
+                                      const q = item.search_query.trim().toLowerCase();
+                                      return (
+                                        catalogItem.item_reference.toLowerCase().includes(q) ||
+                                        catalogItem.item_description.toLowerCase().includes(q)
+                                      );
+                                    }).length === 0 && (
+                                      <div className="p-3 text-sm text-slate-500">
+                                        No registered material matched this search.
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                              {!locked && !isView && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
                                     updateMaterialItem(eventIndex, itemIndex, {
                                       material_kind: "manual",
                                       source_table: "",
                                       source_record_id: "",
+                                      search_query: "",
                                       item_reference: "",
                                       item_description: "",
-                                    });
-                                  } else {
-                                    chooseCatalogItem(eventIndex, itemIndex, e.target.value);
+                                    })
                                   }
-                                }}
-                              >
-                                <option value="">Select project material...</option>
-                                <option value="__manual__">Other / unidentified item...</option>
-                                {availableCatalog.map((catalogItem) => (
-                                  <option
-                                    key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
-                                    value={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
-                                  >
-                                    {catalogItem.item_reference}
-                                    {catalogItem.item_description ? ` — ${catalogItem.item_description}` : ""}
-                                  </option>
-                                ))}
-                              </select>
+                                  className="mt-2 text-xs font-semibold text-blue-700"
+                                >
+                                  + Add an unlisted item (mesh clips, loose hardware, etc.)
+                                </button>
+                              )}
                             </div>
 
                             {item.material_kind === "manual" ? (
@@ -4493,16 +4523,14 @@ export default function DailyDocketForm({
                               </div>
                             ) : (
                               <Input
-                                label="Reference / Description"
+                                label="Selected item"
                                 value={item.item_reference}
                                 onChange={(v) =>
                                   updateMaterialItem(eventIndex, itemIndex, {
                                     item_reference: v,
-                                    source_table: item.source_table,
-                                    source_record_id: item.source_record_id,
                                   })
                                 }
-                                disabled={locked || isView}
+                                disabled={locked || isView || Boolean(item.source_record_id)}
                               />
                             )}
 
@@ -4872,6 +4900,257 @@ export default function DailyDocketForm({
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-slate-900">Excess Steel / Materials</h3>
+              <p className="text-sm text-slate-600">
+                Record material left over at this tower separately from delays or missing-steel issues.
+              </p>
+            </div>
+
+            {!locked && !isView && (
+              <button
+                type="button"
+                onClick={() => addMaterialEvent("excess")}
+                className="bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-emerald-800"
+              >
+                + Add Excess Material
+              </button>
+            )}
+          </div>
+
+          {materialEvents.filter((event) => event.event_type === "excess").length === 0 ? (
+            <div className="rounded-xl border border-dashed border-emerald-300 bg-white/70 p-4 text-sm text-slate-600">
+              No excess material recorded.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {materialEvents
+                .map((event, eventIndex) => ({ event, eventIndex }))
+                .filter(({ event }) => event.event_type === "excess")
+                .map(({ event, eventIndex }) => (
+                  <div
+                    key={event.ui_id}
+                    className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3"
+                  >
+                    {event.items.map((item, itemIndex) => {
+                      const q = item.search_query.trim().toLowerCase();
+                      const availableCatalog = materialCatalog.filter(
+                        (catalogItem) =>
+                          catalogItem.tower_id === towerId &&
+                          (!q ||
+                            catalogItem.item_reference.toLowerCase().includes(q) ||
+                            catalogItem.item_description.toLowerCase().includes(q))
+                      );
+
+                      return (
+                        <div
+                          key={item.ui_id}
+                          className="grid md:grid-cols-[1.7fr_1.2fr_100px_90px_auto] gap-2 items-end"
+                        >
+                          <div>
+                            <label className="block text-sm font-medium mb-1">
+                              Search member / bundle / bolt
+                            </label>
+                            <input
+                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                              value={item.search_query}
+                              disabled={locked || isView}
+                              placeholder="Search current tower material..."
+                              onChange={(e) =>
+                                updateMaterialItem(eventIndex, itemIndex, {
+                                  search_query: e.target.value,
+                                  material_kind: "registered",
+                                })
+                              }
+                            />
+                            {!locked &&
+                              !isView &&
+                              item.search_query.trim() &&
+                              item.material_kind !== "manual" && (
+                                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border bg-white">
+                                  {availableCatalog.slice(0, 10).map((catalogItem) => (
+                                    <button
+                                      type="button"
+                                      key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                      onClick={() =>
+                                        chooseCatalogItem(
+                                          eventIndex,
+                                          itemIndex,
+                                          `${catalogItem.source_table}:${catalogItem.source_record_id}`
+                                        )
+                                      }
+                                      className="block w-full border-b px-3 py-2 text-left text-sm hover:bg-emerald-50 last:border-b-0"
+                                    >
+                                      <span className="font-semibold">
+                                        {catalogItem.item_reference}
+                                      </span>
+                                      {catalogItem.item_description && (
+                                        <span className="text-slate-500">
+                                          {" — "}{catalogItem.item_description}
+                                        </span>
+                                      )}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                            {!locked && !isView && (
+                              <button
+                                type="button"
+                                className="mt-2 text-xs font-semibold text-emerald-800"
+                                onClick={() =>
+                                  updateMaterialItem(eventIndex, itemIndex, {
+                                    material_kind: "manual",
+                                    source_table: "",
+                                    source_record_id: "",
+                                    search_query: "",
+                                    item_reference: "",
+                                    item_description: "",
+                                  })
+                                }
+                              >
+                                + Add unlisted item
+                              </button>
+                            )}
+                          </div>
+
+                          {item.material_kind === "manual" ? (
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input
+                                label="Item type"
+                                value={item.manual_category}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, { manual_category: v })
+                                }
+                                disabled={locked || isView}
+                              />
+                              <Input
+                                label="Item"
+                                value={item.item_reference}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
+                                }
+                                disabled={locked || isView}
+                              />
+                            </div>
+                          ) : (
+                            <Input
+                              label="Selected item"
+                              value={item.item_reference}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
+                              }
+                              disabled={locked || isView || Boolean(item.source_record_id)}
+                            />
+                          )}
+
+                          <Input
+                            label="Qty"
+                            type="number"
+                            value={item.quantity}
+                            onChange={(v) =>
+                              updateMaterialItem(eventIndex, itemIndex, { quantity: v })
+                            }
+                            disabled={locked || isView}
+                          />
+
+                          <Input
+                            label="Unit"
+                            value={item.unit}
+                            onChange={(v) =>
+                              updateMaterialItem(eventIndex, itemIndex, { unit: v })
+                            }
+                            disabled={locked || isView}
+                          />
+
+                          {!locked && !isView && (
+                            <button
+                              type="button"
+                              onClick={() => removeMaterialItem(eventIndex, itemIndex)}
+                              className="border px-3 py-2 rounded-lg"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Where is the excess now?</label>
+                        <select
+                          className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                          value={event.destination_location}
+                          disabled={locked || isView}
+                          onChange={(e) =>
+                            updateMaterialEvent(eventIndex, "destination_location", e.target.value)
+                          }
+                        >
+                          <option value="">At current tower</option>
+                          <option value="laydown">Returned / returning to laydown</option>
+                          <option value="other_tower">Sent / sending to another tower</option>
+                          <option value="other">Other location</option>
+                        </select>
+                      </div>
+
+                      {event.destination_location === "other_tower" && (
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Destination tower</label>
+                          <select
+                            className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
+                            value={event.destination_tower_id}
+                            disabled={locked || isView}
+                            onChange={(e) =>
+                              updateMaterialEvent(eventIndex, "destination_tower_id", e.target.value)
+                            }
+                          >
+                            <option value="">Select tower...</option>
+                            {projectTowers
+                              .filter((tower) => tower.id !== towerId)
+                              .map((tower) => (
+                                <option key={tower.id} value={tower.id}>
+                                  {tower.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    <Input
+                      label="Notes (optional)"
+                      value={event.notes}
+                      onChange={(v) => updateMaterialEvent(eventIndex, "notes", v)}
+                      disabled={locked || isView}
+                    />
+
+                    {!locked && !isView && (
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => addMaterialItem(eventIndex)}
+                          className="text-sm font-semibold text-emerald-800"
+                        >
+                          + Add another excess item
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeMaterialEvent(eventIndex)}
+                          className="text-sm font-semibold text-red-700"
+                        >
+                          Remove excess record
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
             </div>
           )}
         </div>
