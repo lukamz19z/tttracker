@@ -5110,233 +5110,275 @@ export default function DailyDocketForm({
               No excess material recorded.
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {materialEvents
                 .map((event, eventIndex) => ({ event, eventIndex }))
                 .filter(({ event }) => event.event_type === "excess")
                 .map(({ event, eventIndex }) => (
                   <div
                     key={event.ui_id}
-                    className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3"
+                    className="rounded-2xl border border-emerald-200 bg-white p-4 md:p-5 space-y-5 shadow-sm"
                   >
-                    {event.items.map((item, itemIndex) => {
-                      return (
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-emerald-900">
+                          Excess material record
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Search a registered item or enter an unlisted material.
+                        </div>
+                      </div>
+
+                      {!locked && !isView && (
+                        <button
+                          type="button"
+                          onClick={() => removeMaterialEvent(eventIndex)}
+                          className="border border-red-200 text-red-700 px-3 py-2 rounded-xl text-sm font-semibold hover:bg-red-50"
+                        >
+                          Remove Record
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-4 space-y-4">
+                      {event.items.map((item, itemIndex) => (
                         <div
                           key={item.ui_id}
-                          className="grid md:grid-cols-[1.7fr_1.2fr_100px_90px_auto] gap-2 items-end"
+                          className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 md:p-4 space-y-3"
                         >
-                          <div>
-                            <label className="block text-sm font-medium mb-1">
-                              Search member / bundle / bolt
-                            </label>
-                            <input
-                              className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                              value={item.search_query}
-                              disabled={locked || isView}
-                              placeholder="Search current tower material..."
-                              onChange={(e) =>
-                                updateMaterialItem(eventIndex, itemIndex, {
-                                  search_query: e.target.value,
-                                  material_kind: "registered",
-                                })
-                              }
-                            />
-                            {!locked &&
-                              !isView &&
-                              item.search_query.trim() &&
-                              item.material_kind !== "manual" && (
-                                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border bg-white">
-                                  {item.search_loading && (
-                                    <div className="p-3 text-sm text-slate-500">
-                                      Searching project material...
-                                    </div>
-                                  )}
+                          <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
+                            <div className="relative">
+                              <label className="block text-sm font-semibold mb-1">
+                                Search member / bundle / bolt
+                              </label>
+                              <input
+                                className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                value={item.search_query}
+                                disabled={locked || isView}
+                                placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
+                                onChange={(e) =>
+                                  void searchProjectMaterial(
+                                    eventIndex,
+                                    itemIndex,
+                                    e.target.value
+                                  )
+                                }
+                              />
 
-                                  {!item.search_loading &&
-                                    item.search_results.slice(0, 20).map((catalogItem) => (
-                                      <button
-                                        type="button"
-                                        key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
-                                        onClick={() =>
-                                          chooseCatalogItem(
-                                            eventIndex,
-                                            itemIndex,
-                                            `${catalogItem.source_table}:${catalogItem.source_record_id}`
-                                          )
-                                        }
-                                        className="block w-full border-b px-3 py-2 text-left text-sm hover:bg-emerald-50 last:border-b-0"
-                                      >
-                                        <span className="font-semibold">
-                                          {catalogItem.item_reference}
-                                        </span>
-                                        {catalogItem.item_description && (
-                                          <span className="text-slate-500">
-                                            {" — "}{catalogItem.item_description}
-                                          </span>
-                                        )}
-                                      </button>
-                                    ))}
-
-                                  {!item.search_loading &&
-                                    item.search_results.length === 0 && (
+                              {!locked &&
+                                !isView &&
+                                item.search_query.trim().length > 0 &&
+                                item.material_kind !== "manual" && (
+                                  <div className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+                                    {item.search_loading && (
                                       <div className="p-3 text-sm text-slate-500">
-                                        {item.item_description.startsWith("Search error:")
-                                          ? item.item_description
-                                          : "No registered member, bundle or bolt matched this search."}
+                                        Searching project material...
                                       </div>
                                     )}
-                                </div>
-                              )}
+
+                                    {!item.search_loading &&
+                                      item.search_results.slice(0, 20).map((catalogItem) => (
+                                        <button
+                                          type="button"
+                                          key={`${catalogItem.source_table}:${catalogItem.source_record_id}`}
+                                          onClick={() =>
+                                            chooseCatalogItem(
+                                              eventIndex,
+                                              itemIndex,
+                                              `${catalogItem.source_table}:${catalogItem.source_record_id}`
+                                            )
+                                          }
+                                          className="block w-full border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-emerald-50"
+                                        >
+                                          <div className="text-sm font-semibold text-slate-900">
+                                            {catalogItem.item_reference}
+                                          </div>
+                                          {catalogItem.item_description && (
+                                            <div className="text-xs text-slate-500 mt-0.5">
+                                              {catalogItem.item_description}
+                                            </div>
+                                          )}
+                                        </button>
+                                      ))}
+
+                                    {!item.search_loading &&
+                                      item.search_results.length === 0 && (
+                                        <div className="p-3 text-sm text-slate-500">
+                                          {item.item_description.startsWith("Search error:")
+                                            ? item.item_description
+                                            : "No registered member, bundle or bolt matched this search."}
+                                        </div>
+                                      )}
+                                  </div>
+                                )}
+                            </div>
+
+                            {item.material_kind === "manual" ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input
+                                  label="Item type"
+                                  value={item.manual_category}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      manual_category: v,
+                                    })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Item"
+                                  value={item.item_reference}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      item_reference: v,
+                                    })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                              </div>
+                            ) : (
+                              <Input
+                                label="Selected item"
+                                value={item.item_reference}
+                                onChange={(v) =>
+                                  updateMaterialItem(eventIndex, itemIndex, {
+                                    item_reference: v,
+                                  })
+                                }
+                                disabled={locked || isView || Boolean(item.source_record_id)}
+                              />
+                            )}
+
+                            <Input
+                              label="Qty"
+                              type="number"
+                              value={item.quantity}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, { quantity: v })
+                              }
+                              disabled={locked || isView}
+                            />
+
+                            <Input
+                              label="Unit"
+                              value={item.unit}
+                              onChange={(v) =>
+                                updateMaterialItem(eventIndex, itemIndex, { unit: v })
+                              }
+                              disabled={locked || isView}
+                            />
 
                             {!locked && !isView && (
                               <button
                                 type="button"
-                                className="mt-2 text-xs font-semibold text-emerald-800"
+                                onClick={() => removeMaterialItem(eventIndex, itemIndex)}
+                                className="border px-3 py-2.5 rounded-xl bg-white text-sm hover:bg-slate-50"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+
+                          {!locked && !isView && (
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <button
+                                type="button"
                                 onClick={() =>
                                   updateMaterialItem(eventIndex, itemIndex, {
                                     material_kind: "manual",
                                     source_table: "",
                                     source_record_id: "",
                                     search_query: "",
+                                    search_loading: false,
+                                    search_results: [],
                                     item_reference: "",
                                     item_description: "",
                                   })
                                 }
+                                className="text-xs font-semibold text-emerald-800"
                               >
-                                + Add unlisted item
+                                + Add an unlisted item (mesh clips, loose hardware, etc.)
                               </button>
-                            )}
-                          </div>
 
-                          {item.material_kind === "manual" ? (
-                            <div className="grid grid-cols-2 gap-2">
-                              <Input
-                                label="Item type"
-                                value={item.manual_category}
-                                onChange={(v) =>
-                                  updateMaterialItem(eventIndex, itemIndex, { manual_category: v })
-                                }
-                                disabled={locked || isView}
-                              />
-                              <Input
-                                label="Item"
-                                value={item.item_reference}
-                                onChange={(v) =>
-                                  updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
-                                }
-                                disabled={locked || isView}
-                              />
+                              <button
+                                type="button"
+                                onClick={() => addMaterialItem(eventIndex)}
+                                className="text-xs font-semibold text-emerald-800"
+                              >
+                                + Add another excess item
+                              </button>
                             </div>
-                          ) : (
-                            <Input
-                              label="Selected item"
-                              value={item.item_reference}
-                              onChange={(v) =>
-                                updateMaterialItem(eventIndex, itemIndex, { item_reference: v })
-                              }
-                              disabled={locked || isView || Boolean(item.source_record_id)}
-                            />
-                          )}
-
-                          <Input
-                            label="Qty"
-                            type="number"
-                            value={item.quantity}
-                            onChange={(v) =>
-                              updateMaterialItem(eventIndex, itemIndex, { quantity: v })
-                            }
-                            disabled={locked || isView}
-                          />
-
-                          <Input
-                            label="Unit"
-                            value={item.unit}
-                            onChange={(v) =>
-                              updateMaterialItem(eventIndex, itemIndex, { unit: v })
-                            }
-                            disabled={locked || isView}
-                          />
-
-                          {!locked && !isView && (
-                            <button
-                              type="button"
-                              onClick={() => removeMaterialItem(eventIndex, itemIndex)}
-                              className="border px-3 py-2 rounded-lg"
-                            >
-                              Remove
-                            </button>
                           )}
                         </div>
-                      );
-                    })}
-
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium mb-1">Where is the excess now?</label>
-                        <select
-                          className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                          value={event.destination_location}
-                          disabled={locked || isView}
-                          onChange={(e) =>
-                            updateMaterialEvent(eventIndex, "destination_location", e.target.value)
-                          }
-                        >
-                          <option value="">At current tower</option>
-                          <option value="laydown">Returned / returning to laydown</option>
-                          <option value="other_tower">Sent / sending to another tower</option>
-                          <option value="other">Other location</option>
-                        </select>
-                      </div>
-
-                      {event.destination_location === "other_tower" && (
-                        <div>
-                          <label className="block text-sm font-medium mb-1">Destination tower</label>
-                          <select
-                            className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
-                            value={event.destination_tower_id}
-                            disabled={locked || isView}
-                            onChange={(e) =>
-                              updateMaterialEvent(eventIndex, "destination_tower_id", e.target.value)
-                            }
-                          >
-                            <option value="">Select tower...</option>
-                            {projectTowers
-                              .filter((tower) => tower.id !== towerId)
-                              .map((tower) => (
-                                <option key={tower.id} value={tower.id}>
-                                  {tower.name}
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-                      )}
+                      ))}
                     </div>
 
-                    <Input
-                      label="Notes (optional)"
-                      value={event.notes}
-                      onChange={(v) => updateMaterialEvent(eventIndex, "notes", v)}
-                      disabled={locked || isView}
-                    />
+                    <div className="border-t border-slate-200 pt-4">
+                      <div className="grid md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-semibold mb-1">
+                            Where is the excess now?
+                          </label>
+                          <select
+                            className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                            value={event.destination_location}
+                            disabled={locked || isView}
+                            onChange={(e) =>
+                              updateMaterialEvent(
+                                eventIndex,
+                                "destination_location",
+                                e.target.value
+                              )
+                            }
+                          >
+                            <option value="">At current tower</option>
+                            <option value="laydown">Returned / returning to laydown</option>
+                            <option value="other_tower">Sent / sending to another tower</option>
+                            <option value="other">Other location</option>
+                          </select>
+                        </div>
 
-                    {!locked && !isView && (
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={() => addMaterialItem(eventIndex)}
-                          className="text-sm font-semibold text-emerald-800"
-                        >
-                          + Add another excess item
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeMaterialEvent(eventIndex)}
-                          className="text-sm font-semibold text-red-700"
-                        >
-                          Remove excess record
-                        </button>
+                        {event.destination_location === "other_tower" && (
+                          <div>
+                            <label className="block text-sm font-semibold mb-1">
+                              Destination tower
+                            </label>
+                            <select
+                              className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                              value={event.destination_tower_id}
+                              disabled={locked || isView}
+                              onChange={(e) =>
+                                updateMaterialEvent(
+                                  eventIndex,
+                                  "destination_tower_id",
+                                  e.target.value
+                                )
+                              }
+                            >
+                              <option value="">Select tower...</option>
+                              {projectTowers
+                                .filter((tower) => tower.id !== towerId)
+                                .map((tower) => (
+                                  <option key={tower.id} value={tower.id}>
+                                    {tower.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-4">
+                      <Input
+                        label="Notes (optional)"
+                        value={event.notes}
+                        onChange={(v) =>
+                          updateMaterialEvent(eventIndex, "notes", v)
+                        }
+                        disabled={locked || isView}
+                      />
+                    </div>
                   </div>
                 ))}
             </div>
