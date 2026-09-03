@@ -187,10 +187,27 @@ const SECTION_V2_DEFS = [
   ["LE","LE"],["BE","BE"],["CB","CB"],["BSS","BSS"],["MSS","MSS"],["TSS","TSS"],
   ["BX_ARMS","BX ARMS"],["MX_ARMS","MX ARMS"],["TX_ARMS","TX ARMS"],["EP","EP"],
 ] as const;
+const SECTION_PROGRESS_WEIGHTS: Record<string, number> = {
+  LE: 20,
+  BE: 15,
+  CB: 15,
+  BSS: 10,
+  MSS: 10,
+  TSS: 10,
+  BX_ARMS: 5,
+  MX_ARMS: 5,
+  TX_ARMS: 5,
+  EP: 5,
+};
+
 function blankSectionV2Rows(): SectionV2ProgressRow[] {
   return SECTION_V2_DEFS.map(([section_code, section_label]) => ({
-    section_code, section_label, assembly_today:"",
-    erection_today:"", assembly_weight:10, erection_weight:10,
+    section_code,
+    section_label,
+    assembly_today: "",
+    erection_today: "",
+    assembly_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
+    erection_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
   }));
 }
 
@@ -1236,8 +1253,8 @@ export default function DailyDocketForm({
             section_label: String(r.section_label || r.section_code),
             assembly_today: old?.assembly_today || "",
             erection_today: old?.erection_today || "",
-            assembly_weight: Number(r.assembly_weight || 0),
-            erection_weight: Number(r.erection_weight || 0),
+            assembly_weight: SECTION_PROGRESS_WEIGHTS[String(r.section_code)] ?? 0,
+            erection_weight: SECTION_PROGRESS_WEIGHTS[String(r.section_code)] ?? 0,
           };
         });
       });
@@ -1361,8 +1378,8 @@ export default function DailyDocketForm({
                 section_label: toStringValue(r.section_label || cfg.section_label),
                 assembly_today: toStringValue(r.assembly_today ?? r.assembly_overall ?? r.assembled_qty),
                 erection_today: toStringValue(r.erection_today ?? r.erection_overall ?? r.erected_qty),
-                assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
-                erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+                assembly_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.assembly_weight,
+                erection_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.erection_weight,
               } : cfg;
             }));
           } else {
@@ -1544,8 +1561,8 @@ export default function DailyDocketForm({
               section_label: toStringValue(r.section_label || cfg.section_label),
               assembly_today: toStringValue(r.assembly_today ?? r.assembly_overall ?? r.assembled_qty),
               erection_today: toStringValue(r.erection_today ?? r.erection_overall ?? r.erected_qty),
-              assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
-              erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+              assembly_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.assembly_weight,
+              erection_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.erection_weight,
             } : cfg;
           }));
         } else {
@@ -1632,34 +1649,48 @@ export default function DailyDocketForm({
 
   const totalAssemblyPercent = useMemo(() => {
     if (progressModel === "section_v2") {
-      const applicable = sectionV2Rows
-        .filter((row) => hasBodyExtension || row.section_code !== "BE")
-        .filter((row) => row.assembly_today.trim() !== "");
-      if (!applicable.length) return 0;
-      return Math.round(applicable.reduce((sum, row) => sum + Math.max(0, Math.min(100, toNumber(row.assembly_today))), 0) / applicable.length);
+      return Math.round(
+        sectionV2Rows
+          .filter((row) => hasBodyExtension || row.section_code !== "BE")
+          .reduce((sum, row) => {
+            const progress = Math.max(0, Math.min(100, toNumber(row.assembly_today)));
+            const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
+            return sum + progress * weight;
+          }, 0) / 100
+      );
     }
+
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
-    return Math.round(visibleProgressRows.reduce((sum, row) => {
-      const rowPercent = Math.max(0, Math.min(100, Number(row.assembled_qty || 0)));
-      return sum + (rowPercent / 100) * weight;
-    }, 0));
+    return Math.round(
+      visibleProgressRows.reduce((sum, row) => {
+        const rowPercent = Math.max(0, Math.min(100, Number(row.assembled_qty || 0)));
+        return sum + (rowPercent / 100) * weight;
+      }, 0)
+    );
   }, [progressModel, sectionV2Rows, hasBodyExtension, visibleProgressRows]);
 
   const totalErectionPercent = useMemo(() => {
     if (progressModel === "section_v2") {
-      const applicable = sectionV2Rows
-        .filter((row) => hasBodyExtension || row.section_code !== "BE")
-        .filter((row) => row.erection_today.trim() !== "");
-      if (!applicable.length) return 0;
-      return Math.round(applicable.reduce((sum, row) => sum + Math.max(0, Math.min(100, toNumber(row.erection_today))), 0) / applicable.length);
+      return Math.round(
+        sectionV2Rows
+          .filter((row) => hasBodyExtension || row.section_code !== "BE")
+          .reduce((sum, row) => {
+            const progress = Math.max(0, Math.min(100, toNumber(row.erection_today)));
+            const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
+            return sum + progress * weight;
+          }, 0) / 100
+      );
     }
+
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
-    return Math.round(visibleProgressRows.reduce((sum, row) => {
-      const rowPercent = Math.max(0, Math.min(100, Number(row.erected_qty || 0)));
-      return sum + (rowPercent / 100) * weight;
-    }, 0));
+    return Math.round(
+      visibleProgressRows.reduce((sum, row) => {
+        const rowPercent = Math.max(0, Math.min(100, Number(row.erected_qty || 0)));
+        return sum + (rowPercent / 100) * weight;
+      }, 0)
+    );
   }, [progressModel, sectionV2Rows, hasBodyExtension, visibleProgressRows]);
 
   const displayProgress = useMemo(
@@ -1670,7 +1701,9 @@ export default function DailyDocketForm({
   function updateSectionV2(index: number, key: "assembly_today"|"erection_today", value: string) {
     if (isView || locked) return;
     const nextValue = value.trim() === "" ? "" : clampPercent(value);
-    setSectionV2Rows((prev) => prev.map((row, i) => i === index ? { ...row, [key]: nextValue } : row));
+    setSectionV2Rows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [key]: nextValue } : row))
+    );
   }
 
   const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
@@ -3425,8 +3458,8 @@ export default function DailyDocketForm({
             ...cfg,
             assembly_today: "",
             erection_today: "",
-            assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
-            erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+            assembly_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.assembly_weight,
+            erection_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.erection_weight,
           } : cfg;
         }));
       } else {
@@ -3661,26 +3694,18 @@ export default function DailyDocketForm({
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h2 className="text-xl font-semibold text-slate-900">
-              {progressModel === "section_v2" ? "Tower Progress" : "Legacy Section Quantities"}
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              {progressModel === "section_v2"
-                ? "New dockets use LE, BE, CB, BSS, MSS, TSS, BX Arms, MX Arms, TX Arms and EP. Historical legacy dockets stay on their original calculation."
-                : "This is a historical legacy docket. Its original progress structure is preserved."}
-            </p>
-          </div>
-          <div className="rounded-xl border bg-slate-50 px-4 py-3 text-sm font-bold">
-            Model: {progressModel === "section_v2" ? "Section v2" : "Legacy"}
-          </div>
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Tower Progress</h2>
         </div>
 
         {progressModel === "section_v2" ? (
           <>
-            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <label className="inline-flex items-center gap-3 text-sm font-medium">
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Body Extension</div>
+                <div className="text-xs text-slate-500">Include BE in tower progress</div>
+              </div>
+              <label className="inline-flex items-center gap-2 text-sm font-medium">
                 <input
                   type="checkbox"
                   checked={hasBodyExtension}
@@ -3688,11 +3713,8 @@ export default function DailyDocketForm({
                   onChange={(e) => setHasBodyExtension(e.target.checked)}
                   className="h-4 w-4"
                 />
-                This tower has a Body Extension (BE)
+                {hasBodyExtension ? "Included" : "Not included"}
               </label>
-              <span className="text-xs text-slate-500">
-                Automatically detected from the tower record. You can manually override it here.
-              </span>
             </div>
 
             <div className="border border-slate-200 rounded-xl overflow-x-auto bg-white">
@@ -3732,10 +3754,7 @@ export default function DailyDocketForm({
               <div className="grid sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t">
                 <KpiPill label="Overall Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
                 <KpiPill label="Overall Erection" value={`${totalErectionPercent}%`} tone="emerald" />
-                <KpiPill label="Overall Tower Progress" value={`${displayProgress}%`} tone="purple" />
-              </div>
-              <div className="px-4 pb-4 text-xs text-slate-500">
-                Overall Assembly is the average of the entered Assembly segment percentages. Overall Erection is the average of the entered Erection segment percentages. Blank segments are excluded. Overall Tower Progress is 50% Assembly + 50% Erection.
+                <KpiPill label="Total Progress" value={`${displayProgress}%`} tone="purple" />
               </div>
             </div>
           </>
