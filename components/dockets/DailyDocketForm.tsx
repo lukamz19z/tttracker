@@ -174,6 +174,28 @@ type ProgressRow = {
   erected_qty: string;
 };
 
+type ProgressModel = "legacy" | "section_v2";
+type SectionV2ProgressRow = {
+  section_code: string;
+  section_label: string;
+  assembly_today: string;
+  assembly_overall: string;
+  erection_today: string;
+  erection_overall: string;
+  assembly_weight: number;
+  erection_weight: number;
+};
+const SECTION_V2_DEFS = [
+  ["LE","LE"],["BE","BE"],["CB","CB"],["BSS","BSS"],["MSS","MSS"],["TSS","TSS"],
+  ["BX_ARMS","BX ARMS"],["MX_ARMS","MX ARMS"],["TX_ARMS","TX ARMS"],["EP","EP"],
+] as const;
+function blankSectionV2Rows(): SectionV2ProgressRow[] {
+  return SECTION_V2_DEFS.map(([section_code, section_label]) => ({
+    section_code, section_label, assembly_today:"", assembly_overall:"",
+    erection_today:"", erection_overall:"", assembly_weight:10, erection_weight:10,
+  }));
+}
+
 type DocketRecord = {
   id?: string;
   project_id: string;
@@ -210,6 +232,15 @@ type DocketRecord = {
   sharepoint_sync_status?: string | null;
   sharepoint_web_url?: string | null;
   pdf_file_name?: string | null;
+  progress_model?: "legacy" | "section_v2" | string | null;
+  approval_status?: string | null;
+  bc_submitted_at?: string | null;
+  bc_approved_at?: string | null;
+  bc_approved_name?: string | null;
+  client_approved_at?: string | null;
+  client_approved_name?: string | null;
+  draft_sharepoint_web_url?: string | null;
+  final_sharepoint_web_url?: string | null;
 };
 
 type TowerRecord = {
@@ -999,6 +1030,11 @@ export default function DailyDocketForm({
       : DEFAULT_PROGRESS_ROWS
   );
 
+  const [progressModel, setProgressModel] = useState<ProgressModel>(
+    initialDocket?.progress_model === "legacy" ? "legacy" : "section_v2"
+  );
+  const [sectionV2Rows, setSectionV2Rows] = useState<SectionV2ProgressRow[]>(blankSectionV2Rows());
+  const [approvalStatus, setApprovalStatus] = useState(toStringValue(initialDocket?.approval_status) || (mode === "create" ? "draft" : "legacy"));
   const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
   const [crews, setCrews] = useState<CrewRecord[]>([]);
@@ -1184,6 +1220,37 @@ export default function DailyDocketForm({
   }, [projectId, supabase]);
 
   useEffect(() => {
+    async function loadV2ProgressConfig() {
+      const { data } = await supabase
+        .from("project_docket_progress_weights")
+        .select("section_code,section_label,assembly_weight,erection_weight,sort_order,active")
+        .eq("project_id", projectId)
+        .eq("active", true)
+        .order("sort_order");
+
+      if (!data?.length) return;
+      setSectionV2Rows((prev) => {
+        const previous = new Map(prev.map((r) => [r.section_code, r]));
+        return data.map((r: any) => {
+          const old = previous.get(String(r.section_code));
+          return {
+            section_code: String(r.section_code),
+            section_label: String(r.section_label || r.section_code),
+            assembly_today: old?.assembly_today || "",
+            assembly_overall: old?.assembly_overall || "",
+            erection_today: old?.erection_today || "",
+            erection_overall: old?.erection_overall || "",
+            assembly_weight: Number(r.assembly_weight || 0),
+            erection_weight: Number(r.erection_weight || 0),
+          };
+        });
+      });
+    }
+    const timer = window.setTimeout(() => void loadV2ProgressConfig(), 0);
+    return () => window.clearTimeout(timer);
+  }, [projectId, supabase]);
+
+  useEffect(() => {
     if (!docketId && !initialDocket) return;
 
     async function loadDocket() {
@@ -1193,6 +1260,8 @@ export default function DailyDocketForm({
         setLeadingHand(toStringValue(initialDocket.leading_hand));
         setWeather(toStringValue(initialDocket.weather));
         setRateType(initialDocket.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
+        setProgressModel(initialDocket.progress_model === "section_v2" ? "section_v2" : "legacy");
+        setApprovalStatus(toStringValue(initialDocket.approval_status) || "legacy");
 
         setWeatherDelayHours(toStringValue(initialDocket.weather_delay_hours));
         setLightningDelayHours(toStringValue(initialDocket.lightning_delay_hours));
@@ -1285,13 +1354,30 @@ export default function DailyDocketForm({
         if (initialPlantRows?.length) setPlantRows(initialPlantRows.map((r) => makePlantRow(r)));
 
         if (initialProgressRows?.length) {
-          setProgressRows(
-            initialProgressRows.map((r) => ({
+          const rawRows = initialProgressRows as any[];
+          const isV2 = initialDocket.progress_model === "section_v2" || rawRows.some((r) => r.progress_model === "section_v2");
+          if (isV2) {
+            setProgressModel("section_v2");
+            setSectionV2Rows((configured) => configured.map((cfg) => {
+              const r = rawRows.find((x) => String(x.section_code || "") === cfg.section_code);
+              return r ? {
+                ...cfg,
+                section_label: toStringValue(r.section_label || cfg.section_label),
+                assembly_today: toStringValue(r.assembly_today),
+                assembly_overall: toStringValue(r.assembly_overall ?? r.assembled_qty),
+                erection_today: toStringValue(r.erection_today),
+                erection_overall: toStringValue(r.erection_overall ?? r.erected_qty),
+                assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
+                erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+              } : cfg;
+            }));
+          } else {
+            setProgressRows(rawRows.map((r) => ({
               section_label: toStringValue(r.section_label),
               assembled_qty: toStringValue(r.assembled_qty),
               erected_qty: toStringValue(r.erected_qty),
-            }))
-          );
+            })));
+          }
         }
 
         if (docketId) {
@@ -1379,6 +1465,8 @@ export default function DailyDocketForm({
       setLeadingHand(toStringValue(data.leading_hand));
       setWeather(toStringValue(data.weather));
       setRateType(data.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
+      setProgressModel(data.progress_model === "section_v2" ? "section_v2" : "legacy");
+      setApprovalStatus(toStringValue(data.approval_status) || "legacy");
 
       setWeatherDelayHours(toStringValue(data.weather_delay_hours));
       setLightningDelayHours(toStringValue(data.lightning_delay_hours));
@@ -1451,13 +1539,30 @@ export default function DailyDocketForm({
       if (plant && plant.length > 0) setPlantRows(plant.map((r) => makePlantRow(r)));
 
       if (progress && progress.length > 0) {
-        setProgressRows(
-          progress.map((r) => ({
+        const rawRows = progress as any[];
+        const isV2 = data.progress_model === "section_v2" || rawRows.some((r) => r.progress_model === "section_v2");
+        if (isV2) {
+          setProgressModel("section_v2");
+          setSectionV2Rows((configured) => configured.map((cfg) => {
+            const r = rawRows.find((x) => String(x.section_code || "") === cfg.section_code);
+            return r ? {
+              ...cfg,
+              section_label: toStringValue(r.section_label || cfg.section_label),
+              assembly_today: toStringValue(r.assembly_today),
+              assembly_overall: toStringValue(r.assembly_overall ?? r.assembled_qty),
+              erection_today: toStringValue(r.erection_today),
+              erection_overall: toStringValue(r.erection_overall ?? r.erected_qty),
+              assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
+              erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+            } : cfg;
+          }));
+        } else {
+          setProgressRows(rawRows.map((r) => ({
             section_label: toStringValue(r.section_label),
             assembled_qty: toStringValue(r.assembled_qty),
             erected_qty: toStringValue(r.erected_qty),
-          }))
-        );
+          })));
+        }
       }
 
 
@@ -1521,10 +1626,10 @@ export default function DailyDocketForm({
     supabase,
   ]);
 
-  const locked = useMemo(
-    () => isClientSignedDocket({ client_rep_name: clientRepName, signed_date: signedDate }),
-    [clientRepName, signedDate]
-  );
+  const locked = useMemo(() => {
+    if (isClientSignedDocket({ client_rep_name: clientRepName, signed_date: signedDate })) return true;
+    return ["submitted_bc","client_pending","final","legacy_final"].includes(approvalStatus);
+  }, [clientRepName, signedDate, approvalStatus]);
 
   const duplicateWorkerIndexes = useMemo(() => getDuplicateWorkerIndexes(labourRows), [labourRows]);
   const hasDuplicateWorkers = duplicateWorkerIndexes.size > 0;
@@ -1534,29 +1639,45 @@ export default function DailyDocketForm({
   }, [progressRows, hasBodyExtension]);
 
   const totalAssemblyPercent = useMemo(() => {
+    if (progressModel === "section_v2") {
+      const weightTotal = sectionV2Rows.reduce((s, r) => s + Number(r.assembly_weight || 0), 0);
+      if (!weightTotal) return 0;
+      const weighted = sectionV2Rows.reduce((s, r) => s + (toNumber(r.assembly_overall) / 100) * Number(r.assembly_weight || 0), 0);
+      return Math.round((weighted / weightTotal) * 100);
+    }
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
-    const total = visibleProgressRows.reduce((sum, row) => {
+    return Math.round(visibleProgressRows.reduce((sum, row) => {
       const rowPercent = Math.max(0, Math.min(100, Number(row.assembled_qty || 0)));
       return sum + (rowPercent / 100) * weight;
-    }, 0);
-    return Math.round(total);
-  }, [visibleProgressRows]);
+    }, 0));
+  }, [progressModel, sectionV2Rows, visibleProgressRows]);
 
   const totalErectionPercent = useMemo(() => {
+    if (progressModel === "section_v2") {
+      const weightTotal = sectionV2Rows.reduce((s, r) => s + Number(r.erection_weight || 0), 0);
+      if (!weightTotal) return 0;
+      const weighted = sectionV2Rows.reduce((s, r) => s + (toNumber(r.erection_overall) / 100) * Number(r.erection_weight || 0), 0);
+      return Math.round((weighted / weightTotal) * 100);
+    }
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
-    const total = visibleProgressRows.reduce((sum, row) => {
+    return Math.round(visibleProgressRows.reduce((sum, row) => {
       const rowPercent = Math.max(0, Math.min(100, Number(row.erected_qty || 0)));
       return sum + (rowPercent / 100) * weight;
-    }, 0);
-    return Math.round(total);
-  }, [visibleProgressRows]);
+    }, 0));
+  }, [progressModel, sectionV2Rows, visibleProgressRows]);
 
   const displayProgress = useMemo(
     () => Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5),
     [totalAssemblyPercent, totalErectionPercent]
   );
+
+  function updateSectionV2(index: number, key: "assembly_today"|"assembly_overall"|"erection_today"|"erection_overall", value: string) {
+    if (isView || locked) return;
+    const nextValue = clampPercent(value);
+    setSectionV2Rows((prev) => prev.map((row, i) => i === index ? { ...row, [key]: nextValue } : row));
+  }
 
   const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
 
@@ -2134,6 +2255,8 @@ export default function DailyDocketForm({
       leading_hand: leadingHand,
       weather,
       rate_type: rateType,
+      progress_model: progressModel,
+      approval_status: mode === "create" ? "draft" : approvalStatus,
       assembly_percent: totalAssemblyPercent,
       erection_percent: totalErectionPercent,
       weather_delay_hours: Number(weatherDelayHours || delaySummaryByType.weather || 0),
@@ -2228,18 +2351,31 @@ export default function DailyDocketForm({
   }
 
   function buildProgressPayload(docketIdValue: string) {
+    if (progressModel === "section_v2") {
+      return sectionV2Rows.map((row) => ({
+        docket_id: docketIdValue,
+        progress_model: "section_v2",
+        section: row.section_code,
+        section_code: row.section_code,
+        section_label: row.section_label,
+        assembly_today: toNumber(row.assembly_today),
+        assembly_overall: toNumber(row.assembly_overall),
+        erection_today: toNumber(row.erection_today),
+        erection_overall: toNumber(row.erection_overall),
+        assembly_weight: row.assembly_weight,
+        erection_weight: row.erection_weight,
+        // Maintain old columns so existing readers do not break.
+        assembled_qty: toNumber(row.assembly_overall),
+        erected_qty: toNumber(row.erection_overall),
+      }));
+    }
     return progressRows.map((row) => ({
       docket_id: docketIdValue,
+      progress_model: "legacy",
       section: row.section_label,
       section_label: row.section_label,
-      assembled_qty:
-        !hasBodyExtension && isBodyExtensionRow(row)
-          ? 0
-          : Number(row.assembled_qty || 0),
-      erected_qty:
-        !hasBodyExtension && isBodyExtensionRow(row)
-          ? 0
-          : Number(row.erected_qty || 0),
+      assembled_qty: !hasBodyExtension && isBodyExtensionRow(row) ? 0 : Number(row.assembled_qty || 0),
+      erected_qty: !hasBodyExtension && isBodyExtensionRow(row) ? 0 : Number(row.erected_qty || 0),
     }));
   }
 
@@ -2986,37 +3122,6 @@ export default function DailyDocketForm({
     }
   }
 
-  async function publishDailyDocketToSharePoint(docketIdValue: string) {
-    if (!bcRepName.trim()) return;
-
-    const response = await fetch(`/api/daily-dockets/${docketIdValue}/publish`, {
-      method: "POST",
-    });
-
-    let result: {
-      error?: string;
-      fileName?: string;
-      sharePoint?: { webUrl?: string | null };
-    } = {};
-
-    try {
-      result = await response.json();
-    } catch {
-      // Fallback error below.
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        result.error ||
-          "Daily Docket saved, but the PDF could not be published to SharePoint."
-      );
-    }
-
-    setSharePointStatus("published");
-    setPublishedPdfName(result.fileName || "");
-    setSharePointUrl(result.sharePoint?.webUrl || "");
-  }
-
   async function handleCreate() {
     const docketFileUrl = await uploadFileIfNeeded();
 
@@ -3074,10 +3179,6 @@ export default function DailyDocketForm({
     await syncDelayDayworks(docket.id);
     await recalcTowerProgressAndStatus();
 
-    // This only publishes the internal SharePoint PDF.
-    // External email issue remains separate and should be gated by review approval.
-    await publishDailyDocketToSharePoint(docket.id);
-
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
   }
 
@@ -3086,7 +3187,7 @@ export default function DailyDocketForm({
 
     const { data: existing, error: existingError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, client_rep_name, signed_date")
+      .select("id, client_rep_name, signed_date, approval_status, progress_model")
       .eq("id", docketId)
       .single();
 
@@ -3094,8 +3195,8 @@ export default function DailyDocketForm({
       throw new Error("Could not load docket for editing.");
     }
 
-    if (isClientSignedDocket(existing)) {
-      throw new Error("This docket is client signed and cannot be edited.");
+    if (isClientSignedDocket(existing) || ["submitted_bc","client_pending","final","legacy_final"].includes(String(existing.approval_status || ""))) {
+      throw new Error("This docket is locked by its approval status and cannot be edited.");
     }
 
     const docketFileUrl = await uploadFileIfNeeded();
@@ -3166,8 +3267,6 @@ export default function DailyDocketForm({
     await syncMaterialEvents(docketId);
     await syncDelayDayworks(docketId);
     await recalcTowerProgressAndStatus();
-    await publishDailyDocketToSharePoint(docketId);
-
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
     router.refresh();
   }
@@ -3252,6 +3351,8 @@ export default function DailyDocketForm({
       setLeadingHand(toStringValue(lastDocket.leading_hand));
       setWeather(toStringValue(lastDocket.weather));
       setRateType(lastDocket.rate_type === "schedule_of_rates" ? "schedule_of_rates" : "tonnage_rate");
+      setProgressModel("section_v2");
+      setApprovalStatus("draft");
 
       setWeatherDelayHours(toStringValue(lastDocket.weather_delay_hours));
       setLightningDelayHours(toStringValue(lastDocket.lightning_delay_hours));
@@ -3323,26 +3424,26 @@ export default function DailyDocketForm({
         notes: "",
       });
 
-      if (progress && progress.length > 0) {
-        setProgressRows(
-          progress.map((r) => ({
-            section_label: toStringValue(r.section_label),
-            assembled_qty: toStringValue(r.assembled_qty),
-            erected_qty: toStringValue(r.erected_qty),
-          }))
-        );
+      if (progress && progress.length > 0 && lastDocket.progress_model === "section_v2") {
+        const rawRows = progress as any[];
+        setSectionV2Rows((configured) => configured.map((cfg) => {
+          const r = rawRows.find((x) => String(x.section_code || "") === cfg.section_code);
+          return r ? {
+            ...cfg,
+            assembly_today: "",
+            assembly_overall: toStringValue(r.assembly_overall ?? r.assembled_qty),
+            erection_today: "",
+            erection_overall: toStringValue(r.erection_overall ?? r.erected_qty),
+            assembly_weight: Number(r.assembly_weight ?? cfg.assembly_weight),
+            erection_weight: Number(r.erection_weight ?? cfg.erection_weight),
+          } : cfg;
+        }));
       } else {
-        setProgressRows(DEFAULT_PROGRESS_ROWS);
-
-        const { data: tower } = await supabase
-          .from("towers")
-          .select("*")
-          .eq("id", towerId)
-          .single();
-
-        setHasBodyExtension(
-          inferTowerHasBodyExtension((tower as TowerRecord | null) || null)
-        );
+        // Legacy history is intentionally not converted into v2 section percentages.
+        // The first v2 docket should establish the opening cumulative values per new section.
+        setSectionV2Rows((configured) => configured.map((r) => ({
+          ...r, assembly_today: "", assembly_overall: "", erection_today: "", erection_overall: "",
+        })));
       }
     } catch (err) {
       console.error(err);
@@ -3569,88 +3670,97 @@ export default function DailyDocketForm({
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Section Quantities</h2>
+            <h2 className="text-xl font-semibold text-slate-900">
+              {progressModel === "section_v2" ? "Tower Progress" : "Legacy Section Quantities"}
+            </h2>
             <p className="text-sm text-slate-500 mt-1">
-              This drives assembly, erection and tower progress. Body extension is auto-detected but can be overridden.
+              {progressModel === "section_v2"
+                ? "New dockets use LE, BE, CB, BSS, MSS, TSS, BX Arms, MX Arms, TX Arms and EP. Historical legacy dockets stay on their original calculation."
+                : "This is a historical legacy docket. Its original progress structure is preserved."}
             </p>
           </div>
-
-          <label className="inline-flex items-center gap-3 text-sm font-medium rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <input
-              type="checkbox"
-              checked={hasBodyExtension}
-              disabled={locked || isView}
-              onChange={(e) => handleBodyExtensionToggle(e.target.checked)}
-              className="h-4 w-4"
-            />
-            This tower has body extensions
-          </label>
+          <div className="rounded-xl border bg-slate-50 px-4 py-3 text-sm font-bold">
+            Model: {progressModel === "section_v2" ? "Section v2" : "Legacy"}
+          </div>
         </div>
 
-        {!hasBodyExtension && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
-            Body Extensions are excluded from the progress calculation for this docket.
-          </div>
-        )}
-
-        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-          <table className="w-full">
-            <thead className="bg-slate-100 text-left text-sm text-slate-600">
-              <tr>
-                <th className="p-3">Section</th>
-                <th className="p-3">Assembly %</th>
-                <th className="p-3">Erection %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleProgressRows.map((row) => {
-                const actualIndex = progressRows.findIndex(
-                  (r) => r.section_label === row.section_label
-                );
-
-                return (
-                  <tr key={row.section_label} className="border-t border-slate-100">
-                    <td className="p-3 font-medium text-slate-800">{row.section_label}</td>
-                    <td className="p-3">
-                      <input
-                        className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={row.assembled_qty}
-                        disabled={locked || isView}
-                        onChange={(e) =>
-                          updateProgressRow(actualIndex, "assembled_qty", e.target.value)
-                        }
-                      />
-                    </td>
-                    <td className="p-3">
-                      <input
-                        className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={row.erected_qty}
-                        disabled={locked || isView}
-                        onChange={(e) =>
-                          updateProgressRow(actualIndex, "erected_qty", e.target.value)
-                        }
-                      />
-                    </td>
+        {progressModel === "section_v2" ? (
+          <div className="border border-slate-200 rounded-xl overflow-x-auto bg-white">
+            <table className="w-full min-w-[850px]">
+              <thead className="bg-slate-100 text-sm text-slate-600">
+                <tr>
+                  <th rowSpan={2} className="p-3 text-left">Section</th>
+                  <th colSpan={2} className="p-3 text-center border-l">Assembly</th>
+                  <th colSpan={2} className="p-3 text-center border-l">Erection</th>
+                </tr>
+                <tr>
+                  <th className="p-2 border-l">Progress Today</th>
+                  <th className="p-2">Overall Progress</th>
+                  <th className="p-2 border-l">Progress Today</th>
+                  <th className="p-2">Overall Progress</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sectionV2Rows.map((row, index) => (
+                  <tr key={row.section_code} className="border-t">
+                    <td className="p-3 font-bold">{row.section_label}</td>
+                    {(["assembly_today","assembly_overall","erection_today","erection_overall"] as const).map((key) => (
+                      <td key={key} className="p-2 border-l first:border-l">
+                        <input
+                          type="number" min="0" max="100" step="1"
+                          className="border rounded-lg p-2 w-full disabled:bg-slate-100"
+                          value={row[key]}
+                          disabled={locked || isView}
+                          onChange={(e) => updateSectionV2(index, key, e.target.value)}
+                        />
+                      </td>
+                    ))}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t border-slate-200">
-            <KpiPill label="Total Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
-            <KpiPill label="Total Erection" value={`${totalErectionPercent}%`} tone="emerald" />
-            <KpiPill label="Tower Progress Used" value={`${displayProgress}%`} tone="purple" />
+                ))}
+              </tbody>
+            </table>
+            <div className="grid sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t">
+              <KpiPill label="Overall Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
+              <KpiPill label="Overall Erection" value={`${totalErectionPercent}%`} tone="emerald" />
+              <KpiPill label="Tower Progress Used" value={`${displayProgress}%`} tone="purple" />
+            </div>
+            <div className="px-4 pb-4 text-xs text-slate-500">
+              Aggregate Assembly/Erection uses the project weighting configured under Docket Settings. Progress Today is kept separately from cumulative Overall Progress.
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <label className="inline-flex items-center gap-3 text-sm font-medium rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <input type="checkbox" checked={hasBodyExtension} disabled={locked || isView}
+                onChange={(e) => handleBodyExtensionToggle(e.target.checked)} className="h-4 w-4" />
+              This tower has body extensions
+            </label>
+            <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+              <table className="w-full">
+                <thead className="bg-slate-100 text-left text-sm text-slate-600">
+                  <tr><th className="p-3">Section</th><th className="p-3">Assembly %</th><th className="p-3">Erection %</th></tr>
+                </thead>
+                <tbody>
+                  {visibleProgressRows.map((row) => {
+                    const actualIndex = progressRows.findIndex((r) => r.section_label === row.section_label);
+                    return <tr key={row.section_label} className="border-t">
+                      <td className="p-3 font-medium">{row.section_label}</td>
+                      <td className="p-3"><input className="border rounded-lg p-2 w-full disabled:bg-slate-100" type="number" min="0" max="100" value={row.assembled_qty} disabled={locked || isView} onChange={(e)=>updateProgressRow(actualIndex,"assembled_qty",e.target.value)} /></td>
+                      <td className="p-3"><input className="border rounded-lg p-2 w-full disabled:bg-slate-100" type="number" min="0" max="100" value={row.erected_qty} disabled={locked || isView} onChange={(e)=>updateProgressRow(actualIndex,"erected_qty",e.target.value)} /></td>
+                    </tr>
+                  })}
+                </tbody>
+              </table>
+              <div className="grid sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t">
+                <KpiPill label="Total Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
+                <KpiPill label="Total Erection" value={`${totalErectionPercent}%`} tone="emerald" />
+                <KpiPill label="Tower Progress Used" value={`${displayProgress}%`} tone="purple" />
+              </div>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
@@ -5468,85 +5578,31 @@ export default function DailyDocketForm({
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">
-            Sign-Off & Daily Docket PDF
-          </h2>
+          <h2 className="text-xl font-semibold text-slate-900">Docket Workflow</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Once a BC Rep Name is recorded, saving the docket generates the current PDF and publishes it to the project SharePoint Daily Dockets folder for this tower. The external email issue should remain behind the separate review/approval workflow.
+            Saving keeps the docket as a TTTracker draft. Submit it from the Daily Docket register when it is ready for Commercial / Supervisor review. SharePoint draft and final PDFs are generated by the approval workflow, not by Save.
           </p>
         </div>
-
-        {sharePointStatus && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm ${
-              sharePointStatus === "published"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                : sharePointStatus === "failed"
-                ? "border-red-200 bg-red-50 text-red-800"
-                : "border-blue-200 bg-blue-50 text-blue-800"
-            }`}
-          >
-            <div className="font-semibold">SharePoint: {sharePointStatus}</div>
-            {publishedPdfName && <div className="mt-1">{publishedPdfName}</div>}
-
-            {sharePointUrl && (
-              <a
-                href={sharePointUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-block mt-2 underline font-medium"
-              >
-                Open SharePoint PDF
-              </a>
-            )}
+        <div className="rounded-xl border bg-slate-50 p-4">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Current status</div>
+          <div className="font-black text-lg mt-1">{approvalStatus.replaceAll("_"," ").replace(/\w/g,(x)=>x.toUpperCase())}</div>
+        </div>
+        {(sharePointUrl || existingDocketFileUrl) && (
+          <div className="flex flex-wrap gap-3">
+            {sharePointUrl && <a href={sharePointUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline font-semibold">Open published / final PDF</a>}
+            {existingDocketFileUrl && <a href={existingDocketFileUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline font-semibold">Open supporting docket file</a>}
           </div>
         )}
-
         <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="BC Rep Name"
-            value={bcRepName}
-            onChange={setBcRepName}
-            disabled={locked || isView}
-          />
-
-          <Input
-            label="Client Rep Name"
-            value={clientRepName}
-            onChange={setClientRepName}
-            disabled={locked || isView}
-          />
-
-          <Input
-            label="Signed Date"
-            type="date"
-            value={signedDate}
-            onChange={setSignedDate}
-            disabled
-          />
-
+          <Input label="BC Rep Name" value={bcRepName} onChange={setBcRepName} disabled={locked || isView} />
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Optional Supporting Docket Scan
-            </label>
-            <input
-              type="file"
-              disabled={locked || isView}
-              onChange={(e) => setDocketFile(e.target.files?.[0] || null)}
-              className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
-            />
-
-            {existingDocketFileUrl && (
-              <a
-                href={existingDocketFileUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-blue-600 text-sm font-medium mt-2 inline-block"
-              >
-                Open current uploaded docket
-              </a>
-            )}
+            <label className="block text-sm font-medium mb-1">Optional Supporting Docket Scan</label>
+            <input type="file" disabled={locked || isView} onChange={(e)=>setDocketFile(e.target.files?.[0]||null)} className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white" />
           </div>
+          {(clientRepName || signedDate) && <>
+            <Input label="Client Rep Name" value={clientRepName} onChange={setClientRepName} disabled />
+            <Input label="Signed Date" type="date" value={signedDate} onChange={setSignedDate} disabled />
+          </>}
         </div>
       </section>
 

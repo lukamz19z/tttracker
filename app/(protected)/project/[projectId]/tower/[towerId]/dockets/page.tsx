@@ -42,6 +42,12 @@ type DocketRecord = {
   sharepoint_sync_status?: string | null;
   sharepoint_web_url?: string | null;
   pdf_file_name?: string | null;
+  progress_model?: string | null;
+  approval_status?: string | null;
+  draft_sharepoint_web_url?: string | null;
+  final_sharepoint_web_url?: string | null;
+  bc_approved_name?: string | null;
+  client_approved_name?: string | null;
 };
 
 type LabourRow = {
@@ -170,22 +176,31 @@ function getProgress(docket: DocketRecord): number {
   return Math.round(getAssembly(docket) * 0.5 + getErection(docket) * 0.5);
 }
 
-function getStatus(docket: DocketRecord): "closed" | "bc_signed" | "open" {
-  if (docket.client_rep_name?.trim() && docket.signed_date?.trim()) return "closed";
-  if (docket.bc_rep_name?.trim()) return "bc_signed";
-  return "open";
-}
+type WorkflowStatus = "legacy"|"legacy_final"|"draft"|"submitted_bc"|"bc_changes_requested"|"client_pending"|"client_changes_requested"|"final";
 
-function getStatusLabel(status: "closed" | "bc_signed" | "open") {
-  if (status === "closed") return "Closed";
-  if (status === "bc_signed") return "BC Signed";
-  return "Open";
+function getStatus(docket: DocketRecord): WorkflowStatus {
+  const value = String(docket.approval_status || "");
+  if (["legacy","legacy_final","draft","submitted_bc","bc_changes_requested","client_pending","client_changes_requested","final"].includes(value)) {
+    return value as WorkflowStatus;
+  }
+  if (docket.client_rep_name?.trim() && docket.signed_date?.trim()) return "legacy_final";
+  return "legacy";
 }
-
-function getStatusClasses(status: "closed" | "bc_signed" | "open") {
-  if (status === "closed") return "bg-emerald-100 text-emerald-700 border-emerald-200";
-  if (status === "bc_signed") return "bg-blue-100 text-blue-700 border-blue-200";
-  return "bg-amber-100 text-amber-700 border-amber-200";
+function getStatusLabel(status: WorkflowStatus) {
+  const labels: Record<WorkflowStatus,string> = {
+    legacy:"Legacy / Open", legacy_final:"Legacy Final", draft:"Draft",
+    submitted_bc:"Awaiting BC Approval", bc_changes_requested:"BC Changes Requested",
+    client_pending:"Awaiting Client Approval", client_changes_requested:"Client Changes Requested",
+    final:"Final",
+  };
+  return labels[status];
+}
+function getStatusClasses(status: WorkflowStatus) {
+  if (status === "final" || status === "legacy_final") return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (status === "submitted_bc" || status === "client_pending") return "bg-blue-100 text-blue-700 border-blue-200";
+  if (status === "bc_changes_requested" || status === "client_changes_requested") return "bg-rose-100 text-rose-700 border-rose-200";
+  if (status === "draft") return "bg-amber-100 text-amber-700 border-amber-200";
+  return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
 function getSharePointClasses(status: string | null | undefined) {
@@ -309,6 +324,8 @@ export default function TowerDocketsPage() {
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [deletingDocketId, setDeletingDocketId] = useState<string | null>(null);
+  const [workflowBusyId, setWorkflowBusyId] = useState<string | null>(null);
+  const [currentRole, setCurrentRole] = useState("");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -418,6 +435,18 @@ export default function TowerDocketsPage() {
       setLoading(false);
     }
   }, [projectId, supabase, towerId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { data } = await supabase.from("user_roles").select("role").eq("user_id", user.id).maybeSingle();
+        setCurrentRole(String(data?.role || "").toLowerCase());
+      })();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void fetchData(), 0);
@@ -638,7 +667,42 @@ export default function TowerDocketsPage() {
     towerNameById,
   ]);
 
+  const canReviewBc = ["admin","commercial","commercial_manager","supervisor"].includes(currentRole);
+
+  async function submitForBcApproval(id: string) {
+    setWorkflowBusyId(id);
+    try {
+      const response = await fetch(`/api/daily-dockets/${id}/submit-bc`, { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not submit docket.");
+      await fetchData();
+    } catch (e) { alert(e instanceof Error ? e.message : "Could not submit docket."); }
+    finally { setWorkflowBusyId(null); }
+  }
+
+  async function bcReview(id: string, decision: "approve"|"request_changes") {
+    const comments = decision === "request_changes" ? (window.prompt("What needs to be changed?") || "") : "";
+    if (decision === "request_changes" && !comments.trim()) return;
+    if (decision === "approve" && !window.confirm("Approve this docket internally and send it to the configured client approval contacts?")) return;
+    setWorkflowBusyId(id);
+    try {
+      const response = await fetch(`/api/daily-dockets/${id}/bc-review`, {
+        method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({decision,comments})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "BC review failed.");
+      await fetchData();
+    } catch (e) { alert(e instanceof Error ? e.message : "BC review failed."); }
+    finally { setWorkflowBusyId(null); }
+  }
+
   async function deleteDocket(id: string) {
+    const target = dockets.find((d) => d.id === id);
+    const workflowStatus = target ? getStatus(target) : "legacy";
+    if (!["legacy","draft","bc_changes_requested","client_changes_requested"].includes(workflowStatus)) {
+      alert("Submitted, client-pending and final Daily Dockets cannot be deleted from the normal register.");
+      return;
+    }
     const confirmed = window.confirm(
       "Delete this daily docket? This will remove its labour, delay, plant, progress and linked material-event records, then recalculate the tower totals.",
     );
@@ -693,12 +757,10 @@ export default function TowerDocketsPage() {
               </p>
             </div>
 
-            <Link
-              href={`/project/${projectId}/tower/${towerId}/dockets/new`}
-              className="w-full md:w-auto text-center bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-semibold"
-            >
-              + Add Daily Docket
-            </Link>
+            <div className="flex flex-col md:flex-row gap-2">
+              <Link href={`/project/${projectId}/docket-settings`} className="w-full md:w-auto text-center border border-slate-300 bg-white px-5 py-3 rounded-xl text-sm font-semibold">Docket Settings</Link>
+              <Link href={`/project/${projectId}/tower/${towerId}/dockets/new`} className="w-full md:w-auto text-center bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-semibold">+ Add Daily Docket</Link>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 md:gap-3 mt-5">
@@ -1071,40 +1133,38 @@ export default function TowerDocketsPage() {
                         )}
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                          <Link
-                            href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}?mode=view`}
-                            className="text-center bg-slate-800 text-white px-4 py-3 rounded-xl text-sm font-semibold"
-                          >
-                            View
-                          </Link>
+                          <Link href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}?mode=view`} className="text-center bg-slate-800 text-white px-4 py-3 rounded-xl text-sm font-semibold">View</Link>
 
-                          {status !== "closed" && (
-                            <Link
-                              href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}/edit`}
-                              className="text-center bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-semibold"
-                            >
-                              Edit
-                            </Link>
+                          {["legacy","draft","bc_changes_requested","client_changes_requested"].includes(status) && (
+                            <Link href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}/edit`} className="text-center bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-semibold">Edit</Link>
                           )}
 
-                          <button
-                            type="button"
-                            onClick={() => void deleteDocket(docket.id)}
-                            disabled={deletingDocketId === docket.id}
-                            className="bg-rose-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60"
-                          >
-                            {deletingDocketId === docket.id ? "Deleting..." : "Delete"}
-                          </button>
+                          {["draft","bc_changes_requested","client_changes_requested"].includes(status) && (
+                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void submitForBcApproval(docket.id)} className="bg-indigo-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">
+                              {workflowBusyId===docket.id?"Submitting…":"Submit for BC Approval"}
+                            </button>
+                          )}
+
+                          {status==="submitted_bc" && canReviewBc && (<>
+                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void bcReview(docket.id,"approve")} className="bg-emerald-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">Approve & Send to Client</button>
+                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void bcReview(docket.id,"request_changes")} className="bg-amber-500 text-slate-950 px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">Request Changes</button>
+                          </>)}
+
+                          {["legacy","draft","bc_changes_requested","client_changes_requested"].includes(status) && (
+                            <button type="button" onClick={()=>void deleteDocket(docket.id)} disabled={deletingDocketId===docket.id} className="bg-rose-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">
+                              {deletingDocketId===docket.id?"Deleting…":"Delete"}
+                            </button>
+                          )}
                         </div>
 
-                        {docket.sharepoint_web_url && (
+                        {(docket.final_sharepoint_web_url || docket.draft_sharepoint_web_url || docket.sharepoint_web_url) && (
                           <a
-                            href={docket.sharepoint_web_url}
+                            href={docket.final_sharepoint_web_url || docket.draft_sharepoint_web_url || docket.sharepoint_web_url || "#"}
                             target="_blank"
                             rel="noreferrer"
                             className="block text-center border border-slate-300 bg-white text-slate-800 px-4 py-3 rounded-xl text-sm font-semibold hover:bg-slate-50"
                           >
-                            Open Published PDF
+                            {status === "final" ? "Open Final PDF" : status === "client_pending" ? "Open Draft PDF" : "Open Published PDF"}
                           </a>
                         )}
                       </div>
