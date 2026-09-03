@@ -1649,60 +1649,113 @@ export default function DailyDocketForm({
 
   const totalAssemblyPercent = useMemo(() => {
     if (progressModel === "section_v2") {
-      return Math.round(
-        sectionV2Rows
-          .filter((row) => hasBodyExtension || row.section_code !== "BE")
-          .reduce((sum, row) => {
-            const progress = Math.max(0, Math.min(100, toNumber(row.assembly_today)));
-            const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
-            return sum + progress * weight;
-          }, 0) / 100
+      const applicableRows = sectionV2Rows.filter(
+        (row) => hasBodyExtension || row.section_code !== "BE"
       );
+
+      const applicableWeight = applicableRows.reduce(
+        (sum, row) => sum + (SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0),
+        0
+      );
+
+      if (applicableWeight <= 0) return 0;
+
+      const weightedProgress = applicableRows.reduce((sum, row) => {
+        const progress = Math.max(0, Math.min(100, toNumber(row.assembly_today)));
+        const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
+        return sum + progress * weight;
+      }, 0);
+
+      return Math.round(weightedProgress / applicableWeight);
     }
 
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
+
     return Math.round(
       visibleProgressRows.reduce((sum, row) => {
-        const rowPercent = Math.max(0, Math.min(100, Number(row.assembled_qty || 0)));
+        const rowPercent = Math.max(
+          0,
+          Math.min(100, Number(row.assembled_qty || 0))
+        );
         return sum + (rowPercent / 100) * weight;
       }, 0)
     );
-  }, [progressModel, sectionV2Rows, hasBodyExtension, visibleProgressRows]);
+  }, [
+    progressModel,
+    sectionV2Rows,
+    hasBodyExtension,
+    visibleProgressRows,
+  ]);
 
   const totalErectionPercent = useMemo(() => {
     if (progressModel === "section_v2") {
-      return Math.round(
-        sectionV2Rows
-          .filter((row) => hasBodyExtension || row.section_code !== "BE")
-          .reduce((sum, row) => {
-            const progress = Math.max(0, Math.min(100, toNumber(row.erection_today)));
-            const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
-            return sum + progress * weight;
-          }, 0) / 100
+      const applicableRows = sectionV2Rows.filter(
+        (row) => hasBodyExtension || row.section_code !== "BE"
       );
+
+      const applicableWeight = applicableRows.reduce(
+        (sum, row) => sum + (SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0),
+        0
+      );
+
+      if (applicableWeight <= 0) return 0;
+
+      const weightedProgress = applicableRows.reduce((sum, row) => {
+        const progress = Math.max(0, Math.min(100, toNumber(row.erection_today)));
+        const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
+        return sum + progress * weight;
+      }, 0);
+
+      return Math.round(weightedProgress / applicableWeight);
     }
 
     if (visibleProgressRows.length === 0) return 0;
     const weight = 100 / visibleProgressRows.length;
+
     return Math.round(
       visibleProgressRows.reduce((sum, row) => {
-        const rowPercent = Math.max(0, Math.min(100, Number(row.erected_qty || 0)));
+        const rowPercent = Math.max(
+          0,
+          Math.min(100, Number(row.erected_qty || 0))
+        );
         return sum + (rowPercent / 100) * weight;
       }, 0)
     );
-  }, [progressModel, sectionV2Rows, hasBodyExtension, visibleProgressRows]);
+  }, [
+    progressModel,
+    sectionV2Rows,
+    hasBodyExtension,
+    visibleProgressRows,
+  ]);
 
   const displayProgress = useMemo(
-    () => Math.round(totalAssemblyPercent * 0.5 + totalErectionPercent * 0.5),
+    () =>
+      Math.round(
+        totalAssemblyPercent * 0.5 +
+        totalErectionPercent * 0.5
+      ),
     [totalAssemblyPercent, totalErectionPercent]
   );
 
-  function updateSectionV2(index: number, key: "assembly_today"|"erection_today", value: string) {
+  function updateSectionV2(
+    index: number,
+    key: "assembly_today" | "erection_today",
+    value: string
+  ) {
     if (isView || locked) return;
-    const nextValue = value.trim() === "" ? "" : clampPercent(value);
+
+    const nextValue =
+      value.trim() === ""
+        ? ""
+        : clampPercent(value);
+
     setSectionV2Rows((prev) =>
-      prev.map((row, i) => (i === index ? { ...row, [key]: nextValue } : row))
+      prev.map((row, i) =>
+        i === index
+          ? { ...row, [key]: nextValue }
+          : row
+      )
     );
   }
 
@@ -3700,12 +3753,12 @@ export default function DailyDocketForm({
 
         {progressModel === "section_v2" ? (
           <>
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-900">Body Extension</div>
-                <div className="text-xs text-slate-500">Include BE in tower progress</div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-sm font-semibold text-slate-900">
+                Body Extension
               </div>
-              <label className="inline-flex items-center gap-2 text-sm font-medium">
+
+              <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
                 <input
                   type="checkbox"
                   checked={hasBodyExtension}
@@ -3713,7 +3766,7 @@ export default function DailyDocketForm({
                   onChange={(e) => setHasBodyExtension(e.target.checked)}
                   className="h-4 w-4"
                 />
-                {hasBodyExtension ? "Included" : "Not included"}
+                {hasBodyExtension ? "Included" : "Excluded"}
               </label>
             </div>
 
@@ -5604,34 +5657,101 @@ export default function DailyDocketForm({
         )}
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">Docket Workflow</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Saving keeps the docket as a TTTracker draft. Submit it from the Daily Docket register when it is ready for Commercial / Supervisor review. SharePoint draft and final PDFs are generated by the approval workflow, not by Save.
-          </p>
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h2 className="text-xl font-semibold text-slate-900">Submission</h2>
+
+          {mode !== "create" && (
+            <span
+              className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                approvalStatus === "final" || approvalStatus === "legacy_final"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : approvalStatus === "submitted_bc" || approvalStatus === "client_pending"
+                  ? "border-blue-200 bg-blue-50 text-blue-700"
+                  : approvalStatus === "bc_changes_requested" ||
+                    approvalStatus === "client_changes_requested"
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-slate-200 bg-slate-50 text-slate-600"
+              }`}
+            >
+              {approvalStatus === "final" || approvalStatus === "legacy_final"
+                ? "Approved"
+                : approvalStatus === "submitted_bc"
+                ? "Pending BC Approval"
+                : approvalStatus === "client_pending"
+                ? "Pending Client Approval"
+                : approvalStatus === "bc_changes_requested" ||
+                  approvalStatus === "client_changes_requested"
+                ? "Changes Required"
+                : "In Progress"}
+            </span>
+          )}
         </div>
-        <div className="rounded-xl border bg-slate-50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Current status</div>
-          <div className="font-black text-lg mt-1">{approvalStatus.replaceAll("_"," ").replace(/\w/g,(x)=>x.toUpperCase())}</div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Input
+            label="BC Representative"
+            value={bcRepName}
+            onChange={setBcRepName}
+            disabled={locked || isView}
+          />
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Supporting Docket File
+            </label>
+            <input
+              type="file"
+              disabled={locked || isView}
+              onChange={(e) => setDocketFile(e.target.files?.[0] || null)}
+              className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
+            />
+          </div>
+
+          {(clientRepName || signedDate) && (
+            <>
+              <Input
+                label="Client Representative"
+                value={clientRepName}
+                onChange={setClientRepName}
+                disabled
+              />
+              <Input
+                label="Approval Date"
+                type="date"
+                value={signedDate}
+                onChange={setSignedDate}
+                disabled
+              />
+            </>
+          )}
         </div>
+
         {(sharePointUrl || existingDocketFileUrl) && (
-          <div className="flex flex-wrap gap-3">
-            {sharePointUrl && <a href={sharePointUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline font-semibold">Open published / final PDF</a>}
-            {existingDocketFileUrl && <a href={existingDocketFileUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline font-semibold">Open supporting docket file</a>}
+          <div className="flex flex-wrap gap-3 pt-1">
+            {sharePointUrl && (
+              <a
+                href={sharePointUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-semibold text-blue-700 hover:text-blue-800"
+              >
+                View Daily Docket PDF
+              </a>
+            )}
+
+            {existingDocketFileUrl && (
+              <a
+                href={existingDocketFileUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-semibold text-blue-700 hover:text-blue-800"
+              >
+                View Supporting File
+              </a>
+            )}
           </div>
         )}
-        <div className="grid md:grid-cols-2 gap-4">
-          <Input label="BC Rep Name" value={bcRepName} onChange={setBcRepName} disabled={locked || isView} />
-          <div>
-            <label className="block text-sm font-medium mb-1">Optional Supporting Docket Scan</label>
-            <input type="file" disabled={locked || isView} onChange={(e)=>setDocketFile(e.target.files?.[0]||null)} className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white" />
-          </div>
-          {(clientRepName || signedDate) && <>
-            <Input label="Client Rep Name" value={clientRepName} onChange={setClientRepName} disabled />
-            <Input label="Signed Date" type="date" value={signedDate} onChange={setSignedDate} disabled />
-          </>}
-        </div>
       </section>
 
       <div className="sticky bottom-4 z-10 flex gap-3 bg-white/90 backdrop-blur border border-slate-200 rounded-2xl p-3 shadow-lg w-fit">
