@@ -187,19 +187,32 @@ function getStatus(docket: DocketRecord): WorkflowStatus {
   return "legacy";
 }
 function getStatusLabel(status: WorkflowStatus) {
-  const labels: Record<WorkflowStatus,string> = {
-    legacy:"Legacy / Open", legacy_final:"Legacy Final", draft:"Draft",
-    submitted_bc:"Awaiting BC Approval", bc_changes_requested:"BC Changes Requested",
-    client_pending:"Awaiting Client Approval", client_changes_requested:"Client Changes Requested",
-    final:"Final",
+  const labels: Record<WorkflowStatus, string> = {
+    legacy: "In Progress",
+    legacy_final: "Approved",
+    draft: "In Progress",
+    submitted_bc: "Pending BC Approval",
+    bc_changes_requested: "Changes Required",
+    client_pending: "Pending Client Approval",
+    client_changes_requested: "Changes Required",
+    final: "Approved",
   };
+
   return labels[status];
 }
 function getStatusClasses(status: WorkflowStatus) {
-  if (status === "final" || status === "legacy_final") return "bg-emerald-100 text-emerald-700 border-emerald-200";
-  if (status === "submitted_bc" || status === "client_pending") return "bg-blue-100 text-blue-700 border-blue-200";
-  if (status === "bc_changes_requested" || status === "client_changes_requested") return "bg-rose-100 text-rose-700 border-rose-200";
-  if (status === "draft") return "bg-amber-100 text-amber-700 border-amber-200";
+  if (status === "final" || status === "legacy_final") {
+    return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  }
+
+  if (status === "submitted_bc" || status === "client_pending") {
+    return "bg-blue-50 text-blue-700 border-blue-200";
+  }
+
+  if (status === "bc_changes_requested" || status === "client_changes_requested") {
+    return "bg-amber-50 text-amber-800 border-amber-200";
+  }
+
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
@@ -211,10 +224,10 @@ function getSharePointClasses(status: string | null | undefined) {
 }
 
 function getSharePointLabel(status: string | null | undefined) {
-  if (status === "published") return "PDF Published";
-  if (status === "publishing") return "Publishing PDF";
-  if (status === "failed") return "PDF Failed";
-  return "PDF Not Published";
+  if (status === "published") return "Final PDF";
+  if (status === "publishing") return "Preparing PDF";
+  if (status === "failed") return "PDF Error";
+  return "PDF Pending";
 }
 
 function buildTowerStatus(progress: number) {
@@ -704,7 +717,7 @@ export default function TowerDocketsPage() {
       return;
     }
     const confirmed = window.confirm(
-      "Delete this daily docket? This will remove its labour, delay, plant, progress and linked material-event records, then recalculate the tower totals.",
+      "Delete this Daily Docket? This will permanently remove the docket and its linked records.",
     );
     if (!confirmed) return;
 
@@ -752,13 +765,13 @@ export default function TowerDocketsPage() {
             <div>
               <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Daily Dockets</h1>
               <p className="text-sm md:text-base text-slate-500 mt-1">
-                Quick register of progress, labour, delays, material issues,
-                mobilisation and submitted docket records for this tower.
+                Daily records for this tower, including progress, labour, delays,
+                materials and approval status.
               </p>
             </div>
 
             <div className="flex flex-col md:flex-row gap-2">
-              <Link href={`/project/${projectId}/docket-settings`} className="w-full md:w-auto text-center border border-slate-300 bg-white px-5 py-3 rounded-xl text-sm font-semibold">Docket Settings</Link>
+              <Link href={`/project/${projectId}/docket-settings`} className="w-full md:w-auto text-center border border-slate-300 bg-white px-5 py-3 rounded-xl text-sm font-semibold">Approval Settings</Link>
               <Link href={`/project/${projectId}/tower/${towerId}/dockets/new`} className="w-full md:w-auto text-center bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-semibold">+ Add Daily Docket</Link>
             </div>
           </div>
@@ -784,7 +797,7 @@ export default function TowerDocketsPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search date, crew, member, bundle, delay, mobilisation, weather or status..."
+              placeholder="Search date, crew, material, weather or approval status..."
               className="w-full border border-slate-300 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -925,7 +938,7 @@ export default function TowerDocketsPage() {
 
                         <div className="text-right shrink-0">
                           <div className="text-2xl font-black text-slate-900">{progress}%</div>
-                          <div className="text-[11px] text-slate-500">Overall</div>
+                          <div className="text-[11px] text-slate-500">Tower Progress</div>
                         </div>
                       </div>
 
@@ -955,15 +968,14 @@ export default function TowerDocketsPage() {
                     {isOpen && (
                       <div className="border-t border-slate-200 bg-slate-50 p-3 md:p-4 space-y-4">
                         <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                          <div className="flex items-center justify-between gap-3 mb-2">
-                            <div className="text-sm font-bold text-slate-800">Progress Breakdown</div>
-                            <div className="text-xs text-slate-500">50% Assembly + 50% Erection</div>
+                          <div className="mb-2">
+                            <div className="text-sm font-bold text-slate-800">Progress</div>
                           </div>
 
                           <div className="space-y-2">
                             <ProgressLine label="Assembly" value={assembly} tone="blue" />
                             <ProgressLine label="Erection" value={erection} tone="emerald" />
-                            <ProgressLine label="Overall" value={progress} tone="slate" strong />
+                            <ProgressLine label="Total Progress" value={progress} tone="slate" strong />
                           </div>
                         </div>
 
@@ -972,6 +984,33 @@ export default function TowerDocketsPage() {
                           <DetailCard label="Workers" value={totals.workers} />
                           <DetailCard label="Material Issues" value={material.issues} />
                           <DetailCard label="Excess Records" value={material.excess} />
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3 md:p-4">
+                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-bold text-slate-800">Approval</div>
+                              <div className="text-sm text-slate-500 mt-1">
+                                {status === "draft" || status === "legacy"
+                                  ? "Ready to be reviewed and submitted when complete."
+                                  : status === "submitted_bc"
+                                  ? "Awaiting review by BC Commercial or Supervisor."
+                                  : status === "bc_changes_requested"
+                                  ? "BC has requested changes before the docket can proceed."
+                                  : status === "client_pending"
+                                  ? "BC review is complete and the docket is awaiting client approval."
+                                  : status === "client_changes_requested"
+                                  ? "The client has requested changes before approval."
+                                  : "Approval complete."}
+                              </div>
+                            </div>
+
+                            <span
+                              className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-semibold ${getStatusClasses(status)}`}
+                            >
+                              {getStatusLabel(status)}
+                            </span>
+                          </div>
                         </div>
 
                         {docketMaterialEvents.filter((event) => event.event_type !== "excess").length > 0 && (
@@ -1118,9 +1157,7 @@ export default function TowerDocketsPage() {
                                 <div className="text-sm font-bold text-purple-900">
                                   Schedule of Rates Plant
                                 </div>
-                                <div className="text-xs text-purple-700 mt-1">
-                                  Plant and equipment hours captured against this docket.
-                                </div>
+
                               </div>
                               <div className="text-right">
                                 <div className="text-xl font-black text-purple-900">
@@ -1141,7 +1178,7 @@ export default function TowerDocketsPage() {
 
                           {["draft","bc_changes_requested","client_changes_requested"].includes(status) && (
                             <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void submitForBcApproval(docket.id)} className="bg-indigo-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">
-                              {workflowBusyId===docket.id?"Submitting…":"Submit for BC Approval"}
+                              {workflowBusyId===docket.id?"Submitting…":"Submit for Approval"}
                             </button>
                           )}
 
@@ -1164,7 +1201,11 @@ export default function TowerDocketsPage() {
                             rel="noreferrer"
                             className="block text-center border border-slate-300 bg-white text-slate-800 px-4 py-3 rounded-xl text-sm font-semibold hover:bg-slate-50"
                           >
-                            {status === "final" ? "Open Final PDF" : status === "client_pending" ? "Open Draft PDF" : "Open Published PDF"}
+                            {status === "final" || status === "legacy_final"
+                              ? "View Final PDF"
+                              : status === "client_pending"
+                              ? "View Draft PDF"
+                              : "View Docket PDF"}
                           </a>
                         )}
                       </div>
