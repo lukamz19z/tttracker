@@ -1,22 +1,20 @@
 import { NextResponse } from "next/server";
-
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import {
-  authUserEmailMap,
-  createDocketAdminSupabase,
   getBcReviewerRecipients,
-  requireAuthenticatedProjectUser,
-  type BcReviewerRecipient,
-} from "@/lib/dockets/server";
+  isConfiguredBcReviewer,
+} from "@/lib/dockets/reviewers";
 import {
   docketEmailShell,
   sendDailyDocketEmail,
 } from "@/lib/email/daily-dockets";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
 type RouteContext = {
-  params: Promise<{ docketId: string }>;
+  params: Promise<{
+    docketId: string;
+  }>;
 };
 
 type DocketRow = {
@@ -28,66 +26,276 @@ type DocketRow = {
   leading_hand: string | null;
   approval_status: string | null;
   bc_rep_name: string | null;
+  bc_signature_data_url: string | null;
+  bc_signed_at: string | null;
 };
 
 type ProjectRow = {
+  id: string;
   name: string | null;
   project_number: string | null;
 };
 
 type TowerRow = {
+  id: string;
   name: string | null;
-  tower_number: string | null;
-  structure_number: string | null;
+  extra_data: Record<string, unknown> | null;
 };
 
-export async function POST(request: Request, context: RouteContext) {
-  const { docketId } = await context.params;
+async function createRouteSupabase() {
+  const cookieStore = await cookies();
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Supabase server configuration is missing.");
+  }
+
+  return createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // Cookie writes can be unavailable in some server contexts.
+        }
+      },
+    },
+  });
+}
+
+function createServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceRoleKey) {
+    throw new Error(
+      "Supabase service configuration is missing. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    );
+  }
+
+  return createClient(url, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "No date";
+
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function getTowerName(tower: TowerRow | null) {
+  if (!tower) return "Tower";
+
+  const extra = tower.extra_data || {};
+
+  return String(
+    tower.name ||
+      extra.tower_number ||
+      extra.structure_number ||
+      extra.tower_no ||
+      "Tower",
+  );
+}
+
+function buildReviewUrl({
+  projectId,
+  towerId,
+  docketId,
+}: {
+  projectId: string;
+  towerId: string;
+  docketId: string;
+}) {
+  const configuredBaseUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+    "";
+
+  let baseUrl = configuredBaseUrl.trim();
+
+  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+    baseUrl = `https://${baseUrl}`;
+  }
+
+  if (!baseUrl) {
+    throw new Error(
+      "TTTracker application URL is not configured. Set NEXT_PUBLIC_APP_URL in production.",
+    );
+  }
+
+  return `${baseUrl.replace(/\/$/, "")}/project/${encodeURIComponent(
+    projectId,
+  )}/tower/${encodeURIComponent(towerId)}/dockets/${encodeURIComponent(
+    docketId,
+  )}/review`;
+}
+
+async function recordWorkflowEvent(
+  service: ReturnType<typeof createServiceClient>,
+  values: {
+    docketId: string;
+    projectId: string;
+    actorUserId: string;
+    eventType: string;
+    comments?: string | null;
+  },
+) {
+  const { error } = await service.from("tower_docket_workflow_events").insert({
+    docket_id: values.docketId,
+    project_id: values.projectId,
+    actor_user_id: values.actorUserId,
+    event_type: values.eventType,
+    comments: values.comments || null,
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error("Could not record Daily Docket workflow event", error);
+  }
+}
+
+export async function POST(
+  _request: Request,
+  context: RouteContext,
+) {
   try {
-    const admin = createDocketAdminSupabase();
+    const { docketId } = await context.params;
 
-    const { data: docketData, error: docketError } = await admin
+    if (!docketId) {
+      return NextResponse.json(
+        { error: "Daily Docket ID is required." },
+        { status: 400 },
+      );
+    }
+
+    const supabase = await createRouteSupabase();
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return NextResponse.json(
+        { error: "You must be signed in to submit this Daily Docket." },
+        { status: 401 },
+      );
+    }
+
+    const service = createServiceClient();
+
+    const { data: docketData, error: docketError } = await service
       .from("tower_daily_dockets")
-      .select(
-        "id,project_id,tower_id,docket_date,crew,leading_hand,approval_status,bc_rep_name",
-      )
+      .select(`
+        id,
+        project_id,
+        tower_id,
+        docket_date,
+        crew,
+        leading_hand,
+        approval_status,
+        bc_rep_name,
+        bc_signature_data_url,
+        bc_signed_at
+      `)
       .eq("id", docketId)
       .single();
 
     if (docketError || !docketData) {
       return NextResponse.json(
-        { error: "Daily Docket not found." },
+        { error: "Daily Docket could not be found." },
         { status: 404 },
       );
     }
 
-    const docket = docketData as unknown as DocketRow;
+    const docket = docketData as DocketRow;
 
-    const { user } = await requireAuthenticatedProjectUser(
-      docket.project_id,
-    );
+    const allowedStatuses = new Set([
+      "draft",
+      "legacy",
+      "bc_changes_requested",
+      "client_changes_requested",
+    ]);
 
-    const currentStatus = docket.approval_status || "draft";
-
-    if (
-      ![
-        "draft",
-        "bc_changes_requested",
-        "client_changes_requested",
-      ].includes(currentStatus)
-    ) {
+    if (!allowedStatuses.has(String(docket.approval_status || "legacy"))) {
       return NextResponse.json(
         {
           error:
-            "This Daily Docket cannot be submitted for approval in its current status.",
+            "This Daily Docket cannot be submitted from its current approval status.",
         },
         { status: 409 },
       );
     }
 
+    const { data: accessData, error: accessError } = await service
+      .from("project_access")
+      .select("user_id")
+      .eq("project_id", docket.project_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (accessError) {
+      return NextResponse.json(
+        { error: "Project access could not be verified." },
+        { status: 500 },
+      );
+    }
+
+    const submitterIsReviewer = await isConfiguredBcReviewer(
+      service,
+      docket.project_id,
+      user.id,
+    );
+
+    if (!accessData && !submitterIsReviewer) {
+      return NextResponse.json(
+        { error: "You do not have access to submit this Daily Docket." },
+        { status: 403 },
+      );
+    }
+
+    if (!docket.bc_rep_name?.trim()) {
+      return NextResponse.json(
+        {
+          error:
+            "A BC Representative must be recorded before the Daily Docket can be submitted.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (!docket.bc_signature_data_url?.trim()) {
+      return NextResponse.json(
+        {
+          error:
+            "The BC Representative signature must be captured before submission.",
+        },
+        { status: 400 },
+      );
+    }
+
     const reviewers = await getBcReviewerRecipients(
-      admin,
+      service,
       docket.project_id,
     );
 
@@ -95,202 +303,178 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json(
         {
           error:
-            "No Commercial, Supervisor or Admin reviewers with project access were found.",
+            "No BC reviewers are configured for this project. Update Daily Docket Approval Settings before submitting.",
         },
-        { status: 409 },
+        { status: 400 },
       );
     }
-
-    const [
-      { data: projectData, error: projectError },
-      { data: towerData, error: towerError },
-    ] = await Promise.all([
-      admin
-        .from("projects")
-        .select("name,project_number")
-        .eq("id", docket.project_id)
-        .single(),
-
-      admin
-        .from("towers")
-        .select("name,tower_number,structure_number")
-        .eq("id", docket.tower_id)
-        .single(),
-    ]);
-
-    if (projectError) {
-      throw new Error(
-        `Project could not be loaded: ${projectError.message}`,
-      );
-    }
-
-    if (towerError) {
-      throw new Error(
-        `Tower could not be loaded: ${towerError.message}`,
-      );
-    }
-
-    const project = projectData as unknown as ProjectRow;
-    const tower = towerData as unknown as TowerRow;
-
-    const submitterMap = await authUserEmailMap(admin, [user.id]);
-    const submitter = submitterMap.get(user.id);
 
     const submittedAt = new Date().toISOString();
 
-    const { error: updateError } = await admin
+    const { data: updatedDocket, error: updateError } = await service
       .from("tower_daily_dockets")
       .update({
         approval_status: "submitted_bc",
         bc_submitted_at: submittedAt,
         bc_submitted_by: user.id,
       })
-      .eq("id", docketId);
+      .eq("id", docket.id)
+      .in("approval_status", [
+        "draft",
+        "legacy",
+        "bc_changes_requested",
+        "client_changes_requested",
+      ])
+      .select("id, approval_status")
+      .maybeSingle();
 
     if (updateError) {
-      throw new Error(
-        `Daily Docket could not be submitted: ${updateError.message}`,
+      return NextResponse.json(
+        { error: `Daily Docket could not be submitted: ${updateError.message}` },
+        { status: 500 },
       );
     }
 
-    const { error: approvalError } = await admin
-      .from("tower_docket_approvals")
-      .insert({
-        docket_id: docketId,
-        project_id: docket.project_id,
-        stage: "bc",
-        status: "pending",
-        submitted_by: user.id,
-        submitted_at: submittedAt,
+    if (!updatedDocket) {
+      return NextResponse.json(
+        {
+          error:
+            "The Daily Docket changed before it could be submitted. Refresh the page and try again.",
+        },
+        { status: 409 },
+      );
+    }
+
+    await service.from("tower_docket_approvals").insert({
+      docket_id: docket.id,
+      project_id: docket.project_id,
+      approval_stage: "bc",
+      status: "pending",
+      requested_at: submittedAt,
+      requested_by: user.id,
+      created_at: submittedAt,
+    });
+
+    await recordWorkflowEvent(service, {
+      docketId: docket.id,
+      projectId: docket.project_id,
+      actorUserId: user.id,
+      eventType: "bc_submitted",
+    });
+
+    const [{ data: projectData }, { data: towerData }] = await Promise.all([
+      service
+        .from("projects")
+        .select("id, name, project_number")
+        .eq("id", docket.project_id)
+        .maybeSingle(),
+      service
+        .from("towers")
+        .select("id, name, extra_data")
+        .eq("id", docket.tower_id)
+        .maybeSingle(),
+    ]);
+
+    const project = (projectData as ProjectRow | null) || null;
+    const tower = (towerData as TowerRow | null) || null;
+
+    let emailWarning: string | null = null;
+
+    try {
+      const reviewUrl = buildReviewUrl({
+        projectId: docket.project_id,
+        towerId: docket.tower_id,
+        docketId: docket.id,
       });
 
-    if (approvalError) {
-      throw new Error(
-        `Approval record could not be created: ${approvalError.message}`,
-      );
-    }
+      const projectName =
+        project?.name ||
+        project?.project_number ||
+        "TTTracker Project";
 
-    const { error: workflowError } = await admin
-      .from("tower_docket_workflow_events")
-      .insert({
-        docket_id: docketId,
-        project_id: docket.project_id,
-        event_type: "submitted_for_bc_approval",
-        performed_by: user.id,
-        performed_by_name:
-          submitter?.name ||
-          docket.bc_rep_name ||
-          docket.leading_hand ||
-          null,
-        performed_by_email: submitter?.email || null,
-      });
+      const towerName = getTowerName(tower);
+      const docketDate = formatDate(docket.docket_date);
 
-    if (workflowError) {
-      throw new Error(
-        `Workflow history could not be recorded: ${workflowError.message}`,
-      );
-    }
+      const recipientNames = reviewers
+        .map((reviewer) => reviewer.name)
+        .filter(Boolean);
 
-    const origin =
-      process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
-
-    const towerName =
-      tower.tower_number ||
-      tower.structure_number ||
-      tower.name ||
-      "Tower";
-
-    const reviewUrl =
-      `${origin}/project/${docket.project_id}` +
-      `/tower/${docket.tower_id}/dockets/${docketId}`;
-
-    const reviewerEmails = reviewers.map(
-      (reviewer: BcReviewerRecipient) => reviewer.email,
-    );
-
-    await sendDailyDocketEmail({
-      to: reviewerEmails,
-      subject: `Daily Docket awaiting approval - ${towerName} - ${docket.docket_date || ""}`,
-      html: docketEmailShell(
-        "Daily Docket awaiting approval",
+      const html = docketEmailShell(
+        "Daily Docket awaiting BC approval",
         `
-          <p>A Daily Docket has been submitted for BC review.</p>
+          <p>A Daily Docket has been submitted for BC approval.</p>
 
-          <table
-            role="presentation"
-            style="width:100%;border-collapse:collapse;margin:20px 0"
-          >
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:20px 0;border-collapse:collapse;">
             <tr>
-              <td style="padding:7px 0;color:#64748b;width:140px">Project</td>
-              <td style="padding:7px 0;font-weight:600">
-                ${project.project_number || ""} ${project.name || ""}
-              </td>
+              <td style="padding:8px 0;color:#64748b;width:150px;">Project</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${projectName}</td>
             </tr>
             <tr>
-              <td style="padding:7px 0;color:#64748b">Tower</td>
-              <td style="padding:7px 0;font-weight:600">${towerName}</td>
+              <td style="padding:8px 0;color:#64748b;">Tower</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${towerName}</td>
             </tr>
             <tr>
-              <td style="padding:7px 0;color:#64748b">Date</td>
-              <td style="padding:7px 0">${docket.docket_date || ""}</td>
+              <td style="padding:8px 0;color:#64748b;">Docket Date</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docketDate}</td>
             </tr>
             <tr>
-              <td style="padding:7px 0;color:#64748b">Crew</td>
-              <td style="padding:7px 0">${docket.crew || "—"}</td>
+              <td style="padding:8px 0;color:#64748b;">Leading Hand</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.leading_hand || "—"}</td>
             </tr>
             <tr>
-              <td style="padding:7px 0;color:#64748b">Leading Hand</td>
-              <td style="padding:7px 0">${docket.leading_hand || "—"}</td>
+              <td style="padding:8px 0;color:#64748b;">BC Representative</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.bc_rep_name || "—"}</td>
             </tr>
           </table>
 
-          <p style="margin:24px 0 8px">
-            <a
-              href="${reviewUrl}"
-              style="
-                display:inline-block;
-                background:#2563eb;
-                color:#ffffff;
-                text-decoration:none;
-                padding:12px 18px;
-                border-radius:8px;
-                font-weight:700;
-              "
-            >
+          <p style="margin-top:20px;">
+            Review the Daily Docket in TTTracker and either approve it for client review or request changes.
+          </p>
+
+          <p style="margin:24px 0;">
+            <a href="${reviewUrl}" style="display:inline-block;background:#047857;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px;">
               Review Daily Docket
             </a>
           </p>
+
+          <p style="font-size:13px;color:#64748b;">
+            This approval request was sent to ${recipientNames.length} configured BC reviewer${recipientNames.length === 1 ? "" : "s"}.
+          </p>
         `,
-      ),
-    });
+      );
+
+      await sendDailyDocketEmail({
+        to: reviewers.map((reviewer) => reviewer.email),
+        subject: `Daily Docket approval required · ${towerName} · ${docketDate}`,
+        html,
+      });
+    } catch (emailError) {
+      console.error(
+        "Daily Docket submitted but BC reviewer email could not be sent",
+        emailError,
+      );
+
+      emailWarning =
+        "The Daily Docket was submitted successfully, but the reviewer email could not be sent.";
+    }
 
     return NextResponse.json({
       success: true,
       status: "submitted_bc",
+      submittedAt,
       reviewers: reviewers.length,
+      warning: emailWarning,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Submission failed.";
-
-    if (message === "AUTH_REQUIRED") {
-      return NextResponse.json(
-        { error: "You must be logged in." },
-        { status: 401 },
-      );
-    }
-
-    if (message === "PROJECT_FORBIDDEN") {
-      return NextResponse.json(
-        { error: "You do not have access to this project." },
-        { status: 403 },
-      );
-    }
-
-    console.error("DAILY DOCKET SUBMIT BC ERROR", error);
+    console.error("Daily Docket submit-bc route failed", error);
 
     return NextResponse.json(
-      { error: message },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "The Daily Docket could not be submitted.",
+      },
       { status: 500 },
     );
   }

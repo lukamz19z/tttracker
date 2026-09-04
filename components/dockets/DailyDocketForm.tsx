@@ -1058,6 +1058,7 @@ export default function DailyDocketForm({
   const [approvalStatus, setApprovalStatus] = useState(toStringValue(initialDocket?.approval_status) || (mode === "create" ? "draft" : "legacy"));
   const [hasBodyExtension, setHasBodyExtension] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [submittingApproval, setSubmittingApproval] = useState(false);
   const [crews, setCrews] = useState<CrewRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [selectedCrewId, setSelectedCrewId] = useState("");
@@ -3275,7 +3276,7 @@ export default function DailyDocketForm({
     router.push(`/project/${projectId}/tower/${towerId}/dockets`);
   }
 
-  async function handleUpdate() {
+  async function handleUpdate(options?: { navigate?: boolean }) {
     if (!docketId) throw new Error("Missing docket id");
 
     const { data: existing, error: existingError } = await supabase
@@ -3360,8 +3361,11 @@ export default function DailyDocketForm({
     await syncMaterialEvents(docketId);
     await syncDelayDayworks(docketId);
     await recalcTowerProgressAndStatus();
-    router.push(`/project/${projectId}/tower/${towerId}/dockets`);
-    router.refresh();
+
+    if (options?.navigate !== false) {
+      router.push(`/project/${projectId}/tower/${towerId}/dockets`);
+      router.refresh();
+    }
   }
 
   function handleBcSignatureChange(value: string) {
@@ -3414,6 +3418,95 @@ export default function DailyDocketForm({
       console.error(error);
       alert(error instanceof Error ? error.message : "Something went wrong");
       setSaving(false);
+    }
+  }
+
+  async function handleSubmitForApproval() {
+    if (mode !== "edit" || !docketId || locked || isView) return;
+
+    if (!docketDate) {
+      alert("Please enter docket date");
+      return;
+    }
+
+    if (!leadingHand.trim()) {
+      alert("Please enter leading hand name");
+      return;
+    }
+
+    if (hasDuplicateWorkers) {
+      alert("Duplicate worker names found. Each worker can only appear once in a daily docket.");
+      return;
+    }
+
+    if (incidentOccurred && !incidentType) {
+      alert("Please select the incident type.");
+      return;
+    }
+
+    if (incidentOccurred && !incidentNotes.trim()) {
+      alert("Please enter incident notes/action required.");
+      return;
+    }
+
+    if (!bcRepName.trim()) {
+      alert("Please enter the BC Representative before submitting for approval.");
+      return;
+    }
+
+    if (!bcSignatureDataUrl) {
+      alert("Please capture the BC Representative signature before submitting for approval.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Submit this Daily Docket for BC approval? The docket will be locked while it is under review."
+    );
+
+    if (!confirmed) return;
+
+    setSubmittingApproval(true);
+
+    try {
+      // Save the latest form data first. A normal save only updates Supabase;
+      // SharePoint publishing is handled later by the approval workflow.
+      await handleUpdate({ navigate: false });
+
+      const response = await fetch(
+        `/api/daily-dockets/${encodeURIComponent(docketId)}/submit-bc`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const result = (await response.json().catch(() => null)) as
+        | { success?: boolean; error?: string; status?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error || "The Daily Docket could not be submitted for BC approval."
+        );
+      }
+
+      setApprovalStatus("submitted_bc");
+
+      alert("Daily Docket submitted for BC approval.");
+
+      router.push(`/project/${projectId}/tower/${towerId}/dockets`);
+      router.refresh();
+    } catch (error) {
+      console.error(error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "The Daily Docket could not be submitted for BC approval."
+      );
+    } finally {
+      setSubmittingApproval(false);
     }
   }
 
@@ -3658,8 +3751,12 @@ export default function DailyDocketForm({
       </div>
 
       {locked && mode === "edit" && (
-        <div className="border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-2xl p-4">
-          This docket has been client signed and is now locked.
+        <div className="border border-blue-200 bg-blue-50 text-blue-800 rounded-2xl p-4">
+          {approvalStatus === "submitted_bc"
+            ? "This docket is pending BC approval and is locked for editing."
+            : approvalStatus === "client_pending"
+            ? "This docket is pending client approval and is locked for editing."
+            : "This docket has been approved and is locked for editing."}
         </div>
       )}
 
@@ -5813,11 +5910,12 @@ export default function DailyDocketForm({
         )}
       </section>
 
-      <div className="sticky bottom-4 z-10 flex gap-3 bg-white/90 backdrop-blur border border-slate-200 rounded-2xl p-3 shadow-lg w-fit">
+      <div className="sticky bottom-4 z-10 flex flex-wrap gap-3 bg-white/90 backdrop-blur border border-slate-200 rounded-2xl p-3 shadow-lg w-fit">
         {!locked && !isView && (
           <button
+            type="button"
             onClick={handleSubmit}
-            disabled={saving}
+            disabled={saving || submittingApproval}
             className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60"
           >
             {saving
@@ -5829,6 +5927,22 @@ export default function DailyDocketForm({
               : "Update Daily Docket"}
           </button>
         )}
+
+        {mode === "edit" &&
+          !locked &&
+          !isView &&
+          ["draft", "legacy", "bc_changes_requested", "client_changes_requested"].includes(
+            approvalStatus
+          ) && (
+            <button
+              type="button"
+              onClick={handleSubmitForApproval}
+              disabled={saving || submittingApproval}
+              className="bg-emerald-700 text-white px-6 py-3 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {submittingApproval ? "Submitting..." : "Submit for Approval"}
+            </button>
+          )}
 
         <button
           type="button"

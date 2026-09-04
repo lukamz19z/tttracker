@@ -319,6 +319,27 @@ function itemLabel(item: MaterialEventItem) {
   return `${qtyPrefix}${item.item_reference || "Unlisted item"}`;
 }
 
+function normalizeWebsiteRole(value: string | null | undefined) {
+  switch (String(value || "").trim().toLowerCase()) {
+    case "site_admin":
+    case "administrator":
+      return "admin";
+    case "commercial_manager":
+      return "commercial";
+    case "safety":
+    case "safety_manager":
+      return "hseq";
+    case "mechanic":
+    case "assets":
+      return "asset_manager";
+    case "leading_hand":
+    case "field":
+      return "crew";
+    default:
+      return String(value || "").trim().toLowerCase();
+  }
+}
+
 export default function TowerDocketsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const params = useParams();
@@ -339,6 +360,7 @@ export default function TowerDocketsPage() {
   const [deletingDocketId, setDeletingDocketId] = useState<string | null>(null);
   const [workflowBusyId, setWorkflowBusyId] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState("");
+  const [configuredBcReviewerRoles, setConfiguredBcReviewerRoles] = useState<string[]>([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -452,14 +474,62 @@ export default function TowerDocketsPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void (async () => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-        const { data } = await supabase.from("user_roles").select("role").eq("user_id", user.id).maybeSingle();
-        setCurrentRole(String(data?.role || "").toLowerCase());
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setCurrentRole("");
+          setConfiguredBcReviewerRoles([]);
+          return;
+        }
+
+        const [roleResult, reviewerRolesResult] = await Promise.all([
+          supabase
+            .from("user_roles")
+            .select("role")
+            .eq("user_id", user.id)
+            .maybeSingle(),
+          supabase
+            .from("project_docket_approval_roles")
+            .select("role, receives_bc_review")
+            .eq("project_id", projectId)
+            .eq("receives_bc_review", true),
+        ]);
+
+        setCurrentRole(
+          normalizeWebsiteRole(
+            (roleResult.data as { role?: string | null } | null)?.role,
+          ),
+        );
+
+        if (reviewerRolesResult.error) {
+          console.warn(
+            "Daily Docket reviewer configuration could not be loaded",
+            reviewerRolesResult.error,
+          );
+          setConfiguredBcReviewerRoles([]);
+          return;
+        }
+
+        setConfiguredBcReviewerRoles(
+          Array.from(
+            new Set(
+              ((reviewerRolesResult.data || []) as Array<{
+                role?: string | null;
+                receives_bc_review?: boolean | null;
+              }>)
+                .filter((row) => row.receives_bc_review !== false)
+                .map((row) => normalizeWebsiteRole(row.role))
+                .filter(Boolean),
+            ),
+          ),
+        );
       })();
     }, 0);
+
     return () => window.clearTimeout(timer);
-  }, [supabase]);
+  }, [projectId, supabase]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void fetchData(), 0);
@@ -680,7 +750,7 @@ export default function TowerDocketsPage() {
     towerNameById,
   ]);
 
-  const canReviewBc = ["admin","commercial","commercial_manager","supervisor"].includes(currentRole);
+  const canReviewBc = configuredBcReviewerRoles.includes(currentRole);
 
   async function submitForBcApproval(id: string) {
     setWorkflowBusyId(id);
@@ -690,22 +760,6 @@ export default function TowerDocketsPage() {
       if (!response.ok) throw new Error(result.error || "Could not submit docket.");
       await fetchData();
     } catch (e) { alert(e instanceof Error ? e.message : "Could not submit docket."); }
-    finally { setWorkflowBusyId(null); }
-  }
-
-  async function bcReview(id: string, decision: "approve"|"request_changes") {
-    const comments = decision === "request_changes" ? (window.prompt("What needs to be changed?") || "") : "";
-    if (decision === "request_changes" && !comments.trim()) return;
-    if (decision === "approve" && !window.confirm("Approve this docket internally and send it to the configured client approval contacts?")) return;
-    setWorkflowBusyId(id);
-    try {
-      const response = await fetch(`/api/daily-dockets/${id}/bc-review`, {
-        method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({decision,comments})
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "BC review failed.");
-      await fetchData();
-    } catch (e) { alert(e instanceof Error ? e.message : "BC review failed."); }
     finally { setWorkflowBusyId(null); }
   }
 
@@ -994,7 +1048,7 @@ export default function TowerDocketsPage() {
                                 {status === "draft" || status === "legacy"
                                   ? "Ready to be reviewed and submitted when complete."
                                   : status === "submitted_bc"
-                                  ? "Awaiting review by BC Commercial or Supervisor."
+                                  ? "Awaiting review by an authorised BC reviewer."
                                   : status === "bc_changes_requested"
                                   ? "BC has requested changes before the docket can proceed."
                                   : status === "client_pending"
@@ -1169,7 +1223,7 @@ export default function TowerDocketsPage() {
                           </div>
                         )}
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
                           <Link href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}?mode=view`} className="text-center bg-slate-800 text-white px-4 py-3 rounded-xl text-sm font-semibold">View</Link>
 
                           {["legacy","draft","bc_changes_requested","client_changes_requested"].includes(status) && (
@@ -1182,10 +1236,20 @@ export default function TowerDocketsPage() {
                             </button>
                           )}
 
-                          {status==="submitted_bc" && canReviewBc && (<>
-                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void bcReview(docket.id,"approve")} className="bg-emerald-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">Approve & Send to Client</button>
-                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void bcReview(docket.id,"request_changes")} className="bg-amber-500 text-slate-950 px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">Request Changes</button>
-                          </>)}
+                          {status === "submitted_bc" && canReviewBc && (
+                            <Link
+                              href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}/review`}
+                              className="text-center bg-emerald-700 text-white px-4 py-3 rounded-xl text-sm font-semibold hover:bg-emerald-800"
+                            >
+                              Review Daily Docket
+                            </Link>
+                          )}
+
+                          {status === "submitted_bc" && !canReviewBc && (
+                            <div className="flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-semibold text-blue-700">
+                              Pending Authorised Review
+                            </div>
+                          )}
 
                           {["legacy","draft","bc_changes_requested","client_changes_requested"].includes(status) && (
                             <button type="button" onClick={()=>void deleteDocket(docket.id)} disabled={deletingDocketId===docket.id} className="bg-rose-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">
