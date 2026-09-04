@@ -1,579 +1,905 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  Loader2,
+  Mail,
+  Plus,
+  Save,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
+import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-type ProjectRecord = {
+type RoleCode =
+  | "admin"
+  | "hseq"
+  | "asset_manager"
+  | "commercial"
+  | "editor"
+  | "crew"
+  | "viewer";
+
+type ProjectRow = {
   id: string;
-  name: string | null;
+  name: string;
   project_number: string | null;
-  client: string | null;
 };
 
-type DocketContact = {
+type ApprovalRoleRow = {
+  id: string;
+  project_id: string;
+  role: string;
+  receives_bc_review: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ClientContactRow = {
+  id: string;
+  project_id: string;
+  name: string;
+  email: string;
+  company: string | null;
+  receives_approval: boolean;
+  receives_final: boolean;
+  active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ClientContactDraft = {
   id?: string;
   name: string;
   email: string;
   company: string;
-  receives_approval: boolean;
-  receives_final: boolean;
+  receivesApproval: boolean;
+  receivesFinal: boolean;
   active: boolean;
 };
 
-function blankContact(clientName = ""): DocketContact {
+type MessageState = {
+  tone: "success" | "error";
+  text: string;
+} | null;
+
+const ROLE_OPTIONS: Array<{
+  value: RoleCode;
+  label: string;
+  detail: string;
+}> = [
+  {
+    value: "admin",
+    label: "Administrator",
+    detail: "System administrators assigned to this project.",
+  },
+  {
+    value: "commercial",
+    label: "Commercial",
+    detail: "Commercial users assigned to this project.",
+  },
+  {
+    value: "hseq",
+    label: "HSEQ",
+    detail: "HSEQ users assigned to this project.",
+  },
+  {
+    value: "asset_manager",
+    label: "Asset Manager",
+    detail: "Asset managers assigned to this project.",
+  },
+  {
+    value: "editor",
+    label: "Editor",
+    detail: "Editors assigned to this project.",
+  },
+  {
+    value: "crew",
+    label: "Crew / Field",
+    detail: "Crew or field users assigned to this project.",
+  },
+  {
+    value: "viewer",
+    label: "Viewer",
+    detail: "Read-only users assigned to this project.",
+  },
+];
+
+const DEFAULT_APPROVAL_ROLES: RoleCode[] = ["admin", "commercial"];
+
+function normaliseRole(value?: string | null): RoleCode | null {
+  const role = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_");
+
+  if (role === "administrator" || role === "site_admin") return "admin";
+  if (role === "safety" || role === "safety_manager") return "hseq";
+  if (role === "assets") return "asset_manager";
+  if (role === "commercial_manager") return "commercial";
+  if (role === "leading_hand" || role === "field") return "crew";
+
+  if (
+    [
+      "admin",
+      "hseq",
+      "asset_manager",
+      "commercial",
+      "editor",
+      "crew",
+      "viewer",
+    ].includes(role)
+  ) {
+    return role as RoleCode;
+  }
+
+  return null;
+}
+
+function blankContact(): ClientContactDraft {
   return {
     name: "",
     email: "",
-    company: clientName,
-    receives_approval: true,
-    receives_final: true,
+    company: "",
+    receivesApproval: true,
+    receivesFinal: true,
     active: true,
   };
 }
 
-function normaliseEmail(value: string) {
-  return value.trim().toLowerCase();
+function isEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
-function isValidEmail(value: string) {
-  const email = normaliseEmail(value);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-export default function DocketApprovalSettingsPage() {
-  const params = useParams();
+export default function DailyDocketApprovalSettingsPage() {
+  const params = useParams<{ projectId: string }>();
   const router = useRouter();
-  const projectId = String(params.projectId ?? "");
+  const projectId = String(params?.projectId ?? "");
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [project, setProject] = useState<ProjectRecord | null>(null);
-  const [contacts, setContacts] = useState<DocketContact[]>([]);
+  const [project, setProject] = useState<ProjectRow | null>(null);
+  const [selectedRoles, setSelectedRoles] = useState<RoleCode[]>(
+    DEFAULT_APPROVAL_ROLES,
+  );
+  const [contacts, setContacts] = useState<ClientContactDraft[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<"success" | "error" | "">("");
+  const [savingRoles, setSavingRoles] = useState(false);
+  const [savingContacts, setSavingContacts] = useState(false);
+  const [canManage, setCanManage] = useState(false);
+  const [message, setMessage] = useState<MessageState>(null);
+
+  const loadSettings = useCallback(async () => {
+    if (!projectId) {
+      throw new Error("Missing project.");
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      router.replace("/login");
+      return;
+    }
+
+    const [roleResult, projectResult] = await Promise.all([
+      supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("projects")
+        .select("id, name, project_number")
+        .eq("id", projectId)
+        .single(),
+    ]);
+
+    if (roleResult.error) {
+      throw new Error(roleResult.error.message);
+    }
+
+    const currentRole = normaliseRole(roleResult.data?.role);
+    const isAdmin = currentRole === "admin";
+
+    if (!isAdmin) {
+      setCanManage(false);
+      throw new Error(
+        "Only an Administrator can manage Daily Docket approval settings.",
+      );
+    }
+
+    setCanManage(true);
+
+    if (projectResult.error || !projectResult.data) {
+      throw new Error(
+        projectResult.error?.message ?? "Could not load the project.",
+      );
+    }
+
+    setProject(projectResult.data as ProjectRow);
+
+    const [approvalRolesResult, contactsResult] = await Promise.all([
+      supabase
+        .from("project_docket_approval_roles")
+        .select(
+          "id, project_id, role, receives_bc_review, created_at, updated_at",
+        )
+        .eq("project_id", projectId)
+        .eq("receives_bc_review", true),
+      supabase
+        .from("project_docket_contacts")
+        .select(
+          "id, project_id, name, email, company, receives_approval, receives_final, active, created_at, updated_at",
+        )
+        .eq("project_id", projectId)
+        .order("name"),
+    ]);
+
+    if (approvalRolesResult.error) {
+      const missingTable =
+        approvalRolesResult.error.message
+          .toLowerCase()
+          .includes("project_docket_approval_roles") ||
+        approvalRolesResult.error.code === "42P01";
+
+      throw new Error(
+        missingTable
+          ? "Daily Docket approval role settings have not been created in Supabase yet."
+          : approvalRolesResult.error.message,
+      );
+    }
+
+    if (contactsResult.error) {
+      throw new Error(contactsResult.error.message);
+    }
+
+    const savedRoles = (
+      (approvalRolesResult.data ?? []) as ApprovalRoleRow[]
+    )
+      .map((row) => normaliseRole(row.role))
+      .filter((role): role is RoleCode => Boolean(role));
+
+    setSelectedRoles(
+      savedRoles.length > 0
+        ? [...new Set(savedRoles)]
+        : DEFAULT_APPROVAL_ROLES,
+    );
+
+    setContacts(
+      ((contactsResult.data ?? []) as ClientContactRow[]).map((row) => ({
+        id: row.id,
+        name: row.name ?? "",
+        email: row.email ?? "",
+        company: row.company ?? "",
+        receivesApproval: row.receives_approval ?? true,
+        receivesFinal: row.receives_final ?? true,
+        active: row.active ?? true,
+      })),
+    );
+  }, [projectId, router, supabase]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadSettings();
-    }, 0);
+    let cancelled = false;
 
-    return () => window.clearTimeout(timer);
-  }, [projectId, supabase]);
-
-  async function loadSettings() {
-    setLoading(true);
-    setMessage("");
-    setMessageType("");
-
-    try {
-      const [{ data: projectData, error: projectError }, { data: contactData, error: contactError }] =
-        await Promise.all([
-          supabase
-            .from("projects")
-            .select("id,name,project_number,client")
-            .eq("id", projectId)
-            .single(),
-          supabase
-            .from("project_docket_contacts")
-            .select(
-              "id,name,email,company,receives_approval,receives_final,active",
-            )
-            .eq("project_id", projectId)
-            .order("active", { ascending: false })
-            .order("name"),
-        ]);
-
-      if (projectError || !projectData) {
-        throw new Error(projectError?.message || "Project could not be loaded.");
+    void (async () => {
+      try {
+        await loadSettings();
+      } catch (error) {
+        if (!cancelled) {
+          setMessage({
+            tone: "error",
+            text:
+              error instanceof Error
+                ? error.message
+                : "Could not load Daily Docket approval settings.",
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
+    })();
 
-      if (contactError) {
-        throw new Error(contactError.message);
-      }
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSettings]);
 
-      const loadedProject = projectData as ProjectRecord;
-      setProject(loadedProject);
-
-      const loadedContacts = (contactData || []).map((row) => ({
-        id: String(row.id),
-        name: String(row.name || ""),
-        email: String(row.email || ""),
-        company: String(row.company || ""),
-        receives_approval: Boolean(row.receives_approval),
-        receives_final: Boolean(row.receives_final),
-        active: row.active !== false,
-      }));
-
-      setContacts(
-        loadedContacts.length > 0
-          ? loadedContacts
-          : [blankContact(String(loadedProject.client || ""))],
-      );
-    } catch (error) {
-      console.error("DAILY DOCKET APPROVAL SETTINGS LOAD ERROR:", error);
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Approval settings could not be loaded.",
-      );
-      setMessageType("error");
-    } finally {
-      setLoading(false);
-    }
+  function toggleRole(role: RoleCode) {
+    setMessage(null);
+    setSelectedRoles((current) =>
+      current.includes(role)
+        ? current.filter((item) => item !== role)
+        : [...current, role],
+    );
   }
 
-  function updateContact<K extends keyof DocketContact>(
-    index: number,
-    key: K,
-    value: DocketContact[K],
-  ) {
-    setContacts((current) =>
-      current.map((contact, contactIndex) =>
-        contactIndex === index ? { ...contact, [key]: value } : contact,
-      ),
-    );
+  async function saveApprovalRoles() {
+    if (!canManage || !projectId) return;
+
+    if (selectedRoles.length === 0) {
+      setMessage({
+        tone: "error",
+        text: "Select at least one BC approval recipient role.",
+      });
+      return;
+    }
+
+    setSavingRoles(true);
+    setMessage(null);
+
+    try {
+      const deleteResult = await supabase
+        .from("project_docket_approval_roles")
+        .delete()
+        .eq("project_id", projectId);
+
+      if (deleteResult.error) {
+        throw new Error(deleteResult.error.message);
+      }
+
+      const insertResult = await supabase
+        .from("project_docket_approval_roles")
+        .insert(
+          selectedRoles.map((role) => ({
+            project_id: projectId,
+            role,
+            receives_bc_review: true,
+          })),
+        );
+
+      if (insertResult.error) {
+        throw new Error(insertResult.error.message);
+      }
+
+      setMessage({
+        tone: "success",
+        text: "BC approval recipients updated.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save BC approval recipients.",
+      });
+    } finally {
+      setSavingRoles(false);
+    }
   }
 
   function addContact() {
-    setContacts((current) => [
-      ...current,
-      blankContact(String(project?.client || "")),
-    ]);
+    setContacts((current) => [...current, blankContact()]);
+    setMessage(null);
   }
 
-  async function removeContact(index: number) {
-    const contact = contacts[index];
-    if (!contact) return;
+  function updateContact(
+    index: number,
+    patch: Partial<ClientContactDraft>,
+  ) {
+    setContacts((current) =>
+      current.map((contact, currentIndex) =>
+        currentIndex === index ? { ...contact, ...patch } : contact,
+      ),
+    );
+    setMessage(null);
+  }
 
-    if (!contact.id) {
-      setContacts((current) => current.filter((_, i) => i !== index));
+  function removeContact(index: number) {
+    setContacts((current) =>
+      current.filter((_, currentIndex) => currentIndex !== index),
+    );
+    setMessage(null);
+  }
+
+  async function saveClientContacts(event?: FormEvent) {
+    event?.preventDefault();
+
+    if (!canManage || !projectId) return;
+
+    const cleaned = contacts.map((contact) => ({
+      ...contact,
+      name: contact.name.trim(),
+      email: contact.email.trim().toLowerCase(),
+      company: contact.company.trim(),
+    }));
+
+    const incomplete = cleaned.find(
+      (contact) => !contact.name || !contact.email,
+    );
+
+    if (incomplete) {
+      setMessage({
+        tone: "error",
+        text: "Each client contact needs a name and email address.",
+      });
       return;
     }
 
-    const confirmed = window.confirm(
-      `Remove ${contact.name || contact.email || "this contact"} from Daily Docket approvals?`,
+    const invalidEmail = cleaned.find(
+      (contact) => !isEmail(contact.email),
     );
 
-    if (!confirmed) return;
+    if (invalidEmail) {
+      setMessage({
+        tone: "error",
+        text: `Enter a valid email address for ${invalidEmail.name || "the client contact"}.`,
+      });
+      return;
+    }
 
-    setSaving(true);
-    setMessage("");
-    setMessageType("");
+    const emails = cleaned.map((contact) => contact.email);
+    const duplicateEmail = emails.find(
+      (email, index) => emails.indexOf(email) !== index,
+    );
+
+    if (duplicateEmail) {
+      setMessage({
+        tone: "error",
+        text: `The email address ${duplicateEmail} has been entered more than once.`,
+      });
+      return;
+    }
+
+    const activeContacts = cleaned.filter((contact) => contact.active);
+    if (
+      activeContacts.length > 0 &&
+      !activeContacts.some((contact) => contact.receivesApproval)
+    ) {
+      setMessage({
+        tone: "error",
+        text: "At least one active client contact must receive approval requests.",
+      });
+      return;
+    }
+
+    setSavingContacts(true);
+    setMessage(null);
 
     try {
-      const { error } = await supabase
+      const existingResult = await supabase
         .from("project_docket_contacts")
-        .delete()
-        .eq("id", contact.id)
+        .select("id")
         .eq("project_id", projectId);
 
-      if (error) throw error;
+      if (existingResult.error) {
+        throw new Error(existingResult.error.message);
+      }
 
-      setContacts((current) => current.filter((_, i) => i !== index));
-      setMessage("Contact removed.");
-      setMessageType("success");
-    } catch (error) {
-      console.error("DAILY DOCKET CONTACT DELETE ERROR:", error);
-      setMessage(
-        error instanceof Error ? error.message : "Contact could not be removed.",
+      const existingIds = new Set(
+        (existingResult.data ?? []).map((row) => String(row.id)),
       );
-      setMessageType("error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveSettings() {
-    setMessage("");
-    setMessageType("");
-
-    const completedContacts = contacts.filter(
-      (contact) =>
-        contact.name.trim() ||
-        contact.email.trim() ||
-        contact.company.trim(),
-    );
-
-    for (const contact of completedContacts) {
-      if (!contact.name.trim()) {
-        setMessage("Each Daily Docket contact requires a name.");
-        setMessageType("error");
-        return;
-      }
-
-      if (!isValidEmail(contact.email)) {
-        setMessage(
-          `${contact.name.trim() || "Each contact"} requires a valid email address.`,
-        );
-        setMessageType("error");
-        return;
-      }
-
-      if (!contact.receives_approval && !contact.receives_final) {
-        setMessage(
-          `${contact.name.trim()} must receive either approval requests, final dockets, or both.`,
-        );
-        setMessageType("error");
-        return;
-      }
-    }
-
-    const emailSet = new Set<string>();
-
-    for (const contact of completedContacts) {
-      const email = normaliseEmail(contact.email);
-
-      if (emailSet.has(email)) {
-        setMessage(`Duplicate email address: ${contact.email}`);
-        setMessageType("error");
-        return;
-      }
-
-      emailSet.add(email);
-    }
-
-    const approvalContacts = completedContacts.filter(
-      (contact) => contact.active && contact.receives_approval,
-    );
-
-    if (completedContacts.length > 0 && approvalContacts.length === 0) {
-      setMessage(
-        "At least one active contact must receive Daily Docket approval requests.",
+      const retainedIds = new Set(
+        cleaned
+          .map((contact) => contact.id)
+          .filter((id): id is string => Boolean(id)),
       );
-      setMessageType("error");
-      return;
-    }
 
-    setSaving(true);
+      const idsToDelete = [...existingIds].filter(
+        (id) => !retainedIds.has(id),
+      );
 
-    try {
-      for (const contact of completedContacts) {
-        const payload = {
-          project_id: projectId,
-          name: contact.name.trim(),
-          email: normaliseEmail(contact.email),
-          company: contact.company.trim() || null,
-          receives_approval: contact.receives_approval,
-          receives_final: contact.receives_final,
-          active: contact.active,
-          updated_at: new Date().toISOString(),
-        };
+      if (idsToDelete.length > 0) {
+        const deleteResult = await supabase
+          .from("project_docket_contacts")
+          .delete()
+          .in("id", idsToDelete);
 
-        if (contact.id) {
-          const { error } = await supabase
-            .from("project_docket_contacts")
-            .update(payload)
-            .eq("id", contact.id)
-            .eq("project_id", projectId);
-
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
-            .from("project_docket_contacts")
-            .insert(payload);
-
-          if (error) throw error;
+        if (deleteResult.error) {
+          throw new Error(deleteResult.error.message);
         }
       }
 
-      setMessage("Approval settings saved.");
-      setMessageType("success");
-      await loadSettings();
+      const nextContacts: ClientContactDraft[] = [];
+
+      for (const contact of cleaned) {
+        const payload = {
+          project_id: projectId,
+          name: contact.name,
+          email: contact.email,
+          company: contact.company || null,
+          receives_approval: contact.receivesApproval,
+          receives_final: contact.receivesFinal,
+          active: contact.active,
+        };
+
+        if (contact.id) {
+          const updateResult = await supabase
+            .from("project_docket_contacts")
+            .update(payload)
+            .eq("id", contact.id)
+            .eq("project_id", projectId)
+            .select(
+              "id, project_id, name, email, company, receives_approval, receives_final, active",
+            )
+            .single();
+
+          if (updateResult.error || !updateResult.data) {
+            throw new Error(
+              updateResult.error?.message ??
+                "Could not update a client contact.",
+            );
+          }
+
+          const row = updateResult.data as ClientContactRow;
+          nextContacts.push({
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            company: row.company ?? "",
+            receivesApproval: row.receives_approval,
+            receivesFinal: row.receives_final,
+            active: row.active,
+          });
+        } else {
+          const insertResult = await supabase
+            .from("project_docket_contacts")
+            .insert(payload)
+            .select(
+              "id, project_id, name, email, company, receives_approval, receives_final, active",
+            )
+            .single();
+
+          if (insertResult.error || !insertResult.data) {
+            throw new Error(
+              insertResult.error?.message ??
+                "Could not create a client contact.",
+            );
+          }
+
+          const row = insertResult.data as ClientContactRow;
+          nextContacts.push({
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            company: row.company ?? "",
+            receivesApproval: row.receives_approval,
+            receivesFinal: row.receives_final,
+            active: row.active,
+          });
+        }
+      }
+
+      setContacts(nextContacts);
+      setMessage({
+        tone: "success",
+        text: "Client approval contacts updated.",
+      });
     } catch (error) {
-      console.error("DAILY DOCKET APPROVAL SETTINGS SAVE ERROR:", error);
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Approval settings could not be saved.",
-      );
-      setMessageType("error");
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save client approval contacts.",
+      });
     } finally {
-      setSaving(false);
+      setSavingContacts(false);
     }
   }
 
-  const approvalCount = contacts.filter(
-    (contact) =>
-      contact.active &&
-      contact.receives_approval &&
-      contact.name.trim() &&
-      isValidEmail(contact.email),
-  ).length;
-
-  const finalCount = contacts.filter(
-    (contact) =>
-      contact.active &&
-      contact.receives_final &&
-      contact.name.trim() &&
-      isValidEmail(contact.email),
-  ).length;
-
   if (loading) {
     return (
-      <div className="p-4 md:p-8 min-h-screen bg-slate-50">
-        Loading approval settings...
-      </div>
+      <AppShell>
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <Loader2 size={28} className="animate-spin text-slate-400" />
+        </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="p-4 md:p-8 min-h-screen bg-slate-50">
-      <div className="max-w-6xl mx-auto space-y-5">
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-              Daily Docket Approval Settings
-            </h1>
-
-            {project && (
-              <div className="text-sm text-slate-500 mt-2">
-                {[project.project_number, project.name]
-                  .filter(Boolean)
-                  .join(" · ")}
+    <AppShell>
+      <div className="mx-auto max-w-6xl space-y-6">
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-slate-400">
+                <ShieldCheck size={18} />
+                <span className="text-sm font-semibold uppercase tracking-wider">
+                  Daily Dockets
+                </span>
               </div>
-            )}
+
+              <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+                Approval Settings
+              </h1>
+
+              {project ? (
+                <p className="mt-2 text-sm font-medium text-slate-500">
+                  {project.name}
+                  {project.project_number
+                    ? ` · ${project.project_number}`
+                    : ""}
+                </p>
+              ) : null}
+            </div>
+
+            <Link
+              href={`/project/${projectId}`}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <ArrowLeft size={16} />
+              Back to Project
+            </Link>
+          </div>
+        </section>
+
+        {message ? (
+          <section
+            className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
+              message.tone === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-rose-200 bg-rose-50 text-rose-800"
+            }`}
+          >
+            {message.text}
+          </section>
+        ) : null}
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Users size={19} className="text-slate-500" />
+                <h2 className="text-lg font-bold text-slate-950">
+                  BC Approval Recipients
+                </h2>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Selected roles receive the BC review email when a docket is
+                submitted.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void saveApprovalRoles()}
+              disabled={savingRoles || !canManage}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {savingRoles ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Save size={16} />
+              )}
+              Save Recipients
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="border border-slate-300 bg-white px-5 py-3 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Back
-          </button>
-        </div>
+          <div className="grid gap-3 p-6 md:grid-cols-2">
+            {ROLE_OPTIONS.map((role) => {
+              const selected = selectedRoles.includes(role.value);
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <SummaryCard
-            label="Approval Recipients"
-            value={approvalCount}
-          />
-          <SummaryCard
-            label="Final Docket Recipients"
-            value={finalCount}
-          />
-          <SummaryCard
-            label="Client"
-            value={project?.client || "Not set"}
-          />
-        </div>
+              return (
+                <button
+                  key={role.value}
+                  type="button"
+                  onClick={() => toggleRole(role.value)}
+                  disabled={!canManage}
+                  className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                    selected
+                      ? "border-slate-950 bg-slate-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  <span
+                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
+                      selected
+                        ? "border-slate-950 bg-slate-950 text-white"
+                        : "border-slate-300 bg-white text-transparent"
+                    }`}
+                  >
+                    <Check size={14} strokeWidth={3} />
+                  </span>
 
-        <section className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-          <div className="p-5 md:p-6 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <h2 className="text-xl font-semibold text-slate-900">
-              Client Contacts
-            </h2>
+                  <span>
+                    <span className="block text-sm font-bold text-slate-900">
+                      {role.label}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      {role.detail}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <form
+          onSubmit={(event) => void saveClientContacts(event)}
+          className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"
+        >
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Mail size={19} className="text-slate-500" />
+                <h2 className="text-lg font-bold text-slate-950">
+                  Client Approval Contacts
+                </h2>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Client contacts receive approval requests and final signed
+                dockets.
+              </p>
+            </div>
 
             <button
               type="button"
               onClick={addContact}
-              className="bg-slate-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-black"
+              disabled={!canManage}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
             >
-              + Add Contact
+              <Plus size={16} />
+              Add Contact
             </button>
           </div>
 
-          <div className="p-4 md:p-6 space-y-3">
+          <div className="p-6">
             {contacts.length === 0 ? (
-              <div className="border border-dashed border-slate-300 rounded-2xl p-8 text-center text-slate-500 bg-slate-50">
-                No Daily Docket contacts have been configured.
+              <div className="rounded-2xl border border-dashed border-slate-300 px-6 py-10 text-center">
+                <Mail size={28} className="mx-auto text-slate-300" />
+                <h3 className="mt-3 font-bold text-slate-900">
+                  No client contacts
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Add the client representatives who will receive Daily Docket
+                  approvals.
+                </p>
               </div>
             ) : (
-              contacts.map((contact, index) => (
-                <div
-                  key={contact.id || `contact-${index}`}
-                  className={`rounded-2xl border p-4 md:p-5 ${
-                    contact.active
-                      ? "border-slate-200 bg-white"
-                      : "border-slate-200 bg-slate-50"
-                  }`}
-                >
-                  <div className="grid lg:grid-cols-[1fr_1.2fr_1fr] gap-3">
-                    <Field
-                      label="Name"
-                      value={contact.name}
-                      placeholder="Client representative"
-                      disabled={saving}
-                      onChange={(value) =>
-                        updateContact(index, "name", value)
-                      }
-                    />
+              <div className="space-y-4">
+                {contacts.map((contact, index) => (
+                  <div
+                    key={contact.id ?? `new-${index}`}
+                    className="rounded-2xl border border-slate-200 p-5"
+                  >
+                    <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
+                      <Field label="Name">
+                        <input
+                          value={contact.name}
+                          onChange={(event) =>
+                            updateContact(index, {
+                              name: event.target.value,
+                            })
+                          }
+                          disabled={!canManage}
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-50"
+                        />
+                      </Field>
 
-                    <Field
-                      label="Email"
-                      type="email"
-                      value={contact.email}
-                      placeholder="name@company.com"
-                      disabled={saving}
-                      onChange={(value) =>
-                        updateContact(index, "email", value)
-                      }
-                    />
+                      <Field label="Email">
+                        <input
+                          type="email"
+                          value={contact.email}
+                          onChange={(event) =>
+                            updateContact(index, {
+                              email: event.target.value,
+                            })
+                          }
+                          disabled={!canManage}
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-50"
+                        />
+                      </Field>
 
-                    <Field
-                      label="Company"
-                      value={contact.company}
-                      placeholder={project?.client || "Client"}
-                      disabled={saving}
-                      onChange={(value) =>
-                        updateContact(index, "company", value)
-                      }
-                    />
-                  </div>
+                      <Field label="Company">
+                        <input
+                          value={contact.company}
+                          onChange={(event) =>
+                            updateContact(index, {
+                              company: event.target.value,
+                            })
+                          }
+                          disabled={!canManage}
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-50"
+                        />
+                      </Field>
 
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mt-4 pt-4 border-t border-slate-100">
-                    <div className="flex flex-wrap gap-4">
-                      <Toggle
-                        label="Approval Requests"
-                        checked={contact.receives_approval}
-                        disabled={saving}
-                        onChange={(checked) =>
-                          updateContact(
-                            index,
-                            "receives_approval",
-                            checked,
-                          )
-                        }
-                      />
-
-                      <Toggle
-                        label="Final Dockets"
-                        checked={contact.receives_final}
-                        disabled={saving}
-                        onChange={(checked) =>
-                          updateContact(
-                            index,
-                            "receives_final",
-                            checked,
-                          )
-                        }
-                      />
-
-                      <Toggle
-                        label="Active"
-                        checked={contact.active}
-                        disabled={saving}
-                        onChange={(checked) =>
-                          updateContact(index, "active", checked)
-                        }
-                      />
+                      <button
+                        type="button"
+                        onClick={() => removeContact(index)}
+                        disabled={!canManage}
+                        className="inline-flex h-11 items-center justify-center rounded-xl border border-rose-200 bg-white px-3 text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                        aria-label="Remove client contact"
+                      >
+                        <Trash2 size={17} />
+                      </button>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => void removeContact(index)}
-                      disabled={saving}
-                      className="text-sm font-semibold text-rose-700 hover:text-rose-800 disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
+                    <div className="mt-4 flex flex-wrap gap-5 border-t border-slate-100 pt-4">
+                      <CheckOption
+                        label="Approval requests"
+                        checked={contact.receivesApproval}
+                        onChange={(checked) =>
+                          updateContact(index, {
+                            receivesApproval: checked,
+                          })
+                        }
+                        disabled={!canManage}
+                      />
+
+                      <CheckOption
+                        label="Final signed docket"
+                        checked={contact.receivesFinal}
+                        onChange={(checked) =>
+                          updateContact(index, {
+                            receivesFinal: checked,
+                          })
+                        }
+                        disabled={!canManage}
+                      />
+
+                      <CheckOption
+                        label="Active"
+                        checked={contact.active}
+                        onChange={(checked) =>
+                          updateContact(index, { active: checked })
+                        }
+                        disabled={!canManage}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
-          </div>
-        </section>
 
-        <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 shadow-sm">
-          <div className="grid md:grid-cols-3 gap-4">
-            <WorkflowStep
-              number="1"
-              title="BC Approval"
-              text="Commercial or Supervisor reviews the submitted docket."
-            />
-            <WorkflowStep
-              number="2"
-              title="Client Approval"
-              text="Selected contacts receive the secure approval and signature request."
-            />
-            <WorkflowStep
-              number="3"
-              title="Final Docket"
-              text="The signed final PDF is distributed to the selected recipients."
-            />
+            <div className="mt-6 flex justify-end border-t border-slate-200 pt-5">
+              <button
+                type="submit"
+                disabled={savingContacts || !canManage}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {savingContacts ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Save size={16} />
+                )}
+                Save Client Contacts
+              </button>
+            </div>
           </div>
-        </section>
-
-        {message && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm font-medium ${
-              messageType === "success"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-rose-200 bg-rose-50 text-rose-700"
-            }`}
-          >
-            {message}
-          </div>
-        )}
-
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => void saveSettings()}
-            disabled={saving}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-semibold disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save Approval Settings"}
-          </button>
-        </div>
+        </form>
       </div>
-    </div>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-medium text-slate-500">{label}</div>
-      <div className="text-xl font-bold text-slate-900 mt-1 truncate">
-        {value}
-      </div>
-    </div>
+    </AppShell>
   );
 }
 
 function Field({
   label,
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-  disabled,
+  children,
 }: {
   label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  placeholder?: string;
-  disabled?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <div>
-      <label className="block text-sm font-medium text-slate-700 mb-1">
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-800">
         {label}
-      </label>
-      <input
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className="border border-slate-300 rounded-xl px-3 py-2.5 w-full bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
-      />
-    </div>
+      </span>
+      {children}
+    </label>
   );
 }
 
-function Toggle({
+function CheckOption({
   label,
   checked,
   onChange,
@@ -585,37 +911,15 @@ function Toggle({
   disabled?: boolean;
 }) {
   return (
-    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+    <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
       <input
         type="checkbox"
         checked={checked}
-        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
-        className="h-4 w-4"
+        disabled={disabled}
+        className="h-4 w-4 rounded border-slate-300"
       />
       {label}
     </label>
-  );
-}
-
-function WorkflowStep({
-  number,
-  title,
-  text,
-}: {
-  number: string;
-  title: string;
-  text: string;
-}) {
-  return (
-    <div className="flex gap-3">
-      <div className="h-8 w-8 shrink-0 rounded-full bg-slate-900 text-white flex items-center justify-center text-sm font-bold">
-        {number}
-      </div>
-      <div>
-        <div className="font-semibold text-slate-900">{title}</div>
-        <div className="text-sm text-slate-500 mt-1">{text}</div>
-      </div>
-    </div>
   );
 }
