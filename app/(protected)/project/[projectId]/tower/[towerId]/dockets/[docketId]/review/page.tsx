@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -10,6 +11,7 @@ import {
   FileCheck2,
   Loader2,
   MessageSquareWarning,
+  RotateCcw,
   ShieldCheck,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -24,10 +26,26 @@ type DocketRow = {
   weather: string | null;
   rate_type: string | null;
   approval_status: string | null;
+  progress_model: string | null;
   assembly_percent: number | null;
   erection_percent: number | null;
   raw_manhours: number | null;
   production_manhours: number | null;
+  lunch_break_minutes: number | null;
+  travel_in_minutes: number | null;
+  travel_out_minutes: number | null;
+  mobilisation_hours: number | null;
+  mobilisation_notes: string | null;
+  delays_comments: string | null;
+  weather_delay_hours: number | null;
+  lightning_delay_hours: number | null;
+  toolbox_delay_hours: number | null;
+  other_delay_hours: number | null;
+  other_delay_reason: string | null;
+  missing_items_bolts: string | null;
+  incident_occurred: boolean | null;
+  incident_type: string | null;
+  incident_notes: string | null;
   bc_rep_name: string | null;
   bc_signature_data_url: string | null;
   bc_signed_at: string | null;
@@ -60,7 +78,24 @@ type LabourRow = {
   time_in: string | null;
   time_out: string | null;
   total_hours: number | null;
+  lunch_minutes: number | null;
+  travel_in_minutes: number | null;
+  travel_out_minutes: number | null;
+  mobilisation_hours: number | null;
+  delay_hours: number | null;
+  delay_reason: string | null;
   production_hours: number | null;
+};
+
+type PlantRow = {
+  id?: string;
+  plant_name: string | null;
+  plant_type: string | null;
+  asset_number: string | null;
+  time_in: string | null;
+  time_out: string | null;
+  total_hours: number | null;
+  notes: string | null;
 };
 
 type DelayRow = {
@@ -68,6 +103,10 @@ type DelayRow = {
   delay_type: string | null;
   delay_reason: string | null;
   delay_hours: number | null;
+  applies_to: string | null;
+  worker_names: string[] | null;
+  delay_applies_mode: string | null;
+  plant_names: string[] | null;
 };
 
 type ProgressRow = {
@@ -78,7 +117,57 @@ type ProgressRow = {
   assembled_qty?: number | null;
   erected_qty?: number | null;
   assembly_today?: number | null;
+  assembly_overall?: number | null;
   erection_today?: number | null;
+  erection_overall?: number | null;
+  assembly_weight?: number | null;
+  erection_weight?: number | null;
+};
+
+type MaterialItemRow = {
+  id?: string;
+  item_reference: string | null;
+  item_description: string | null;
+  quantity: number | string | null;
+  unit: string | null;
+};
+
+type MaterialPersonRow = {
+  id?: string;
+  employee_name?: string | null;
+  worker_name?: string | null;
+  employee_id?: string | null;
+  hours?: number | null;
+};
+
+type MaterialPlantRow = {
+  id?: string;
+  plant_name?: string | null;
+  asset_number?: string | null;
+  hours?: number | null;
+};
+
+type MaterialEventRow = {
+  id: string;
+  event_type: string | null;
+  occurred_at: string | null;
+  source_tower_id: string | null;
+  destination_tower_id: string | null;
+  destination_location: string | null;
+  work_outcome: string | null;
+  notes: string | null;
+  items: MaterialItemRow[] | null;
+  people: MaterialPersonRow[] | null;
+  plant: MaterialPlantRow[] | null;
+};
+
+type RevisionAllocationRow = {
+  id: string;
+  source_tower_id: string;
+  target_tower_id: string;
+  hours: number | null;
+  worker_names: string[] | null;
+  reason: string | null;
 };
 
 type ReviewResponse = {
@@ -87,14 +176,53 @@ type ReviewResponse = {
   error?: string;
 };
 
+type ChangeCategory =
+  | "Progress"
+  | "Labour"
+  | "Mobilisation / Travel"
+  | "Delays"
+  | "Materials"
+  | "Safety"
+  | "Commercial"
+  | "Other";
+
+type ChangeRequest = {
+  category: ChangeCategory;
+  detail: string;
+};
+
+type MobilisationReview = {
+  included: boolean;
+  fromTowerId: string;
+  toTowerId: string;
+  status: string;
+  percentComplete: string;
+  startedDate: string;
+  targetMoveDate: string;
+  completedDate: string;
+  minutes: number;
+  hours: number;
+  workerNames: string[];
+  notes: string;
+};
+
+const CHANGE_CATEGORIES: ChangeCategory[] = [
+  "Progress",
+  "Labour",
+  "Mobilisation / Travel",
+  "Delays",
+  "Materials",
+  "Safety",
+  "Commercial",
+  "Other",
+];
+
 function formatDate(value: string | null) {
   if (!value) return "—";
-
   const [year, month, day] = value.slice(0, 10).split("-");
   if (!year || !month || !day) return value;
 
   const date = new Date(Number(year), Number(month) - 1, Number(day));
-
   return new Intl.DateTimeFormat("en-AU", {
     day: "2-digit",
     month: "long",
@@ -104,7 +232,6 @@ function formatDate(value: string | null) {
 
 function formatDateTime(value: string | null) {
   if (!value) return "—";
-
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
@@ -117,33 +244,28 @@ function formatDateTime(value: string | null) {
   }).format(date);
 }
 
-function formatHours(value: number | null) {
+function formatHours(value: number | null | undefined) {
   return Number(value || 0).toFixed(2);
 }
 
-function formatPercent(value: number | null) {
+function formatMinutes(value: number | null | undefined) {
+  const minutes = Number(value || 0);
+  if (minutes <= 0) return "0 min";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = Math.round(minutes % 60);
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
+
+function formatPercent(value: number | null | undefined) {
   return `${Math.round(Number(value || 0))}%`;
 }
 
-function roleLabel(value: string) {
-  switch (value) {
-    case "admin":
-      return "Administrator";
-    case "commercial":
-      return "Commercial";
-    case "hseq":
-      return "HSEQ";
-    case "asset_manager":
-      return "Asset Manager";
-    case "editor":
-      return "Editor";
-    case "crew":
-      return "Crew / Field";
-    case "viewer":
-      return "Viewer";
-    default:
-      return value;
-  }
+function titleCase(value: string | null | undefined) {
+  if (!value) return "—";
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function normalizeRole(value: string | null | undefined) {
@@ -167,6 +289,27 @@ function normalizeRole(value: string | null | undefined) {
   }
 }
 
+function roleLabel(value: string) {
+  switch (value) {
+    case "admin":
+      return "Administrator";
+    case "commercial":
+      return "Commercial";
+    case "hseq":
+      return "HSEQ";
+    case "asset_manager":
+      return "Asset Manager";
+    case "editor":
+      return "Editor";
+    case "crew":
+      return "Crew / Field";
+    case "viewer":
+      return "Viewer";
+    default:
+      return value;
+  }
+}
+
 function statusLabel(value: string | null) {
   switch (value) {
     case "submitted_bc":
@@ -182,6 +325,116 @@ function statusLabel(value: string | null) {
     default:
       return "In Progress";
   }
+}
+
+function parseMobilisation(
+  docket: DocketRow,
+  labour: LabourRow[],
+): MobilisationReview {
+  const comments = docket.delays_comments || "";
+  const line = comments
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith("MOBILISATION|"));
+
+  const values: Record<string, string> = {};
+
+  if (line) {
+    for (const piece of line.split("|").slice(1)) {
+      const index = piece.indexOf("=");
+      if (index === -1) continue;
+      values[piece.slice(0, index)] = piece.slice(index + 1);
+    }
+  }
+
+  const docketHours = Number(docket.mobilisation_hours || 0);
+  const parsedMinutes = Number(values.minutes || 0);
+  const parsedHours = Number(values.hours || 0);
+  const labourHasMob = labour.some(
+    (row) => Number(row.mobilisation_hours || 0) > 0,
+  );
+
+  const included =
+    Boolean(line) ||
+    docketHours > 0 ||
+    labourHasMob ||
+    Boolean((docket.mobilisation_notes || "").trim());
+
+  const hours =
+    parsedHours > 0
+      ? parsedHours
+      : parsedMinutes > 0
+        ? parsedMinutes / 60
+        : docketHours;
+
+  const minutes =
+    parsedMinutes > 0 ? parsedMinutes : Math.round(hours * 60);
+
+  return {
+    included,
+    fromTowerId: values.from || "",
+    toTowerId: values.to || "",
+    status: values.status || "",
+    percentComplete: values.progress || "",
+    startedDate: values.started || "",
+    targetMoveDate: values.target || "",
+    completedDate: values.completed || "",
+    minutes,
+    hours,
+    workerNames: values.workers
+      ? values.workers
+          .split(",")
+          .map((name) => name.trim())
+          .filter(Boolean)
+      : [],
+    notes: values.notes || docket.mobilisation_notes || "",
+  };
+}
+
+function generalComments(value: string | null) {
+  return (value || "")
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith("MOBILISATION|"))
+    .join("\n")
+    .trim();
+}
+
+function eventLabel(value: string | null) {
+  switch (value) {
+    case "missing":
+      return "Missing Material";
+    case "found_received":
+      return "Found / Received";
+    case "taken_from_another_tower":
+      return "Taken From Another Tower";
+    case "sent_to_another_tower":
+      return "Sent To Another Tower";
+    case "excess":
+      return "Excess Material";
+    case "damaged_incorrect":
+      return "Damaged / Incorrect Material";
+    default:
+      return titleCase(value);
+  }
+}
+
+function workOutcomeLabel(value: string | null) {
+  switch (value) {
+    case "stopped_work":
+      return "Stopped work";
+    case "slowed_down":
+      return "Slowed down work";
+    case "changed_sequence":
+      return "Changed work sequence";
+    case "minor_impact":
+      return "Minor impact";
+    default:
+      return value ? titleCase(value) : "No impact recorded";
+  }
+}
+
+function signatureApproxBytes(dataUrl: string) {
+  const base64 = dataUrl.split(",")[1] || "";
+  return Math.ceil((base64.length * 3) / 4);
 }
 
 export default function DailyDocketBcReviewPage() {
@@ -203,14 +456,31 @@ export default function DailyDocketBcReviewPage() {
 
   const [project, setProject] = useState<ProjectRow | null>(null);
   const [tower, setTower] = useState<TowerRow | null>(null);
+  const [projectTowers, setProjectTowers] = useState<TowerRow[]>([]);
   const [docket, setDocket] = useState<DocketRow | null>(null);
   const [labour, setLabour] = useState<LabourRow[]>([]);
+  const [plant, setPlant] = useState<PlantRow[]>([]);
   const [delays, setDelays] = useState<DelayRow[]>([]);
   const [progress, setProgress] = useState<ProgressRow[]>([]);
+  const [materialEvents, setMaterialEvents] = useState<MaterialEventRow[]>([]);
+  const [revisionAllocations, setRevisionAllocations] = useState<
+    RevisionAllocationRow[]
+  >([]);
 
   const [currentRole, setCurrentRole] = useState("");
+  const [reviewerName, setReviewerName] = useState("");
+  const [reviewerEmail, setReviewerEmail] = useState("");
   const [allowedReviewer, setAllowedReviewer] = useState(false);
-  const [comments, setComments] = useState("");
+
+  const [approvalComments, setApprovalComments] = useState("");
+  const [changeDetails, setChangeDetails] = useState<
+    Partial<Record<ChangeCategory, string>>
+  >({});
+  const [selectedChangeCategories, setSelectedChangeCategories] = useState<
+    ChangeCategory[]
+  >([]);
+
+  const [reviewerSignature, setReviewerSignature] = useState("");
   const [submitting, setSubmitting] = useState<
     "approve" | "request_changes" | null
   >(null);
@@ -241,10 +511,14 @@ export default function DailyDocketBcReviewPage() {
         const [
           projectRes,
           towerRes,
+          projectTowersRes,
           docketRes,
           labourRes,
+          plantRes,
           delayRes,
           progressRes,
+          materialRes,
+          revisionRes,
           roleRes,
           configRes,
         ] = await Promise.all([
@@ -260,6 +534,11 @@ export default function DailyDocketBcReviewPage() {
             .eq("project_id", projectId)
             .single(),
           supabase
+            .from("towers")
+            .select("id, name, line")
+            .eq("project_id", projectId)
+            .order("name"),
+          supabase
             .from("tower_daily_dockets")
             .select(`
               id,
@@ -271,10 +550,26 @@ export default function DailyDocketBcReviewPage() {
               weather,
               rate_type,
               approval_status,
+              progress_model,
               assembly_percent,
               erection_percent,
               raw_manhours,
               production_manhours,
+              lunch_break_minutes,
+              travel_in_minutes,
+              travel_out_minutes,
+              mobilisation_hours,
+              mobilisation_notes,
+              delays_comments,
+              weather_delay_hours,
+              lightning_delay_hours,
+              toolbox_delay_hours,
+              other_delay_hours,
+              other_delay_reason,
+              missing_items_bolts,
+              incident_occurred,
+              incident_type,
+              incident_notes,
               bc_rep_name,
               bc_signature_data_url,
               bc_signed_at,
@@ -294,12 +589,47 @@ export default function DailyDocketBcReviewPage() {
             .single(),
           supabase
             .from("tower_docket_labour")
-            .select("id, worker_name, time_in, time_out, total_hours, production_hours")
+            .select(`
+              id,
+              worker_name,
+              time_in,
+              time_out,
+              total_hours,
+              lunch_minutes,
+              travel_in_minutes,
+              travel_out_minutes,
+              mobilisation_hours,
+              delay_hours,
+              delay_reason,
+              production_hours
+            `)
             .eq("docket_id", docketId)
             .order("worker_name"),
           supabase
+            .from("tower_docket_plant")
+            .select(`
+              id,
+              plant_name,
+              plant_type,
+              asset_number,
+              time_in,
+              time_out,
+              total_hours,
+              notes
+            `)
+            .eq("docket_id", docketId),
+          supabase
             .from("tower_docket_delays")
-            .select("id, delay_type, delay_reason, delay_hours")
+            .select(`
+              id,
+              delay_type,
+              delay_reason,
+              delay_hours,
+              applies_to,
+              worker_names,
+              delay_applies_mode,
+              plant_names
+            `)
             .eq("docket_id", docketId),
           supabase
             .from("tower_docket_progress")
@@ -311,9 +641,48 @@ export default function DailyDocketBcReviewPage() {
               assembled_qty,
               erected_qty,
               assembly_today,
-              erection_today
+              assembly_overall,
+              erection_today,
+              erection_overall,
+              assembly_weight,
+              erection_weight
             `)
             .eq("docket_id", docketId),
+          supabase
+            .from("tower_material_events")
+            .select(`
+              id,
+              event_type,
+              occurred_at,
+              source_tower_id,
+              destination_tower_id,
+              destination_location,
+              work_outcome,
+              notes,
+              items:tower_material_event_items(
+                id,
+                item_reference,
+                item_description,
+                quantity,
+                unit
+              ),
+              people:tower_material_event_people(*),
+              plant:tower_material_event_plant(*)
+            `)
+            .eq("docket_id", docketId)
+            .order("occurred_at", { ascending: true }),
+          supabase
+            .from("tower_docket_hour_allocations")
+            .select(`
+              id,
+              source_tower_id,
+              target_tower_id,
+              hours,
+              worker_names,
+              reason
+            `)
+            .eq("docket_id", docketId)
+            .order("created_at", { ascending: true }),
           supabase
             .from("user_roles")
             .select("role")
@@ -338,12 +707,21 @@ export default function DailyDocketBcReviewPage() {
           throw new Error("Daily Docket could not be loaded.");
         }
 
+        if (revisionRes.error) {
+          throw new Error(
+            "Tower revision allocations could not be loaded. Run the tower_docket_hour_allocations SQL migration before reviewing this docket.",
+          );
+        }
+
         const role = normalizeRole(
           (roleRes.data as { role?: string | null } | null)?.role,
         );
 
         const configuredRoles = new Set(
-          ((configRes.data || []) as { role: string; receives_bc_review: boolean }[])
+          ((configRes.data || []) as {
+            role: string;
+            receives_bc_review: boolean;
+          }[])
             .filter((row) => row.receives_bc_review)
             .map((row) => normalizeRole(row.role)),
         );
@@ -351,12 +729,27 @@ export default function DailyDocketBcReviewPage() {
         if (!cancelled) {
           setProject(projectRes.data as ProjectRow);
           setTower(towerRes.data as TowerRow);
+          setProjectTowers((projectTowersRes.data || []) as TowerRow[]);
           setDocket(docketRes.data as DocketRow);
           setLabour((labourRes.data || []) as LabourRow[]);
+          setPlant((plantRes.data || []) as PlantRow[]);
           setDelays((delayRes.data || []) as DelayRow[]);
           setProgress((progressRes.data || []) as ProgressRow[]);
+          setMaterialEvents((materialRes.data || []) as MaterialEventRow[]);
+          setRevisionAllocations(
+            (revisionRes.data || []) as RevisionAllocationRow[],
+          );
           setCurrentRole(role);
           setAllowedReviewer(configuredRoles.has(role));
+          setReviewerName(
+            String(
+              user.user_metadata?.full_name ||
+                user.user_metadata?.name ||
+                user.email ||
+                "",
+            ),
+          );
+          setReviewerEmail(user.email || "");
         }
       } catch (error) {
         if (!cancelled) {
@@ -380,6 +773,12 @@ export default function DailyDocketBcReviewPage() {
 
   const towerName = tower?.name || "Tower";
 
+  const towerNameById = useMemo(() => {
+    return new Map(
+      projectTowers.map((row) => [row.id, row.name || "Unnamed tower"]),
+    );
+  }, [projectTowers]);
+
   const totalProgress = Math.round(
     Number(docket?.assembly_percent || 0) * 0.5 +
       Number(docket?.erection_percent || 0) * 0.5,
@@ -389,6 +788,46 @@ export default function DailyDocketBcReviewPage() {
     (sum, row) => sum + Number(row.delay_hours || 0),
     0,
   );
+
+  const mobilisation = useMemo(
+    () => (docket ? parseMobilisation(docket, labour) : null),
+    [docket, labour],
+  );
+
+  const siteComments = useMemo(
+    () => generalComments(docket?.delays_comments || null),
+    [docket?.delays_comments],
+  );
+
+  const revisionManhours = useMemo(
+    () =>
+      revisionAllocations.reduce(
+        (sum, row) =>
+          sum +
+          Number(row.hours || 0) *
+            Math.max(1, Array.isArray(row.worker_names) ? row.worker_names.length : 0),
+        0,
+      ),
+    [revisionAllocations],
+  );
+
+  const changeRequests = useMemo<ChangeRequest[]>(
+    () =>
+      selectedChangeCategories.map((category) => ({
+        category,
+        detail: (changeDetails[category] || "").trim(),
+      })),
+    [changeDetails, selectedChangeCategories],
+  );
+
+  function toggleChangeCategory(category: ChangeCategory) {
+    setSelectedChangeCategories((current) =>
+      current.includes(category)
+        ? current.filter((item) => item !== category)
+        : [...current, category],
+    );
+    setSubmitError(null);
+  }
 
   async function submitReview(action: "approve" | "request_changes") {
     if (!docketId || !docket) return;
@@ -403,15 +842,44 @@ export default function DailyDocketBcReviewPage() {
       return;
     }
 
-    if (action === "request_changes" && !comments.trim()) {
-      setSubmitError("Enter the required changes before sending the docket back.");
-      return;
+    if (action === "approve") {
+      if (!reviewerSignature) {
+        setSubmitError("Capture the BC reviewer signature before approving.");
+        return;
+      }
+
+      if (signatureApproxBytes(reviewerSignature) > 400 * 1024) {
+        setSubmitError("Reviewer signature is too large. Clear it and sign again.");
+        return;
+      }
     }
+
+    if (action === "request_changes") {
+      if (changeRequests.length === 0) {
+        setSubmitError("Select at least one section that requires changes.");
+        return;
+      }
+
+      const missingDetail = changeRequests.find((request) => !request.detail);
+      if (missingDetail) {
+        setSubmitError(
+          `Enter the required change for ${missingDetail.category}.`,
+        );
+        return;
+      }
+    }
+
+    const comments =
+      action === "request_changes"
+        ? changeRequests
+            .map((request) => `${request.category}: ${request.detail}`)
+            .join("\n")
+        : approvalComments.trim();
 
     const confirmed = window.confirm(
       action === "approve"
-        ? "Approve this Daily Docket and send it to the client for approval?"
-        : "Send this Daily Docket back for changes?",
+        ? "Approve this Daily Docket, generate the draft PDF and send it to the client for approval?"
+        : "Return this Daily Docket to the project team with the selected changes?",
     );
 
     if (!confirmed) return;
@@ -429,7 +897,11 @@ export default function DailyDocketBcReviewPage() {
           },
           body: JSON.stringify({
             action,
-            comments: comments.trim() || undefined,
+            comments: comments || undefined,
+            change_requests:
+              action === "request_changes" ? changeRequests : undefined,
+            reviewer_signature_data_url:
+              action === "approve" ? reviewerSignature : undefined,
           }),
         },
       );
@@ -527,16 +999,14 @@ export default function DailyDocketBcReviewPage() {
 
             <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-600">
               {completed === "approved"
-                ? "The draft Daily Docket has been published and the configured client contacts have been sent their approval link."
-                : "The Daily Docket has been returned to the project team for amendment."}
+                ? "The BC approval has been recorded. The draft Daily Docket has been published and the configured client contacts have been sent their approval link."
+                : "The Daily Docket has been returned to the project team with the requested changes."}
             </p>
 
             <button
               type="button"
               onClick={() =>
-                router.push(
-                  `/project/${projectId}/tower/${towerId}/dockets`,
-                )
+                router.push(`/project/${projectId}/tower/${towerId}/dockets`)
               }
               className="mt-7 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800"
             >
@@ -556,9 +1026,7 @@ export default function DailyDocketBcReviewPage() {
             <button
               type="button"
               onClick={() =>
-                router.push(
-                  `/project/${projectId}/tower/${towerId}/dockets`,
-                )
+                router.push(`/project/${projectId}/tower/${towerId}/dockets`)
               }
               className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               aria-label="Back to Daily Dockets"
@@ -596,7 +1064,7 @@ export default function DailyDocketBcReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
           <div className="space-y-6">
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 px-6 py-5">
@@ -630,9 +1098,20 @@ export default function DailyDocketBcReviewPage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">
-                Progress & Hours
-              </h2>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Progress & Hours
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Production manhours are internal BC calculations and are not
+                    shown on the client docket.
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  Internal review
+                </span>
+              </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <MetricCard
@@ -651,29 +1130,49 @@ export default function DailyDocketBcReviewPage() {
                 <MetricCard
                   label="Production MH"
                   value={formatHours(docket.production_manhours)}
+                  internal
+                />
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <SummaryBlockCompact
+                  label="Lunch"
+                  value={formatMinutes(docket.lunch_break_minutes)}
+                />
+                <SummaryBlockCompact
+                  label="Travel In"
+                  value={formatMinutes(docket.travel_in_minutes)}
+                />
+                <SummaryBlockCompact
+                  label="Travel Out"
+                  value={formatMinutes(docket.travel_out_minutes)}
                 />
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between gap-4">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Section Progress
-                </h2>
-              </div>
+              <h2 className="text-lg font-semibold text-slate-900">
+                Section Progress
+              </h2>
 
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-170 text-sm">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-4 py-3 text-left font-semibold">
                         Section
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
-                        Assembly
+                        Assembly Today
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
-                        Erection
+                        Assembly Overall
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Erection Today
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Erection Overall
                       </th>
                     </tr>
                   </thead>
@@ -681,10 +1180,10 @@ export default function DailyDocketBcReviewPage() {
                     {progress.length ? (
                       progress.map((row, index) => {
                         const isV2 = row.progress_model === "section_v2";
-                        const assembly = isV2
+                        const assemblyToday = isV2
                           ? Number(row.assembly_today || 0)
                           : Number(row.assembled_qty || 0);
-                        const erection = isV2
+                        const erectionToday = isV2
                           ? Number(row.erection_today || 0)
                           : Number(row.erected_qty || 0);
 
@@ -699,10 +1198,20 @@ export default function DailyDocketBcReviewPage() {
                                 `Section ${index + 1}`}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
-                              {Math.round(assembly)}%
+                              {formatPercent(assemblyToday)}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
-                              {Math.round(erection)}%
+                              {isV2
+                                ? formatPercent(row.assembly_overall)
+                                : "Legacy"}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-700">
+                              {formatPercent(erectionToday)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-700">
+                              {isV2
+                                ? formatPercent(row.erection_overall)
+                                : "Legacy"}
                             </td>
                           </tr>
                         );
@@ -710,7 +1219,7 @@ export default function DailyDocketBcReviewPage() {
                     ) : (
                       <tr>
                         <td
-                          colSpan={3}
+                          colSpan={5}
                           className="px-4 py-5 text-center text-slate-500"
                         >
                           No progress rows recorded.
@@ -724,16 +1233,21 @@ export default function DailyDocketBcReviewPage() {
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between gap-4">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  Labour
-                </h2>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Labour
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Raw and internal production-hour calculation for each worker.
+                  </p>
+                </div>
                 <span className="text-sm font-medium text-slate-500">
                   {labour.length} worker{labour.length === 1 ? "" : "s"}
                 </span>
               </div>
 
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-190 text-sm">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-4 py-3 text-left font-semibold">
@@ -744,6 +1258,18 @@ export default function DailyDocketBcReviewPage() {
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
                         Raw Hrs
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Lunch
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Travel
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Mob
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Delay
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
                         Prod Hrs
@@ -766,7 +1292,22 @@ export default function DailyDocketBcReviewPage() {
                           <td className="px-4 py-3 text-right text-slate-700">
                             {formatHours(row.total_hours)}
                           </td>
-                          <td className="px-4 py-3 text-right text-slate-700">
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatMinutes(row.lunch_minutes)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatMinutes(
+                              Number(row.travel_in_minutes || 0) +
+                                Number(row.travel_out_minutes || 0),
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatHours(row.mobilisation_hours)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {formatHours(row.delay_hours)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-700">
                             {formatHours(row.production_hours)}
                           </td>
                         </tr>
@@ -774,7 +1315,7 @@ export default function DailyDocketBcReviewPage() {
                     ) : (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={8}
                           className="px-4 py-5 text-center text-slate-500"
                         >
                           No labour rows recorded.
@@ -786,13 +1327,276 @@ export default function DailyDocketBcReviewPage() {
               </div>
             </section>
 
+            <section className="rounded-2xl border border-blue-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Mobilising / Demobilising
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    This section is always shown so the reviewer can confirm
+                    whether mobilisation was included.
+                  </p>
+                </div>
+
+                {mobilisation?.included ? (
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    Included
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    Not included
+                  </span>
+                )}
+              </div>
+
+              {!mobilisation?.included ? (
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <p className="font-semibold text-slate-800">
+                    No mobilisation or demobilisation recorded on this docket.
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    No production hours have been allocated to mobilisation from
+                    the docket-level mobilisation section.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <SummaryBlockCompact
+                      label="Moving From"
+                      value={
+                        towerNameById.get(mobilisation.fromTowerId) ||
+                        "Project / laydown / other"
+                      }
+                    />
+                    <SummaryBlockCompact
+                      label="Moving To"
+                      value={
+                        towerNameById.get(mobilisation.toTowerId) ||
+                        "Not specified"
+                      }
+                    />
+                    <SummaryBlockCompact
+                      label="Stage"
+                      value={titleCase(mobilisation.status)}
+                    />
+                    <SummaryBlockCompact
+                      label="Time Spent"
+                      value={`${formatHours(mobilisation.hours)} hrs`}
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                      Workers Included
+                    </p>
+                    {mobilisation.workerNames.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {mobilisation.workerNames.map((name) => (
+                          <span
+                            key={name}
+                            className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm font-medium text-amber-800">
+                        Legacy / crew-wide mobilisation record — individual
+                        workers were not stored on this entry.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <SummaryBlockCompact
+                      label="Started"
+                      value={formatDate(
+                        mobilisation.startedDate
+                          ? mobilisation.startedDate
+                          : null,
+                      )}
+                    />
+                    <SummaryBlockCompact
+                      label="Target Move"
+                      value={formatDate(
+                        mobilisation.targetMoveDate
+                          ? mobilisation.targetMoveDate
+                          : null,
+                      )}
+                    />
+                    <SummaryBlockCompact
+                      label="Completed"
+                      value={formatDate(
+                        mobilisation.completedDate
+                          ? mobilisation.completedDate
+                          : null,
+                      )}
+                    />
+                  </div>
+
+                  {mobilisation.notes ? (
+                    <TextPanel label="Mobilisation Notes" value={mobilisation.notes} />
+                  ) : null}
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Tower Revision / Hour Reallocation
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Internal BC allocation of revision or rectification hours to
+                    another tower.
+                  </p>
+                </div>
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                  Internal only
+                </span>
+              </div>
+
+              {revisionAllocations.length ? (
+                <div className="mt-5 space-y-3">
+                  {revisionAllocations.map((row) => {
+                    const workers = Array.isArray(row.worker_names)
+                      ? row.worker_names
+                      : [];
+                    const manhours =
+                      Number(row.hours || 0) * Math.max(1, workers.length);
+
+                    return (
+                      <div
+                        key={row.id}
+                        className="rounded-xl border border-amber-100 bg-amber-50/40 p-4"
+                      >
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <SummaryBlockCompact
+                            label="Tower"
+                            value={
+                              towerNameById.get(row.target_tower_id) ||
+                              row.target_tower_id
+                            }
+                          />
+                          <SummaryBlockCompact
+                            label="Hours / Worker"
+                            value={`${formatHours(row.hours)} hrs`}
+                          />
+                          <SummaryBlockCompact
+                            label="Allocated MH"
+                            value={`${manhours.toFixed(2)} MH`}
+                          />
+                        </div>
+
+                        <div className="mt-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Workers
+                          </p>
+                          <p className="mt-1 text-sm font-medium text-slate-800">
+                            {workers.length ? workers.join(", ") : "Not specified"}
+                          </p>
+                        </div>
+
+                        {row.reason ? (
+                          <p className="mt-3 text-sm text-slate-600">
+                            {row.reason}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
+                  <div className="text-right text-sm font-semibold text-amber-900">
+                    Total revision allocation: {revisionManhours.toFixed(2)} MH
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <p className="font-semibold text-slate-800">
+                    No tower revision or hour reallocation recorded.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            {docket.rate_type === "schedule_of_rates" ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Plant
+                  </h2>
+                  <span className="text-sm text-slate-500">
+                    {plant.length} item{plant.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                {plant.length ? (
+                  <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full min-w-160 text-sm">
+                      <thead className="bg-slate-50 text-slate-600">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold">
+                            Plant
+                          </th>
+                          <th className="px-4 py-3 text-left font-semibold">
+                            Asset
+                          </th>
+                          <th className="px-4 py-3 text-left font-semibold">
+                            Time
+                          </th>
+                          <th className="px-4 py-3 text-right font-semibold">
+                            Hours
+                          </th>
+                          <th className="px-4 py-3 text-left font-semibold">
+                            Notes
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {plant.map((row, index) => (
+                          <tr
+                            key={row.id || `${row.plant_name}-${index}`}
+                            className="border-t border-slate-200"
+                          >
+                            <td className="px-4 py-3 font-medium text-slate-900">
+                              {row.plant_name || row.plant_type || "—"}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">
+                              {row.asset_number || "—"}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">
+                              {row.time_in || "—"} - {row.time_out || "—"}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-700">
+                              {formatHours(row.total_hours)}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600">
+                              {row.notes || "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-500">
+                    No plant rows recorded.
+                  </p>
+                )}
+              </section>
+            ) : null}
+
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between gap-4">
                 <h2 className="text-lg font-semibold text-slate-900">
                   Delays
                 </h2>
                 <span className="text-sm font-medium text-slate-500">
-                  {totalDelayHours.toFixed(2)} hrs
+                  {totalDelayHours.toFixed(2)} hrs recorded
                 </span>
               </div>
 
@@ -804,33 +1608,265 @@ export default function DailyDocketBcReviewPage() {
                       className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
                     >
                       <div className="flex items-start justify-between gap-4">
-                        <div>
+                        <div className="min-w-0">
                           <p className="text-sm font-semibold text-slate-900">
-                            {(row.delay_type || "Delay")
-                              .replaceAll("_", " ")
-                              .replace(/\b\w/g, (char) => char.toUpperCase())}
+                            {titleCase(row.delay_type || "Delay")}
                           </p>
                           <p className="mt-1 text-sm text-slate-600">
                             {row.delay_reason || "No reason entered"}
                           </p>
+
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                            <span className="rounded-full bg-white px-2 py-1 ring-1 ring-slate-200">
+                              {row.applies_to === "selected_workers"
+                                ? "Selected workers"
+                                : "Entire crew"}
+                            </span>
+                            {row.worker_names?.length ? (
+                              <span className="rounded-full bg-white px-2 py-1 ring-1 ring-slate-200">
+                                {row.worker_names.join(", ")}
+                              </span>
+                            ) : null}
+                            {row.delay_applies_mode === "labour_and_plant" ? (
+                              <span className="rounded-full bg-white px-2 py-1 ring-1 ring-slate-200">
+                                Labour + plant
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                        <span className="text-sm font-semibold text-slate-700">
+
+                        <span className="shrink-0 text-sm font-semibold text-slate-700">
                           {formatHours(row.delay_hours)} hrs
                         </span>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <p className="text-sm text-slate-500">
-                    No delay rows recorded.
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="font-semibold text-slate-800">
+                      No delays recorded.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Materials
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Missing, excess, received, transferred and damaged material
+                    events recorded on this docket.
                   </p>
+                </div>
+                <span className="text-sm text-slate-500">
+                  {materialEvents.length} event
+                  {materialEvents.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {materialEvents.length ? (
+                <div className="mt-5 space-y-4">
+                  {materialEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            {eventLabel(event.event_type)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {event.occurred_at
+                              ? formatDateTime(event.occurred_at)
+                              : "Time not recorded"}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                          {workOutcomeLabel(event.work_outcome)}
+                        </span>
+                      </div>
+
+                      {event.items?.length ? (
+                        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                          {event.items.map((item, index) => (
+                            <div
+                              key={item.id || index}
+                              className="flex items-start justify-between gap-4 border-t border-slate-100 px-3 py-2 first:border-t-0"
+                            >
+                              <div>
+                                <p className="text-sm font-semibold text-slate-800">
+                                  {item.item_reference || "Material item"}
+                                </p>
+                                {item.item_description ? (
+                                  <p className="text-xs text-slate-500">
+                                    {item.item_description}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <span className="text-sm font-medium text-slate-700">
+                                {item.quantity || "—"} {item.unit || ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {(event.source_tower_id ||
+                        event.destination_tower_id ||
+                        event.destination_location) && (
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          {event.source_tower_id ? (
+                            <SummaryBlockCompact
+                              label="Source"
+                              value={
+                                towerNameById.get(event.source_tower_id) ||
+                                event.source_tower_id
+                              }
+                            />
+                          ) : null}
+                          {event.destination_tower_id ? (
+                            <SummaryBlockCompact
+                              label="Destination"
+                              value={
+                                towerNameById.get(event.destination_tower_id) ||
+                                event.destination_tower_id
+                              }
+                            />
+                          ) : event.destination_location ? (
+                            <SummaryBlockCompact
+                              label="Destination"
+                              value={titleCase(event.destination_location)}
+                            />
+                          ) : null}
+                        </div>
+                      )}
+
+                      {event.people?.length ? (
+                        <p className="mt-3 text-xs text-slate-600">
+                          <strong>People:</strong>{" "}
+                          {event.people
+                            .map(
+                              (person) =>
+                                person.employee_name ||
+                                person.worker_name ||
+                                person.employee_id ||
+                                "Worker",
+                            )
+                            .join(", ")}
+                        </p>
+                      ) : null}
+
+                      {event.plant?.length ? (
+                        <p className="mt-2 text-xs text-slate-600">
+                          <strong>Plant:</strong>{" "}
+                          {event.plant
+                            .map(
+                              (item) =>
+                                item.plant_name ||
+                                item.asset_number ||
+                                "Plant item",
+                            )
+                            .join(", ")}
+                        </p>
+                      ) : null}
+
+                      {event.notes ? (
+                        <p className="mt-3 text-sm text-slate-600">
+                          {event.notes}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <p className="font-semibold text-slate-800">
+                    No structured material events recorded.
+                  </p>
+                  {docket.missing_items_bolts ? (
+                    <p className="mt-2 text-sm text-slate-600">
+                      <strong>Legacy missing items:</strong>{" "}
+                      {docket.missing_items_bolts}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-500">
+                      No missing or excess material has been recorded.
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section
+              className={`rounded-2xl border bg-white p-6 shadow-sm ${
+                docket.incident_occurred
+                  ? "border-red-200"
+                  : "border-emerald-200"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Safety / Incident
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Safety information declared on the Daily Docket.
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    docket.incident_occurred
+                      ? "bg-red-50 text-red-700"
+                      : "bg-emerald-50 text-emerald-700"
+                  }`}
+                >
+                  {docket.incident_occurred
+                    ? "Incident / event recorded"
+                    : "No incident recorded"}
+                </span>
+              </div>
+
+              {docket.incident_occurred ? (
+                <div className="mt-5 space-y-3">
+                  <SummaryBlockCompact
+                    label="Incident Type"
+                    value={docket.incident_type || "Not specified"}
+                  />
+                  <TextPanel
+                    label="Incident / Safety Details"
+                    value={docket.incident_notes || "No details entered"}
+                  />
+                </div>
+              ) : (
+                <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                  The docket records that no incident or safety event occurred.
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-900">
+                General Site Comments
+              </h2>
+              <div className="mt-4">
+                {siteComments ? (
+                  <TextPanel label="Comments" value={siteComments} />
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                    No general site comments recorded.
+                  </div>
                 )}
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-900">
-                BC Representative Sign-off
+                Docket Prepared / BC Representative Sign-off
               </h2>
 
               <div className="mt-5 grid gap-5 md:grid-cols-[1fr_260px]">
@@ -858,10 +1894,50 @@ export default function DailyDocketBcReviewPage() {
                     />
                   ) : (
                     <div className="flex h-28 items-center justify-center text-sm text-slate-500">
-                      No signature recorded
+                      No preparer signature recorded
                     </div>
                   )}
                 </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    BC Reviewer Signature
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    This is the reviewing BC representative approving the docket
+                    before it is issued to the client.
+                  </p>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  Required to approve
+                </span>
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <SummaryBlockCompact
+                  label="Reviewer"
+                  value={reviewerName || "Signed-in user"}
+                />
+                <SummaryBlockCompact
+                  label="Email"
+                  value={reviewerEmail || "—"}
+                />
+              </div>
+
+              <div className="mt-4">
+                <SignaturePad
+                  value={reviewerSignature}
+                  disabled={
+                    !allowedReviewer ||
+                    docket.approval_status !== "submitted_bc" ||
+                    submitting !== null
+                  }
+                  onChange={setReviewerSignature}
+                />
               </div>
             </section>
           </div>
@@ -877,7 +1953,8 @@ export default function DailyDocketBcReviewPage() {
                     BC Approval
                   </h2>
                   <p className="mt-1 text-sm leading-5 text-slate-500">
-                    Review the docket before sending it to the client.
+                    Review every docket section before approving or returning it
+                    for correction.
                   </p>
                 </div>
               </div>
@@ -894,23 +1971,23 @@ export default function DailyDocketBcReviewPage() {
 
               <div className="mt-5">
                 <label
-                  htmlFor="review-comments"
-                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="approval-comments"
+                  className="block text-sm font-semibold text-slate-700"
                 >
-                  Review Comments
+                  Approval note
                 </label>
                 <textarea
-                  id="review-comments"
-                  rows={5}
-                  value={comments}
+                  id="approval-comments"
+                  rows={3}
+                  value={approvalComments}
                   disabled={
                     !allowedReviewer ||
                     docket.approval_status !== "submitted_bc" ||
                     submitting !== null
                   }
-                  onChange={(event) => setComments(event.target.value)}
+                  onChange={(event) => setApprovalComments(event.target.value)}
                   className="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100"
-                  placeholder="Optional for approval. Required if changes are requested."
+                  placeholder="Optional note when approving."
                 />
               </div>
 
@@ -920,7 +1997,7 @@ export default function DailyDocketBcReviewPage() {
                 </div>
               ) : null}
 
-              <div className="mt-5 grid gap-3">
+              <div className="mt-5">
                 <button
                   type="button"
                   disabled={
@@ -938,25 +2015,102 @@ export default function DailyDocketBcReviewPage() {
                   )}
                   Approve & Send to Client
                 </button>
-
-                <button
-                  type="button"
-                  disabled={
-                    !allowedReviewer ||
-                    docket.approval_status !== "submitted_bc" ||
-                    submitting !== null
-                  }
-                  onClick={() => void submitReview("request_changes")}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {submitting === "request_changes" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <MessageSquareWarning className="h-4 w-4" />
-                  )}
-                  Request Changes
-                </button>
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-amber-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+                  <MessageSquareWarning className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="font-semibold text-slate-900">
+                    Request Changes
+                  </h2>
+                  <p className="mt-1 text-sm leading-5 text-slate-500">
+                    Select exactly which docket sections need correction and
+                    enter the required change for each one.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                {CHANGE_CATEGORIES.map((category) => {
+                  const selected =
+                    selectedChangeCategories.includes(category);
+
+                  return (
+                    <button
+                      key={category}
+                      type="button"
+                      disabled={
+                        !allowedReviewer ||
+                        docket.approval_status !== "submitted_bc" ||
+                        submitting !== null
+                      }
+                      onClick={() => toggleChangeCategory(category)}
+                      className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
+                        selected
+                          ? "border-amber-500 bg-amber-500 text-white"
+                          : "border-slate-200 bg-white text-slate-700 hover:border-amber-300"
+                      } disabled:opacity-50`}
+                    >
+                      {category}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedChangeCategories.length ? (
+                <div className="mt-4 space-y-3">
+                  {selectedChangeCategories.map((category) => (
+                    <div key={category}>
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        {category}
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={changeDetails[category] || ""}
+                        disabled={
+                          !allowedReviewer ||
+                          docket.approval_status !== "submitted_bc" ||
+                          submitting !== null
+                        }
+                        onChange={(event) =>
+                          setChangeDetails((current) => ({
+                            ...current,
+                            [category]: event.target.value,
+                          }))
+                        }
+                        className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 disabled:bg-slate-100"
+                        placeholder={`What needs to change in ${category.toLowerCase()}?`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 text-xs text-slate-500">
+                  No changes selected.
+                </p>
+              )}
+
+              <button
+                type="button"
+                disabled={
+                  !allowedReviewer ||
+                  docket.approval_status !== "submitted_bc" ||
+                  submitting !== null
+                }
+                onClick={() => void submitReview("request_changes")}
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {submitting === "request_changes" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <MessageSquareWarning className="h-4 w-4" />
+                )}
+                Return for Changes
+              </button>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -971,15 +2125,16 @@ export default function DailyDocketBcReviewPage() {
                 />
                 <CheckItem
                   ok={Boolean(docket.bc_signature_data_url)}
-                  label="BC signature captured"
+                  label="Preparer signature captured"
                 />
                 <CheckItem
                   ok={Boolean(docket.docket_date)}
                   label="Docket date recorded"
                 />
+                <CheckItem ok={labour.length > 0} label="Labour recorded" />
                 <CheckItem
-                  ok={labour.length > 0}
-                  label="Labour recorded"
+                  ok={Boolean(reviewerSignature)}
+                  label="Reviewer signature captured"
                 />
               </div>
             </section>
@@ -990,13 +2145,131 @@ export default function DailyDocketBcReviewPage() {
   );
 }
 
-function SummaryBlock({
-  label,
+function SignaturePad({
   value,
+  disabled,
+  onChange,
 }: {
-  label: string;
   value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
 }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  function canvasPoint(
+    canvas: HTMLCanvasElement,
+    event: ReactPointerEvent<HTMLCanvasElement>,
+  ) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    return {
+      x: (event.clientX - rect.left) * scaleX,
+      y: (event.clientY - rect.top) * scaleY,
+    };
+  }
+
+  function startDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (disabled) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    lastPointRef.current = canvasPoint(canvas, event);
+  }
+
+  function draw(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (disabled || !drawingRef.current) return;
+    const canvas = canvasRef.current;
+    const previous = lastPointRef.current;
+    if (!canvas || !previous) return;
+
+    const next = canvasPoint(canvas, event);
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    context.strokeStyle = "#0f172a";
+    context.lineWidth = 3;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    context.moveTo(previous.x, previous.y);
+    context.lineTo(next.x, next.y);
+    context.stroke();
+
+    lastPointRef.current = next;
+  }
+
+  function finishDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current) return;
+    const canvas = canvasRef.current;
+
+    drawingRef.current = false;
+    lastPointRef.current = null;
+
+    if (canvas?.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+
+    if (canvas) {
+      onChange(canvas.toDataURL("image/png"));
+    }
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    onChange("");
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <label className="text-sm font-semibold text-slate-700">
+          Reviewer signature
+        </label>
+        <button
+          type="button"
+          disabled={disabled || !value}
+          onClick={clear}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Clear
+        </button>
+      </div>
+
+      <div className="mt-2 overflow-hidden rounded-xl border border-slate-300 bg-white">
+        <canvas
+          ref={canvasRef}
+          width={900}
+          height={240}
+          onPointerDown={startDrawing}
+          onPointerMove={draw}
+          onPointerUp={finishDrawing}
+          onPointerCancel={finishDrawing}
+          className={`h-40 w-full touch-none ${
+            disabled ? "cursor-not-allowed bg-slate-100" : "cursor-crosshair"
+          }`}
+          aria-label="BC reviewer signature pad"
+        />
+      </div>
+
+      <p className="mt-2 text-xs text-slate-500">
+        Sign above using the mouse, stylus or touchscreen. The signature is
+        stored against the BC approval record.
+      </p>
+    </div>
+  );
+}
+
+function SummaryBlock({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-white px-5 py-4">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -1007,7 +2280,7 @@ function SummaryBlock({
   );
 }
 
-function MetricCard({
+function SummaryBlockCompact({
   label,
   value,
 }: {
@@ -1015,22 +2288,46 @@ function MetricCard({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p className="mt-1 text-xl font-bold text-slate-900">{value}</p>
+      <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
 }
 
-function SummaryLine({
+function MetricCard({
   label,
   value,
+  internal = false,
 }: {
   label: string;
   value: string;
+  internal?: boolean;
 }) {
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 ${
+        internal
+          ? "border-emerald-200 bg-emerald-50"
+          : "border-slate-200 bg-slate-50"
+      }`}
+    >
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-xl font-bold text-slate-900">{value}</p>
+      {internal ? (
+        <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+          Internal
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -1041,13 +2338,20 @@ function SummaryLine({
   );
 }
 
-function CheckItem({
-  ok,
-  label,
-}: {
-  ok: boolean;
-  label: string;
-}) {
+function TextPanel({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function CheckItem({ ok, label }: { ok: boolean; label: string }) {
   return (
     <div className="flex items-center gap-2">
       <div

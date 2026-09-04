@@ -34,6 +34,11 @@ type ReviewAction = "approve" | "request_changes";
 type ReviewBody = {
   action?: ReviewAction;
   comments?: string;
+  change_requests?: Array<{
+    category?: string;
+    detail?: string;
+  }>;
+  reviewer_signature_data_url?: string;
 };
 
 type DocketRow = {
@@ -262,6 +267,41 @@ async function publishDraftPdf({
   };
 }
 
+function validateReviewerSignature(value: unknown) {
+  const signature = String(value ?? "").trim();
+
+  if (!signature.startsWith("data:image/png;base64,")) {
+    return {
+      ok: false as const,
+      error: "A valid BC reviewer signature is required before approval.",
+    };
+  }
+
+  const base64 = signature.split(",")[1] || "";
+  const approximateBytes = Math.ceil((base64.length * 3) / 4);
+
+  if (approximateBytes > 400 * 1024) {
+    return {
+      ok: false as const,
+      error: "The BC reviewer signature is too large. Clear it and sign again.",
+    };
+  }
+
+  return { ok: true as const, signature };
+}
+
+function normaliseChangeRequests(value: ReviewBody["change_requests"]) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((row) => ({
+      category: String(row?.category ?? "").trim(),
+      detail: String(row?.detail ?? "").trim(),
+    }))
+    .filter((row) => row.category && row.detail)
+    .slice(0, 20);
+}
+
 export async function POST(request: Request, context: RouteContext) {
   const { docketId } = await context.params;
 
@@ -276,13 +316,32 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const comments = String(body.comments ?? "").trim();
+    const changeRequests = normaliseChangeRequests(body.change_requests);
 
-    if (body.action === "request_changes" && !comments) {
+    if (body.action === "request_changes" && changeRequests.length === 0 && !comments) {
       return NextResponse.json(
-        { error: "Please enter the changes required before returning this Daily Docket." },
+        {
+          error:
+            "Select the docket sections requiring changes and enter the required correction for each section.",
+        },
         { status: 400 },
       );
     }
+
+    const reviewerSignatureResult =
+      body.action === "approve"
+        ? validateReviewerSignature(body.reviewer_signature_data_url)
+        : null;
+
+    if (reviewerSignatureResult && !reviewerSignatureResult.ok) {
+      return NextResponse.json(
+        { error: reviewerSignatureResult.error },
+        { status: 400 },
+      );
+    }
+
+    const reviewerSignature =
+      reviewerSignatureResult?.ok ? reviewerSignatureResult.signature : null;
 
     const admin = createDocketAdminSupabase();
 
@@ -365,7 +424,12 @@ export async function POST(request: Request, context: RouteContext) {
           reviewed_by_name: reviewerName,
           reviewed_by_email: reviewerEmail,
           reviewed_at: reviewedAt,
-          comments: comments || null,
+          comments:
+            comments ||
+            changeRequests
+              .map((request) => `${request.category}: ${request.detail}`)
+              .join("\n") ||
+            null,
         })
         .eq("docket_id", docketId)
         .eq("stage", "bc")
@@ -386,7 +450,15 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by: user.id,
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
-          comments: comments || null,
+          comments:
+            comments ||
+            changeRequests
+              .map((request) => `${request.category}: ${request.detail}`)
+              .join("\n") ||
+            null,
+          metadata: {
+            change_requests: changeRequests,
+          },
         });
 
       if (workflowError) {
@@ -581,6 +653,7 @@ export async function POST(request: Request, context: RouteContext) {
         reviewed_by_name: reviewerName,
         reviewed_by_email: reviewerEmail,
         reviewed_at: reviewedAt,
+        signature_data_url: reviewerSignature,
         comments: comments || null,
       })
       .eq("docket_id", docketId)
@@ -654,6 +727,9 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
           comments: comments || null,
+          metadata: {
+            reviewer_signature_captured: Boolean(reviewerSignature),
+          },
         },
         {
           docket_id: docketId,
