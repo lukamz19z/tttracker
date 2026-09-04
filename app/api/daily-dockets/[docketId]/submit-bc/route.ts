@@ -348,7 +348,7 @@ export async function POST(
     await service.from("tower_docket_approvals").insert({
       docket_id: docket.id,
       project_id: docket.project_id,
-      approval_stage: "bc",
+      stage: "bc",
       status: "pending",
       requested_at: submittedAt,
       requested_by: user.id,

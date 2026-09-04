@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   FileCheck2,
   Loader2,
   RotateCcw,
@@ -100,6 +101,7 @@ function statusLabel(value: string | null) {
 export default function ClientDailyDocketApprovalPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token ?? "";
+  const pdfUrl = token ? `/api/daily-dockets/client/${encodeURIComponent(token)}/pdf` : "#";
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -525,7 +527,17 @@ export default function ClientDailyDocketApprovalPage() {
                   </div>
 
                   <div className="mt-2">
-                    <SignaturePad
+                    
+              <a
+                href={pdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+              >
+                <ExternalLink size={16} />
+                View Daily Docket PDF
+              </a>
+<SignaturePad
                       value={signature}
                       onChange={setSignature}
                     />

@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import {
-  createDocketAdminSupabase,
-  getBcReviewerRecipients,
-} from "@/lib/dockets/server";
+import { createDocketAdminSupabase } from "@/lib/dockets/server";
+import { getBcReviewerRecipients } from "@/lib/dockets/reviewers";
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
 import {
   docketEmailShell,
@@ -192,6 +190,52 @@ function approvalUnavailableReason(approval: ApprovalRow | null) {
   }
 
   return null;
+}
+
+
+async function claimApprovalToken(
+  admin: ReturnType<typeof createDocketAdminSupabase>,
+  approvalId: string,
+  claimedAt: string,
+) {
+  const { data, error } = await admin
+    .from("tower_docket_approvals")
+    .update({
+      token_used_at: claimedAt,
+    })
+    .eq("id", approvalId)
+    .eq("status", "pending")
+    .is("token_used_at", null)
+    .is("token_superseded_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Client approval link could not be secured: ${error.message}`,
+    );
+  }
+
+  return Boolean(data?.id);
+}
+
+async function releaseApprovalTokenClaim(
+  admin: ReturnType<typeof createDocketAdminSupabase>,
+  approvalId: string,
+  claimedAt: string,
+) {
+  const { error } = await admin
+    .from("tower_docket_approvals")
+    .update({
+      token_used_at: null,
+    })
+    .eq("id", approvalId)
+    .eq("status", "pending")
+    .eq("token_used_at", claimedAt);
+
+  if (error) {
+    console.error("Could not release Daily Docket client token claim", error);
+  }
 }
 
 async function loadBundle(
@@ -433,6 +477,10 @@ export async function GET(_request: Request, context: RouteContext) {
 export async function POST(request: Request, context: RouteContext) {
   const { token } = await context.params;
 
+  let claimedApprovalId: string | null = null;
+  let claimedAt: string | null = null;
+  let claimAdmin: ReturnType<typeof createDocketAdminSupabase> | null = null;
+
   try {
     if (!token) {
       return NextResponse.json(
@@ -457,6 +505,13 @@ export async function POST(request: Request, context: RouteContext) {
     if (!name) {
       return NextResponse.json(
         { error: "Enter your name before submitting your response." },
+        { status: 400 },
+      );
+    }
+
+    if (body.action === "request_changes" && !comments) {
+      return NextResponse.json(
+        { error: "Enter the changes required before returning this Daily Docket." },
         { status: 400 },
       );
     }
@@ -496,6 +551,27 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const now = new Date().toISOString();
+
+    const tokenClaimed = await claimApprovalToken(
+      admin,
+      approval.id,
+      now,
+    );
+
+    if (!tokenClaimed) {
+      return NextResponse.json(
+        {
+          error:
+            "This approval link has already been used or another approval response is being processed.",
+        },
+        { status: 409 },
+      );
+    }
+
+    claimedApprovalId = approval.id;
+    claimedAt = now;
+    claimAdmin = admin;
+
     const recipientEmail =
       String(approval.recipient_email ?? "").trim().toLowerCase() || null;
 
@@ -522,7 +598,6 @@ export async function POST(request: Request, context: RouteContext) {
           reviewed_by_email: recipientEmail,
           reviewed_at: now,
           comments: comments || null,
-          token_used_at: now,
         })
         .eq("id", approval.id)
         .eq("status", "pending");
@@ -574,6 +649,8 @@ export async function POST(request: Request, context: RouteContext) {
         docket.project_id,
       );
 
+      let reviewerEmailWarning: string | null = null;
+
       if (reviewers.length > 0) {
         const origin =
           process.env.NEXT_PUBLIC_APP_URL ||
@@ -590,58 +667,72 @@ export async function POST(request: Request, context: RouteContext) {
             "Tower",
         );
 
-        await sendDailyDocketEmail({
-          to: reviewers.map((reviewer) => reviewer.email),
-          subject: `Client requested Daily Docket changes - ${towerName} - ${docket.docket_date || ""}`,
-          html: docketEmailShell(
-            "Client requested Daily Docket changes",
-            `
-              <p>The client has requested changes to a Daily Docket.</p>
+        try {
+          await sendDailyDocketEmail({
+            to: reviewers.map((reviewer) => reviewer.email),
+            subject: `Client requested Daily Docket changes - ${towerName} - ${docket.docket_date || ""}`,
+            html: docketEmailShell(
+              "Client requested Daily Docket changes",
+              `
+                <p>The client has requested changes to a Daily Docket.</p>
 
-              <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
-                <tr>
-                  <td style="padding:7px 0;color:#64748b;width:150px">Project</td>
-                  <td style="padding:7px 0;font-weight:600">
-                    ${escapeHtml(project.project_number || "")}
-                    ${escapeHtml(project.name || "")}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:7px 0;color:#64748b">Tower</td>
-                  <td style="padding:7px 0;font-weight:600">${escapeHtml(towerName)}</td>
-                </tr>
-                <tr>
-                  <td style="padding:7px 0;color:#64748b">Client Representative</td>
-                  <td style="padding:7px 0">${escapeHtml(name)}</td>
-                </tr>
-                ${
-                  comments
-                    ? `
-                      <tr>
-                        <td style="padding:7px 0;color:#64748b;vertical-align:top">Comments</td>
-                        <td style="padding:7px 0">${escapeHtml(comments)}</td>
-                      </tr>
-                    `
-                    : ""
-                }
-              </table>
+                <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
+                  <tr>
+                    <td style="padding:7px 0;color:#64748b;width:150px">Project</td>
+                    <td style="padding:7px 0;font-weight:600">
+                      ${escapeHtml(project.project_number || "")}
+                      ${escapeHtml(project.name || "")}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:7px 0;color:#64748b">Tower</td>
+                    <td style="padding:7px 0;font-weight:600">${escapeHtml(towerName)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:7px 0;color:#64748b">Client Representative</td>
+                    <td style="padding:7px 0">${escapeHtml(name)}</td>
+                  </tr>
+                  ${
+                    comments
+                      ? `
+                        <tr>
+                          <td style="padding:7px 0;color:#64748b;vertical-align:top">Comments</td>
+                          <td style="padding:7px 0">${escapeHtml(comments)}</td>
+                        </tr>
+                      `
+                      : ""
+                  }
+                </table>
 
-              <p style="margin:24px 0 8px">
-                <a
-                  href="${escapeHtml(editUrl)}"
-                  style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700"
-                >
-                  Open Daily Docket
-                </a>
-              </p>
-            `,
-          ),
-        });
+                <p style="margin:24px 0 8px">
+                  <a
+                    href="${escapeHtml(editUrl)}"
+                    style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700"
+                  >
+                    Open Daily Docket
+                  </a>
+                </p>
+              `,
+            ),
+          });
+        } catch (emailError) {
+          console.error(
+            "Client change request was saved but BC reviewer email failed",
+            emailError,
+          );
+          reviewerEmailWarning =
+            "The change request was saved, but the BC notification email could not be sent.";
+        }
       }
+
+      claimedApprovalId = null;
+      claimedAt = null;
+      claimAdmin = null;
 
       return NextResponse.json({
         success: true,
         status: "client_changes_requested",
+        warning: reviewerEmailWarning,
       });
     }
 
@@ -688,7 +779,7 @@ export async function POST(request: Request, context: RouteContext) {
       pdf: finalPdf,
     });
 
-    const { error: docketUpdateError } = await admin
+    const { data: finalisedDocket, error: docketUpdateError } = await admin
       .from("tower_daily_dockets")
       .update({
         approval_status: "final",
@@ -728,13 +819,37 @@ export async function POST(request: Request, context: RouteContext) {
         sharepoint_sync_error: null,
       })
       .eq("id", docket.id)
-      .eq("approval_status", "client_pending");
+      .eq("approval_status", "client_pending")
+      .select("id,approval_status")
+      .maybeSingle();
 
     if (docketUpdateError) {
+      await releaseApprovalTokenClaim(admin, approval.id, now);
+
       throw new Error(
         `The final PDF was uploaded to SharePoint, but TTTracker could not save the final approval: ${docketUpdateError.message}`,
       );
     }
+
+    if (!finalisedDocket) {
+      claimedApprovalId = null;
+      claimedAt = null;
+      claimAdmin = null;
+
+      return NextResponse.json(
+        {
+          error:
+            "This Daily Docket has already been finalised by another approval response.",
+        },
+        { status: 409 },
+      );
+    }
+
+    claimedApprovalId = null;
+    claimedAt = null;
+    claimAdmin = null;
+
+    const finalWarnings: string[] = [];
 
     const { error: approvalUpdateError } = await admin
       .from("tower_docket_approvals")
@@ -744,7 +859,6 @@ export async function POST(request: Request, context: RouteContext) {
         reviewed_by_email: recipientEmail,
         reviewed_at: now,
         comments: comments || null,
-        token_used_at: now,
         client_signature_data_url: signatureDataUrl,
         client_signed_name: name,
         client_signed_email: recipientEmail,
@@ -754,8 +868,12 @@ export async function POST(request: Request, context: RouteContext) {
       .eq("status", "pending");
 
     if (approvalUpdateError) {
-      throw new Error(
-        `Client approval record could not be completed: ${approvalUpdateError.message}`,
+      console.error(
+        "Daily Docket finalised but client approval record could not be completed",
+        approvalUpdateError,
+      );
+      finalWarnings.push(
+        "The Daily Docket was finalised, but its approval audit record could not be fully updated.",
       );
     }
 
@@ -771,8 +889,12 @@ export async function POST(request: Request, context: RouteContext) {
       .neq("id", approval.id);
 
     if (supersedeError) {
-      throw new Error(
-        `Other client approval links could not be closed: ${supersedeError.message}`,
+      console.error(
+        "Daily Docket finalised but other client approval links could not be superseded",
+        supersedeError,
+      );
+      finalWarnings.push(
+        "The Daily Docket was finalised, but one or more unused approval links could not be closed.",
       );
     }
 
@@ -800,10 +922,16 @@ export async function POST(request: Request, context: RouteContext) {
       ]);
 
     if (workflowError) {
-      throw new Error(
-        `Workflow history could not be recorded: ${workflowError.message}`,
+      console.error(
+        "Daily Docket finalised but workflow history could not be recorded",
+        workflowError,
+      );
+      finalWarnings.push(
+        "The Daily Docket was finalised, but part of the workflow history could not be recorded.",
       );
     }
+
+    let finalContacts: ClientContactRow[] = [];
 
     const { data: finalContactsData, error: finalContactsError } =
       await admin
@@ -814,18 +942,33 @@ export async function POST(request: Request, context: RouteContext) {
         .eq("receives_final", true);
 
     if (finalContactsError) {
-      throw new Error(
-        `Final client recipients could not be loaded: ${finalContactsError.message}`,
+      console.error(
+        "Daily Docket finalised but final client recipients could not be loaded",
+        finalContactsError,
       );
+      finalWarnings.push(
+        "The Daily Docket was finalised, but final client recipients could not be loaded.",
+      );
+    } else {
+      finalContacts = (finalContactsData ?? []) as ClientContactRow[];
     }
 
-    const finalContacts =
-      (finalContactsData ?? []) as ClientContactRow[];
+    let reviewers: Awaited<ReturnType<typeof getBcReviewerRecipients>> = [];
 
-    const reviewers = await getBcReviewerRecipients(
-      admin,
-      docket.project_id,
-    );
+    try {
+      reviewers = await getBcReviewerRecipients(
+        admin,
+        docket.project_id,
+      );
+    } catch (reviewerError) {
+      console.error(
+        "Daily Docket finalised but BC final recipients could not be loaded",
+        reviewerError,
+      );
+      finalWarnings.push(
+        "The Daily Docket was finalised, but BC final recipients could not be loaded.",
+      );
+    }
 
     const finalRecipients = [
       ...new Set(
@@ -839,62 +982,81 @@ export async function POST(request: Request, context: RouteContext) {
     ];
 
     if (finalRecipients.length > 0) {
-      await sendDailyDocketEmail({
-        to: finalRecipients,
-        subject: `Approved Daily Docket - ${published.towerName} - ${published.docketDate}`,
-        html: docketEmailShell(
-          "Daily Docket approved",
-          `
-            <p>The Daily Docket has been approved and finalised.</p>
+      try {
+        await sendDailyDocketEmail({
+          to: finalRecipients,
+          subject: `Approved Daily Docket - ${published.towerName} - ${published.docketDate}`,
+          html: docketEmailShell(
+            "Daily Docket approved",
+            `
+              <p>The Daily Docket has been approved and finalised.</p>
 
-            <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
-              <tr>
-                <td style="padding:7px 0;color:#64748b;width:150px">Project</td>
-                <td style="padding:7px 0;font-weight:600">
-                  ${escapeHtml(project.project_number || "")}
-                  ${escapeHtml(project.name || "")}
-                </td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Tower</td>
-                <td style="padding:7px 0;font-weight:600">${escapeHtml(published.towerName)}</td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Date</td>
-                <td style="padding:7px 0">${escapeHtml(published.docketDate)}</td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Client Representative</td>
-                <td style="padding:7px 0">${escapeHtml(name)}</td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Approved</td>
-                <td style="padding:7px 0">${escapeHtml(new Date(now).toLocaleString("en-AU"))}</td>
-              </tr>
-            </table>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
+                <tr>
+                  <td style="padding:7px 0;color:#64748b;width:150px">Project</td>
+                  <td style="padding:7px 0;font-weight:600">
+                    ${escapeHtml(project.project_number || "")}
+                    ${escapeHtml(project.name || "")}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Tower</td>
+                  <td style="padding:7px 0;font-weight:600">${escapeHtml(published.towerName)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Date</td>
+                  <td style="padding:7px 0">${escapeHtml(published.docketDate)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Client Representative</td>
+                  <td style="padding:7px 0">${escapeHtml(name)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Approved</td>
+                  <td style="padding:7px 0">${escapeHtml(new Date(now).toLocaleString("en-AU"))}</td>
+                </tr>
+              </table>
 
-            <p>The approved Daily Docket is attached for your records.</p>
-          `,
-        ),
-        attachments: [
-          {
-            name: published.fileName,
-            contentType: "application/pdf",
-            contentBytes: Buffer.from(finalPdf).toString("base64"),
-          },
-        ],
-      });
+              <p>The approved Daily Docket is attached for your records.</p>
+            `,
+          ),
+          attachments: [
+            {
+              name: published.fileName,
+              contentType: "application/pdf",
+              contentBytes: Buffer.from(finalPdf).toString("base64"),
+            },
+          ],
+        });
+      } catch (emailError) {
+        console.error(
+          "Daily Docket finalised but final email distribution failed",
+          emailError,
+        );
+        finalWarnings.push(
+          "The Daily Docket was approved and saved to SharePoint, but the final email could not be sent.",
+        );
+      }
     }
 
     return NextResponse.json({
       success: true,
       status: "final",
+      warning: finalWarnings.length > 0 ? finalWarnings.join(" ") : null,
       final: {
         fileName: published.fileName,
         webUrl: published.item.webUrl ?? null,
       },
     });
   } catch (error) {
+    if (claimAdmin && claimedApprovalId && claimedAt) {
+      await releaseApprovalTokenClaim(
+        claimAdmin,
+        claimedApprovalId,
+        claimedAt,
+      );
+    }
+
     console.error("DAILY DOCKET CLIENT APPROVAL ERROR", error);
 
     return NextResponse.json(

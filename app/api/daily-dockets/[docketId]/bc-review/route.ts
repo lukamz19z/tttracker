@@ -5,9 +5,9 @@ import { NextResponse } from "next/server";
 import {
   authUserEmailMap,
   createDocketAdminSupabase,
-  getWebsiteRole,
   requireAuthenticatedProjectUser,
 } from "@/lib/dockets/server";
+import { isConfiguredBcReviewer } from "@/lib/dockets/reviewers";
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
 import {
   docketEmailShell,
@@ -72,18 +72,6 @@ type ClientContactRow = {
   active: boolean;
 };
 
-function normaliseRole(value: unknown) {
-  const role = String(value ?? "").trim().toLowerCase();
-
-  if (role === "site_admin" || role === "administrator") return "admin";
-  if (role === "safety" || role === "safety_manager") return "hseq";
-  if (role === "commercial_manager") return "commercial";
-  if (role === "mechanic" || role === "assets") return "asset_manager";
-  if (role === "leading_hand" || role === "field") return "crew";
-
-  return role;
-}
-
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -103,36 +91,6 @@ function addDaysIso(days: number) {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString();
-}
-
-async function reviewerCanApprove(
-  admin: ReturnType<typeof createDocketAdminSupabase>,
-  projectId: string,
-  userId: string,
-) {
-  const websiteRole = normaliseRole(await getWebsiteRole(admin, userId));
-
-  if (!websiteRole) return false;
-
-  const { data: configuredRows, error } = await admin
-    .from("project_docket_approval_roles")
-    .select("role")
-    .eq("project_id", projectId)
-    .eq("receives_bc_review", true);
-
-  if (error) {
-    throw new Error(
-      `Daily Docket approval settings could not be loaded: ${error.message}`,
-    );
-  }
-
-  const configuredRoles = new Set(
-    (configuredRows ?? [])
-      .map((row) => normaliseRole(row.role))
-      .filter(Boolean),
-  );
-
-  return configuredRoles.has(websiteRole);
 }
 
 async function loadPdfBundle(
@@ -318,6 +276,14 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const comments = String(body.comments ?? "").trim();
+
+    if (body.action === "request_changes" && !comments) {
+      return NextResponse.json(
+        { error: "Please enter the changes required before returning this Daily Docket." },
+        { status: 400 },
+      );
+    }
+
     const admin = createDocketAdminSupabase();
 
     const { data: docketData, error: docketError } = await admin
@@ -349,7 +315,7 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const allowedReviewer = await reviewerCanApprove(
+    const allowedReviewer = await isConfiguredBcReviewer(
       admin,
       docket.project_id,
       user.id,
@@ -718,61 +684,85 @@ export async function POST(request: Request, context: RouteContext) {
       process.env.NEXT_PUBLIC_APP_URL ||
       new URL(request.url).origin;
 
+    const clientEmailFailures: string[] = [];
+
     for (const { contact, token } of approvalLinks) {
       const approvalUrl =
         `${origin}/docket-approval/${encodeURIComponent(token)}`;
+      const pdfUrl =
+        `${origin}/api/daily-dockets/client/${encodeURIComponent(token)}/pdf`;
 
-      await sendDailyDocketEmail({
-        to: [contact.email],
-        subject: `Daily Docket approval required - ${published.towerName} - ${published.docketDate}`,
-        html: docketEmailShell(
-          "Daily Docket approval required",
-          `
-            <p>A Daily Docket is ready for your review and approval.</p>
+      try {
+        await sendDailyDocketEmail({
+          to: [contact.email],
+          subject: `Daily Docket approval required - ${published.towerName} - ${published.docketDate}`,
+          html: docketEmailShell(
+            "Daily Docket approval required",
+            `
+              <p>A Daily Docket is ready for your review and approval.</p>
 
-            <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
-              <tr>
-                <td style="padding:7px 0;color:#64748b;width:140px">Project</td>
-                <td style="padding:7px 0;font-weight:600">
-                  ${escapeHtml(project.project_number || "")}
-                  ${escapeHtml(project.name || "")}
-                </td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Tower</td>
-                <td style="padding:7px 0;font-weight:600">${escapeHtml(published.towerName)}</td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">Date</td>
-                <td style="padding:7px 0">${escapeHtml(published.docketDate)}</td>
-              </tr>
-              <tr>
-                <td style="padding:7px 0;color:#64748b">BC Approved By</td>
-                <td style="padding:7px 0">${escapeHtml(reviewerName || reviewerEmail || "BC Reviewer")}</td>
-              </tr>
-            </table>
+              <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
+                <tr>
+                  <td style="padding:7px 0;color:#64748b;width:140px">Project</td>
+                  <td style="padding:7px 0;font-weight:600">
+                    ${escapeHtml(project.project_number || "")}
+                    ${escapeHtml(project.name || "")}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Tower</td>
+                  <td style="padding:7px 0;font-weight:600">${escapeHtml(published.towerName)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">Date</td>
+                  <td style="padding:7px 0">${escapeHtml(published.docketDate)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:7px 0;color:#64748b">BC Approved By</td>
+                  <td style="padding:7px 0">${escapeHtml(reviewerName || reviewerEmail || "BC Reviewer")}</td>
+                </tr>
+              </table>
 
-            <p style="margin:24px 0 8px">
-              <a
-                href="${escapeHtml(approvalUrl)}"
-                style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700"
-              >
-                Review Daily Docket
-              </a>
-            </p>
+              <p style="margin:24px 0 8px">
+                <a
+                  href="${escapeHtml(approvalUrl)}"
+                  style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700;margin-right:8px"
+                >
+                  Review &amp; Approve
+                </a>
 
-            <p style="margin-top:18px;color:#64748b;font-size:13px">
-              This secure approval link expires in 14 days.
-            </p>
-          `,
-        ),
-      });
+                <a
+                  href="${escapeHtml(pdfUrl)}"
+                  style="display:inline-block;background:#ffffff;color:#0f172a;text-decoration:none;padding:11px 18px;border-radius:8px;font-weight:700;border:1px solid #cbd5e1"
+                >
+                  View Daily Docket PDF
+                </a>
+              </p>
+
+              <p style="margin-top:18px;color:#64748b;font-size:13px">
+                This secure approval link expires in 14 days.
+              </p>
+            `,
+          ),
+        });
+      } catch (emailError) {
+        console.error(
+          `Client Daily Docket approval email failed for ${contact.email}`,
+          emailError,
+        );
+        clientEmailFailures.push(contact.email);
+      }
     }
 
     return NextResponse.json({
       success: true,
       status: "client_pending",
       clientRecipients: approvalLinks.length,
+      clientEmailsSent: approvalLinks.length - clientEmailFailures.length,
+      warning:
+        clientEmailFailures.length > 0
+          ? "BC approval completed and the draft PDF was saved, but one or more client approval emails could not be sent."
+          : null,
       draft: {
         fileName: published.fileName,
         webUrl: published.item.webUrl ?? null,
