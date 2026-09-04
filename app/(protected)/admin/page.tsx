@@ -4,14 +4,18 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
+  Building2,
+  Image as ImageIcon,
   KeyRound,
   Loader2,
   Plus,
   RefreshCw,
+  Save,
   Search,
   ShieldCheck,
   SlidersHorizontal,
   UserCog,
+  Upload,
   Users,
   X,
 } from "lucide-react";
@@ -108,6 +112,21 @@ type EditForm = {
   websiteRole: WebsiteRole;
   mobileRole: MobileRole;
   projectIds: string[];
+};
+
+type BrandingRecord = {
+  company_name: string;
+  logo_file_name: string | null;
+  logo_content_type: string | null;
+  logo_sharepoint_item_id: string | null;
+  logo_sharepoint_drive_id: string | null;
+  logo_updated_at: string | null;
+};
+
+type BrandingResponse = {
+  branding?: BrandingRecord;
+  logo_url?: string | null;
+  error?: string;
 };
 
 const EMPTY_CREATE_FORM: CreateForm = {
@@ -252,7 +271,7 @@ function mapApiUser(user: ApiUser): AdminUser | null {
 
 export default function AdminPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
-  const [adminTab, setAdminTab] = useState<"users" | "permissions">("users");
+  const [adminTab, setAdminTab] = useState<"users" | "permissions" | "branding">("users");
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -283,6 +302,19 @@ export default function AdminPage() {
     tone: "success" | "error";
     text: string;
   } | null>(null);
+
+  const [branding, setBranding] = useState<BrandingRecord>({
+    company_name: "BC Contracting",
+    logo_file_name: null,
+    logo_content_type: null,
+    logo_sharepoint_item_id: null,
+    logo_sharepoint_drive_id: null,
+    logo_updated_at: null,
+  });
+  const [brandingLogoUrl, setBrandingLogoUrl] = useState<string | null>(null);
+  const [brandingFile, setBrandingFile] = useState<File | null>(null);
+  const [brandingLoading, setBrandingLoading] = useState(false);
+  const [brandingSaving, setBrandingSaving] = useState(false);
 
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -407,6 +439,157 @@ export default function AdminPage() {
       });
     } finally {
       setRefreshing(false);
+    }
+  }
+
+
+  const loadBranding = useCallback(async () => {
+    setBrandingLoading(true);
+
+    try {
+      const response = await apiFetch("/api/admin/branding");
+      const payload = (await response.json()) as BrandingResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to load document branding.");
+      }
+
+      if (payload.branding) {
+        setBranding(payload.branding);
+      }
+
+      setBrandingLogoUrl(payload.logo_url ?? null);
+      setBrandingFile(null);
+    } finally {
+      setBrandingLoading(false);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    if (adminTab !== "branding") return;
+
+    const timer = window.setTimeout(() => {
+      void loadBranding().catch((error) => {
+        setMessage({
+          tone: "error",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Failed to load document branding.",
+        });
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [adminTab, loadBranding]);
+
+  async function saveBranding() {
+    const companyName = branding.company_name.trim();
+
+    if (!companyName) {
+      setMessage({ tone: "error", text: "Enter the company name." });
+      return;
+    }
+
+    if (brandingFile) {
+      const allowed = ["image/png", "image/jpeg"];
+      if (!allowed.includes(brandingFile.type)) {
+        setMessage({
+          tone: "error",
+          text: "The logo must be a PNG or JPEG image.",
+        });
+        return;
+      }
+
+      if (brandingFile.size > 2 * 1024 * 1024) {
+        setMessage({
+          tone: "error",
+          text: "The logo must be smaller than 2 MB.",
+        });
+        return;
+      }
+    }
+
+    setBrandingSaving(true);
+    setMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.set("company_name", companyName);
+
+      if (brandingFile) {
+        formData.set("logo", brandingFile);
+      }
+
+      const response = await apiFetch("/api/admin/branding", {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = (await response.json()) as BrandingResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save document branding.");
+      }
+
+      if (payload.branding) {
+        setBranding(payload.branding);
+      }
+
+      setBrandingLogoUrl(payload.logo_url ?? null);
+      setBrandingFile(null);
+      setMessage({
+        tone: "success",
+        text: "Document branding updated successfully.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Failed to save document branding.",
+      });
+    } finally {
+      setBrandingSaving(false);
+    }
+  }
+
+  async function removeBrandingLogo() {
+    if (!window.confirm("Remove the current document logo?")) return;
+
+    setBrandingSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/admin/branding", {
+        method: "DELETE",
+      });
+
+      const payload = (await response.json()) as BrandingResponse;
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to remove the logo.");
+      }
+
+      if (payload.branding) {
+        setBranding(payload.branding);
+      }
+
+      setBrandingLogoUrl(null);
+      setBrandingFile(null);
+      setMessage({
+        tone: "success",
+        text: "Document logo removed.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Failed to remove the logo.",
+      });
+    } finally {
+      setBrandingSaving(false);
     }
   }
 
@@ -653,13 +836,12 @@ export default function AdminPage() {
               </div>
 
               <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
-                Users & Access
+                Administration
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Create login accounts, assign website and mobile roles, manage
-                project access and reset passwords. Employee profiles, crews,
-                PPE and training remain managed through People.
+                Manage login access, role permissions and company document
+                branding used across TTTracker generated documents.
               </p>
             </div>
 
@@ -718,6 +900,19 @@ export default function AdminPage() {
             >
               <SlidersHorizontal size={16} />
               Roles & Permissions
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAdminTab("branding")}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold ${
+                adminTab === "branding"
+                  ? "bg-slate-950 text-white"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <ImageIcon size={16} />
+              Branding
             </button>
           </div>
         </section>
@@ -842,8 +1037,163 @@ export default function AdminPage() {
           )}
         </section>
           </>
-        ) : (
+        ) : adminTab === "permissions" ? (
           <AdminPermissionsPanel />
+        ) : (
+          <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-slate-100 p-3 text-slate-700">
+                  <Building2 size={22} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-slate-950">
+                    Document Branding
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Company branding used on Daily Dockets and other generated
+                    TTTracker documents.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {brandingLoading ? (
+              <div className="flex min-h-72 items-center justify-center">
+                <Loader2 size={28} className="animate-spin text-slate-400" />
+              </div>
+            ) : (
+              <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-6">
+                  <Field label="Company name">
+                    <input
+                      value={branding.company_name}
+                      onChange={(event) =>
+                        setBranding((current) => ({
+                          ...current,
+                          company_name: event.target.value,
+                        }))
+                      }
+                      placeholder="BC Contracting"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                    />
+                  </Field>
+
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">
+                      Company logo
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Upload a clean PNG or JPEG. A transparent PNG is preferred.
+                      Maximum file size 2 MB.
+                    </p>
+
+                    <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100">
+                      <Upload size={18} />
+                      {brandingFile ? brandingFile.name : "Choose logo"}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="hidden"
+                        onChange={(event) =>
+                          setBrandingFile(event.target.files?.[0] ?? null)
+                        }
+                      />
+                    </label>
+
+                    {brandingFile ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        New logo selected. Save branding to upload it.
+                      </p>
+                    ) : branding.logo_file_name ? (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Current file: {branding.logo_file_name}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-5">
+                    <button
+                      type="button"
+                      onClick={() => void saveBranding()}
+                      disabled={brandingSaving}
+                      className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {brandingSaving ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Save size={16} />
+                      )}
+                      Save Branding
+                    </button>
+
+                    {branding.logo_sharepoint_item_id ? (
+                      <button
+                        type="button"
+                        onClick={() => void removeBrandingLogo()}
+                        disabled={brandingSaving}
+                        className="rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                      >
+                        Remove Logo
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Document preview
+                  </div>
+
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex min-h-28 items-center justify-between gap-5 border-b border-slate-200 px-5 py-4">
+                      <div className="flex min-w-0 items-center gap-4">
+                        <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2">
+                          {brandingLogoUrl ? (
+                            <img
+                              src={brandingLogoUrl}
+                              alt="Current company logo"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          ) : (
+                            <ImageIcon size={25} className="text-slate-300" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-bold text-slate-950">
+                            {branding.company_name || "Company"}
+                          </div>
+                          <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Daily Docket
+                          </div>
+                        </div>
+                      </div>
+
+                      <span className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                        DRAFT
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 p-5">
+                      <div className="h-2 w-2/3 rounded bg-slate-200" />
+                      <div className="h-2 w-full rounded bg-slate-100" />
+                      <div className="h-2 w-5/6 rounded bg-slate-100" />
+                      <div className="mt-5 h-px bg-slate-200" />
+                      <div className="text-[10px] text-slate-400">
+                        TTTracker • Uncontrolled when printed
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="mt-3 text-xs leading-5 text-slate-500">
+                    The saved logo is kept in the controlled SharePoint branding
+                    location. TTTracker stores only the SharePoint reference and
+                    retrieves the image server-side when generating documents.
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
         )}
       </div>
 
