@@ -144,6 +144,15 @@ type MobilisationStatus =
   | "setup"
   | "complete";
 
+type TowerRevisionAllocation = {
+  id?: string;
+  ui_id: string;
+  target_tower_id: string;
+  hours: string;
+  worker_names: string[];
+  reason: string;
+};
+
 type MobilisationDraft = {
   enabled: boolean;
   from_tower_id: string;
@@ -154,6 +163,7 @@ type MobilisationDraft = {
   target_move_date: string;
   completed_date: string;
   notes: string;
+  worker_names: string[];
 };
 
 type DbDelayRow = {
@@ -1028,6 +1038,7 @@ export default function DailyDocketForm({
 
   const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
+  const [towerRevisionAllocations, setTowerRevisionAllocations] = useState<TowerRevisionAllocation[]>([]);
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
   const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
     enabled:
@@ -1041,6 +1052,7 @@ export default function DailyDocketForm({
     target_move_date: "",
     completed_date: "",
     notes: "",
+    worker_names: [],
   });
 
   const [progressRows, setProgressRows] = useState<ProgressRow[]>(
@@ -1312,6 +1324,7 @@ export default function DailyDocketForm({
             target_move_date: values.target || "",
             completed_date: values.completed || "",
             notes: values.notes || toStringValue(initialDocket.mobilisation_notes),
+            worker_names: values.workers ? values.workers.split(",").map((name) => name.trim()).filter(Boolean) : [],
           });
 
           if (values.minutes) {
@@ -1532,6 +1545,7 @@ export default function DailyDocketForm({
         { data: plant },
         { data: progress },
         { data: structuredMaterialEvents },
+        { data: revisionAllocations },
       ] = await Promise.all([
         supabase.from("tower_docket_labour").select("*").eq("docket_id", docketId),
         supabase.from("tower_docket_delays").select("*").eq("docket_id", docketId),
@@ -1547,9 +1561,25 @@ export default function DailyDocketForm({
           `)
           .eq("docket_id", docketId)
           .order("occurred_at", { ascending: true }),
+        supabase
+          .from("tower_docket_hour_allocations")
+          .select("*")
+          .eq("docket_id", docketId)
+          .order("created_at", { ascending: true }),
       ]);
 
       if (labour && labour.length > 0) setLabourRows(labour.map((r) => makeLabourRow(r)));
+
+      setTowerRevisionAllocations(
+        ((revisionAllocations || []) as any[]).map((row) => ({
+          id: row.id,
+          ui_id: row.id || makeUiId(),
+          target_tower_id: toStringValue(row.target_tower_id),
+          hours: toStringValue(row.hours),
+          worker_names: Array.isArray(row.worker_names) ? row.worker_names.map(String) : [],
+          reason: toStringValue(row.reason),
+        }))
+      );
 
       if (delays && delays.length > 0) {
         setDelayRows((delays as DbDelayRow[]).map((r) => makeDelayRow(r)));
@@ -1802,9 +1832,16 @@ export default function DailyDocketForm({
 
   const labourRowsWithProduction = labourRows.map((row) => {
     const appliedDelayHours = delayHoursForWorker(row.worker_name);
-    const effectiveMobilisationMinutes = mobilisation.enabled
+    const mobilisationAppliesToWorker =
+      mobilisation.enabled &&
+      (mobilisation.worker_names.length === 0 ||
+        mobilisation.worker_names.some(
+          (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
+        ));
+
+    const effectiveMobilisationMinutes = mobilisationAppliesToWorker
       ? mobilisationHours
-      : row.mobilisation_hours;
+      : "";
 
     const next: LabourRow = {
       ...row,
@@ -1898,9 +1935,19 @@ export default function DailyDocketForm({
     [mobilisation.enabled, mobilisationHours]
   );
 
+  const mobilisationWorkerCount = useMemo(() => {
+    if (!mobilisation.enabled) return 0;
+    if (mobilisation.worker_names.length === 0) return labourWorkerCount;
+    return labourRowsWithProduction.filter((row) =>
+      mobilisation.worker_names.some(
+        (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
+      )
+    ).length;
+  }, [mobilisation.enabled, mobilisation.worker_names, labourWorkerCount, labourRowsWithProduction]);
+
   const mobilisationManhours = useMemo(
-    () => mobilisationDurationHours * labourWorkerCount,
-    [mobilisationDurationHours, labourWorkerCount]
+    () => mobilisationDurationHours * mobilisationWorkerCount,
+    [mobilisationDurationHours, mobilisationWorkerCount]
   );
 
   const totalDelayManhours = useMemo(
@@ -2371,7 +2418,7 @@ export default function DailyDocketForm({
       delays_comments: [
         delaysComments.trim(),
         mobilisation.enabled
-          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|minutes=${mobilisationHours || "0"}|hours=${minutesToHours(mobilisationHours)}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
+          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|minutes=${mobilisationHours || "0"}|hours=${minutesToHours(mobilisationHours)}|workers=${mobilisation.worker_names.map((name) => name.replace(/[|,]/g, " ")).join(",")}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
           : "",
       ]
         .filter(Boolean)
@@ -2423,6 +2470,49 @@ export default function DailyDocketForm({
         delay_reason: row.delay_reason || null,
         production_hours: Number(row.production_hours || 0),
       }));
+  }
+
+  function buildTowerRevisionAllocationPayload(docketIdValue: string) {
+    return towerRevisionAllocations
+      .filter(
+        (allocation) =>
+          allocation.target_tower_id &&
+          allocation.target_tower_id !== towerId &&
+          toNumber(allocation.hours) > 0 &&
+          allocation.worker_names.length > 0
+      )
+      .map((allocation) => ({
+        docket_id: docketIdValue,
+        project_id: projectId,
+        source_tower_id: towerId,
+        target_tower_id: allocation.target_tower_id,
+        hours: toNumber(allocation.hours),
+        worker_names: allocation.worker_names,
+        reason: allocation.reason.trim() || null,
+      }));
+  }
+
+  async function syncTowerRevisionAllocations(docketIdValue: string) {
+    const deleteRes = await supabase
+      .from("tower_docket_hour_allocations")
+      .delete()
+      .eq("docket_id", docketIdValue);
+
+    if (deleteRes.error) {
+      throw new Error(
+        "Daily docket saved, but tower revision allocations could not be refreshed. Run the tower_docket_hour_allocations SQL migration."
+      );
+    }
+
+    const payload = buildTowerRevisionAllocationPayload(docketIdValue);
+    if (payload.length === 0) return;
+
+    const insertRes = await supabase.from("tower_docket_hour_allocations").insert(payload);
+    if (insertRes.error) {
+      throw new Error(
+        "Daily docket saved, but tower revision allocations could not be saved. Run the tower_docket_hour_allocations SQL migration."
+      );
+    }
   }
 
   function buildPlantPayload(docketIdValue: string) {
@@ -3282,6 +3372,7 @@ export default function DailyDocketForm({
       }
     }
 
+    await syncTowerRevisionAllocations(docket.id);
     await syncMaterialEvents(docket.id);
     await syncDelayDayworks(docket.id);
     await recalcTowerProgressAndStatus();
@@ -3371,6 +3462,7 @@ export default function DailyDocketForm({
       if (progressInsertRes.error) throw new Error("Failed to save progress rows.");
     }
 
+    await syncTowerRevisionAllocations(docketId);
     await syncMaterialEvents(docketId);
     await syncDelayDayworks(docketId);
     await recalcTowerProgressAndStatus();
@@ -3629,6 +3721,7 @@ export default function DailyDocketForm({
         target_move_date: "",
         completed_date: "",
         notes: "",
+        worker_names: [],
       });
       setMobilisationHours("");
       setMobilisationNotes("");
@@ -3905,7 +3998,7 @@ export default function DailyDocketForm({
             </div>
 
             <div className="border border-slate-200 rounded-xl overflow-x-auto bg-white">
-              <table className="w-full min-w-[620px]">
+              <table className="w-full min-w-155">
                 <thead className="bg-slate-100 text-sm text-slate-600">
                   <tr>
                     <th className="p-3 text-left">Section</th>
@@ -4419,6 +4512,152 @@ export default function DailyDocketForm({
         </section>
       )}
 
+      <section className="bg-white border border-amber-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Tower Revision / Reallocation</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Allocate specific worker-hours from this docket to revision or rectification work on another tower. These hours remain traceable to this docket but can be attributed to the selected tower for internal production reporting.
+            </p>
+          </div>
+          {!locked && !isView && (
+            <button
+              type="button"
+              onClick={() =>
+                setTowerRevisionAllocations((prev) => [
+                  ...prev,
+                  {
+                    ui_id: makeUiId(),
+                    target_tower_id: "",
+                    hours: "",
+                    worker_names: [],
+                    reason: "",
+                  },
+                ])
+              }
+              className="shrink-0 rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+            >
+              + Add Revision
+            </button>
+          )}
+        </div>
+
+        {towerRevisionAllocations.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+            No tower revision or hour reallocation recorded.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {towerRevisionAllocations.map((allocation, allocationIndex) => (
+              <div key={allocation.ui_id} className="rounded-xl border border-amber-100 bg-amber-50/30 p-4 space-y-3">
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto] items-end">
+                  <div>
+                    <label className="block text-sm font-semibold mb-1">Tower being revised</label>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white p-2.5 text-sm disabled:bg-slate-100"
+                      value={allocation.target_tower_id}
+                      disabled={locked || isView}
+                      onChange={(e) =>
+                        setTowerRevisionAllocations((prev) =>
+                          prev.map((row, i) =>
+                            i === allocationIndex ? { ...row, target_tower_id: e.target.value } : row
+                          )
+                        )
+                      }
+                    >
+                      <option value="">Select tower...</option>
+                      {projectTowers
+                        .filter((tower) => tower.id !== towerId)
+                        .map((tower) => (
+                          <option key={tower.id} value={tower.id}>{tower.name}</option>
+                        ))}
+                    </select>
+                  </div>
+                  <Input
+                    label="Hours per worker"
+                    type="number"
+                    value={allocation.hours}
+                    onChange={(value) =>
+                      setTowerRevisionAllocations((prev) =>
+                        prev.map((row, i) => i === allocationIndex ? { ...row, hours: value } : row)
+                      )
+                    }
+                    disabled={locked || isView}
+                  />
+                  {!locked && !isView && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTowerRevisionAllocations((prev) => prev.filter((_, i) => i !== allocationIndex))
+                      }
+                      className="rounded-lg border border-red-200 bg-white px-3 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <p className="text-sm font-semibold text-slate-800 mb-2">Workers completing the revision</p>
+                  <div className="flex flex-wrap gap-2">
+                    {labourRowsWithProduction.filter((row) => row.worker_name.trim()).map((row) => {
+                      const selected = allocation.worker_names.some(
+                        (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
+                      );
+                      return (
+                        <button
+                          key={row.worker_name}
+                          type="button"
+                          disabled={locked || isView}
+                          onClick={() =>
+                            setTowerRevisionAllocations((prev) =>
+                              prev.map((item, i) =>
+                                i === allocationIndex
+                                  ? {
+                                      ...item,
+                                      worker_names: selected
+                                        ? item.worker_names.filter(
+                                            (name) => normalizeWorkerName(name) !== normalizeWorkerName(row.worker_name)
+                                          )
+                                        : [...item.worker_names, row.worker_name],
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                          className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                            selected
+                              ? "border-amber-500 bg-amber-600 text-white"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-amber-300"
+                          } disabled:opacity-60`}
+                        >
+                          {row.worker_name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Input
+                  label="Revision / rectification details"
+                  value={allocation.reason}
+                  onChange={(value) =>
+                    setTowerRevisionAllocations((prev) =>
+                      prev.map((row, i) => i === allocationIndex ? { ...row, reason: value } : row)
+                    )
+                  }
+                  disabled={locked || isView}
+                />
+
+                <div className="text-xs font-semibold text-amber-800">
+                  Internal allocation: {(toNumber(allocation.hours) * allocation.worker_names.length).toFixed(2)} manhours
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="bg-white border border-blue-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
@@ -4439,6 +4678,7 @@ export default function DailyDocketForm({
                 if (!enabled) {
                   setMobilisationHours("");
                   setMobilisationNotes("");
+                  setMobilisation((prev) => ({ ...prev, enabled: false, worker_names: [] }));
                 }
               }}
             />
@@ -4486,6 +4726,50 @@ export default function DailyDocketForm({
                 onChange={setMobilisationHours}
                 disabled={locked || isView}
               />
+            </div>
+
+            <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Workers mobilising / demobilising</p>
+                  <p className="text-xs text-slate-500">Select only the workers involved. Their mobilisation time will be deducted from their production hours.</p>
+                </div>
+                <span className="text-xs font-semibold text-blue-700">{mobilisationWorkerCount} worker{mobilisationWorkerCount === 1 ? "" : "s"}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {labourRowsWithProduction.filter((row) => row.worker_name.trim()).map((row) => {
+                  const selected = mobilisation.worker_names.some(
+                    (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
+                  );
+                  return (
+                    <button
+                      key={row.worker_name}
+                      type="button"
+                      disabled={locked || isView}
+                      onClick={() =>
+                        setMobilisation((prev) => ({
+                          ...prev,
+                          worker_names: selected
+                            ? prev.worker_names.filter(
+                                (name) => normalizeWorkerName(name) !== normalizeWorkerName(row.worker_name)
+                              )
+                            : [...prev.worker_names, row.worker_name],
+                        }))
+                      }
+                      className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+                        selected
+                          ? "border-blue-500 bg-blue-600 text-white"
+                          : "border-slate-200 bg-white text-slate-700 hover:border-blue-300"
+                      } disabled:opacity-60`}
+                    >
+                      {row.worker_name}
+                    </button>
+                  );
+                })}
+              </div>
+              {mobilisation.worker_names.length === 0 && (
+                <p className="mt-2 text-xs text-amber-700">No workers selected — select the workers actually involved in the move.</p>
+              )}
             </div>
 
             <div className="grid md:grid-cols-4 gap-3">
@@ -4768,13 +5052,6 @@ export default function DailyDocketForm({
                 .map((event, eventIndex) => ({ event, eventIndex }))
                 .filter(({ event }) => event.event_type !== "excess")
                 .map(({ event, eventIndex }) => {
-                const catalogTowerId =
-                  event.event_type === "taken_from_another_tower"
-                    ? event.source_tower_id
-                    : event.event_type === "sent_to_another_tower"
-                    ? towerId
-                    : towerId;
-
                 return (
                   <div
                     key={event.ui_id}
@@ -6229,7 +6506,7 @@ function EmployeeSearchInput({
         }`}
         value={value}
         disabled={disabled}
-        placeholder="Search employee name or role"
+        placeholder="Search employee..."
         onFocus={() => setOpen(true)}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onChange={(e) => {
@@ -6266,7 +6543,7 @@ function EmployeeSearchInput({
       />
 
       {open && !disabled && (
-        <div className="absolute z-40 mt-1 max-h-72 w-full min-w-[280px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+        <div className="z-40 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-md">
           {matches.length > 0 ? (
             matches.map((item, matchIndex) => {
               const isCurrentCrew = Boolean(selectedCrewId && item.employee.crew_id === selectedCrewId);
