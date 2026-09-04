@@ -989,8 +989,8 @@ export default function DailyDocketForm({
   const [docketFile, setDocketFile] = useState<File | null>(null);
   const [existingDocketFileUrl, setExistingDocketFileUrl] = useState(toStringValue(initialDocket?.docket_file_url));
   const [sharePointUrl, setSharePointUrl] = useState(toStringValue(initialDocket?.sharepoint_web_url));
-  const [sharePointStatus, setSharePointStatus] = useState(toStringValue(initialDocket?.sharepoint_sync_status));
-  const [publishedPdfName, setPublishedPdfName] = useState(toStringValue(initialDocket?.pdf_file_name));
+  const [, setSharePointStatus] = useState(toStringValue(initialDocket?.sharepoint_sync_status));
+  const [, setPublishedPdfName] = useState(toStringValue(initialDocket?.pdf_file_name));
 
   const [bulkTimeIn, setBulkTimeIn] = useState("");
   const [bulkTimeOut, setBulkTimeOut] = useState("");
@@ -1030,7 +1030,9 @@ export default function DailyDocketForm({
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
   const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
-    enabled: false,
+    enabled:
+      toNumber(initialDocket?.mobilisation_hours) > 0 ||
+      Boolean(toStringValue(initialDocket?.mobilisation_notes).trim()),
     from_tower_id: "",
     to_tower_id: towerId,
     status: "planning",
@@ -1101,24 +1103,12 @@ export default function DailyDocketForm({
     async function loadTowerBodyExtensionDefault() {
       const { data } = await supabase
         .from("towers")
-        .select(`
-          id,
-          name,
-          tower_number,
-          structure_number,
-          line,
-          extra_data
-        `)
+        .select("id, name, line, extra_data")
         .eq("id", towerId)
         .single();
 
       const towerData = data as TowerRecord | null;
-      const towerName = String(
-        towerData?.tower_number ||
-        towerData?.structure_number ||
-        towerData?.name ||
-        ""
-      );
+      const towerName = String(towerData?.name || "");
       const line = String(towerData?.line || "");
 
       setTowerLabel(line ? `${towerName} (${line})` : towerName);
@@ -1321,8 +1311,15 @@ export default function DailyDocketForm({
             started_date: values.started || "",
             target_move_date: values.target || "",
             completed_date: values.completed || "",
-            notes: values.notes || "",
+            notes: values.notes || toStringValue(initialDocket.mobilisation_notes),
           });
+
+          if (values.minutes) {
+            setMobilisationHours(values.minutes);
+          } else if (values.hours) {
+            setMobilisationHours(hoursToMinutes(values.hours));
+          }
+          if (values.notes) setMobilisationNotes(values.notes);
         }
 
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
@@ -1330,6 +1327,13 @@ export default function DailyDocketForm({
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
         setMobilisationHours(hoursToMinutes(initialDocket.mobilisation_hours));
         setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
+        if (!mobilisationLine && (toNumber(initialDocket.mobilisation_hours) > 0 || toStringValue(initialDocket.mobilisation_notes).trim())) {
+          setMobilisation((prev) => ({
+            ...prev,
+            enabled: true,
+            notes: toStringValue(initialDocket.mobilisation_notes),
+          }));
+        }
         setIncidentOccurred(Boolean(initialDocket.incident_occurred));
         setIncidentType(toStringValue(initialDocket.incident_type));
         setIncidentNotes(toStringValue(initialDocket.incident_notes));
@@ -1501,6 +1505,13 @@ export default function DailyDocketForm({
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
       setMobilisationHours(hoursToMinutes(data.mobilisation_hours));
       setMobilisationNotes(toStringValue(data.mobilisation_notes));
+      if (toNumber(data.mobilisation_hours) > 0 || toStringValue(data.mobilisation_notes).trim()) {
+        setMobilisation((prev) => ({
+          ...prev,
+          enabled: true,
+          notes: toStringValue(data.mobilisation_notes),
+        }));
+      }
       setIncidentOccurred(Boolean(data.incident_occurred));
       setIncidentType(toStringValue(data.incident_type));
       setIncidentNotes(toStringValue(data.incident_notes));
@@ -1644,6 +1655,7 @@ export default function DailyDocketForm({
     initialDelayRows,
     initialPlantRows,
     supabase,
+    towerId,
   ]);
 
   const locked = useMemo(() => {
@@ -1790,8 +1802,13 @@ export default function DailyDocketForm({
 
   const labourRowsWithProduction = labourRows.map((row) => {
     const appliedDelayHours = delayHoursForWorker(row.worker_name);
+    const effectiveMobilisationMinutes = mobilisation.enabled
+      ? mobilisationHours
+      : row.mobilisation_hours;
+
     const next: LabourRow = {
       ...row,
+      mobilisation_hours: effectiveMobilisationMinutes,
       delay_hours: appliedDelayHours ? appliedDelayHours.toFixed(2) : "",
       delay_reason: delayReasonsForWorker(row.worker_name),
     };
@@ -1876,6 +1893,16 @@ export default function DailyDocketForm({
     [labourRowsWithProduction]
   );
 
+  const mobilisationDurationHours = useMemo(
+    () => (mobilisation.enabled ? minutesToHours(mobilisationHours) : 0),
+    [mobilisation.enabled, mobilisationHours]
+  );
+
+  const mobilisationManhours = useMemo(
+    () => mobilisationDurationHours * labourWorkerCount,
+    [mobilisationDurationHours, labourWorkerCount]
+  );
+
   const totalDelayManhours = useMemo(
     () => labourRowsWithProduction.reduce((sum, row) => sum + toNumber(row.delay_hours), 0),
     [labourRowsWithProduction]
@@ -1913,18 +1940,6 @@ export default function DailyDocketForm({
       })),
     [crews]
   );
-
-  const employeeNameOptions = useMemo(() => {
-    const seen = new Set<string>();
-    return employees
-      .map((employee) => employee.full_name.trim())
-      .filter((name) => {
-        const key = normalizeWorkerName(name);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [employees]);
 
   function crewMembersForCrew(crewId: string) {
     return employees.filter((employee) => employee.crew_id === crewId);
@@ -2032,7 +2047,6 @@ export default function DailyDocketForm({
           lunchBreakMinutes,
           travelInMinutes,
           travelOutMinutes,
-          mobilisationHours,
         })
       );
 
@@ -2109,7 +2123,7 @@ export default function DailyDocketForm({
           lunch_minutes: previous.lunch_minutes || lunchBreakMinutes,
           travel_in_minutes: previous.travel_in_minutes || travelInMinutes,
           travel_out_minutes: previous.travel_out_minutes || travelOutMinutes,
-          mobilisation_hours: previous.mobilisation_hours || mobilisationHours,
+          mobilisation_hours: "",
           delay_hours: "",
           delay_reason: "",
           production_hours: "",
@@ -2206,7 +2220,6 @@ export default function DailyDocketForm({
           lunch_minutes: lunchBreakMinutes,
           travel_in_minutes: travelInMinutes,
           travel_out_minutes: travelOutMinutes,
-          mobilisation_hours: mobilisationHours,
         };
 
         return {
@@ -2358,7 +2371,7 @@ export default function DailyDocketForm({
       delays_comments: [
         delaysComments.trim(),
         mobilisation.enabled
-          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
+          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|minutes=${mobilisationHours || "0"}|hours=${minutesToHours(mobilisationHours)}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
           : "",
       ]
         .filter(Boolean)
@@ -2375,8 +2388,8 @@ export default function DailyDocketForm({
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
-      mobilisation_hours: minutesToHours(mobilisationHours),
-      mobilisation_notes: mobilisationNotes,
+      mobilisation_hours: mobilisation.enabled ? minutesToHours(mobilisationHours) : 0,
+      mobilisation_notes: mobilisation.enabled ? mobilisation.notes || mobilisationNotes || null : null,
       incident_occurred: incidentOccurred,
       incident_type: incidentOccurred ? incidentType || null : null,
       incident_notes: incidentOccurred ? incidentNotes || null : null,
@@ -3594,7 +3607,6 @@ export default function DailyDocketForm({
             lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
             travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
             travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
-            mobilisationHours: hoursToMinutes(lastDocket.mobilisation_hours),
           }),
         ]);
       }
@@ -3618,6 +3630,8 @@ export default function DailyDocketForm({
         completed_date: "",
         notes: "",
       });
+      setMobilisationHours("");
+      setMobilisationNotes("");
 
       if (progress && progress.length > 0 && lastDocket.progress_model === "section_v2") {
         const rawRows = progress as any[];
@@ -3969,185 +3983,172 @@ export default function DailyDocketForm({
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Labour</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Raw hours are captured for the docket. Production hours are calculated from defaults and delay events.
+              Keep the daily times quick to enter. Lunch and travel can be adjusted per worker; mobilisation and delays are applied from their sections below.
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-right">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
             <MiniSummary label="Workers" value={String(labourWorkerCount)} />
-            <MiniSummary label="Raw" value={totalLabourHours.toFixed(2)} />
-            <MiniSummary label="Production" value={totalProductionHours.toFixed(2)} />
-            <MiniSummary label="Lunch" value={totalLunchHours.toFixed(2)} />
-            <MiniSummary label="Travel" value={totalTravelHours.toFixed(2)} />
-            <MiniSummary label="Prestart Hrs" value={totalMobilisationHours.toFixed(2)} />
-            <MiniSummary label="Delay" value={totalDelayManhours.toFixed(2)} />
+            <MiniSummary label="Raw MH" value={totalLabourHours.toFixed(2)} />
+            <MiniSummary label="Production MH" value={totalProductionHours.toFixed(2)} />
+            <MiniSummary label="Lunch MH" value={totalLunchHours.toFixed(2)} />
+            <MiniSummary label="Travel MH" value={totalTravelHours.toFixed(2)} />
+            <MiniSummary label="Delay / Mob MH" value={(totalDelayManhours + totalMobilisationHours).toFixed(2)} />
           </div>
         </div>
 
-        <datalist id="employee-name-options">
-          {employeeNameOptions.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
+        <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+          <div className="hidden lg:grid grid-cols-[minmax(240px,1.5fr)_105px_105px_95px_105px_minmax(220px,1fr)_70px] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div>Worker</div>
+            <div>Time In</div>
+            <div>Time Out</div>
+            <div>Raw Hrs</div>
+            <div>Prod Hrs</div>
+            <div>Deductions</div>
+            <div></div>
+          </div>
 
-        <div className="space-y-3">
-          {labourRowsWithProduction.map((row, index) => {
-            const isDuplicate = duplicateWorkerIndexes.has(index);
+          <div className="divide-y divide-slate-200">
+            {labourRowsWithProduction.map((row, index) => {
+              const isDuplicate = duplicateWorkerIndexes.has(index);
+              const travelMinutes = toNumber(row.travel_in_minutes) + toNumber(row.travel_out_minutes);
+              const mobHours = minutesToHours(row.mobilisation_hours);
+              const deductionParts = [
+                toNumber(row.lunch_minutes) > 0 ? `Lunch ${toNumber(row.lunch_minutes)}m` : "",
+                travelMinutes > 0 ? `Travel ${travelMinutes}m` : "",
+                mobHours > 0 ? `Mob ${mobHours.toFixed(2)}h` : "",
+                toNumber(row.delay_hours) > 0 ? `Delay ${toNumber(row.delay_hours).toFixed(2)}h` : "",
+              ].filter(Boolean);
 
-            return (
-              <div
-                key={index}
-                className={`border rounded-xl p-3 space-y-3 bg-white ${
-                  isDuplicate ? "border-red-300 bg-red-50" : "border-slate-200"
-                }`}
-              >
-                <div className="grid grid-cols-2 md:grid-cols-[1.4fr_110px_110px_100px_100px] gap-2 items-end">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Worker Name</label>
-                    <input
-                      id={`labour-name-${index}`}
-                      list="employee-name-options"
-                      className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
-                        isDuplicate ? "border-red-500 bg-white" : ""
-                      }`}
-                      value={row.worker_name}
+              return (
+                <div
+                  key={index}
+                  className={`p-3 ${isDuplicate ? "bg-red-50" : "bg-white"}`}
+                >
+                  <div className="grid grid-cols-2 lg:grid-cols-[minmax(240px,1.5fr)_105px_105px_95px_105px_minmax(220px,1fr)_70px] gap-2 items-end">
+                    <div className="col-span-2 lg:col-span-1">
+                      <label className="block lg:hidden text-xs font-semibold text-slate-500 mb-1">Worker</label>
+                      <EmployeeSearchInput
+                        id={`labour-name-${index}`}
+                        value={row.worker_name}
+                        employees={employees}
+                        selectedCrewId={selectedCrewId}
+                        disabled={locked || isView}
+                        invalid={isDuplicate}
+                        onChange={(value) => updateLabourRow(index, "worker_name", value)}
+                        onCommit={() => focusById(`labour-timein-${index}`)}
+                      />
+                      {isDuplicate && row.worker_name.trim() && (
+                        <p className="text-xs text-red-600 mt-1">Already entered on this docket.</p>
+                      )}
+                    </div>
+
+                    <LabourInput
+                      label="Time In"
+                      id={`labour-timein-${index}`}
+                      type="time"
+                      value={row.time_in}
                       disabled={locked || isView}
-                      placeholder="Start typing or select employee"
-                      onKeyDown={(e) =>
-                        handleLabourKeyDown(e, `labour-timein-${index}`)
-                      }
-                      onChange={(e) =>
-                        updateLabourRow(index, "worker_name", e.target.value)
-                      }
+                      onKeyDown={(e) => handleLabourKeyDown(e, `labour-timeout-${index}`)}
+                      onChange={(v) => updateLabourRow(index, "time_in", v)}
                     />
-                    {isDuplicate && row.worker_name.trim() && (
-                      <p className="text-xs text-red-600 mt-1">
-                        This worker name is already entered in this docket.
-                      </p>
+                    <LabourInput
+                      label="Time Out"
+                      id={`labour-timeout-${index}`}
+                      type="time"
+                      value={row.time_out}
+                      disabled={locked || isView}
+                      onKeyDown={(e) => handleLabourKeyDown(e, `labour-hours-${index}`)}
+                      onChange={(v) => updateLabourRow(index, "time_out", v)}
+                    />
+                    <LabourInput
+                      label="Raw Hrs"
+                      id={`labour-hours-${index}`}
+                      type="number"
+                      value={row.total_hours}
+                      disabled={locked || isView}
+                      onKeyDown={(e) => handleLabourKeyDown(e, `labour-name-${index + 1}`)}
+                      onChange={(v) => updateLabourRow(index, "total_hours", v)}
+                    />
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1 lg:hidden">Prod Hrs</label>
+                      <div className="border border-emerald-200 rounded-lg px-2 py-2 text-sm bg-emerald-50 text-emerald-800 font-bold h-10 flex items-center">
+                        {row.production_hours || "0.00"}
+                      </div>
+                    </div>
+
+                    <div className="col-span-2 lg:col-span-1">
+                      <label className="block text-sm font-medium mb-1 lg:hidden">Deductions</label>
+                      <div className="min-h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 flex items-center">
+                        {deductionParts.length ? deductionParts.join(" · ") : "No deductions"}
+                      </div>
+                    </div>
+
+                    {!locked && !isView ? (
+                      <button
+                        type="button"
+                        onClick={() => removeLabourRow(index)}
+                        className="border border-slate-300 px-2 py-2 rounded-lg h-10 text-xs font-semibold hover:bg-slate-50"
+                      >
+                        Remove
+                      </button>
+                    ) : (
+                      <div />
                     )}
                   </div>
 
-                  <LabourInput
-                    label="Time In"
-                    id={`labour-timein-${index}`}
-                    type="time"
-                    value={row.time_in}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-timeout-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "time_in", v)}
-                  />
-                  <LabourInput
-                    label="Time Out"
-                    id={`labour-timeout-${index}`}
-                    type="time"
-                    value={row.time_out}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-hours-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "time_out", v)}
-                  />
-                  <LabourInput
-                    label="Raw Hrs"
-                    id={`labour-hours-${index}`}
-                    type="number"
-                    value={row.total_hours}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-lunch-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "total_hours", v)}
-                  />
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Prod Hrs</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-emerald-50 text-emerald-800 font-semibold">
-                      {row.production_hours || "0.00"}
+                  <details className="mt-2 group">
+                    <summary className="cursor-pointer select-none text-xs font-semibold text-slate-500 hover:text-slate-800 w-fit">
+                      Adjust lunch / travel
+                    </summary>
+                    <div className="mt-3 grid grid-cols-2 md:grid-cols-[120px_120px_120px_140px_1fr] gap-2 items-end rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <LabourInput
+                        label="Lunch Min"
+                        id={`labour-lunch-${index}`}
+                        type="number"
+                        value={row.lunch_minutes}
+                        disabled={locked || isView}
+                        onChange={(v) => updateLabourRow(index, "lunch_minutes", v)}
+                      />
+                      <LabourInput
+                        label="Travel In Min"
+                        id={`labour-travelin-${index}`}
+                        type="number"
+                        value={row.travel_in_minutes}
+                        disabled={locked || isView}
+                        onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)}
+                      />
+                      <LabourInput
+                        label="Travel Out Min"
+                        id={`labour-travelout-${index}`}
+                        type="number"
+                        value={row.travel_out_minutes}
+                        disabled={locked || isView}
+                        onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)}
+                      />
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Mob / Delay</label>
+                        <div className="border rounded-lg p-2 text-sm bg-white h-10">
+                          {mobHours.toFixed(2)}h / {toNumber(row.delay_hours).toFixed(2)}h
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Delay Reason</label>
+                        <div className="border rounded-lg p-2 text-sm bg-white min-h-10 text-slate-700">
+                          {row.delay_reason || "—"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  </details>
                 </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-[110px_110px_110px_110px_110px_1fr_auto] gap-2 items-end">
-                  <LabourInput
-                    label="Lunch Min"
-                    id={`labour-lunch-${index}`}
-                    type="number"
-                    value={row.lunch_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-travelin-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "lunch_minutes", v)}
-                  />
-                  <LabourInput
-                    label="Travel In"
-                    id={`labour-travelin-${index}`}
-                    type="number"
-                    value={row.travel_in_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-travelout-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "travel_in_minutes", v)}
-                  />
-                  <LabourInput
-                    label="Travel Out"
-                    id={`labour-travelout-${index}`}
-                    type="number"
-                    value={row.travel_out_minutes}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-mob-${index}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "travel_out_minutes", v)}
-                  />
-                  <LabourInput
-                    label="Prestart Min"
-                    id={`labour-mob-${index}`}
-                    type="number"
-                    value={row.mobilisation_hours}
-                    disabled={locked || isView}
-                    onKeyDown={(e) =>
-                      handleLabourKeyDown(e, `labour-name-${index + 1}`)
-                    }
-                    onChange={(v) => updateLabourRow(index, "mobilisation_hours", v)}
-                  />
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Delay Hrs</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-amber-50 text-amber-800 font-semibold">
-                      {row.delay_hours || "0.00"}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Delay Reason</label>
-                    <div className="border rounded-lg p-2 text-sm w-full bg-slate-50 text-slate-700 min-h-10 truncate">
-                      {row.delay_reason || "—"}
-                    </div>
-                  </div>
-
-                  {!locked && !isView ? (
-                    <button
-                      type="button"
-                      onClick={() => removeLabourRow(index)}
-                      className="border px-4 py-2 rounded-lg h-10 hover:bg-slate-50"
-                    >
-                      Remove
-                    </button>
-                  ) : (
-                    <div />
-                  )}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {!locked && !isView && (
-          <div className="pt-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 flex flex-col md:flex-row md:items-end gap-2">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 flex flex-col md:flex-row md:items-end gap-2">
             <button
               type="button"
               onClick={addLabourRow}
@@ -4157,18 +4158,8 @@ export default function DailyDocketForm({
             </button>
 
             <div className="grid grid-cols-2 md:grid-cols-[160px_160px_auto] gap-2 items-end flex-1">
-              <LabourInput
-                label="Bulk Time In"
-                type="time"
-                value={bulkTimeIn}
-                onChange={setBulkTimeIn}
-              />
-              <LabourInput
-                label="Bulk Time Out"
-                type="time"
-                value={bulkTimeOut}
-                onChange={setBulkTimeOut}
-              />
+              <LabourInput label="Bulk Time In" type="time" value={bulkTimeIn} onChange={setBulkTimeIn} />
+              <LabourInput label="Bulk Time Out" type="time" value={bulkTimeOut} onChange={setBulkTimeOut} />
               <button
                 type="button"
                 onClick={applyBulkTimes}
@@ -4428,74 +4419,73 @@ export default function DailyDocketForm({
         </section>
       )}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <section className="bg-white border border-blue-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Mobilisation Progress</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Mobilising / Demobilising</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Track a move over multiple days so the next docket continues from the same mobilisation rather than treating it as a one-day delay.
+              Record the crew move and the time spent on it. This time is deducted from production hours in the same way as a delay, while remaining visible as mobilisation on the docket.
             </p>
           </div>
 
-          <label className="inline-flex items-center gap-2 text-sm font-semibold">
+          <label className="inline-flex items-center gap-2 text-sm font-semibold rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
             <input
               type="checkbox"
               checked={mobilisation.enabled}
               disabled={locked || isView}
-              onChange={(e) =>
-                setMobilisation((prev) => ({ ...prev, enabled: e.target.checked }))
-              }
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                setMobilisation((prev) => ({ ...prev, enabled }));
+                if (!enabled) {
+                  setMobilisationHours("");
+                  setMobilisationNotes("");
+                }
+              }}
             />
             Crew is mobilising / demobilising
           </label>
         </div>
 
-        {mobilisation.enabled && (
+        {mobilisation.enabled ? (
           <div className="space-y-4">
-            <div className="grid md:grid-cols-2 gap-3">
+            <div className="grid md:grid-cols-[1fr_1fr_180px] gap-3 items-end">
               <div>
-                <label className="block text-sm font-medium mb-1">Moving from tower</label>
+                <label className="block text-sm font-medium mb-1">Moving from</label>
                 <select
                   className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                   value={mobilisation.from_tower_id}
                   disabled={locked || isView}
-                  onChange={(e) =>
-                    setMobilisation((prev) => ({
-                      ...prev,
-                      from_tower_id: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setMobilisation((prev) => ({ ...prev, from_tower_id: e.target.value }))}
                 >
                   <option value="">Project / laydown / other location</option>
                   {projectTowers.map((tower) => (
-                    <option key={tower.id} value={tower.id}>
-                      {tower.name}
-                    </option>
+                    <option key={tower.id} value={tower.id}>{tower.name}</option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">Moving to tower</label>
+                <label className="block text-sm font-medium mb-1">Moving to</label>
                 <select
                   className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                   value={mobilisation.to_tower_id}
                   disabled={locked || isView}
-                  onChange={(e) =>
-                    setMobilisation((prev) => ({
-                      ...prev,
-                      to_tower_id: e.target.value,
-                    }))
-                  }
+                  onChange={(e) => setMobilisation((prev) => ({ ...prev, to_tower_id: e.target.value }))}
                 >
                   <option value="">Select destination...</option>
                   {projectTowers.map((tower) => (
-                    <option key={tower.id} value={tower.id}>
-                      {tower.name}
-                    </option>
+                    <option key={tower.id} value={tower.id}>{tower.name}</option>
                   ))}
                 </select>
               </div>
+
+              <Input
+                label="Time spent (minutes)"
+                type="number"
+                value={mobilisationHours}
+                onChange={setMobilisationHours}
+                disabled={locked || isView}
+              />
             </div>
 
             <div className="grid md:grid-cols-4 gap-3">
@@ -4505,12 +4495,7 @@ export default function DailyDocketForm({
                   className="border rounded-lg p-2 w-full bg-white disabled:bg-slate-100"
                   value={mobilisation.status}
                   disabled={locked || isView}
-                  onChange={(e) =>
-                    setMobilisation((prev) => ({
-                      ...prev,
-                      status: e.target.value as MobilisationStatus,
-                    }))
-                  }
+                  onChange={(e) => setMobilisation((prev) => ({ ...prev, status: e.target.value as MobilisationStatus }))}
                 >
                   <option value="planning">Planning / preparing</option>
                   <option value="packing">Packing / breaking down</option>
@@ -4526,9 +4511,7 @@ export default function DailyDocketForm({
                 label="Progress %"
                 type="number"
                 value={mobilisation.percent_complete}
-                onChange={(v) =>
-                  setMobilisation((prev) => ({ ...prev, percent_complete: v }))
-                }
+                onChange={(v) => setMobilisation((prev) => ({ ...prev, percent_complete: clampPercent(v) }))}
                 disabled={locked || isView}
               />
 
@@ -4536,9 +4519,7 @@ export default function DailyDocketForm({
                 label="Started"
                 type="date"
                 value={mobilisation.started_date}
-                onChange={(v) =>
-                  setMobilisation((prev) => ({ ...prev, started_date: v }))
-                }
+                onChange={(v) => setMobilisation((prev) => ({ ...prev, started_date: v }))}
                 disabled={locked || isView}
               />
 
@@ -4546,9 +4527,7 @@ export default function DailyDocketForm({
                 label="Target move / ready date"
                 type="date"
                 value={mobilisation.target_move_date}
-                onChange={(v) =>
-                  setMobilisation((prev) => ({ ...prev, target_move_date: v }))
-                }
+                onChange={(v) => setMobilisation((prev) => ({ ...prev, target_move_date: v }))}
                 disabled={locked || isView}
               />
             </div>
@@ -4558,21 +4537,35 @@ export default function DailyDocketForm({
                 label="Completed"
                 type="date"
                 value={mobilisation.completed_date}
-                onChange={(v) =>
-                  setMobilisation((prev) => ({ ...prev, completed_date: v }))
-                }
+                onChange={(v) => setMobilisation((prev) => ({ ...prev, completed_date: v }))}
                 disabled={locked || isView}
               />
             )}
 
-            <Input
-              label="Mobilisation notes"
-              value={mobilisation.notes}
-              onChange={(v) =>
-                setMobilisation((prev) => ({ ...prev, notes: v }))
-              }
-              disabled={locked || isView}
-            />
+            <div className="grid md:grid-cols-[1fr_auto] gap-3 items-end">
+              <Input
+                label="Mobilisation / demobilisation notes"
+                value={mobilisation.notes}
+                onChange={(v) => {
+                  setMobilisation((prev) => ({ ...prev, notes: v }));
+                  setMobilisationNotes(v);
+                }}
+                disabled={locked || isView}
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <MiniSummary label="Crew Duration" value={`${mobilisationDurationHours.toFixed(2)} hrs`} />
+                <MiniSummary label="Production Deduction" value={`${mobilisationManhours.toFixed(2)} MH`} />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              The entered mobilisation duration is applied to every worker currently on this docket. For {labourWorkerCount} worker{labourWorkerCount === 1 ? "" : "s"}, {mobilisationDurationHours.toFixed(2)} hours produces a {mobilisationManhours.toFixed(2)} manhour production deduction.
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+            No mobilisation or demobilisation recorded for this docket.
           </div>
         )}
       </section>
@@ -4633,7 +4626,7 @@ export default function DailyDocketForm({
                         <option value="weather">Weather</option>
                         <option value="lightning">Lightning</option>
                         <option value="toolbox">Toolbox</option>
-                        <option value="mobilisation">Prestart / Mobilisation</option>
+                        <option value="mobilisation" disabled>Mobilisation (use section above)</option>
                         <option value="access">Access / Bogged</option>
                         <option value="plant">Plant / Equipment</option>
                         <option value="other">Other</option>
@@ -4782,10 +4775,6 @@ export default function DailyDocketForm({
                     ? towerId
                     : towerId;
 
-                const availableCatalog = materialCatalog.filter(
-                  (item) => !catalogTowerId || item.tower_id === catalogTowerId
-                );
-
                 return (
                   <div
                     key={event.ui_id}
@@ -4891,11 +4880,6 @@ export default function DailyDocketForm({
                       </div>
 
                       {event.items.map((item, itemIndex) => {
-                        const catalogValue =
-                          item.source_table && item.source_record_id
-                            ? `${item.source_table}:${item.source_record_id}`
-                            : "";
-
                         return (
                           <div
                             key={item.ui_id}
@@ -5711,7 +5695,7 @@ export default function DailyDocketForm({
               Docket Production Defaults
             </h2>
             <p className="text-sm text-slate-500 mt-1">
-              Prestart, lunch and travel defaults used to calculate production hours.
+              Lunch and travel defaults used to calculate production hours. Mobilisation is entered in the Mobilising / Demobilising section above.
             </p>
           </div>
 
@@ -5726,7 +5710,7 @@ export default function DailyDocketForm({
 
         {showProductionDefaults && (
           <>
-            <div className="grid md:grid-cols-4 gap-4">
+            <div className="grid md:grid-cols-3 gap-4">
               <Input
                 label="Lunch Break Minutes"
                 type="number"
@@ -5748,21 +5732,7 @@ export default function DailyDocketForm({
                 onChange={setTravelOutMinutes}
                 disabled={locked || isView}
               />
-              <Input
-                label="Prestart Minutes"
-                type="number"
-                value={mobilisationHours}
-                onChange={setMobilisationHours}
-                disabled={locked || isView}
-              />
             </div>
-
-            <Input
-              label="Prestart Notes"
-              value={mobilisationNotes}
-              onChange={setMobilisationNotes}
-              disabled={locked || isView}
-            />
 
             {!locked && !isView && (
               <button
@@ -6001,7 +5971,7 @@ function SignaturePad({
     const prepared = prepareCanvas();
     if (!prepared) return;
 
-    const { canvas, context, rect } = prepared;
+    const { context, rect } = prepared;
     context.clearRect(0, 0, rect.width, rect.height);
 
     if (!value) return;
@@ -6192,6 +6162,142 @@ function Input({
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       />
+    </div>
+  );
+}
+
+function EmployeeSearchInput({
+  id,
+  value,
+  employees,
+  selectedCrewId,
+  disabled,
+  invalid,
+  onChange,
+  onCommit,
+}: {
+  id: string;
+  value: string;
+  employees: EmployeeRecord[];
+  selectedCrewId: string;
+  disabled: boolean;
+  invalid: boolean;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const matches = useMemo(() => {
+    const query = normaliseText(value);
+    const queryParts = query.split(" ").filter(Boolean);
+
+    return employees
+      .filter((employee) => employee.active !== false && employee.full_name?.trim())
+      .map((employee) => {
+        const name = employee.full_name.trim();
+        const role = toStringValue(employee.role).trim();
+        const haystack = normaliseText(`${name} ${role}`);
+        const crewPriority = selectedCrewId && employee.crew_id === selectedCrewId ? 0 : 1;
+        const exactName = normalizeWorkerName(name) === normalizeWorkerName(value) ? 0 : 1;
+        const startsWith = query && normaliseText(name).startsWith(query) ? 0 : 1;
+        return { employee, name, role, haystack, crewPriority, exactName, startsWith };
+      })
+      .filter((item) => queryParts.length === 0 || queryParts.every((part) => item.haystack.includes(part)))
+      .sort((a, b) =>
+        a.exactName - b.exactName ||
+        a.crewPriority - b.crewPriority ||
+        a.startsWith - b.startsWith ||
+        a.name.localeCompare(b.name)
+      )
+      .slice(0, 10);
+  }, [employees, selectedCrewId, value]);
+
+  function selectEmployee(employee: EmployeeRecord) {
+    onChange(employee.full_name.trim());
+    setOpen(false);
+    window.setTimeout(onCommit, 0);
+  }
+
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        autoComplete="off"
+        className={`border rounded-lg p-2 text-sm w-full disabled:bg-slate-100 ${
+          invalid ? "border-red-500 bg-white" : "border-slate-300"
+        }`}
+        value={value}
+        disabled={disabled}
+        placeholder="Search employee name or role"
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setActiveIndex(0);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && matches.length > 0) {
+            e.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => Math.min(current + 1, matches.length - 1));
+            return;
+          }
+          if (e.key === "ArrowUp" && matches.length > 0) {
+            e.preventDefault();
+            setOpen(true);
+            setActiveIndex((current) => Math.max(current - 1, 0));
+            return;
+          }
+          if (e.key === "Escape") {
+            setOpen(false);
+            return;
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (open && matches[activeIndex]) {
+              selectEmployee(matches[activeIndex].employee);
+            } else {
+              onCommit();
+            }
+          }
+        }}
+      />
+
+      {open && !disabled && (
+        <div className="absolute z-40 mt-1 max-h-72 w-full min-w-[280px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+          {matches.length > 0 ? (
+            matches.map((item, matchIndex) => {
+              const isCurrentCrew = Boolean(selectedCrewId && item.employee.crew_id === selectedCrewId);
+              return (
+                <button
+                  key={item.employee.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setActiveIndex(matchIndex)}
+                  onClick={() => selectEmployee(item.employee)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left ${
+                    activeIndex === matchIndex ? "bg-blue-50" : "hover:bg-slate-50"
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-slate-900">{item.name}</span>
+                    {item.role && <span className="block truncate text-xs text-slate-500">{item.role}</span>}
+                  </span>
+                  {isCurrentCrew && (
+                    <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
+                      Current crew
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          ) : (
+            <div className="px-3 py-3 text-sm text-slate-500">No active employees match this search.</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
