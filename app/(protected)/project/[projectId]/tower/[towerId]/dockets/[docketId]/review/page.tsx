@@ -51,9 +51,7 @@ type ProjectRow = {
 type TowerRow = {
   id: string;
   name: string | null;
-  tower_number?: string | null;
-  structure_number?: string | null;
-  line?: string | null;
+  line: string | null;
 };
 
 type LabourRow = {
@@ -257,7 +255,7 @@ export default function DailyDocketBcReviewPage() {
             .single(),
           supabase
             .from("towers")
-            .select("id, name, tower_number, structure_number, line")
+            .select("id, name, line")
             .eq("id", towerId)
             .eq("project_id", projectId)
             .single(),
@@ -380,11 +378,7 @@ export default function DailyDocketBcReviewPage() {
     };
   }, [docketId, projectId, supabase, towerId]);
 
-  const towerName =
-    tower?.tower_number ||
-    tower?.structure_number ||
-    tower?.name ||
-    "Tower";
+  const towerName = tower?.name || "Tower";
 
   const totalProgress = Math.round(
     Number(docket?.assembly_percent || 0) * 0.5 +
