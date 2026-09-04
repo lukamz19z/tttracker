@@ -2,7 +2,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -252,6 +252,8 @@ type DocketRecord = {
   bc_submitted_at?: string | null;
   bc_approved_at?: string | null;
   bc_approved_name?: string | null;
+  bc_signature_data_url?: string | null;
+  bc_signed_at?: string | null;
   client_approved_at?: string | null;
   client_approved_name?: string | null;
   draft_sharepoint_web_url?: string | null;
@@ -978,6 +980,10 @@ export default function DailyDocketForm({
   const [missingItemsBolts, setMissingItemsBolts] = useState(toStringValue(initialDocket?.missing_items_bolts));
   const [delaysComments, setDelaysComments] = useState(toStringValue(initialDocket?.delays_comments));
   const [bcRepName, setBcRepName] = useState(toStringValue(initialDocket?.bc_rep_name));
+  const [bcSignatureDataUrl, setBcSignatureDataUrl] = useState(
+    toStringValue(initialDocket?.bc_signature_data_url)
+  );
+  const [bcSignedAt, setBcSignedAt] = useState(toStringValue(initialDocket?.bc_signed_at));
   const [clientRepName, setClientRepName] = useState(toStringValue(initialDocket?.client_rep_name));
   const [signedDate, setSignedDate] = useState(toStringValue(initialDocket?.signed_date));
   const [docketFile, setDocketFile] = useState<File | null>(null);
@@ -1328,6 +1334,8 @@ export default function DailyDocketForm({
         setIncidentNotes(toStringValue(initialDocket.incident_notes));
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
+        setBcSignatureDataUrl(toStringValue(initialDocket.bc_signature_data_url));
+        setBcSignedAt(toStringValue(initialDocket.bc_signed_at));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
         setSignedDate(toStringValue(initialDocket.signed_date));
         setExistingDocketFileUrl(toStringValue(initialDocket.docket_file_url));
@@ -1497,6 +1505,8 @@ export default function DailyDocketForm({
       setIncidentNotes(toStringValue(data.incident_notes));
 
       setBcRepName(toStringValue(data.bc_rep_name));
+      setBcSignatureDataUrl(toStringValue(data.bc_signature_data_url));
+      setBcSignedAt(toStringValue(data.bc_signed_at));
       setClientRepName(toStringValue(data.client_rep_name));
       setSignedDate(toStringValue(data.signed_date));
       setExistingDocketFileUrl(toStringValue(data.docket_file_url));
@@ -2371,7 +2381,11 @@ export default function DailyDocketForm({
       incident_notes: incidentOccurred ? incidentNotes || null : null,
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
-      bc_rep_name: bcRepName,
+      bc_rep_name: bcRepName.trim() || null,
+      bc_signature_data_url: bcSignatureDataUrl || null,
+      bc_signed_at: bcSignatureDataUrl
+        ? bcSignedAt || new Date().toISOString()
+        : null,
       client_rep_name: clientRepName,
       signed_date: existingSignedDate,
       docket_file_url: docketFileUrl,
@@ -3350,6 +3364,13 @@ export default function DailyDocketForm({
     router.refresh();
   }
 
+  function handleBcSignatureChange(value: string) {
+    if (isView || locked) return;
+
+    setBcSignatureDataUrl(value);
+    setBcSignedAt(value ? new Date().toISOString() : "");
+  }
+
   async function handleSubmit() {
     if (!projectId || !towerId) {
       alert("Invalid route");
@@ -3451,6 +3472,8 @@ export default function DailyDocketForm({
       setIncidentNotes("");
 
       setBcRepName("");
+      setBcSignatureDataUrl("");
+      setBcSignedAt("");
       setClientRepName("");
       setSignedDate("");
       setDocketFile(null);
@@ -5707,25 +5730,61 @@ export default function DailyDocketForm({
               className="border rounded-lg p-2 w-full disabled:bg-slate-100 bg-white"
             />
           </div>
+        </div>
 
-          {(clientRepName || signedDate) && (
-            <>
-              <Input
-                label="Client Representative"
-                value={clientRepName}
-                onChange={setClientRepName}
-                disabled
-              />
-              <Input
-                label="Approval Date"
-                type="date"
-                value={signedDate}
-                onChange={setSignedDate}
-                disabled
-              />
-            </>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:p-5 space-y-3">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-slate-900">BC Representative Sign-off</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Sign below to confirm the Daily Docket is an accurate record of the shift.
+              </p>
+            </div>
+
+            {bcSignatureDataUrl && (
+              <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+                Signed
+              </div>
+            )}
+          </div>
+
+          <SignaturePad
+            value={bcSignatureDataUrl}
+            onChange={handleBcSignatureChange}
+            disabled={locked || isView}
+          />
+
+          {bcSignatureDataUrl && (
+            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+              <span>
+                Signed by <strong className="text-slate-700">{bcRepName.trim() || "BC Representative"}</strong>
+              </span>
+              {bcSignedAt && (
+                <span>
+                  {new Date(bcSignedAt).toLocaleString()}
+                </span>
+              )}
+            </div>
           )}
         </div>
+
+        {(clientRepName || signedDate) && (
+          <div className="grid md:grid-cols-2 gap-4">
+            <Input
+              label="Client Representative"
+              value={clientRepName}
+              onChange={setClientRepName}
+              disabled
+            />
+            <Input
+              label="Approval Date"
+              type="date"
+              value={signedDate}
+              onChange={setSignedDate}
+              disabled
+            />
+          </div>
+        )}
 
         {(sharePointUrl || existingDocketFileUrl) && (
           <div className="flex flex-wrap gap-3 pt-1">
@@ -5780,6 +5839,217 @@ export default function DailyDocketForm({
         >
           {locked || isView ? "Back" : "Cancel"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function SignaturePad({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+
+  function prepareCanvas() {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const rect = canvas.getBoundingClientRect();
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+    const targetWidth = Math.max(1, Math.round(rect.width * ratio));
+    const targetHeight = Math.max(1, Math.round(rect.height * ratio));
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = 2.2;
+    context.strokeStyle = "#0f172a";
+
+    return { canvas, context, rect };
+  }
+
+  useEffect(() => {
+    const prepared = prepareCanvas();
+    if (!prepared) return;
+
+    const { canvas, context, rect } = prepared;
+    context.clearRect(0, 0, rect.width, rect.height);
+
+    if (!value) return;
+
+    const image = new Image();
+    image.onload = () => {
+      const current = prepareCanvas();
+      if (!current) return;
+      current.context.clearRect(0, 0, current.rect.width, current.rect.height);
+      current.context.drawImage(
+        image,
+        0,
+        0,
+        current.rect.width,
+        current.rect.height
+      );
+    };
+    image.src = value;
+
+    const handleResize = () => {
+      const current = prepareCanvas();
+      if (!current || !value) return;
+      const resizedImage = new Image();
+      resizedImage.onload = () => {
+        const latest = prepareCanvas();
+        if (!latest) return;
+        latest.context.clearRect(0, 0, latest.rect.width, latest.rect.height);
+        latest.context.drawImage(
+          resizedImage,
+          0,
+          0,
+          latest.rect.width,
+          latest.rect.height
+        );
+      };
+      resizedImage.src = value;
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [value]);
+
+  function pointFromEvent(event: React.PointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    };
+  }
+
+  function startDrawing(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (disabled) return;
+
+    const prepared = prepareCanvas();
+    const point = pointFromEvent(event);
+    if (!prepared || !point) return;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawingRef.current = true;
+    lastPointRef.current = point;
+
+    prepared.context.beginPath();
+    prepared.context.moveTo(point.x, point.y);
+    prepared.context.lineTo(point.x + 0.01, point.y + 0.01);
+    prepared.context.stroke();
+  }
+
+  function draw(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (disabled || !drawingRef.current) return;
+
+    const prepared = prepareCanvas();
+    const point = pointFromEvent(event);
+    const lastPoint = lastPointRef.current;
+    if (!prepared || !point || !lastPoint) return;
+
+    event.preventDefault();
+
+    prepared.context.beginPath();
+    prepared.context.moveTo(lastPoint.x, lastPoint.y);
+    prepared.context.lineTo(point.x, point.y);
+    prepared.context.stroke();
+
+    lastPointRef.current = point;
+  }
+
+  function finishDrawing(event?: React.PointerEvent<HTMLCanvasElement>) {
+    if (disabled || !drawingRef.current) return;
+
+    if (event) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already have been released.
+      }
+    }
+
+    drawingRef.current = false;
+    lastPointRef.current = null;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    onChange(canvas.toDataURL("image/png"));
+  }
+
+  function clearSignature() {
+    if (disabled) return;
+
+    const prepared = prepareCanvas();
+    if (prepared) {
+      prepared.context.clearRect(
+        0,
+        0,
+        prepared.rect.width,
+        prepared.rect.height
+      );
+    }
+
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    onChange("");
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">
+        <canvas
+          ref={canvasRef}
+          className={`block h-40 w-full touch-none ${
+            disabled ? "cursor-default bg-slate-50" : "cursor-crosshair"
+          }`}
+          onPointerDown={startDrawing}
+          onPointerMove={draw}
+          onPointerUp={finishDrawing}
+          onPointerCancel={finishDrawing}
+          onPointerLeave={(event) => {
+            if (drawingRef.current && event.buttons === 0) {
+              finishDrawing(event);
+            }
+          }}
+          aria-label="BC representative signature pad"
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs text-slate-500">
+          Use a mouse, touchscreen or stylus to sign.
+        </p>
+
+        {!disabled && (
+          <button
+            type="button"
+            onClick={clearSignature}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Clear Signature
+          </button>
+        )}
       </div>
     </div>
   );
