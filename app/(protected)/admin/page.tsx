@@ -269,6 +269,37 @@ function mapApiUser(user: ApiUser): AdminUser | null {
   };
 }
 
+async function readJsonResponse<T>(
+  response: Response,
+  fallbackError: string,
+): Promise<T> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    if (!response.ok) {
+      throw new Error(
+        `${fallbackError} (${response.status} ${response.statusText || "request failed"}).`,
+      );
+    }
+
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
+
+    throw new Error(
+      response.ok
+        ? `${fallbackError} The server returned an invalid response.`
+        : `${fallbackError} (${response.status}).${
+            preview ? ` ${preview}` : ""
+          }`,
+    );
+  }
+}
+
 export default function AdminPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const [adminTab, setAdminTab] = useState<"users" | "permissions" | "branding">("users");
@@ -448,7 +479,10 @@ export default function AdminPage() {
 
     try {
       const response = await apiFetch("/api/admin/branding");
-      const payload = (await response.json()) as BrandingResponse;
+      const payload = await readJsonResponse<BrandingResponse>(
+        response,
+        "Failed to load document branding.",
+      );
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to load document branding.");
@@ -526,7 +560,10 @@ export default function AdminPage() {
         body: formData,
       });
 
-      const payload = (await response.json()) as BrandingResponse;
+      const payload = await readJsonResponse<BrandingResponse>(
+        response,
+        "Failed to save document branding.",
+      );
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to save document branding.");
@@ -566,7 +603,10 @@ export default function AdminPage() {
         method: "DELETE",
       });
 
-      const payload = (await response.json()) as BrandingResponse;
+      const payload = await readJsonResponse<BrandingResponse>(
+        response,
+        "Failed to remove the logo.",
+      );
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Failed to remove the logo.");
