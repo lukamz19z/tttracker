@@ -22,8 +22,7 @@ import { AdminPermissionsPanel } from "@/components/admin/admin-permissions-pane
 
 type WebsiteRole =
   | "admin"
-  | "site_admin"
-  | "safety_manager"
+  | "hseq"
   | "asset_manager"
   | "commercial"
   | "editor"
@@ -32,8 +31,10 @@ type WebsiteRole =
 
 type MobileRole =
   | "admin"
-  | "mechanic"
-  | "leading_hand"
+  | "hseq"
+  | "asset_manager"
+  | "commercial"
+  | "editor"
   | "crew"
   | "viewer";
 
@@ -120,8 +121,7 @@ const EMPTY_CREATE_FORM: CreateForm = {
 
 const WEBSITE_ROLES: Array<{ value: WebsiteRole; label: string }> = [
   { value: "admin", label: "Administrator" },
-  { value: "site_admin", label: "Site Admin" },
-  { value: "safety_manager", label: "Safety Manager" },
+  { value: "hseq", label: "HSEQ" },
   { value: "asset_manager", label: "Asset Manager" },
   { value: "commercial", label: "Commercial" },
   { value: "editor", label: "Editor" },
@@ -130,10 +130,12 @@ const WEBSITE_ROLES: Array<{ value: WebsiteRole; label: string }> = [
 ];
 
 const MOBILE_ROLES: Array<{ value: MobileRole; label: string }> = [
-  { value: "admin", label: "Admin" },
-  { value: "mechanic", label: "Mechanic" },
-  { value: "leading_hand", label: "Leading Hand" },
-  { value: "crew", label: "Crew" },
+  { value: "admin", label: "Administrator" },
+  { value: "hseq", label: "HSEQ" },
+  { value: "asset_manager", label: "Asset Manager" },
+  { value: "commercial", label: "Commercial" },
+  { value: "editor", label: "Editor" },
+  { value: "crew", label: "Crew / Field" },
   { value: "viewer", label: "Viewer" },
 ];
 
@@ -143,8 +145,8 @@ function normaliseWebsiteRole(value?: string | null): WebsiteRole {
     .toLowerCase()
     .replaceAll(" ", "_");
 
-  if (role === "administrator") return "admin";
-  if (role === "safety") return "safety_manager";
+  if (role === "administrator" || role === "site_admin") return "admin";
+  if (role === "safety" || role === "safety_manager") return "hseq";
   if (role === "assets") return "asset_manager";
   if (role === "commercial_manager") return "commercial";
   if (role === "leading_hand" || role === "field") return "crew";
@@ -152,8 +154,7 @@ function normaliseWebsiteRole(value?: string | null): WebsiteRole {
   if (
     [
       "admin",
-      "site_admin",
-      "safety_manager",
+      "hseq",
       "asset_manager",
       "commercial",
       "editor",
@@ -173,8 +174,22 @@ function normaliseMobileRole(value?: string | null): MobileRole {
     .toLowerCase()
     .replaceAll(" ", "_");
 
+  if (role === "administrator" || role === "site_admin") return "admin";
+  if (role === "safety" || role === "safety_manager") return "hseq";
+  if (role === "assets" || role === "mechanic") return "asset_manager";
+  if (role === "commercial_manager") return "commercial";
+  if (role === "leading_hand" || role === "field") return "crew";
+
   if (
-    ["admin", "mechanic", "leading_hand", "crew", "viewer"].includes(role)
+    [
+      "admin",
+      "hseq",
+      "asset_manager",
+      "commercial",
+      "editor",
+      "crew",
+      "viewer",
+    ].includes(role)
   ) {
     return role as MobileRole;
   }

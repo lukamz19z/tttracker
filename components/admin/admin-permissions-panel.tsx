@@ -167,6 +167,84 @@ function pretty(value: string) {
     );
 }
 
+type CanonicalRoleCode =
+  | "admin"
+  | "hseq"
+  | "asset_manager"
+  | "commercial"
+  | "editor"
+  | "crew"
+  | "viewer";
+
+function canonicalRoleCode(value: string): string {
+  const role = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_");
+
+  if (role === "administrator" || role === "site_admin") return "admin";
+  if (role === "safety" || role === "safety_manager") return "hseq";
+  if (role === "assets") return "asset_manager";
+  if (role === "commercial_manager") return "commercial";
+  if (role === "leading_hand" || role === "field") return "crew";
+
+  return role;
+}
+
+function roleDisplayName(role: Pick<RoleRecord, "code" | "name">) {
+  const code = canonicalRoleCode(role.code);
+
+  const labels: Record<CanonicalRoleCode, string> = {
+    admin: "Administrator",
+    hseq: "HSEQ",
+    asset_manager: "Asset Manager",
+    commercial: "Commercial",
+    editor: "Editor",
+    crew: "Crew / Field",
+    viewer: "Viewer",
+  };
+
+  return labels[code as CanonicalRoleCode] ?? role.name ?? pretty(code);
+}
+
+function canonicalRoleDisplayCode(role: Pick<RoleRecord, "code">) {
+  return canonicalRoleCode(role.code);
+}
+
+function collapseLegacyRoles(roles: RoleRecord[]) {
+  const canonicalCodes = new Set(
+    roles.map((role) => canonicalRoleCode(role.code)),
+  );
+
+  const preferredCodes = new Set([
+    "admin",
+    "hseq",
+    "asset_manager",
+    "commercial",
+    "editor",
+    "crew",
+    "viewer",
+  ]);
+
+  return roles.filter((role) => {
+    const raw = String(role.code ?? "").trim().toLowerCase();
+    const canonical = canonicalRoleCode(raw);
+
+    if (!preferredCodes.has(canonical)) {
+      return true;
+    }
+
+    if (raw === canonical) {
+      return true;
+    }
+
+    return !roles.some(
+      (candidate) =>
+        String(candidate.code ?? "").trim().toLowerCase() === canonical,
+    );
+  });
+}
+
 function isSharePointRow(row: AccessMatrixRow) {
   const type = String(row.access_type ?? "")
     .trim()
@@ -481,14 +559,12 @@ export function AdminPermissionsPanel() {
       }
 
       const nextRoles =
-        [...(
-          payload.roles ??
-          []
-        )].sort(
-          (a, b) =>
-            a.name.localeCompare(
-              b.name,
-            ),
+        collapseLegacyRoles([
+          ...(payload.roles ?? []),
+        ]).sort((a, b) =>
+          roleDisplayName(a).localeCompare(
+            roleDisplayName(b),
+          ),
         );
 
       setRoles(
@@ -516,8 +592,9 @@ export function AdminPermissionsPanel() {
           return (
             nextRoles.find(
               (role) =>
-                role.code ===
-                "admin",
+                canonicalRoleCode(
+                  role.code,
+                ) === "admin",
             )?.id ??
             nextRoles[0]
               ?.id ??
@@ -673,6 +750,8 @@ export function AdminPermissionsPanel() {
       return roles.filter(
         (role) =>
           [
+            roleDisplayName(role),
+            canonicalRoleDisplayCode(role),
             role.name,
             role.code,
             role.description,
@@ -1670,7 +1749,7 @@ export function AdminPermissionsPanel() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-bold">
-                            {role.name}
+                            {roleDisplayName(role)}
                           </div>
 
                           <div
@@ -1681,7 +1760,7 @@ export function AdminPermissionsPanel() {
                                 : "text-slate-400"
                             }`}
                           >
-                            {role.code}
+                            {canonicalRoleDisplayCode(role)}
                           </div>
                         </div>
 
