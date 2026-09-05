@@ -29,6 +29,12 @@ type DocketRow = {
   bc_signature_data_url: string | null;
   bc_signed_at: string | null;
   approval_revision: number | null;
+  raw_manhours?: number | null;
+  weather?: string | null;
+  incident_occurred?: boolean | null;
+  incident_type?: string | null;
+  delays_comments?: string | null;
+  progress_model?: string | null;
 };
 
 type ProjectRow = {
@@ -42,6 +48,164 @@ type TowerRow = {
   name: string | null;
   extra_data: Record<string, unknown> | null;
 };
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function num(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function titleCase(value: unknown) {
+  return String(value ?? "")
+    .replace(/_/g, " ")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function durationHours(start: unknown, finish: unknown) {
+  const a = Date.parse(String(start ?? ""));
+  const b = Date.parse(String(finish ?? ""));
+  return Number.isFinite(a) && Number.isFinite(b) && b >= a
+    ? (b - a) / 3_600_000
+    : null;
+}
+
+function buildOperationalSummaryHtml({
+  docket,
+  labour,
+  plant,
+  delays,
+  materialEvents,
+}: {
+  docket: DocketRow;
+  labour: Array<Record<string, unknown>>;
+  plant: Array<Record<string, unknown>>;
+  delays: Array<Record<string, unknown>>;
+  materialEvents: Array<Record<string, unknown>>;
+}) {
+  const delayHours = delays.reduce((sum, row) => sum + num(row.delay_hours), 0);
+  const nestedRows = (
+    event: Record<string, unknown>,
+    key: string,
+  ): Array<Record<string, unknown>> => {
+    const value = event[key];
+
+    if (!Array.isArray(value)) return [];
+
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        Boolean(row) &&
+        typeof row === "object" &&
+        !Array.isArray(row),
+    );
+  };
+
+  const materialPeople = materialEvents.flatMap((event) =>
+    nestedRows(event, "tower_material_event_people"),
+  );
+  const materialPlant = materialEvents.flatMap((event) =>
+    nestedRows(event, "tower_material_event_plant"),
+  );
+  const materialPersonHours = materialPeople.reduce((sum, row) => {
+    return sum + (durationHours(row.started_at, row.finished_at) ?? 0);
+  }, 0);
+  const materialPlantHours = materialPlant.reduce((sum, row) => {
+    return sum + (durationHours(row.started_at, row.finished_at) ?? 0);
+  }, 0);
+
+  const materialImpactRows = materialEvents
+    .map((event) => {
+      const label = titleCase(event.event_type) || "Material Event";
+      const affected = [
+        event.affected_section,
+        event.affected_activity,
+      ].filter(Boolean).join(" · ");
+      const effect = event.current_effect
+        ? ` — ${titleCase(event.current_effect)}`
+        : "";
+      return `<li style="margin:5px 0"><strong>${escapeHtml(label)}</strong>${affected ? `: ${escapeHtml(affected)}` : ""}${escapeHtml(effect)}</li>`;
+    })
+    .join("");
+
+  const delayRows = delays
+    .map(
+      (row) =>
+        `<li style="margin:5px 0"><strong>${escapeHtml(titleCase(row.delay_type) || "Delay")}</strong> — ${num(row.delay_hours).toFixed(2)} h${row.delay_reason ? ` — ${escapeHtml(row.delay_reason)}` : ""}</li>`,
+    )
+    .join("");
+
+  const plantUsed = plant.filter(
+    (row) =>
+      String(row.plant_name ?? row.asset_number ?? "").trim() &&
+      num(row.total_hours) > 0,
+  );
+
+  return `
+    <div style="margin:22px 0;border:1px solid #dbe3ec;border-radius:12px;overflow:hidden">
+      <div style="background:#0f172a;color:#ffffff;padding:11px 14px;font-weight:700">
+        Daily operational summary
+      </div>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b;width:180px">Workforce</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel · ${num(docket.raw_manhours).toFixed(2)} raw MH</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Plant recorded</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${plant.length}${plantUsed.length ? ` · ${plantUsed.length} with recorded operating hours` : ""}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Delays</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${delays.length ? `${delayHours.toFixed(2)} recorded delay hours` : "No delays recorded"}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Materials</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${materialEvents.length ? `${materialEvents.length} material event${materialEvents.length === 1 ? "" : "s"}` : "No structured material events recorded"}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;color:#64748b">Safety</td>
+          <td style="padding:10px 14px;color:#0f172a;font-weight:600">${docket.incident_occurred ? `Incident/event recorded${docket.incident_type ? ` — ${escapeHtml(docket.incident_type)}` : ""}` : "No incident recorded"}</td>
+        </tr>
+      </table>
+    </div>
+
+    ${
+      delays.length
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px">
+             <div style="font-weight:700;color:#92400e;margin-bottom:7px">Delays / disruptions</div>
+             <ul style="margin:0;padding-left:20px;color:#334155">${delayRows}</ul>
+           </div>`
+        : ""
+    }
+
+    ${
+      materialEvents.length
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px">
+             <div style="font-weight:700;color:#0f172a;margin-bottom:7px">Material impact</div>
+             <ul style="margin:0 0 10px;padding-left:20px;color:#334155">${materialImpactRows}</ul>
+             ${
+               materialPeople.length
+                 ? `<div style="margin-top:8px;color:#334155"><strong>Search / verification:</strong> ${materialPeople.length} personnel · approximately ${materialPersonHours.toFixed(2)} person-hours.</div>`
+                 : ""
+             }
+             ${
+               materialPlant.length
+                 ? `<div style="margin-top:6px;color:#334155"><strong>Plant / equipment affected:</strong> approximately ${materialPlantHours.toFixed(2)} hours.</div>`
+                 : ""
+             }
+           </div>`
+        : ""
+    }
+  `;
+}
 
 async function createRouteSupabase() {
   const cookieStore = await cookies();
@@ -226,7 +390,13 @@ export async function POST(
         bc_rep_name,
         bc_signature_data_url,
         bc_signed_at,
-        approval_revision
+        approval_revision,
+        raw_manhours,
+        weather,
+        incident_occurred,
+        incident_type,
+        delays_comments,
+        progress_model
       `)
       .eq("id", docketId)
       .single();
@@ -410,7 +580,14 @@ export async function POST(
       },
     });
 
-    const [{ data: projectData }, { data: towerData }] = await Promise.all([
+    const [
+      { data: projectData },
+      { data: towerData },
+      labourResult,
+      plantResult,
+      delayResult,
+      materialResult,
+    ] = await Promise.all([
       service
         .from("projects")
         .select("id, name, project_number")
@@ -421,6 +598,30 @@ export async function POST(
         .select("id, name, extra_data")
         .eq("id", docket.tower_id)
         .maybeSingle(),
+      service
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docket.id)
+        .order("worker_name"),
+      service
+        .from("tower_docket_plant")
+        .select("*")
+        .eq("docket_id", docket.id),
+      service
+        .from("tower_docket_delays")
+        .select("*")
+        .eq("docket_id", docket.id)
+        .order("created_at"),
+      service
+        .from("tower_material_events")
+        .select(`
+          *,
+          tower_material_event_items(*),
+          tower_material_event_people(*),
+          tower_material_event_plant(*)
+        `)
+        .eq("docket_id", docket.id)
+        .order("occurred_at"),
     ]);
 
     const project = (projectData as ProjectRow | null) || null;
@@ -446,6 +647,14 @@ export async function POST(
       const recipientNames = reviewers
         .map((reviewer) => reviewer.name)
         .filter(Boolean);
+
+      const operationalSummary = buildOperationalSummaryHtml({
+        docket,
+        labour: (labourResult.data ?? []) as Array<Record<string, unknown>>,
+        plant: (plantResult.data ?? []) as Array<Record<string, unknown>>,
+        delays: (delayResult.data ?? []) as Array<Record<string, unknown>>,
+        materialEvents: (materialResult.data ?? []) as Array<Record<string, unknown>>,
+      });
 
       const html = docketEmailShell(
         "Daily Docket awaiting BC approval",
@@ -478,6 +687,8 @@ export async function POST(
               <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.bc_rep_name || "—"}</td>
             </tr>
           </table>
+
+          ${operationalSummary}
 
           <p style="margin-top:20px;">
             Review the Daily Docket in TTTracker and either approve it for client review or request changes.

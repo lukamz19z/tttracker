@@ -9,6 +9,7 @@ import {
 } from "@/lib/dockets/server";
 import { isConfiguredBcReviewer } from "@/lib/dockets/reviewers";
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
+import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
   docketEmailShell,
   sendDailyDocketEmail,
@@ -86,6 +87,166 @@ function escapeHtml(value: unknown) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function num(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function titleCase(value: unknown) {
+  return String(value ?? "")
+    .replace(/_/g, " ")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function durationHours(start: unknown, finish: unknown) {
+  const a = Date.parse(String(start ?? ""));
+  const b = Date.parse(String(finish ?? ""));
+  return Number.isFinite(a) && Number.isFinite(b) && b >= a
+    ? (b - a) / 3_600_000
+    : null;
+}
+
+function buildClientOperationalSummaryHtml({
+  docket,
+  labour,
+  plant,
+  delays,
+  materialEvents,
+}: {
+  docket: DocketRow;
+  labour: Array<Record<string, unknown>>;
+  plant: Array<Record<string, unknown>>;
+  delays: Array<Record<string, unknown>>;
+  materialEvents: Array<Record<string, unknown>>;
+}) {
+  const delayHours = delays.reduce((sum, row) => sum + num(row.delay_hours), 0);
+  const nestedRows = (
+    event: Record<string, unknown>,
+    key: string,
+  ): Array<Record<string, unknown>> => {
+    const value = event[key];
+
+    if (!Array.isArray(value)) return [];
+
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        Boolean(row) &&
+        typeof row === "object" &&
+        !Array.isArray(row),
+    );
+  };
+
+  const people = materialEvents.flatMap((event) =>
+    nestedRows(event, "tower_material_event_people"),
+  );
+  const affectedPlant = materialEvents.flatMap((event) =>
+    nestedRows(event, "tower_material_event_plant"),
+  );
+  const personHours = people.reduce(
+    (sum, row) => sum + (durationHours(row.started_at, row.finished_at) ?? 0),
+    0,
+  );
+  const plantHours = affectedPlant.reduce(
+    (sum, row) => sum + (durationHours(row.started_at, row.finished_at) ?? 0),
+    0,
+  );
+
+  const peopleRows = people
+    .map((row) => {
+      const hours = durationHours(row.started_at, row.finished_at);
+      const start = String(row.started_at ?? "").slice(11, 16);
+      const finish = String(row.finished_at ?? "").slice(11, 16);
+      return `<li style="margin:5px 0">${escapeHtml(row.employee_name || "Personnel")}${start || finish ? `: ${escapeHtml(start || "—")}–${escapeHtml(finish || "—")}` : ""}${hours !== null ? ` (${hours.toFixed(2)} h)` : ""}</li>`;
+    })
+    .join("");
+
+  const plantRows = affectedPlant
+    .map((row) => {
+      const hours = durationHours(row.started_at, row.finished_at);
+      return `<li style="margin:5px 0">${escapeHtml(row.plant_name || "Plant / equipment")}${hours !== null ? ` — ${hours.toFixed(2)} h` : ""}</li>`;
+    })
+    .join("");
+
+  const materialBlocks = materialEvents
+    .map((event) => {
+      const affected = [event.affected_section, event.affected_activity]
+        .filter(Boolean)
+        .join(" · ");
+      const mitigation = Array.isArray(event.mitigation_actions)
+        ? event.mitigation_actions.map(titleCase).join("; ")
+        : "";
+      return `
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0">
+          <div style="font-weight:700;color:#0f172a">${escapeHtml(titleCase(event.event_type) || "Material Event")}${affected ? ` — ${escapeHtml(affected)}` : ""}</div>
+          ${event.work_outcome ? `<div style="margin-top:5px;color:#334155"><strong>Work outcome:</strong> ${escapeHtml(titleCase(event.work_outcome))}</div>` : ""}
+          ${event.current_effect ? `<div style="margin-top:5px;color:#334155"><strong>Remaining effect:</strong> ${escapeHtml(titleCase(event.current_effect))}</div>` : ""}
+          ${mitigation ? `<div style="margin-top:5px;color:#334155"><strong>Mitigation:</strong> ${escapeHtml(mitigation)}</div>` : ""}
+          ${event.notes ? `<div style="margin-top:5px;color:#334155"><strong>Notes:</strong> ${escapeHtml(event.notes)}</div>` : ""}
+        </div>`;
+    })
+    .join("");
+
+  const delayRows = delays
+    .map(
+      (row) =>
+        `<li style="margin:5px 0"><strong>${escapeHtml(titleCase(row.delay_type) || "Delay")}</strong> — ${num(row.delay_hours).toFixed(2)} h${row.delay_reason ? ` — ${escapeHtml(row.delay_reason)}` : ""}</li>`,
+    )
+    .join("");
+
+  return `
+    <div style="margin:22px 0;border:1px solid #cbd5e1;border-radius:12px;overflow:hidden">
+      <div style="background:#0f172a;color:#ffffff;padding:11px 14px;font-weight:700">
+        BC daily site update
+      </div>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b;width:180px">Workforce</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel · ${num(docket.raw_manhours).toFixed(2)} raw MH</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Plant / equipment</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${plant.length} items recorded</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Delays / disruptions</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${delays.length ? `${delayHours.toFixed(2)} recorded delay hours` : "No delays recorded"}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Materials</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${materialEvents.length ? `${materialEvents.length} material event${materialEvents.length === 1 ? "" : "s"} recorded` : "No structured material events recorded"}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;color:#64748b">Safety</td>
+          <td style="padding:10px 14px;color:#0f172a;font-weight:600">${docket.incident_occurred ? `Incident/event recorded${docket.incident_type ? ` — ${escapeHtml(docket.incident_type)}` : ""}` : "No incident recorded"}</td>
+        </tr>
+      </table>
+    </div>
+
+    ${
+      delays.length
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px">
+             <div style="font-weight:700;color:#92400e;margin-bottom:7px">Delays / disruptions</div>
+             <ul style="margin:0;padding-left:20px;color:#334155">${delayRows}</ul>
+           </div>`
+        : ""
+    }
+
+    ${
+      materialEvents.length
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px">
+             <div style="font-weight:700;color:#0f172a">Material search / verification and impact</div>
+             ${peopleRows ? `<div style="margin-top:10px;color:#334155"><strong>Search undertaken by:</strong><ul style="margin:6px 0 0;padding-left:20px">${peopleRows}</ul></div>` : ""}
+             ${plantRows ? `<div style="margin-top:10px;color:#334155"><strong>Plant / equipment affected:</strong><ul style="margin:6px 0 0;padding-left:20px">${plantRows}</ul></div>` : ""}
+             ${people.length ? `<div style="margin-top:10px;color:#334155"><strong>Personnel impact:</strong> ${people.length} personnel spent approximately ${personHours.toFixed(2)} person-hours searching for or verifying material.</div>` : ""}
+             ${affectedPlant.length ? `<div style="margin-top:6px;color:#334155"><strong>Plant impact:</strong> approximately ${plantHours.toFixed(2)} affected hours recorded.</div>` : ""}
+             ${materialBlocks}
+           </div>`
+        : ""
+    }
+  `;
 }
 
 function makeClientToken() {
@@ -700,7 +861,10 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const bundle = await loadPdfBundle(admin, docket);
+    const [bundle, branding] = await Promise.all([
+      loadPdfBundle(admin, docket),
+      loadSystemPdfBranding(),
+    ]);
     const project = bundle.project;
 
     await admin
@@ -730,6 +894,10 @@ export async function POST(request: Request, context: RouteContext) {
       delays: bundle.delays,
       progress: bundle.progress,
       materialEvents: bundle.materialEvents,
+      branding: {
+        logoDataUrl: branding.logoDataUrl,
+        companyName: branding.companyName,
+      },
     });
 
     const published = await publishDraftPdf({
@@ -934,6 +1102,14 @@ export async function POST(request: Request, context: RouteContext) {
 
     const clientEmailFailures: string[] = [];
 
+    const clientOperationalSummary = buildClientOperationalSummaryHtml({
+      docket: docketForPdf,
+      labour: bundle.labour as Array<Record<string, unknown>>,
+      plant: bundle.plant as Array<Record<string, unknown>>,
+      delays: bundle.delays as Array<Record<string, unknown>>,
+      materialEvents: bundle.materialEvents as Array<Record<string, unknown>>,
+    });
+
     for (const { contact, token } of approvalLinks) {
       const approvalUrl =
         `${origin}/docket-approval/${encodeURIComponent(token)}`;
@@ -947,7 +1123,8 @@ export async function POST(request: Request, context: RouteContext) {
           html: docketEmailShell(
             "Daily Docket approval required",
             `
-              <p>A Daily Docket is ready for your review and approval.</p>
+              <p>Good afternoon,</p>
+              <p>Please see below BC’s daily site update for your review and approval.</p>
 
               <table role="presentation" style="width:100%;border-collapse:collapse;margin:20px 0">
                 <tr>
@@ -974,6 +1151,8 @@ export async function POST(request: Request, context: RouteContext) {
                   <td style="padding:7px 0">${escapeHtml(reviewerName || reviewerEmail || "BC Reviewer")}</td>
                 </tr>
               </table>
+
+              ${clientOperationalSummary}
 
               <p style="margin:24px 0 8px">
                 <a

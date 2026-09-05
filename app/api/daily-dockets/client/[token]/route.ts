@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { createDocketAdminSupabase } from "@/lib/dockets/server";
 import { getBcReviewerRecipients } from "@/lib/dockets/reviewers";
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
+import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
   docketEmailShell,
   sendDailyDocketEmail,
@@ -863,6 +864,8 @@ export async function POST(request: Request, context: RouteContext) {
       })
       .eq("id", docket.id);
 
+    const branding = await loadSystemPdfBranding();
+
     const finalPdf = generateDailyDocketPdf({
       project,
       tower,
@@ -872,6 +875,10 @@ export async function POST(request: Request, context: RouteContext) {
       delays: bundle.delays,
       progress: bundle.progress,
       materialEvents: bundle.materialEvents,
+      branding: {
+        logoDataUrl: branding.logoDataUrl,
+        companyName: branding.companyName,
+      },
     });
 
     const published = await publishFinalPdf({
