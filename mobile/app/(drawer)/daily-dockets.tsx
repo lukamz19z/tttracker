@@ -5,6 +5,7 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -28,27 +29,97 @@ type DelayMode = "labour_only" | "labour_and_plant";
 type MaterialEventType = "missing" | "found_received" | "taken_from_another_tower" | "sent_to_another_tower" | "excess" | "damaged_incorrect";
 type MaterialWorkOutcome = "" | "stopped_work" | "slowed_down" | "changed_sequence" | "minor_impact";
 
-type ProfileRecord = { projectId?: string | null; projectName?: string | null; projectNumber?: string | null; crew?: string | null };
-type Tower = { id: string; project_id: string; name: string | null; tower_number?: string | null; structure_number?: string | null; line: string | null; status: string | null; progress: number | null; extra_data: Record<string, unknown> | null };
+type ProfileRecord = {
+  projectId?: string | null;
+  projectName?: string | null;
+  projectNumber?: string | null;
+  crew?: string | null;
+  role?: string | null;
+  full_name?: string | null;
+  email?: string | null;
+};
+type Tower = {
+  id: string;
+  project_id: string;
+  name: string | null;
+  line: string | null;
+  status: string | null;
+  progress: number | null;
+  extra_data: Record<string, unknown> | null;
+};
 type Crew = { id: string; crew_number: string | null; crew_name: string | null; leading_hand: string | null; active: boolean | null };
 type Employee = { id: string; full_name: string; role: string | null; crew_id: string | null; active: boolean | null };
 
 type Docket = {
-  id: string; project_id: string; tower_id: string; docket_date: string | null; crew: string | null; leading_hand: string | null;
-  weather: string | null; rate_type: string | null; assembly_percent: number | null; erection_percent: number | null;
-  lunch_break_minutes: number | null; travel_in_minutes: number | null; travel_out_minutes: number | null;
-  mobilisation_hours: number | null; mobilisation_notes: string | null; missing_items_bolts: string | null; delays_comments: string | null;
-  raw_manhours: number | null; production_manhours: number | null; incident_occurred: boolean | null; incident_type: string | null;
-  incident_notes: string | null; bc_rep_name: string | null; client_rep_name: string | null; signed_date: string | null; status?: string | null;
+  id: string;
+  project_id: string;
+  tower_id: string;
+  docket_date: string | null;
+  crew: string | null;
+  leading_hand: string | null;
+  weather: string | null;
+  rate_type: string | null;
+  progress_model: string | null;
+  approval_status: string | null;
+  approval_revision?: number | null;
+  assembly_percent: number | null;
+  erection_percent: number | null;
+  lunch_break_minutes: number | null;
+  travel_in_minutes: number | null;
+  travel_out_minutes: number | null;
+  mobilisation_hours: number | null;
+  mobilisation_notes: string | null;
+  missing_items_bolts: string | null;
+  delays_comments: string | null;
+  raw_manhours: number | null;
+  production_manhours: number | null;
+  incident_occurred: boolean | null;
+  incident_type: string | null;
+  incident_notes: string | null;
+  bc_rep_name: string | null;
+  bc_submitted_by?: string | null;
+  bc_signature_data_url?: string | null;
+  bc_signed_at?: string | null;
+  client_rep_name: string | null;
+  signed_date: string | null;
 };
 
 type LabourDb = { docket_id: string; worker_name: string | null; time_in: string | null; time_out: string | null; total_hours: number | null; lunch_minutes: number | null; travel_in_minutes: number | null; travel_out_minutes: number | null; mobilisation_hours: number | null; delay_hours: number | null; production_hours: number | null };
-type ProgressDb = { docket_id: string; section?: string | null; section_label: string | null; assembled_qty: number | null; erected_qty: number | null };
+type ProgressDb = {
+  docket_id: string;
+  progress_model?: string | null;
+  section?: string | null;
+  section_code?: string | null;
+  section_label: string | null;
+  assembled_qty: number | null;
+  erected_qty: number | null;
+  assembly_today?: number | null;
+  assembly_overall?: number | null;
+  erection_today?: number | null;
+  erection_overall?: number | null;
+  assembly_weight?: number | null;
+  erection_weight?: number | null;
+};
 type DelayDb = { docket_id: string; delay_type: string | null; delay_reason: string | null; delay_hours: number | null; applies_to: string | null; worker_names: string[] | null; delay_applies_mode?: string | null; plant_names?: string[] | null };
 type PlantDb = { docket_id: string; plant_name: string | null; plant_type: string | null; asset_number: string | null; operator_name?: string | null; time_in: string | null; time_out: string | null; total_hours: number | null; notes: string | null };
 
 type MaterialCatalogItem = { source_table: string; source_record_id: string; tower_id: string; item_reference: string; item_description: string; unit: string };
-type MaterialEventItemDraft = { ui_id: string; material_kind: "registered" | "manual"; manual_category: string; search_query: string; search_loading: boolean; search_results: MaterialCatalogItem[]; source_table: string; source_record_id: string; item_reference: string; item_description: string; quantity: string; unit: string; notes: string };
+type MaterialEventItemDraft = {
+  ui_id: string;
+  material_kind: "registered" | "manual" | "manual_bolt";
+  manual_category: string;
+  bolt_size: string;
+  search_query: string;
+  search_loading: boolean;
+  search_results: MaterialCatalogItem[];
+  source_table: string;
+  source_record_id: string;
+  item_reference: string;
+  item_description: string;
+  quantity: string;
+  unit: string;
+  notes: string;
+};
 type MaterialPersonDraft = { ui_id: string; employee_id: string; employee_name: string; employee_role: string; started_at: string; finished_at: string };
 type MaterialPlantDraft = { ui_id: string; plant_asset_id: string; plant_name: string; asset_number: string; started_at: string; finished_at: string };
 type MaterialEventDraft = {
@@ -67,19 +138,43 @@ type Bundle = { docket: Docket; labour: LabourDb[]; progress: ProgressDb[]; dela
 
 type FormState = {
   mode: DocketMode; docketId: string | null; towerId: string; docketDate: string; selectedCrewId: string; crewName: string; leadingHand: string;
-  weather: string; rateType: RateType; status: string; lunchBreakMinutes: string; travelInMinutes: string; travelOutMinutes: string; mobilisationMinutes: string;
+  weather: string; rateType: RateType; progressModel: "legacy" | "section_v2"; approvalStatus: string; lunchBreakMinutes: string; travelInMinutes: string; travelOutMinutes: string; mobilisationMinutes: string;
   delaysComments: string; incidentOccurred: boolean; incidentType: string; incidentNotes: string; bcRepName: string; clientRepName: string; signedDate: string;
   hasBodyExtension: boolean; labourRows: LabourRow[]; progressRows: ProgressRow[]; delayRows: DelayRow[]; plantRows: PlantRow[];
   materialEvents: MaterialEventDraft[]; mobilisation: MobilisationDraft;
 };
 
-const DEFAULT_PROGRESS: ProgressRow[] = [
-  { section_label: "Legs", assembled_qty: "", erected_qty: "" },
-  { section_label: "Body Extensions", assembled_qty: "", erected_qty: "" },
-  { section_label: "Common Body", assembled_qty: "", erected_qty: "" },
-  { section_label: "Superstructure", assembled_qty: "", erected_qty: "" },
-  { section_label: "Crossarms", assembled_qty: "", erected_qty: "" },
+const SECTION_WEIGHTS: Record<string, number> = {
+  LE: 20,
+  BE: 15,
+  CB: 15,
+  BSS: 10,
+  MSS: 10,
+  TSS: 10,
+  BX: 5,
+  MX: 5,
+  TX: 5,
+  EP: 5,
+};
+
+const SECTION_V2: { code: string; label: string }[] = [
+  { code: "LE", label: "Legs" },
+  { code: "BE", label: "Body Extension" },
+  { code: "CB", label: "Common Body" },
+  { code: "BSS", label: "Bottom Superstructure" },
+  { code: "MSS", label: "Middle Superstructure" },
+  { code: "TSS", label: "Top Superstructure" },
+  { code: "BX", label: "Bottom Crossarms" },
+  { code: "MX", label: "Middle Crossarms" },
+  { code: "TX", label: "Top Crossarms" },
+  { code: "EP", label: "Earth Peak" },
 ];
+
+const DEFAULT_PROGRESS: ProgressRow[] = SECTION_V2.map((row) => ({
+  section_label: row.label,
+  assembled_qty: "",
+  erected_qty: "",
+}));
 
 const DELAY_OPTIONS = [
   { value: "weather", label: "Weather" }, { value: "lightning", label: "Lightning" }, { value: "toolbox", label: "Toolbox" },
@@ -138,9 +233,40 @@ function calculateHours(timeIn: string, timeOut: string): string {
 function durationHours(a:string,b:string) { return toNumber(calculateHours(a,b)); }
 
 function crewLabel(c: Crew) { return [c.crew_number,c.crew_name].map(clean).filter(Boolean).join(" - "); }
-function towerLabel(t: Tower) { const n = clean(t.tower_number)||clean(t.structure_number)||clean(t.name)||"Unnamed Tower"; return t.line ? `${n} · ${t.line}` : n; }
-function isSigned(d: Docket) { return Boolean(clean(d.client_rep_name) && clean(d.signed_date)); }
-function docketStatus(d: Docket) { if (isSigned(d)) return "Closed"; if (clean(d.status)) return clean(d.status); if (clean(d.bc_rep_name)) return "BC Signed"; return "Draft"; }
+function towerLabel(t: Tower) {
+  const extra = t.extra_data ?? {};
+  const n =
+    clean(t.name) ||
+    clean(extra.tower_number) ||
+    clean(extra.structure_number) ||
+    clean(extra.tower_no) ||
+    "Unnamed Tower";
+  return t.line ? `${n} · ${t.line}` : n;
+}
+function isSigned(d: Docket) {
+  return Boolean(clean(d.client_rep_name) && clean(d.signed_date));
+}
+function approvalLabel(statusValue: string | null | undefined) {
+  const status = clean(statusValue);
+  if (status === "final" || status === "legacy_final") return "Approved";
+  if (status === "submitted_bc") return "Pending BC Approval";
+  if (status === "client_pending") return "Pending Client Approval";
+  if (status === "bc_changes_requested" || status === "client_changes_requested") return "Changes Required";
+  return "In Progress";
+}
+function docketStatus(d: Docket) {
+  if (isSigned(d)) return "Approved";
+  return approvalLabel(d.approval_status);
+}
+function normaliseRole(value: string | null | undefined) {
+  const role = clean(value).toLowerCase();
+  if (role === "site_admin" || role === "administrator") return "admin";
+  if (role === "safety" || role === "safety_manager") return "hseq";
+  if (role === "assets" || role === "mechanic") return "asset_manager";
+  if (role === "commercial_manager") return "commercial";
+  if (role === "leading_hand" || role === "field") return "crew";
+  return role;
+}
 function inferBodyExtension(t: Tower | null) {
   const extra = t?.extra_data ?? {};
   for (const [k,v] of Object.entries(extra)) {
@@ -154,10 +280,10 @@ function inferBodyExtension(t: Tower | null) {
 function blankLabour(d?:{lunch?:string;travelIn?:string;travelOut?:string;mobilisation?:string}):LabourRow { return {worker_name:"",time_in:"",time_out:"",total_hours:"",lunch_minutes:d?.lunch??"",travel_in_minutes:d?.travelIn??"",travel_out_minutes:d?.travelOut??"",mobilisation_minutes:d?.mobilisation??""}; }
 function blankPlant():PlantRow { return {plant_name:"",plant_type:"",asset_id:"",operator_name:"",time_in:"",time_out:"",total_hours:"",notes:""}; }
 function blankDelay():DelayRow { return {ui_id:uid("delay"),delay_type:"weather",delay_reason:"",delay_hours:"",applies_to:"entire_crew",worker_names:[],delay_mode:"labour_only",plant_names:[]}; }
-function blankMaterialItem():MaterialEventItemDraft { return {ui_id:uid("item"),material_kind:"registered",manual_category:"",search_query:"",search_loading:false,search_results:[],source_table:"",source_record_id:"",item_reference:"",item_description:"",quantity:"1",unit:"ea",notes:""}; }
+function blankMaterialItem():MaterialEventItemDraft { return {ui_id:uid("item"),material_kind:"registered",manual_category:"",bolt_size:"",search_query:"",search_loading:false,search_results:[],source_table:"",source_record_id:"",item_reference:"",item_description:"",quantity:"1",unit:"ea",notes:""}; }
 function blankMaterialEvent(type:MaterialEventType="missing"):MaterialEventDraft { return {ui_id:uid("event"),event_type:type,source_tower_id:"",destination_tower_id:"",destination_location:"",affected_work:false,work_outcome:"",affected_activity:"",affected_section:"",impact_start_time:"",impact_finish_time:"",impact_ongoing:false,current_effect:"",mitigation_actions:[],notes:"",items:[blankMaterialItem()],people:[],plant:[]}; }
 function blankMobilisation():MobilisationDraft { return {enabled:false,from_tower_id:"",to_tower_id:"",status:"planning",percent_complete:"0",started_date:"",target_move_date:"",completed_date:"",notes:""}; }
-function blankForm(towerId:string):FormState { return {mode:"create",docketId:null,towerId,docketDate:today(),selectedCrewId:"",crewName:"",leadingHand:"",weather:"",rateType:"tonnage_rate",status:"Draft",lunchBreakMinutes:"30",travelInMinutes:"",travelOutMinutes:"",mobilisationMinutes:"",delaysComments:"",incidentOccurred:false,incidentType:"",incidentNotes:"",bcRepName:"",clientRepName:"",signedDate:"",hasBodyExtension:true,labourRows:[blankLabour({lunch:"30"})],progressRows:DEFAULT_PROGRESS.map(r=>({...r})),delayRows:[],plantRows:[],materialEvents:[],mobilisation:blankMobilisation()}; }
+function blankForm(towerId:string):FormState { return {mode:"create",docketId:null,towerId,docketDate:today(),selectedCrewId:"",crewName:"",leadingHand:"",weather:"",rateType:"tonnage_rate",progressModel:"section_v2",approvalStatus:"draft",lunchBreakMinutes:"30",travelInMinutes:"",travelOutMinutes:"",mobilisationMinutes:"",delaysComments:"",incidentOccurred:false,incidentType:"",incidentNotes:"",bcRepName:"",clientRepName:"",signedDate:"",hasBodyExtension:true,labourRows:[blankLabour({lunch:"30"})],progressRows:DEFAULT_PROGRESS.map(r=>({...r})),delayRows:[],plantRows:[],materialEvents:[],mobilisation:blankMobilisation()}; }
 
 function delayForWorker(row:LabourRow, delays:DelayRow[]) {
   const worker = normaliseName(row.worker_name); if (!worker) return 0;
@@ -165,11 +291,56 @@ function delayForWorker(row:LabourRow, delays:DelayRow[]) {
 }
 function productionHours(row:LabourRow, delays:DelayRow[]) { return Math.max(0,toNumber(row.total_hours)-toNumber(row.lunch_minutes)/60-(toNumber(row.travel_in_minutes)+toNumber(row.travel_out_minutes))/60-toNumber(row.mobilisation_minutes)/60-delayForWorker(row,delays)).toFixed(2); }
 function progressTotals(form:FormState) {
-  const rows=form.progressRows.filter(r=>form.hasBodyExtension||r.section_label.toLowerCase()!=="body extensions");
-  if (!rows.length) return {assembly:0,erection:0,overall:0};
-  const assembly=Math.round(rows.reduce((s,r)=>s+Math.max(0,Math.min(100,toNumber(r.assembled_qty))),0)/rows.length);
-  const erection=Math.round(rows.reduce((s,r)=>s+Math.max(0,Math.min(100,toNumber(r.erected_qty))),0)/rows.length);
-  return {assembly,erection,overall:Math.round(assembly*.5+erection*.5)};
+  const rows = form.progressRows.filter(
+    (row) =>
+      form.hasBodyExtension ||
+      !row.section_label.toLowerCase().includes("body extension")
+  );
+
+  if (!rows.length) return { assembly: 0, erection: 0, overall: 0 };
+
+  if (form.progressModel === "legacy") {
+    const assembly = Math.round(
+      rows.reduce(
+        (sum, row) => sum + Math.max(0, Math.min(100, toNumber(row.assembled_qty))),
+        0
+      ) / rows.length
+    );
+    const erection = Math.round(
+      rows.reduce(
+        (sum, row) => sum + Math.max(0, Math.min(100, toNumber(row.erected_qty))),
+        0
+      ) / rows.length
+    );
+    return { assembly, erection, overall: Math.round(assembly * 0.5 + erection * 0.5) };
+  }
+
+  const activeDefs = SECTION_V2.filter(
+    (def) => form.hasBodyExtension || def.code !== "BE"
+  );
+  const denominator = activeDefs.reduce(
+    (sum, def) => sum + (SECTION_WEIGHTS[def.code] ?? 0),
+    0
+  );
+
+  const weighted = (key: "assembled_qty" | "erected_qty") =>
+    denominator <= 0
+      ? 0
+      : activeDefs.reduce((sum, def) => {
+          const row = form.progressRows.find(
+            (candidate) => candidate.section_label === def.label
+          );
+          const value = Math.max(0, Math.min(100, toNumber(row?.[key])));
+          return sum + value * (SECTION_WEIGHTS[def.code] ?? 0);
+        }, 0) / denominator;
+
+  const assembly = Math.round(weighted("assembled_qty") * 100) / 100;
+  const erection = Math.round(weighted("erected_qty") * 100) / 100;
+  return {
+    assembly,
+    erection,
+    overall: Math.round((assembly * 0.5 + erection * 0.5) * 100) / 100,
+  };
 }
 function plantDisplay(r:PlantRow) { return [r.plant_name,r.asset_id,r.plant_type].map(clean).filter(Boolean).join(" · ") || "Plant / Vehicle"; }
 function buildMobilisationLine(m:MobilisationDraft) { if (!m.enabled) return ""; return ["MOBILISATION",`from=${m.from_tower_id}`,`to=${m.to_tower_id}`,`status=${m.status}`,`progress=${Math.max(0,Math.min(100,toNumber(m.percent_complete)))}`,`started=${m.started_date}`,`target=${m.target_move_date}`,`completed=${m.completed_date}`,`notes=${m.notes.replace(/\|/g,"/").replace(/\n/g," ")}`].join("|"); }
@@ -190,17 +361,36 @@ export default function DailyDocketScreen() {
   const [bundles,setBundles]=useState<Bundle[]>([]), [selectedTowerId,setSelectedTowerId]=useState(""), [towerPickerOpen,setTowerPickerOpen]=useState(false);
   const [towerSearch,setTowerSearch]=useState(""), [search,setSearch]=useState(""), [form,setForm]=useState<FormState|null>(null);
   const [loading,setLoading]=useState(true), [refreshing,setRefreshing]=useState(false), [saving,setSaving]=useState(false), [prefilling,setPrefilling]=useState(false);
+  const [currentUserId,setCurrentUserId]=useState("");
+  const [reviewerRoles,setReviewerRoles]=useState<string[]>([]);
+  const [pendingReviewDocketId,setPendingReviewDocketId]=useState("");
 
   const loadData=useCallback(async(showLoader=true)=>{
     if(!projectId){setLoading(false);return;} if(showLoader)setLoading(true);
     try{
-      const [towerRes,crewRes,employeeRes,docketRes]=await Promise.all([
-        supabase.from("towers").select("*").eq("project_id",projectId).order("name"),
+      const [towerRes,crewRes,employeeRes,docketRes,reviewerRoleRes]=await Promise.all([
+        supabase.from("towers").select("id,project_id,name,line,status,progress,extra_data").eq("project_id",projectId).order("name"),
         supabase.from("crews").select("id,crew_number,crew_name,leading_hand,active").order("crew_number"),
         supabase.from("employees").select("id,full_name,role,crew_id,active").order("full_name"),
-        supabase.from("tower_daily_dockets").select("*").eq("project_id",projectId).order("docket_date",{ascending:false}),
+        supabase
+          .from("tower_daily_dockets")
+          .select("id,project_id,tower_id,docket_date,crew,leading_hand,weather,rate_type,progress_model,approval_status,approval_revision,assembly_percent,erection_percent,lunch_break_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,mobilisation_notes,missing_items_bolts,delays_comments,raw_manhours,production_manhours,incident_occurred,incident_type,incident_notes,bc_rep_name,bc_submitted_by,bc_signature_data_url,bc_signed_at,client_rep_name,signed_date")
+          .eq("project_id",projectId)
+          .order("docket_date",{ascending:false}),
+        supabase
+          .from("project_docket_approval_roles")
+          .select("role,receives_bc_review")
+          .eq("project_id",projectId)
+          .eq("receives_bc_review",true),
       ]);
-      if(towerRes.error)throw towerRes.error;if(docketRes.error)throw docketRes.error;
+      if(towerRes.error)throw towerRes.error;
+      if(docketRes.error)throw docketRes.error;
+      if(reviewerRoleRes.error)throw reviewerRoleRes.error;
+      setReviewerRoles(
+        (reviewerRoleRes.data??[])
+          .map((row:any)=>normaliseRole(clean(row.role)))
+          .filter(Boolean)
+      );
       const dockets=(docketRes.data??[]) as Docket[], ids=dockets.map(d=>d.id);
       let labour:LabourDb[]=[],progress:ProgressDb[]=[],delays:DelayDb[]=[],plant:PlantDb[]=[],materialEvents:any[]=[];
       if(ids.length){
@@ -222,10 +412,45 @@ export default function DailyDocketScreen() {
 
   useEffect(()=>{void loadData();},[loadData]);
 
+  useEffect(()=>{
+    let active=true;
+    void supabase.auth.getUser().then(({data})=>{
+      if(active)setCurrentUserId(clean(data.user?.id));
+    });
+    return()=>{active=false;};
+  },[]);
+
+  useEffect(()=>{
+    const resolve=(url:string|null)=>{
+      if(!url)return;
+      const pathMatch=url.match(/\/dockets\/([^/?#]+)\/review(?:[/?#]|$)/i);
+      if(pathMatch?.[1]){
+        setPendingReviewDocketId(decodeURIComponent(pathMatch[1]));
+        return;
+      }
+      const queryMatch=url.match(/[?&]docketId=([^&#]+)/i);
+      if(queryMatch?.[1])setPendingReviewDocketId(decodeURIComponent(queryMatch[1]));
+    };
+    void Linking.getInitialURL().then(resolve);
+    const sub=Linking.addEventListener("url",event=>resolve(event.url));
+    return()=>sub.remove();
+  },[]);
+
   const selectedTower=towers.find(t=>t.id===selectedTowerId)??null;
   const visibleTowers=useMemo(()=>{const q=towerSearch.trim().toLowerCase();return towers.filter(t=>[towerLabel(t),t.status,t.progress,t.line].map(clean).join(" ").toLowerCase().includes(q));},[towers,towerSearch]);
   const visibleBundles=useMemo(()=>{const q=search.trim().toLowerCase();return bundles.filter(b=>b.docket.tower_id===selectedTowerId&&[b.docket.docket_date,b.docket.crew,b.docket.leading_hand,b.docket.weather,docketStatus(b.docket),...b.materialEvents.flatMap((e:any)=>[e.event_type,e.affected_section,e.current_effect,...(e.items||[]).map((i:any)=>i.item_reference)])].map(clean).join(" ").toLowerCase().includes(q));},[bundles,selectedTowerId,search]);
   const summary=useMemo(()=>visibleBundles.reduce((a,b)=>{a.count++;a.raw+=b.docket.raw_manhours??b.labour.reduce((s,r)=>s+toNumber(r.total_hours),0);a.production+=b.docket.production_manhours??b.labour.reduce((s,r)=>s+toNumber(r.production_hours),0);a.issues+=b.materialEvents.filter((e:any)=>e.event_type!=="excess").length;return a;},{count:0,raw:0,production:0,issues:0}),[visibleBundles]);
+
+  function canEditDocket(d:Docket){
+    const status=clean(d.approval_status)||"legacy";
+    if(isSigned(d)||["final","legacy_final","client_pending"].includes(status))return false;
+    if(status==="submitted_bc"){
+      const isSubmitter=Boolean(currentUserId&&clean(d.bc_submitted_by)===currentUserId);
+      const isReviewer=reviewerRoles.includes(normaliseRole(p?.role));
+      return isSubmitter||isReviewer;
+    }
+    return true;
+  }
 
   async function refresh(){setRefreshing(true);await loadData(false);setRefreshing(false);}
   function applyCrew(target:FormState,crew:Crew){target.selectedCrewId=crew.id;target.crewName=clean(crew.crew_number)||clean(crew.crew_name);target.leadingHand=clean(crew.leading_hand);const members=employees.filter(e=>e.crew_id===crew.id);if(members.length)target.labourRows=members.map(e=>({...blankLabour({lunch:target.lunchBreakMinutes,travelIn:target.travelInMinutes,travelOut:target.travelOutMinutes,mobilisation:target.mobilisationMinutes}),worker_name:e.full_name}));}
@@ -239,12 +464,124 @@ export default function DailyDocketScreen() {
   async function selectCrew(id:string){const c=crews.find(x=>x.id===id);if(!c||!form)return;const next={...form};applyCrew(next,c);next.plantRows=await loadCrewAssets(c);setForm(next);}
 
   function dbLabour(r:LabourDb):LabourRow{const a=clean(r.time_in),b=clean(r.time_out);return{worker_name:clean(r.worker_name),time_in:a,time_out:b,total_hours:r.total_hours==null?calculateHours(a,b):String(r.total_hours),lunch_minutes:r.lunch_minutes==null?"":String(r.lunch_minutes),travel_in_minutes:r.travel_in_minutes==null?"":String(r.travel_in_minutes),travel_out_minutes:r.travel_out_minutes==null?"":String(r.travel_out_minutes),mobilisation_minutes:r.mobilisation_hours==null?"":String(r.mobilisation_hours*60)}}
-  function dbProgress(r:ProgressDb):ProgressRow{return{section_label:clean(r.section_label)||clean(r.section)||"Section",assembled_qty:r.assembled_qty==null?"":String(r.assembled_qty),erected_qty:r.erected_qty==null?"":String(r.erected_qty)}}
+  function dbProgress(r:ProgressDb):ProgressRow{
+    return{
+      section_label:clean(r.section_label)||clean(r.section)||"Section",
+      assembled_qty:r.assembly_overall!=null?String(r.assembly_overall):r.assembly_today!=null?String(r.assembly_today):r.assembled_qty==null?"":String(r.assembled_qty),
+      erected_qty:r.erection_overall!=null?String(r.erection_overall):r.erection_today!=null?String(r.erection_today):r.erected_qty==null?"":String(r.erected_qty)
+    }
+  }
   function dbDelay(r:DelayDb):DelayRow{return{ui_id:uid("delay"),delay_type:(clean(r.delay_type)||"weather") as DelayType,delay_reason:clean(r.delay_reason),delay_hours:r.delay_hours==null?"":String(r.delay_hours),applies_to:clean(r.applies_to)==="selected_workers"?"selected_workers":"entire_crew",worker_names:Array.isArray(r.worker_names)?r.worker_names:[],delay_mode:clean(r.delay_applies_mode)==="labour_and_plant"?"labour_and_plant":"labour_only",plant_names:Array.isArray(r.plant_names)?r.plant_names:[]}}
   function dbPlant(r:PlantDb):PlantRow{const a=clean(r.time_in),b=clean(r.time_out);return{plant_name:clean(r.plant_name),plant_type:clean(r.plant_type),asset_id:clean(r.asset_number),operator_name:clean(r.operator_name),time_in:a,time_out:b,total_hours:r.total_hours==null?calculateHours(a,b):String(r.total_hours),notes:clean(r.notes)}}
-  function dbEvent(e:any):MaterialEventDraft{return{ui_id:uid("event"),event_type:e.event_type as MaterialEventType,source_tower_id:clean(e.source_tower_id),destination_tower_id:clean(e.destination_tower_id),destination_location:clean(e.destination_location),affected_work:Boolean(e.affected_work),work_outcome:(clean(e.work_outcome)||"") as MaterialWorkOutcome,affected_activity:clean(e.affected_activity),affected_section:clean(e.affected_section),impact_start_time:timeFromIso(e.impact_started_at),impact_finish_time:timeFromIso(e.impact_finished_at),impact_ongoing:Boolean(e.impact_ongoing),current_effect:clean(e.current_effect),mitigation_actions:Array.isArray(e.mitigation_actions)?e.mitigation_actions:[],notes:clean(e.notes),items:(e.items||[]).length?(e.items||[]).map((i:any)=>({ui_id:uid("item"),material_kind:i.source_record_id?"registered":"manual",manual_category:i.source_record_id?"":clean(i.item_description),search_query:clean(i.item_reference),search_loading:false,search_results:[],source_table:clean(i.source_table),source_record_id:clean(i.source_record_id),item_reference:clean(i.item_reference),item_description:clean(i.item_description),quantity:i.quantity==null?"1":String(i.quantity),unit:clean(i.unit)||"ea",notes:clean(i.notes)})):[blankMaterialItem()],people:(e.people||[]).map((x:any)=>({ui_id:uid("person"),employee_id:clean(x.employee_id),employee_name:clean(x.employee_name),employee_role:clean(x.employee_role),started_at:timeFromIso(x.started_at),finished_at:timeFromIso(x.finished_at)})),plant:(e.plant||[]).map((x:any)=>({ui_id:uid("mplant"),plant_asset_id:clean(x.plant_asset_id),plant_name:clean(x.plant_name),asset_number:clean(x.asset_number),started_at:timeFromIso(x.started_at),finished_at:timeFromIso(x.finished_at)}))};}
+  function dbEvent(e:any):MaterialEventDraft{
+    return{
+      ui_id:uid("event"),
+      event_type:e.event_type as MaterialEventType,
+      source_tower_id:clean(e.source_tower_id),
+      destination_tower_id:clean(e.destination_tower_id),
+      destination_location:clean(e.destination_location),
+      affected_work:Boolean(e.affected_work),
+      work_outcome:(clean(e.work_outcome)||"") as MaterialWorkOutcome,
+      affected_activity:clean(e.affected_activity),
+      affected_section:clean(e.affected_section),
+      impact_start_time:timeFromIso(e.impact_started_at),
+      impact_finish_time:timeFromIso(e.impact_finished_at),
+      impact_ongoing:Boolean(e.impact_ongoing),
+      current_effect:clean(e.current_effect),
+      mitigation_actions:Array.isArray(e.mitigation_actions)?e.mitigation_actions:[],
+      notes:clean(e.notes),
+      items:(e.items||[]).length
+        ?(e.items||[]).map((i:any)=>{
+            const manualBolt=clean(i.material_type)==="bolt"&&!i.source_record_id;
+            return{
+              ui_id:uid("item"),
+              material_kind:manualBolt?"manual_bolt":i.source_record_id?"registered":"manual",
+              manual_category:i.source_record_id||manualBolt?"":clean(i.item_description),
+              bolt_size:manualBolt?clean(i.bolt_size)||clean(i.item_reference):"",
+              search_query:i.source_record_id?clean(i.item_reference):"",
+              search_loading:false,
+              search_results:[],
+              source_table:clean(i.source_table),
+              source_record_id:clean(i.source_record_id),
+              item_reference:manualBolt?"":clean(i.item_reference),
+              item_description:clean(i.item_description),
+              quantity:i.quantity==null?"1":String(i.quantity),
+              unit:clean(i.unit)||"ea",
+              notes:clean(i.notes)
+            };
+          })
+        :[blankMaterialItem()],
+      people:(e.people||[]).map((x:any)=>({
+        ui_id:uid("person"),
+        employee_id:clean(x.employee_id),
+        employee_name:clean(x.employee_name),
+        employee_role:clean(x.employee_role),
+        started_at:timeFromIso(x.started_at),
+        finished_at:timeFromIso(x.finished_at)
+      })),
+      plant:(e.plant||[]).map((x:any)=>({
+        ui_id:uid("mplant"),
+        plant_asset_id:clean(x.plant_asset_id),
+        plant_name:clean(x.plant_name),
+        asset_number:clean(x.asset_number),
+        started_at:timeFromIso(x.started_at),
+        finished_at:timeFromIso(x.finished_at)
+      }))
+    };
+  }
 
-  function openBundle(b:Bundle,mode:DocketMode){const d=b.docket,t=towers.find(x=>x.id===d.tower_id)??null,c=crews.find(x=>clean(x.crew_number)===clean(d.crew)||clean(x.crew_name)===clean(d.crew));setForm({mode,docketId:d.id,towerId:d.tower_id,docketDate:clean(d.docket_date),selectedCrewId:c?.id??"",crewName:clean(d.crew),leadingHand:clean(d.leading_hand),weather:clean(d.weather),rateType:d.rate_type==="schedule_of_rates"?"schedule_of_rates":"tonnage_rate",status:docketStatus(d),lunchBreakMinutes:d.lunch_break_minutes==null?"":String(d.lunch_break_minutes),travelInMinutes:d.travel_in_minutes==null?"":String(d.travel_in_minutes),travelOutMinutes:d.travel_out_minutes==null?"":String(d.travel_out_minutes),mobilisationMinutes:d.mobilisation_hours==null?"":String(d.mobilisation_hours*60),delaysComments:stripMobilisationLine(d.delays_comments),incidentOccurred:Boolean(d.incident_occurred),incidentType:clean(d.incident_type),incidentNotes:clean(d.incident_notes),bcRepName:clean(d.bc_rep_name),clientRepName:clean(d.client_rep_name),signedDate:clean(d.signed_date),hasBodyExtension:inferBodyExtension(t),labourRows:b.labour.length?b.labour.map(dbLabour):[blankLabour()],progressRows:b.progress.length?b.progress.map(dbProgress):DEFAULT_PROGRESS.map(r=>({...r})),delayRows:b.delays.map(dbDelay),plantRows:b.plant.map(dbPlant),materialEvents:b.materialEvents.map(dbEvent),mobilisation:parseMobilisationLine(d.delays_comments)});}
+  function openBundle(b:Bundle,mode:DocketMode){
+    const d=b.docket;
+    const t=towers.find(x=>x.id===d.tower_id)??null;
+    const c=crews.find(x=>clean(x.crew_number)===clean(d.crew)||clean(x.crew_name)===clean(d.crew));
+    const isV2=clean(d.progress_model)==="section_v2"||b.progress.some(row=>clean(row.progress_model)==="section_v2");
+    const v2HasBe=b.progress.some(row=>clean(row.section_code).toUpperCase()==="BE");
+    const requestedMode=mode==="edit"&&!canEditDocket(d)?"view":mode;
+
+    setForm({
+      mode:requestedMode,
+      docketId:d.id,
+      towerId:d.tower_id,
+      docketDate:clean(d.docket_date),
+      selectedCrewId:c?.id??"",
+      crewName:clean(d.crew),
+      leadingHand:clean(d.leading_hand),
+      weather:clean(d.weather),
+      rateType:d.rate_type==="schedule_of_rates"?"schedule_of_rates":"tonnage_rate",
+      progressModel:isV2?"section_v2":"legacy",
+      approvalStatus:clean(d.approval_status)||"legacy",
+      lunchBreakMinutes:d.lunch_break_minutes==null?"":String(d.lunch_break_minutes),
+      travelInMinutes:d.travel_in_minutes==null?"":String(d.travel_in_minutes),
+      travelOutMinutes:d.travel_out_minutes==null?"":String(d.travel_out_minutes),
+      mobilisationMinutes:d.mobilisation_hours==null?"":String(d.mobilisation_hours*60),
+      delaysComments:stripMobilisationLine(d.delays_comments),
+      incidentOccurred:Boolean(d.incident_occurred),
+      incidentType:clean(d.incident_type),
+      incidentNotes:clean(d.incident_notes),
+      bcRepName:clean(d.bc_rep_name),
+      clientRepName:clean(d.client_rep_name),
+      signedDate:clean(d.signed_date),
+      hasBodyExtension:isV2?v2HasBe:inferBodyExtension(t),
+      labourRows:b.labour.length?b.labour.map(dbLabour):[blankLabour()],
+      progressRows:b.progress.length?b.progress.map(dbProgress):DEFAULT_PROGRESS.map(r=>({...r})),
+      delayRows:b.delays.map(dbDelay),
+      plantRows:b.plant.map(dbPlant),
+      materialEvents:b.materialEvents.map(dbEvent),
+      mobilisation:parseMobilisationLine(d.delays_comments)
+    });
+  }
+
+  useEffect(()=>{
+    if(!pendingReviewDocketId||bundles.length===0)return;
+    const bundle=bundles.find(item=>item.docket.id===pendingReviewDocketId);
+    if(!bundle)return;
+    setSelectedTowerId(bundle.docket.tower_id);
+    openBundle(bundle,canEditDocket(bundle.docket)?"edit":"view");
+    setPendingReviewDocketId("");
+  // openBundle/canEditDocket intentionally use the latest loaded project state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[pendingReviewDocketId,bundles,currentUserId,reviewerRoles]);
+
 
   function updateLabour(i:number,k:keyof LabourRow,v:string){setForm(f=>!f?f:{...f,labourRows:f.labourRows.map((r,x)=>{if(x!==i)return r;const n={...r,[k]:v};if(k==="time_in"||k==="time_out")n.total_hours=calculateHours(n.time_in,n.time_out);return n;})});}
   function blurLabourTime(i:number,k:"time_in"|"time_out"){setForm(f=>!f?f:{...f,labourRows:f.labourRows.map((r,x)=>{if(x!==i)return r;const n={...r,[k]:normaliseTimeInput(r[k])};n.total_hours=calculateHours(n.time_in,n.time_out);return n;})});}
@@ -258,103 +595,532 @@ export default function DailyDocketScreen() {
   function updateMPlant(ei:number,pi:number,p:Partial<MaterialPlantDraft>){setForm(f=>!f?f:{...f,materialEvents:f.materialEvents.map((e,x)=>x!==ei?e:{...e,plant:e.plant.map((r,y)=>y===pi?{...r,...p}:r)})});}
 
   async function searchProjectMaterial(ei:number,ii:number,query:string){
-    if(!form)return;const q=query.trim();updateItem(ei,ii,{search_query:query,material_kind:"registered",search_loading:q.length>=2,search_results:[],source_table:"",source_record_id:"",item_reference:"",item_description:""});if(q.length<2)return;
-    const event=form.materialEvents[ei], searchTowerId=event.event_type==="taken_from_another_tower"?event.source_tower_id:form.towerId;if(!searchTowerId){updateItem(ei,ii,{search_loading:false,item_description:"Select the source tower first."});return;}
-    const safe=q.replace(/[,%()]/g," ").trim(),pattern=`%${safe}%`;
-    const [m,b,u]=await Promise.all([
-      supabase.from("tower_material_members").select("id,tower_id,bundle_reference,drawing_number,mark_no,pn_final,qty_per_tower,section").eq("tower_id",searchTowerId).or([`mark_no.ilike.${pattern}`,`pn_final.ilike.${pattern}`,`bundle_reference.ilike.${pattern}`,`drawing_number.ilike.${pattern}`,`section.ilike.${pattern}`].join(",")).limit(20),
-      supabase.from("tower_material_bolts").select("id,tower_id,tower_segment,bolt_diameter,dn_sn,length,qty").eq("tower_id",searchTowerId).or([`bolt_diameter.ilike.${pattern}`,`dn_sn.ilike.${pattern}`,`length.ilike.${pattern}`,`tower_segment.ilike.${pattern}`].join(",")).limit(12),
-      supabase.from("tower_required_bundles").select("id,tower_id,bundle_no,section,qty_required").eq("tower_id",searchTowerId).or([`bundle_no.ilike.${pattern}`,`section.ilike.${pattern}`].join(",")).limit(12)
+    if(!form)return;
+    const q=query.trim();
+    updateItem(ei,ii,{
+      search_query:query,
+      material_kind:"registered",
+      search_loading:q.length>=2,
+      search_results:[],
+      source_table:"",
+      source_record_id:"",
+      item_reference:"",
+      item_description:"",
+      bolt_size:""
+    });
+    if(q.length<2)return;
+
+    const event=form.materialEvents[ei];
+    const searchTowerId=event.event_type==="taken_from_another_tower"?event.source_tower_id:form.towerId;
+    if(!searchTowerId){
+      updateItem(ei,ii,{search_loading:false,item_description:"Select the source tower first."});
+      return;
+    }
+
+    const safe=q.replace(/[,%()]/g," ").trim();
+    const pattern=`%${safe}%`;
+    const [membersRes,bundlesRes]=await Promise.all([
+      supabase
+        .from("tower_material_members")
+        .select("id,tower_id,bundle_reference,drawing_number,mark_no,pn_final,qty_per_tower,section")
+        .eq("tower_id",searchTowerId)
+        .or([
+          `mark_no.ilike.${pattern}`,
+          `pn_final.ilike.${pattern}`,
+          `bundle_reference.ilike.${pattern}`,
+          `drawing_number.ilike.${pattern}`,
+          `section.ilike.${pattern}`
+        ].join(","))
+        .limit(20),
+      supabase
+        .from("tower_required_bundles")
+        .select("id,tower_id,bundle_no,section,qty_required")
+        .eq("tower_id",searchTowerId)
+        .or([`bundle_no.ilike.${pattern}`,`section.ilike.${pattern}`].join(","))
+        .limit(12)
     ]);
+
+    const searchError=membersRes.error?.message||bundlesRes.error?.message;
     const results:MaterialCatalogItem[]=[];
-    for(const r of m.data||[])results.push({source_table:"tower_material_members",source_record_id:String(r.id),tower_id:String(r.tower_id),item_reference:String(r.mark_no||r.pn_final||r.bundle_reference||"Member"),item_description:[r.drawing_number?`Drawing ${r.drawing_number}`:"",r.bundle_reference?`Bundle ${r.bundle_reference}`:"",r.section?`Section ${r.section}`:"",r.pn_final?`Profile ${r.pn_final}`:""].filter(Boolean).join(" · "),unit:"ea"});
-    for(const r of b.data||[])results.push({source_table:"tower_material_bolts",source_record_id:String(r.id),tower_id:String(r.tower_id),item_reference:[r.bolt_diameter,r.length,r.dn_sn].filter(Boolean).join(" ")||"Bolt",item_description:r.tower_segment?`Section ${r.tower_segment}`:"",unit:"ea"});
-    for(const r of u.data||[])results.push({source_table:"tower_required_bundles",source_record_id:String(r.id),tower_id:String(r.tower_id),item_reference:`Bundle ${r.bundle_no||""}`.trim(),item_description:r.section?`Section ${r.section}`:"",unit:"bundle"});
-    updateItem(ei,ii,{search_loading:false,search_results:results});
+
+    for(const row of membersRes.data||[]){
+      results.push({
+        source_table:"tower_material_members",
+        source_record_id:String(row.id),
+        tower_id:String(row.tower_id),
+        item_reference:String(row.mark_no||row.pn_final||row.bundle_reference||"Member"),
+        item_description:[
+          row.drawing_number?`Drawing ${row.drawing_number}`:"",
+          row.bundle_reference?`Bundle ${row.bundle_reference}`:"",
+          row.section?`Section ${row.section}`:"",
+          row.pn_final?`Profile ${row.pn_final}`:""
+        ].filter(Boolean).join(" · "),
+        unit:"ea"
+      });
+    }
+
+    for(const row of bundlesRes.data||[]){
+      results.push({
+        source_table:"tower_required_bundles",
+        source_record_id:String(row.id),
+        tower_id:String(row.tower_id),
+        item_reference:`Bundle ${row.bundle_no||""}`.trim(),
+        item_description:row.section?`Section ${row.section}`:"",
+        unit:"bundle"
+      });
+    }
+
+    updateItem(ei,ii,{
+      search_loading:false,
+      search_results:results,
+      item_description:results.length===0&&searchError?`Search error: ${searchError}`:""
+    });
   }
-  function chooseCatalogItem(ei:number,ii:number,item:MaterialCatalogItem){updateItem(ei,ii,{material_kind:"registered",search_query:item.item_reference,search_loading:false,search_results:[],source_table:item.source_table,source_record_id:item.source_record_id,item_reference:item.item_reference,item_description:item.item_description,unit:item.unit||"ea"});}
+
+  function chooseCatalogItem(ei:number,ii:number,item:MaterialCatalogItem){
+    updateItem(ei,ii,{
+      material_kind:"registered",
+      manual_category:"",
+      bolt_size:"",
+      search_query:item.item_reference,
+      search_loading:false,
+      search_results:[],
+      source_table:item.source_table,
+      source_record_id:item.source_record_id,
+      item_reference:item.item_reference,
+      item_description:item.item_description,
+      unit:item.unit||"ea"
+    });
+  }
 
   function computed(f:FormState){const labour=f.labourRows.map(r=>{const total=calculateHours(r.time_in,r.time_out)||r.total_hours,n={...r,total_hours:total};return{...n,delay_hours:delayForWorker(n,f.delayRows),production_hours:productionHours(n,f.delayRows)}});return{labour,progress:progressTotals(f),raw:labour.reduce((s,r)=>s+toNumber(r.total_hours),0),production:labour.reduce((s,r)=>s+toNumber(r.production_hours),0)};}
   async function recalcTower(id:string){const {data,error}=await supabase.from("tower_daily_dockets").select("assembly_percent,erection_percent").eq("tower_id",id);if(error)throw error;const progress=(data??[]).reduce((m,r)=>Math.max(m,Math.round(toNumber(r.assembly_percent)*.5+toNumber(r.erection_percent)*.5)),0);const status=progress>=100?"Complete":progress>0?"In Progress":"Not Started";const u=await supabase.from("towers").update({progress,status,updated_at:new Date().toISOString()}).eq("id",id);if(u.error)throw u.error;}
 
   async function syncMaterialEvents(docketId:string,f:FormState){
-    const del=await supabase.from("tower_material_events").delete().eq("docket_id",docketId); if(del.error)throw del.error;
+    const del=await supabase.from("tower_material_events").delete().eq("docket_id",docketId);
+    if(del.error)throw del.error;
+
     for(const e of f.materialEvents){
+      const meaningfulItems=e.items.filter(item=>
+        item.item_reference.trim()||
+        (item.material_kind==="manual_bolt"&&item.bolt_size.trim())
+      );
+      if(!meaningfulItems.length)continue;
+
       const ins=await supabase.from("tower_material_events").insert({
-        project_id:projectId,docket_id:docketId,tower_id:f.towerId,event_type:e.event_type,source_tower_id:e.source_tower_id||null,destination_tower_id:e.destination_tower_id||null,
-        destination_location:e.destination_location||null,occurred_at:`${f.docketDate}T12:00:00`,affected_work:e.event_type==="excess"?false:e.affected_work,
-        work_outcome:e.event_type==="excess"||!e.affected_work?null:e.work_outcome||null,affected_activity:e.event_type==="excess"||!e.affected_work?null:e.affected_activity||null,
+        project_id:projectId,
+        docket_id:docketId,
+        tower_id:f.towerId,
+        event_type:e.event_type,
+        source_tower_id:e.source_tower_id||null,
+        destination_tower_id:e.destination_tower_id||null,
+        destination_location:e.destination_location||null,
+        occurred_at:`${f.docketDate}T12:00:00`,
+        affected_work:e.event_type==="excess"?false:e.affected_work,
+        work_outcome:e.event_type==="excess"||!e.affected_work?null:e.work_outcome||null,
+        affected_activity:e.event_type==="excess"||!e.affected_work?null:e.affected_activity||null,
         affected_section:e.event_type==="excess"||!e.affected_work?null:e.affected_section||null,
         impact_started_at:e.event_type==="excess"||!e.affected_work||e.work_outcome==="changed_sequence"?null:dateTimeIso(f.docketDate,e.impact_start_time),
         impact_finished_at:e.event_type==="excess"||!e.affected_work||e.work_outcome==="changed_sequence"||e.impact_ongoing?null:dateTimeIso(f.docketDate,e.impact_finish_time),
         impact_ongoing:e.event_type==="excess"||!e.affected_work||e.work_outcome==="changed_sequence"?false:e.impact_ongoing,
-        current_effect:e.event_type==="excess"||!e.affected_work?null:e.current_effect||null,mitigation_actions:e.event_type==="excess"||!e.affected_work?[]:e.mitigation_actions,
-        commercial_impact_type:e.work_outcome==="stopped_work"?"delayed":e.work_outcome==="slowed_down"?"disrupted":e.work_outcome==="changed_sequence"?"resequenced":null,notes:e.notes.trim()||null
+        current_effect:e.event_type==="excess"||!e.affected_work?null:e.current_effect||null,
+        mitigation_actions:e.event_type==="excess"||!e.affected_work?[]:e.mitigation_actions,
+        commercial_impact_type:e.work_outcome==="stopped_work"?"Delayed":e.work_outcome==="slowed_down"?"Disrupted":e.work_outcome==="changed_sequence"?"Resequenced":null,
+        notes:e.notes.trim()||null
       }).select("id").single();
+
       if(ins.error||!ins.data)throw ins.error||new Error("Could not create material event.");
       const id=ins.data.id;
-      const items=e.items.filter(i=>i.item_reference.trim()).map(i=>({event_id:id,source_table:i.source_table||null,source_record_id:i.source_record_id||null,item_reference:i.item_reference.trim(),item_description:i.item_description.trim()||i.manual_category.trim()||null,quantity:Math.max(.0001,toNumber(i.quantity)||1),unit:i.unit.trim()||"ea",notes:i.notes.trim()||null}));
-      if(items.length){const r=await supabase.from("tower_material_event_items").insert(items);if(r.error)throw r.error;}
-      const people=e.people.filter(x=>x.employee_name.trim()).map(x=>({event_id:id,employee_id:x.employee_id||null,employee_name:x.employee_name.trim(),employee_role:x.employee_role.trim()||null,involvement_type:"search_verification",started_at:dateTimeIso(f.docketDate,x.started_at),finished_at:dateTimeIso(f.docketDate,x.finished_at)}));
-      if(people.length){const r=await supabase.from("tower_material_event_people").insert(people);if(r.error)throw r.error;}
-      const plant=e.plant.filter(x=>x.plant_name.trim()).map(x=>({event_id:id,plant_asset_id:x.plant_asset_id||null,plant_name:x.plant_name.trim(),asset_number:x.asset_number.trim()||null,involvement_type:"affected",started_at:dateTimeIso(f.docketDate,x.started_at),finished_at:dateTimeIso(f.docketDate,x.finished_at)}));
-      if(plant.length){const r=await supabase.from("tower_material_event_plant").insert(plant);if(r.error)throw r.error;}
+
+      const items=meaningfulItems.map(item=>{
+        const manualBolt=item.material_kind==="manual_bolt";
+        return{
+          event_id:id,
+          source_table:manualBolt?null:item.source_table||null,
+          source_record_id:manualBolt?null:item.source_record_id||null,
+          material_type:manualBolt?"bolt":item.source_table==="tower_material_members"?"steel_member":"other",
+          bolt_size:manualBolt?item.bolt_size.trim()||null:null,
+          item_reference:manualBolt?null:item.item_reference.trim()||null,
+          item_description:manualBolt
+            ?item.item_description.trim()||null
+            :item.material_kind==="manual"
+            ?[item.manual_category.trim(),item.item_description.trim()].filter(Boolean).join(" · ")||null
+            :item.item_description.trim()||null,
+          quantity:Math.max(.0001,toNumber(item.quantity)||1),
+          unit:manualBolt?"ea":item.unit.trim()||"ea",
+          notes:item.notes.trim()||null
+        };
+      });
+      const itemRes=await supabase.from("tower_material_event_items").insert(items);
+      if(itemRes.error)throw itemRes.error;
+
+      const people=e.people.filter(x=>x.employee_name.trim()).map(x=>({
+        event_id:id,
+        employee_id:x.employee_id||null,
+        employee_name:x.employee_name.trim(),
+        employee_role:x.employee_role.trim()||null,
+        involvement_type:"search_verify",
+        started_at:dateTimeIso(f.docketDate,x.started_at),
+        finished_at:dateTimeIso(f.docketDate,x.finished_at)
+      }));
+      if(people.length){
+        const r=await supabase.from("tower_material_event_people").insert(people);
+        if(r.error)throw r.error;
+      }
+
+      const plant=e.plant.filter(x=>x.plant_name.trim()).map(x=>({
+        event_id:id,
+        plant_asset_id:x.plant_asset_id||null,
+        plant_name:x.plant_name.trim(),
+        asset_number:x.asset_number.trim()||null,
+        involvement_type:"affected",
+        started_at:dateTimeIso(f.docketDate,x.started_at),
+        finished_at:dateTimeIso(f.docketDate,x.finished_at)
+      }));
+      if(plant.length){
+        const r=await supabase.from("tower_material_event_plant").insert(plant);
+        if(r.error)throw r.error;
+      }
     }
   }
 
   async function prefillPreviousDay(){
-    if(!form||!projectId)return; setPrefilling(true);
+    if(!form||!projectId)return;
+    setPrefilling(true);
     try{
-      let q=supabase.from("tower_daily_dockets").select("*").eq("project_id",projectId).eq("tower_id",form.towerId).lt("docket_date",form.docketDate||today()).order("docket_date",{ascending:false}).limit(1);
+      let q=supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .eq("project_id",projectId)
+        .eq("tower_id",form.towerId)
+        .lt("docket_date",form.docketDate||today())
+        .order("docket_date",{ascending:false})
+        .limit(1);
+
       if(form.crewName.trim())q=q.eq("crew",form.crewName.trim());
+
       let {data,error}=await q;
-      if(!error&&(!data||!data.length)&&form.crewName.trim()){const f=await supabase.from("tower_daily_dockets").select("*").eq("project_id",projectId).eq("tower_id",form.towerId).lt("docket_date",form.docketDate||today()).order("docket_date",{ascending:false}).limit(1);data=f.data;error=f.error;}
-      if(error)throw error; const prev=(data?.[0]??null) as Docket|null; if(!prev){Alert.alert("No previous docket","No earlier docket was found for this tower.");return;}
-      const [a,b,c]=await Promise.all([supabase.from("tower_docket_labour").select("*").eq("docket_id",prev.id),supabase.from("tower_docket_progress").select("*").eq("docket_id",prev.id),supabase.from("tower_docket_plant").select("*").eq("docket_id",prev.id)]);
-      const err=[a.error,b.error,c.error].find(Boolean);if(err)throw err;
-      const ccrew=crews.find(x=>clean(x.crew_number)===clean(prev.crew)||clean(x.crew_name)===clean(prev.crew));
-      setForm(cur=>!cur?cur:{...cur,selectedCrewId:ccrew?.id??cur.selectedCrewId,crewName:clean(prev.crew)||cur.crewName,leadingHand:clean(prev.leading_hand)||cur.leadingHand,weather:"",rateType:prev.rate_type==="schedule_of_rates"?"schedule_of_rates":"tonnage_rate",lunchBreakMinutes:prev.lunch_break_minutes==null?cur.lunchBreakMinutes:String(prev.lunch_break_minutes),travelInMinutes:prev.travel_in_minutes==null?cur.travelInMinutes:String(prev.travel_in_minutes),travelOutMinutes:prev.travel_out_minutes==null?cur.travelOutMinutes:String(prev.travel_out_minutes),mobilisationMinutes:prev.mobilisation_hours==null?cur.mobilisationMinutes:String(prev.mobilisation_hours*60),labourRows:(a.data??[]).length?((a.data??[]) as LabourDb[]).map(dbLabour):cur.labourRows,progressRows:(b.data??[]).length?((b.data??[]) as ProgressDb[]).map(dbProgress):cur.progressRows,plantRows:((c.data??[]) as PlantDb[]).map(dbPlant),delayRows:[],materialEvents:[],delaysComments:"",incidentOccurred:false,incidentType:"",incidentNotes:"",bcRepName:"",clientRepName:"",signedDate:"",status:"Draft",mobilisation:parseMobilisationLine(prev.delays_comments)});
-      Alert.alert("Previous day loaded",`${formatDate(prev.docket_date)} copied. Material issues and delays were not copied.`);
-    }catch(e){Alert.alert("Could not prefill previous day",errorMessage(e));}finally{setPrefilling(false);}
+      if(!error&&(!data||!data.length)&&form.crewName.trim()){
+        const fallback=await supabase
+          .from("tower_daily_dockets")
+          .select("*")
+          .eq("project_id",projectId)
+          .eq("tower_id",form.towerId)
+          .lt("docket_date",form.docketDate||today())
+          .order("docket_date",{ascending:false})
+          .limit(1);
+        data=fallback.data;
+        error=fallback.error;
+      }
+
+      if(error)throw error;
+      const prev=(data?.[0]??null) as Docket|null;
+      if(!prev){
+        Alert.alert("No previous docket","No earlier docket was found for this tower.");
+        return;
+      }
+
+      const [labourRes,progressRes,plantRes]=await Promise.all([
+        supabase.from("tower_docket_labour").select("*").eq("docket_id",prev.id),
+        supabase.from("tower_docket_progress").select("*").eq("docket_id",prev.id),
+        supabase.from("tower_docket_plant").select("*").eq("docket_id",prev.id)
+      ]);
+      const err=[labourRes.error,progressRes.error,plantRes.error].find(Boolean);
+      if(err)throw err;
+
+      const previousProgress=(progressRes.data??[]) as ProgressDb[];
+      const previousIsV2=clean(prev.progress_model)==="section_v2"||previousProgress.some(row=>clean(row.progress_model)==="section_v2");
+      const previousHasBodyExtension=previousIsV2
+        ?previousProgress.some(row=>clean(row.section_code).toUpperCase()==="BE")
+        :inferBodyExtension(towers.find(t=>t.id===form.towerId)??null);
+
+      const ccrew=crews.find(
+        x=>clean(x.crew_number)===clean(prev.crew)||clean(x.crew_name)===clean(prev.crew)
+      );
+
+      setForm(cur=>!cur?cur:{
+        ...cur,
+        selectedCrewId:ccrew?.id??cur.selectedCrewId,
+        crewName:clean(prev.crew)||cur.crewName,
+        leadingHand:clean(prev.leading_hand)||cur.leadingHand,
+        weather:"",
+        rateType:prev.rate_type==="schedule_of_rates"?"schedule_of_rates":"tonnage_rate",
+        progressModel:previousIsV2?"section_v2":"section_v2",
+        approvalStatus:"draft",
+        lunchBreakMinutes:prev.lunch_break_minutes==null?cur.lunchBreakMinutes:String(prev.lunch_break_minutes),
+        travelInMinutes:prev.travel_in_minutes==null?cur.travelInMinutes:String(prev.travel_in_minutes),
+        travelOutMinutes:prev.travel_out_minutes==null?cur.travelOutMinutes:String(prev.travel_out_minutes),
+        mobilisationMinutes:prev.mobilisation_hours==null?cur.mobilisationMinutes:String(prev.mobilisation_hours*60),
+        labourRows:(labourRes.data??[]).length?((labourRes.data??[]) as LabourDb[]).map(dbLabour):cur.labourRows,
+        progressRows:previousIsV2&&previousProgress.length
+          ?SECTION_V2.map(def=>{
+              const row=previousProgress.find(r=>clean(r.section_code).toUpperCase()===def.code);
+              return{
+                section_label:def.label,
+                assembled_qty:row?dbProgress(row).assembled_qty:"",
+                erected_qty:row?dbProgress(row).erected_qty:""
+              };
+            })
+          :cur.progressRows,
+        hasBodyExtension:previousHasBodyExtension,
+        plantRows:((plantRes.data??[]) as PlantDb[]).map(dbPlant),
+        delayRows:[],
+        materialEvents:[],
+        delaysComments:"",
+        incidentOccurred:false,
+        incidentType:"",
+        incidentNotes:"",
+        bcRepName:"",
+        clientRepName:"",
+        signedDate:"",
+        mobilisation:parseMobilisationLine(prev.delays_comments)
+      });
+
+      Alert.alert(
+        "Previous day loaded",
+        `${formatDate(prev.docket_date)} copied. Progress and Body Extension were carried forward; material issues and delays were not copied.`
+      );
+    }catch(e){
+      Alert.alert("Could not prefill previous day",errorMessage(e));
+    }finally{
+      setPrefilling(false);
+    }
   }
 
   async function saveDocket(){
     if(!form||!projectId)return;
     if(!form.docketDate){Alert.alert("Date required","Enter the docket date.");return;}
     if(!form.leadingHand.trim()){Alert.alert("Leading Hand required","Enter the leading hand.");return;}
-    if(form.labourRows.some(r=>(r.time_in&&timeToMinutes(r.time_in)==null)||(r.time_out&&timeToMinutes(r.time_out)==null))){Alert.alert("Check worker times","Use 06:00, 6:00, 600, 18:00 or 1800.");return;}
-    const names=form.labourRows.map(r=>normaliseName(r.worker_name)).filter(Boolean);if(new Set(names).size!==names.length){Alert.alert("Duplicate workers","Each worker can only appear once.");return;}
-    for(const e of form.materialEvents){
-      if(!e.items.some(i=>i.item_reference.trim())){Alert.alert("Material item required","Each material record needs at least one item.");return;}
-      if(e.event_type==="taken_from_another_tower"&&!e.source_tower_id){Alert.alert("Source tower required","Choose the source tower.");return;}
-      if(e.event_type==="sent_to_another_tower"&&!e.destination_tower_id){Alert.alert("Destination tower required","Choose the destination tower.");return;}
-      if(e.affected_work&&e.event_type!=="excess"&&!e.work_outcome){Alert.alert("Work impact required","Choose what happened to planned work.");return;}
+    if(form.labourRows.some(r=>(r.time_in&&timeToMinutes(r.time_in)==null)||(r.time_out&&timeToMinutes(r.time_out)==null))){
+      Alert.alert("Check worker times","Use 06:00, 6:00, 600, 18:00 or 1800.");
+      return;
     }
+
+    const names=form.labourRows.map(r=>normaliseName(r.worker_name)).filter(Boolean);
+    if(new Set(names).size!==names.length){
+      Alert.alert("Duplicate workers","Each worker can only appear once.");
+      return;
+    }
+
+    for(const event of form.materialEvents){
+      if(!event.items.some(item=>item.item_reference.trim()||(item.material_kind==="manual_bolt"&&item.bolt_size.trim()))){
+        Alert.alert("Material item required","Each material record needs at least one item or a bolt size.");
+        return;
+      }
+      if(event.event_type==="taken_from_another_tower"&&!event.source_tower_id){
+        Alert.alert("Source tower required","Choose the source tower.");
+        return;
+      }
+      if(event.event_type==="sent_to_another_tower"&&!event.destination_tower_id){
+        Alert.alert("Destination tower required","Choose the destination tower.");
+        return;
+      }
+      if(event.affected_work&&event.event_type!=="excess"&&!event.work_outcome){
+        Alert.alert("Work impact required","Choose what happened to planned work.");
+        return;
+      }
+    }
+
     setSaving(true);
     try{
-      const v=computed(form),mob=buildMobilisationLine(form.mobilisation),comments=[form.delaysComments.trim(),mob].filter(Boolean).join("\n");
-      const payload={project_id:projectId,tower_id:form.towerId,docket_date:form.docketDate,crew:form.crewName.trim()||null,leading_hand:form.leadingHand.trim(),weather:form.weather.trim()||null,rate_type:form.rateType,assembly_percent:v.progress.assembly,erection_percent:v.progress.erection,
-        weather_delay_hours:form.delayRows.filter(r=>r.delay_type==="weather").reduce((s,r)=>s+toNumber(r.delay_hours),0),lightning_delay_hours:form.delayRows.filter(r=>r.delay_type==="lightning").reduce((s,r)=>s+toNumber(r.delay_hours),0),toolbox_delay_hours:form.delayRows.filter(r=>r.delay_type==="toolbox").reduce((s,r)=>s+toNumber(r.delay_hours),0),other_delay_hours:form.delayRows.filter(r=>r.delay_type==="other").reduce((s,r)=>s+toNumber(r.delay_hours),0),
-        delays_comments:comments||null,missing_items_bolts:form.materialEvents.filter(e=>e.event_type==="missing").flatMap(e=>e.items.map(i=>`${toNumber(i.quantity)||1} ${i.unit||"ea"} ${i.item_reference||"material"}`)).join("; ")||null,lunch_break_minutes:toNumber(form.lunchBreakMinutes),travel_in_minutes:toNumber(form.travelInMinutes),travel_out_minutes:toNumber(form.travelOutMinutes),mobilisation_hours:toNumber(form.mobilisationMinutes)/60,mobilisation_notes:form.mobilisation.enabled?form.mobilisation.notes.trim()||null:null,raw_manhours:v.raw,production_manhours:v.production,incident_occurred:form.incidentOccurred,incident_type:form.incidentOccurred?form.incidentType:null,incident_notes:form.incidentOccurred?form.incidentNotes.trim():null,bc_rep_name:form.bcRepName.trim()||null,client_rep_name:form.clientRepName.trim()||null,signed_date:form.signedDate||null,status:form.status,updated_at:new Date().toISOString()};
+      const existing=form.docketId?bundles.find(b=>b.docket.id===form.docketId):null;
+      if(existing&&!canEditDocket(existing.docket)){
+        throw new Error("This docket is locked by its approval status and cannot be edited.");
+      }
+
+      const values=computed(form);
+      const mob=buildMobilisationLine(form.mobilisation);
+      const comments=[stripMobilisationLine(form.delaysComments),mob].filter(Boolean).join("\n");
+
+      const missingSummary=form.materialEvents
+        .filter(event=>event.event_type==="missing")
+        .flatMap(event=>event.items)
+        .filter(item=>item.item_reference.trim()||(item.material_kind==="manual_bolt"&&item.bolt_size.trim()))
+        .map(item=>{
+          const ref=item.material_kind==="manual_bolt"?item.bolt_size.trim():item.item_reference.trim();
+          return `${toNumber(item.quantity)||1} × ${ref}`;
+        })
+        .join("; ");
+
+      const payload={
+        project_id:projectId,
+        tower_id:form.towerId,
+        docket_date:form.docketDate,
+        crew:form.crewName.trim()||null,
+        leading_hand:form.leadingHand.trim(),
+        weather:form.weather.trim()||null,
+        rate_type:form.rateType,
+        progress_model:form.progressModel,
+        approval_status:form.approvalStatus||"draft",
+        assembly_percent:values.progress.assembly,
+        erection_percent:values.progress.erection,
+        weather_delay_hours:form.delayRows.filter(r=>r.delay_type==="weather").reduce((sum,row)=>sum+toNumber(row.delay_hours),0),
+        lightning_delay_hours:form.delayRows.filter(r=>r.delay_type==="lightning").reduce((sum,row)=>sum+toNumber(row.delay_hours),0),
+        toolbox_delay_hours:form.delayRows.filter(r=>r.delay_type==="toolbox").reduce((sum,row)=>sum+toNumber(row.delay_hours),0),
+        other_delay_hours:form.delayRows.filter(r=>r.delay_type==="other").reduce((sum,row)=>sum+toNumber(row.delay_hours),0),
+        delays_comments:comments||null,
+        missing_items_bolts:missingSummary||null,
+        lunch_break_minutes:toNumber(form.lunchBreakMinutes),
+        travel_in_minutes:toNumber(form.travelInMinutes),
+        travel_out_minutes:toNumber(form.travelOutMinutes),
+        mobilisation_hours:toNumber(form.mobilisationMinutes)/60,
+        mobilisation_notes:form.mobilisation.enabled?form.mobilisation.notes.trim()||null:null,
+        raw_manhours:values.raw,
+        production_manhours:values.production,
+        incident_occurred:form.incidentOccurred,
+        incident_type:form.incidentOccurred?form.incidentType||null:null,
+        incident_notes:form.incidentOccurred?form.incidentNotes.trim()||null:null,
+        bc_rep_name:form.bcRepName.trim()||null
+      };
+
       let docketId=form.docketId;
-      if(form.mode==="create"){const r=await supabase.from("tower_daily_dockets").insert(payload).select("id").single();if(r.error||!r.data)throw r.error||new Error("Could not create docket.");docketId=r.data.id;}
-      else{const existing=bundles.find(b=>b.docket.id===form.docketId);if(existing&&isSigned(existing.docket))throw new Error("This docket is client signed and cannot be edited.");const r=await supabase.from("tower_daily_dockets").update(payload).eq("id",form.docketId);if(r.error)throw r.error;}
+      if(form.mode==="create"){
+        const result=await supabase.from("tower_daily_dockets").insert(payload).select("id").single();
+        if(result.error||!result.data)throw result.error||new Error("Could not create docket.");
+        docketId=String(result.data.id);
+      }else{
+        if(!form.docketId)throw new Error("Missing docket ID.");
+        const result=await supabase.from("tower_daily_dockets").update(payload).eq("id",form.docketId);
+        if(result.error)throw result.error;
+      }
+
       if(!docketId)throw new Error("Missing docket ID.");
-      await Promise.all([supabase.from("tower_docket_labour").delete().eq("docket_id",docketId),supabase.from("tower_docket_progress").delete().eq("docket_id",docketId),supabase.from("tower_docket_delays").delete().eq("docket_id",docketId),supabase.from("tower_docket_plant").delete().eq("docket_id",docketId)]);
-      const labour=v.labour.filter(r=>r.worker_name.trim()).map(r=>({docket_id:docketId,worker_name:r.worker_name.trim(),time_in:normaliseTimeInput(r.time_in)||null,time_out:normaliseTimeInput(r.time_out)||null,total_hours:toNumber(r.total_hours),lunch_minutes:toNumber(r.lunch_minutes),travel_in_minutes:toNumber(r.travel_in_minutes),travel_out_minutes:toNumber(r.travel_out_minutes),mobilisation_hours:toNumber(r.mobilisation_minutes)/60,delay_hours:toNumber(r.delay_hours),delay_reason:null,production_hours:toNumber(r.production_hours)}));
-      const prog=form.progressRows.map(r=>({docket_id:docketId,section:r.section_label,section_label:r.section_label,assembled_qty:!form.hasBodyExtension&&r.section_label.toLowerCase()==="body extensions"?0:toNumber(r.assembled_qty),erected_qty:!form.hasBodyExtension&&r.section_label.toLowerCase()==="body extensions"?0:toNumber(r.erected_qty)}));
-      const delays=form.delayRows.filter(r=>toNumber(r.delay_hours)>0||r.delay_reason.trim()).map(r=>({docket_id:docketId,delay_type:r.delay_type,delay_reason:r.delay_reason.trim()||null,delay_hours:toNumber(r.delay_hours),applies_to:r.applies_to,worker_names:r.applies_to==="selected_workers"?r.worker_names:[],delay_applies_mode:r.delay_mode,plant_names:r.delay_mode==="labour_and_plant"?r.plant_names:[]}));
-      const plant=form.plantRows.filter(r=>r.plant_name.trim()||r.asset_id.trim()||r.plant_type.trim()).map(r=>({docket_id:docketId,plant_name:r.plant_name.trim()||null,plant_type:r.plant_type.trim()||null,asset_number:r.asset_id.trim()||null,operator_name:null,time_in:form.rateType==="schedule_of_rates"?normaliseTimeInput(r.time_in)||null:null,time_out:form.rateType==="schedule_of_rates"?normaliseTimeInput(r.time_out)||null:null,total_hours:form.rateType==="schedule_of_rates"?toNumber(r.total_hours):0,notes:null}));
-      const results=await Promise.all([labour.length?supabase.from("tower_docket_labour").insert(labour):Promise.resolve({error:null}),prog.length?supabase.from("tower_docket_progress").insert(prog):Promise.resolve({error:null}),delays.length?supabase.from("tower_docket_delays").insert(delays):Promise.resolve({error:null}),plant.length?supabase.from("tower_docket_plant").insert(plant):Promise.resolve({error:null})]);
-      const failed=results.find(r=>r.error);if(failed?.error)throw failed.error;await syncMaterialEvents(docketId,form);await recalcTower(form.towerId);setForm(null);setSelectedTowerId(form.towerId);await loadData(false);Alert.alert(form.mode==="create"?"Daily docket saved":"Daily docket updated",`${formatDate(form.docketDate)} · Crew ${form.crewName||"—"}`);
-    }catch(e){Alert.alert("Could not save daily docket",errorMessage(e));}finally{setSaving(false);}
+
+      const deletes=await Promise.all([
+        supabase.from("tower_docket_labour").delete().eq("docket_id",docketId),
+        supabase.from("tower_docket_progress").delete().eq("docket_id",docketId),
+        supabase.from("tower_docket_delays").delete().eq("docket_id",docketId),
+        supabase.from("tower_docket_plant").delete().eq("docket_id",docketId)
+      ]);
+      const deleteError=deletes.find(result=>result.error)?.error;
+      if(deleteError)throw deleteError;
+
+      const labour=values.labour
+        .filter(row=>row.worker_name.trim())
+        .map(row=>({
+          docket_id:docketId,
+          worker_name:row.worker_name.trim(),
+          time_in:normaliseTimeInput(row.time_in)||null,
+          time_out:normaliseTimeInput(row.time_out)||null,
+          total_hours:toNumber(row.total_hours),
+          lunch_minutes:toNumber(row.lunch_minutes),
+          travel_in_minutes:toNumber(row.travel_in_minutes),
+          travel_out_minutes:toNumber(row.travel_out_minutes),
+          mobilisation_hours:toNumber(row.mobilisation_minutes)/60,
+          delay_hours:toNumber(row.delay_hours),
+          delay_reason:null,
+          production_hours:toNumber(row.production_hours)
+        }));
+
+      const progressPayload=form.progressModel==="section_v2"
+        ?SECTION_V2
+          .filter(def=>form.hasBodyExtension||def.code!=="BE")
+          .map(def=>{
+            const row=form.progressRows.find(candidate=>candidate.section_label===def.label);
+            const assembly=row?.assembled_qty?.trim()?toNumber(row.assembled_qty):null;
+            const erection=row?.erected_qty?.trim()?toNumber(row.erected_qty):null;
+            return{
+              docket_id:docketId,
+              progress_model:"section_v2",
+              section:def.code,
+              section_code:def.code,
+              section_label:def.label,
+              assembly_today:assembly,
+              assembly_overall:assembly,
+              erection_today:erection,
+              erection_overall:erection,
+              assembly_weight:SECTION_WEIGHTS[def.code]??0,
+              erection_weight:SECTION_WEIGHTS[def.code]??0,
+              assembled_qty:assembly??0,
+              erected_qty:erection??0
+            };
+          })
+        :form.progressRows.map(row=>({
+            docket_id:docketId,
+            progress_model:"legacy",
+            section:row.section_label,
+            section_label:row.section_label,
+            assembled_qty:!form.hasBodyExtension&&row.section_label.toLowerCase().includes("body extension")?0:toNumber(row.assembled_qty),
+            erected_qty:!form.hasBodyExtension&&row.section_label.toLowerCase().includes("body extension")?0:toNumber(row.erected_qty)
+          }));
+
+      const delays=form.delayRows
+        .filter(row=>toNumber(row.delay_hours)>0||row.delay_reason.trim())
+        .map(row=>({
+          docket_id:docketId,
+          delay_type:row.delay_type,
+          delay_reason:row.delay_reason.trim()||null,
+          delay_hours:toNumber(row.delay_hours),
+          applies_to:row.applies_to,
+          worker_names:row.applies_to==="selected_workers"?row.worker_names:[],
+          delay_applies_mode:row.delay_mode,
+          plant_names:row.delay_mode==="labour_and_plant"?row.plant_names:[]
+        }));
+
+      const plant=form.plantRows
+        .filter(row=>row.plant_name.trim()||row.asset_id.trim()||row.plant_type.trim())
+        .map(row=>({
+          docket_id:docketId,
+          plant_name:row.plant_name.trim()||null,
+          plant_type:row.plant_type.trim()||null,
+          asset_number:row.asset_id.trim()||null,
+          time_in:form.rateType==="schedule_of_rates"?normaliseTimeInput(row.time_in)||null:null,
+          time_out:form.rateType==="schedule_of_rates"?normaliseTimeInput(row.time_out)||null:null,
+          total_hours:form.rateType==="schedule_of_rates"?toNumber(row.total_hours):0,
+          notes:row.notes.trim()||null
+        }));
+
+      const inserts=await Promise.all([
+        labour.length?supabase.from("tower_docket_labour").insert(labour):Promise.resolve({error:null}),
+        progressPayload.length?supabase.from("tower_docket_progress").insert(progressPayload):Promise.resolve({error:null}),
+        delays.length?supabase.from("tower_docket_delays").insert(delays):Promise.resolve({error:null}),
+        plant.length?supabase.from("tower_docket_plant").insert(plant):Promise.resolve({error:null})
+      ]);
+      const insertError=inserts.find(result=>result.error)?.error;
+      if(insertError)throw insertError;
+
+      await syncMaterialEvents(docketId,form);
+
+      if(existing&&clean(existing.docket.approval_status)==="submitted_bc"){
+        const eventResult=await supabase.from("tower_docket_workflow_events").insert({
+          docket_id:docketId,
+          project_id:projectId,
+          event_type:"submitted_docket_edited_mobile",
+          performed_by:currentUserId||null,
+          metadata:{source:"mobile",approval_status:"submitted_bc"}
+        });
+        if(eventResult.error)throw eventResult.error;
+      }
+
+      await recalcTower(form.towerId);
+      setForm(null);
+      setSelectedTowerId(form.towerId);
+      await loadData(false);
+      Alert.alert(
+        form.mode==="create"?"Daily docket saved":"Daily docket updated",
+        `${formatDate(form.docketDate)} · Crew ${form.crewName||"—"}`
+      );
+    }catch(e){
+      Alert.alert("Could not save daily docket",errorMessage(e));
+    }finally{
+      setSaving(false);
+    }
   }
 
   async function performDelete(b:Bundle){try{await Promise.all([supabase.from("tower_docket_labour").delete().eq("docket_id",b.docket.id),supabase.from("tower_docket_progress").delete().eq("docket_id",b.docket.id),supabase.from("tower_docket_delays").delete().eq("docket_id",b.docket.id),supabase.from("tower_docket_plant").delete().eq("docket_id",b.docket.id),supabase.from("tower_material_events").delete().eq("docket_id",b.docket.id)]);const r=await supabase.from("tower_daily_dockets").delete().eq("id",b.docket.id);if(r.error)throw r.error;await recalcTower(b.docket.tower_id);await loadData(false);}catch(e){Alert.alert("Could not delete docket",errorMessage(e));}}
-  function deleteDocket(b:Bundle){if(isSigned(b.docket)){Alert.alert("Docket locked","Client-signed dockets cannot be deleted.");return;}Alert.alert("Delete daily docket?","This removes labour, progress, delay, plant and material-event rows.",[{text:"Cancel",style:"cancel"},{text:"Delete",style:"destructive",onPress:()=>void performDelete(b)}]);}
+  function deleteDocket(b:Bundle){
+    const status=clean(b.docket.approval_status);
+    if(isSigned(b.docket)||["submitted_bc","client_pending","final","legacy_final"].includes(status)){
+      Alert.alert("Docket locked","Submitted or approved dockets cannot be deleted from the mobile app.");
+      return;
+    }
+    Alert.alert("Delete daily docket?","This removes labour, progress, delay, plant and material-event rows.",[{text:"Cancel",style:"cancel"},{text:"Delete",style:"destructive",onPress:()=>void performDelete(b)}]);
+  }
 
   function renderDocket({item}:{item:Bundle}){
-    const progress=Math.round(toNumber(item.docket.assembly_percent)*.5+toNumber(item.docket.erection_percent)*.5),raw=item.docket.raw_manhours??item.labour.reduce((s,r)=>s+toNumber(r.total_hours),0),prod=item.docket.production_manhours??item.labour.reduce((s,r)=>s+toNumber(r.production_hours),0),issues=item.materialEvents.filter((e:any)=>e.event_type!=="excess").length,excess=item.materialEvents.filter((e:any)=>e.event_type==="excess").length,closed=isSigned(item.docket);
+    const progress=Math.round(toNumber(item.docket.assembly_percent)*.5+toNumber(item.docket.erection_percent)*.5),raw=item.docket.raw_manhours??item.labour.reduce((s,r)=>s+toNumber(r.total_hours),0),prod=item.docket.production_manhours??item.labour.reduce((s,r)=>s+toNumber(r.production_hours),0),issues=item.materialEvents.filter((e:any)=>e.event_type!=="excess").length,excess=item.materialEvents.filter((e:any)=>e.event_type==="excess").length;
+    const editable=canEditDocket(item.docket);
+    const deletable=editable&&!["submitted_bc","client_pending","final","legacy_final"].includes(clean(item.docket.approval_status));
     return <View style={styles.docketCard}>
       <Pressable onPress={()=>openBundle(item,"view")}>
         <View style={styles.docketTop}><View style={styles.docketText}><Text style={styles.docketDate}>{formatDate(item.docket.docket_date)}</Text><Text style={styles.docketMeta}>{item.docket.leading_hand||"No leading hand"} · Crew {item.docket.crew||"—"}</Text></View><StatusPill label={docketStatus(item.docket)}/></View>
@@ -362,7 +1128,7 @@ export default function DailyDocketScreen() {
         <View style={styles.progressLine}><View style={styles.progressTextRow}><Text style={styles.progressLabel}>Progress</Text><Text style={styles.progressValue}>{progress}%</Text></View><View style={styles.progressTrack}><View style={[styles.progressFill,{width:`${Math.max(0,Math.min(100,progress))}%`}]} /></View></View>
         <View style={styles.metricRow}><Metric label="Workers" value={String(item.labour.length)}/><Metric label="Raw" value={raw.toFixed(1)}/><Metric label="Prod" value={prod.toFixed(1)}/><Metric label="Issues" value={String(issues)}/></View>
       </Pressable>
-      <View style={styles.cardActions}><ActionButton icon="eye-outline" label="View" onPress={()=>openBundle(item,"view")}/>{!closed&&<ActionButton icon="create-outline" label="Edit" primary onPress={()=>openBundle(item,"edit")}/>} {!closed&&<Pressable style={styles.deleteButton} onPress={()=>deleteDocket(item)}><Ionicons name="trash-outline" size={18} color="#BE123C"/></Pressable>}</View>
+      <View style={styles.cardActions}><ActionButton icon="eye-outline" label="View" onPress={()=>openBundle(item,"view")}/>{editable&&<ActionButton icon="create-outline" label={clean(item.docket.approval_status)==="submitted_bc"?"Edit Submitted":"Edit"} primary onPress={()=>openBundle(item,"edit")}/>} {deletable&&<Pressable style={styles.deleteButton} onPress={()=>deleteDocket(item)}><Ionicons name="trash-outline" size={18} color="#BE123C"/></Pressable>}</View>
     </View>;
   }
 
@@ -392,11 +1158,20 @@ function DocketEditor(props:{
   const {form,tower,towers,crews,employees,saving,prefilling,onClose,onChange,onSelectCrew,onPrefill,onUpdateLabour,onBlurLabourTime,onUpdateProgress,onUpdatePlant,onBlurPlantTime,onUpdateDelay,onUpdateEvent,onUpdateItem,onUpdatePerson,onUpdateMPlant,onSearchMaterial,onChooseCatalogItem,onSave}=props;
   const [open,setOpen]=useState<Record<string,boolean>>({details:true,progress:true,labour:true,defaults:false,plant:false,delays:false,materials:false,excess:false,mobilisation:false,safety:false,signoff:false});
   const [bulkIn,setBulkIn]=useState(""),[bulkOut,setBulkOut]=useState("");
-  if(!form)return null;const f=form,readOnly=f.mode==="view"||Boolean(f.clientRepName&&f.signedDate);
+  if(!form)return null;const f=form,readOnly=f.mode==="view"||Boolean(f.clientRepName&&f.signedDate)||["client_pending","final","legacy_final"].includes(f.approvalStatus);
   const values=f.labourRows.map(r=>{const total=calculateHours(r.time_in,r.time_out)||r.total_hours,n={...r,total_hours:total};return{...n,delay_hours:delayForWorker(n,f.delayRows),production_hours:productionHours(n,f.delayRows)}});
   const totals={workers:values.filter(r=>r.worker_name.trim()).length,raw:values.reduce((s,r)=>s+toNumber(r.total_hours),0),production:values.reduce((s,r)=>s+toNumber(r.production_hours),0)};
   const progress=progressTotals(f),issueCount=f.materialEvents.filter(e=>e.event_type!=="excess").length,excessCount=f.materialEvents.filter(e=>e.event_type==="excess").length;
-  const workerNames=f.labourRows.map(r=>r.worker_name.trim()).filter(Boolean),plantNames=f.plantRows.map(plantDisplay);
+  const workerNames=Array.from(new Set(f.labourRows.map(r=>r.worker_name.trim()).filter(Boolean)));
+  const labourWorkers=workerNames.map(name=>{
+    const employee=employees.find(emp=>normaliseName(emp.full_name)===normaliseName(name));
+    return{
+      id:employee?.id||`manual:${normaliseName(name)}`,
+      name,
+      role:clean(employee?.role)
+    };
+  });
+  const plantNames=f.plantRows.map(plantDisplay);
   const update=<K extends keyof FormState>(k:K,v:FormState[K])=>onChange(cur=>cur?{...cur,[k]:v}:cur);
   const toggle=(k:string)=>setOpen(x=>({...x,[k]:!x[k]}));
   const addWorker=()=>update("labourRows",[...f.labourRows,blankLabour({lunch:f.lunchBreakMinutes,travelIn:f.travelInMinutes,travelOut:f.travelOutMinutes,mobilisation:f.mobilisationMinutes})]);
@@ -404,7 +1179,22 @@ function DocketEditor(props:{
   const applyDefaults=()=>update("labourRows",f.labourRows.map(r=>({...r,lunch_minutes:f.lunchBreakMinutes,travel_in_minutes:f.travelInMinutes,travel_out_minutes:f.travelOutMinutes,mobilisation_minutes:f.mobilisationMinutes})));
   const addEvent=(type:MaterialEventType)=>update("materialEvents",[...f.materialEvents,blankMaterialEvent(type)]);
   const toggleMitigation=(ei:number,a:string)=>{const e=f.materialEvents[ei],has=e.mitigation_actions.includes(a);onUpdateEvent(ei,{mitigation_actions:has?e.mitigation_actions.filter(x=>x!==a):[...e.mitigation_actions,a]});};
-  const togglePerson=(ei:number,emp:Employee)=>{const e=f.materialEvents[ei],has=e.people.some(p=>p.employee_id===emp.id);onUpdateEvent(ei,{people:has?e.people.filter(p=>p.employee_id!==emp.id):[...e.people,{ui_id:uid("person"),employee_id:emp.id,employee_name:emp.full_name,employee_role:clean(emp.role),started_at:"",finished_at:""}]});};
+  const togglePerson=(ei:number,worker:{id:string;name:string;role:string})=>{
+    const e=f.materialEvents[ei];
+    const has=e.people.some(person=>normaliseName(person.employee_name)===normaliseName(worker.name));
+    onUpdateEvent(ei,{
+      people:has
+        ?e.people.filter(person=>normaliseName(person.employee_name)!==normaliseName(worker.name))
+        :[...e.people,{
+            ui_id:uid("person"),
+            employee_id:worker.id.startsWith("manual:")?"":worker.id,
+            employee_name:worker.name,
+            employee_role:worker.role,
+            started_at:"",
+            finished_at:""
+          }]
+    });
+  };
   const toggleMPlant=(ei:number,row:PlantRow)=>{const e=f.materialEvents[ei],name=plantDisplay(row),has=e.plant.some(p=>normaliseName(p.plant_name)===normaliseName(name));onUpdateEvent(ei,{plant:has?e.plant.filter(p=>normaliseName(p.plant_name)!==normaliseName(name)):[...e.plant,{ui_id:uid("mplant"),plant_asset_id:"",plant_name:name,asset_number:row.asset_id,started_at:"",finished_at:""}]});};
 
   return <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}><SafeAreaView style={styles.safeArea}><KeyboardAvoidingView style={styles.screen} behavior={Platform.OS==="ios"?"padding":undefined}>
@@ -418,10 +1208,11 @@ function DocketEditor(props:{
         <SelectButtons label="Crew" value={f.selectedCrewId} options={crews.map(c=>({value:c.id,label:crewLabel(c)}))} onChange={onSelectCrew} disabled={readOnly}/>
         <Field label="Leading Hand" value={f.leadingHand} onChangeText={v=>update("leadingHand",v)} editable={!readOnly}/>
         <Choice label="Rate" value={f.rateType} options={[["tonnage_rate","Tonnage"],["schedule_of_rates","Schedule of Rates"]]} onChange={v=>update("rateType",v as RateType)} disabled={readOnly}/>
-        <Choice label="Status" value={f.status} options={[["Draft","Draft"],["Submitted","Submitted"]]} onChange={v=>update("status",v)} disabled={readOnly}/>
+        <View style={styles.field}><Text style={styles.fieldLabel}>Workflow</Text><View style={styles.readOnlyField}><Text style={styles.readOnlyFieldText}>{approvalLabel(f.approvalStatus)}</Text></View></View>
       </CollapsibleSection>
 
       <CollapsibleSection title="Tower progress" open={open.progress} onToggle={()=>toggle("progress")} badge={`${progress.overall}%`}>
+        {f.progressModel==="section_v2"&&<Choice label="Body Extension" value={f.hasBodyExtension?"yes":"no"} options={[["yes","Included"],["no","Excluded"]]} onChange={v=>update("hasBodyExtension",v==="yes")} disabled={readOnly}/>}
         {f.progressRows.filter(r=>f.hasBodyExtension||r.section_label.toLowerCase()!=="body extensions").map(r=>{const i=f.progressRows.findIndex(x=>x.section_label===r.section_label);return <View key={r.section_label} style={styles.compactProgressRow}><Text style={styles.compactProgressLabel}>{r.section_label}</Text><CompactPercent label="A" value={r.assembled_qty} onChange={v=>onUpdateProgress(i,"assembled_qty",v)} editable={!readOnly}/><CompactPercent label="E" value={r.erected_qty} onChange={v=>onUpdateProgress(i,"erected_qty",v)} editable={!readOnly}/></View>})}
       </CollapsibleSection>
 
@@ -451,7 +1242,7 @@ function DocketEditor(props:{
 
       <CollapsibleSection title="Steel / material issues" open={open.materials} onToggle={()=>toggle("materials")} badge={issueCount?String(issueCount):undefined} tone="amber">
         <Text style={styles.helperText}>Missing, received, transferred or incorrect material. Excess is separate.</Text>
-        {f.materialEvents.map((e,ei)=>e.event_type==="excess"?null:<MaterialEventCard key={e.ui_id} event={e} eventIndex={ei} towers={towers} employees={employees} plantRows={f.plantRows} progressRows={f.progressRows} readOnly={readOnly} onRemove={()=>update("materialEvents",f.materialEvents.filter((_,x)=>x!==ei))} onUpdateEvent={p=>onUpdateEvent(ei,p)} onUpdateItem={(ii,p)=>onUpdateItem(ei,ii,p)} onAddItem={()=>onUpdateEvent(ei,{items:[...e.items,blankMaterialItem()]})} onRemoveItem={ii=>onUpdateEvent(ei,{items:e.items.filter((_,x)=>x!==ii).length?e.items.filter((_,x)=>x!==ii):[blankMaterialItem()]})} onSearchItem={(ii,q)=>onSearchMaterial(ei,ii,q)} onChooseItem={(ii,item)=>onChooseCatalogItem(ei,ii,item)} onToggleEmployee={emp=>togglePerson(ei,emp)} onTogglePlant={row=>toggleMPlant(ei,row)} onUpdatePerson={(pi,p)=>onUpdatePerson(ei,pi,p)} onUpdatePlant={(pi,p)=>onUpdateMPlant(ei,pi,p)} onToggleMitigation={a=>toggleMitigation(ei,a)}/>)}
+        {f.materialEvents.map((e,ei)=>e.event_type==="excess"?null:<MaterialEventCard key={e.ui_id} event={e} eventIndex={ei} towers={towers} labourWorkers={labourWorkers} plantRows={f.plantRows} progressRows={f.progressRows} readOnly={readOnly} onRemove={()=>update("materialEvents",f.materialEvents.filter((_,x)=>x!==ei))} onUpdateEvent={p=>onUpdateEvent(ei,p)} onUpdateItem={(ii,p)=>onUpdateItem(ei,ii,p)} onAddItem={()=>onUpdateEvent(ei,{items:[...e.items,blankMaterialItem()]})} onRemoveItem={ii=>onUpdateEvent(ei,{items:e.items.filter((_,x)=>x!==ii).length?e.items.filter((_,x)=>x!==ii):[blankMaterialItem()]})} onSearchItem={(ii,q)=>onSearchMaterial(ei,ii,q)} onChooseItem={(ii,item)=>onChooseCatalogItem(ei,ii,item)} onToggleWorker={worker=>togglePerson(ei,worker)} onTogglePlant={row=>toggleMPlant(ei,row)} onUpdatePerson={(pi,p)=>onUpdatePerson(ei,pi,p)} onUpdatePlant={(pi,p)=>onUpdateMPlant(ei,pi,p)} onToggleMitigation={a=>toggleMitigation(ei,a)}/>)}
         {!readOnly&&<Pressable style={[styles.secondaryButton,styles.amberButton]} onPress={()=>addEvent("missing")}><Text style={[styles.secondaryButtonText,styles.amberButtonText]}>Add material issue / movement</Text></Pressable>}
       </CollapsibleSection>
 
@@ -480,12 +1271,12 @@ function DocketEditor(props:{
 }
 
 function MaterialEventCard(props:{
-  event:MaterialEventDraft;eventIndex:number;towers:Tower[];employees:Employee[];plantRows:PlantRow[];progressRows:ProgressRow[];readOnly:boolean;
+  event:MaterialEventDraft;eventIndex:number;towers:Tower[];labourWorkers:{id:string;name:string;role:string}[];plantRows:PlantRow[];progressRows:ProgressRow[];readOnly:boolean;
   onRemove:()=>void;onUpdateEvent:(p:Partial<MaterialEventDraft>)=>void;onUpdateItem:(i:number,p:Partial<MaterialEventItemDraft>)=>void;onAddItem:()=>void;onRemoveItem:(i:number)=>void;
-  onSearchItem:(i:number,q:string)=>void;onChooseItem:(i:number,item:MaterialCatalogItem)=>void;onToggleEmployee:(e:Employee)=>void;onTogglePlant:(r:PlantRow)=>void;
+  onSearchItem:(i:number,q:string)=>void;onChooseItem:(i:number,item:MaterialCatalogItem)=>void;onToggleWorker:(worker:{id:string;name:string;role:string})=>void;onTogglePlant:(r:PlantRow)=>void;
   onUpdatePerson:(i:number,p:Partial<MaterialPersonDraft>)=>void;onUpdatePlant:(i:number,p:Partial<MaterialPlantDraft>)=>void;onToggleMitigation:(a:string)=>void;
 }){
-  const {event:e,towers,employees,plantRows,progressRows,readOnly,onRemove,onUpdateEvent,onUpdateItem,onAddItem,onRemoveItem,onSearchItem,onChooseItem,onToggleEmployee,onTogglePlant,onUpdatePerson,onUpdatePlant,onToggleMitigation}=props;
+  const {event:e,towers,labourWorkers,plantRows,progressRows,readOnly,onRemove,onUpdateEvent,onUpdateItem,onAddItem,onRemoveItem,onSearchItem,onChooseItem,onToggleWorker,onTogglePlant,onUpdatePerson,onUpdatePlant,onToggleMitigation}=props;
   return <View style={styles.materialCard}>
     <View style={styles.rowHeader}><Text style={styles.materialCardTitle}>Material issue / movement</Text>{!readOnly&&<Pressable onPress={onRemove}><Ionicons name="trash-outline" size={17} color="#BE123C"/></Pressable>}</View>
     <SelectButtons label="What happened?" value={e.event_type} options={MATERIAL_EVENT_OPTIONS} onChange={v=>onUpdateEvent({event_type:v as MaterialEventType,source_tower_id:v==="taken_from_another_tower"?e.source_tower_id:"",destination_tower_id:v==="sent_to_another_tower"?e.destination_tower_id:""})} disabled={readOnly}/>
@@ -500,7 +1291,13 @@ function MaterialEventCard(props:{
       <SelectButtons label="What section?" value={e.affected_section} options={progressRows.map(r=>({value:r.section_label,label:r.section_label}))} onChange={v=>onUpdateEvent({affected_section:v})} disabled={readOnly}/>
       <SelectButtons label="What happened to planned work?" value={e.work_outcome} options={[{value:"stopped_work",label:"Couldn't continue"},{value:"slowed_down",label:"Slowed down"},{value:"changed_sequence",label:"Changed sequence"},{value:"minor_impact",label:"Minor impact"}]} onChange={v=>onUpdateEvent({work_outcome:v as MaterialWorkOutcome,impact_start_time:v==="changed_sequence"?"":e.impact_start_time,impact_finish_time:v==="changed_sequence"?"":e.impact_finish_time,impact_ongoing:v==="changed_sequence"?false:e.impact_ongoing})} disabled={readOnly}/>
       {e.work_outcome!=="changed_sequence"?<><View style={styles.twoColumns}><TimeField label="Impact started" value={e.impact_start_time} onChangeText={v=>onUpdateEvent({impact_start_time:v})} onBlur={()=>onUpdateEvent({impact_start_time:normaliseTimeInput(e.impact_start_time)})} editable={!readOnly}/><TimeField label="Impact finished" value={e.impact_finish_time} onChangeText={v=>onUpdateEvent({impact_finish_time:v})} onBlur={()=>onUpdateEvent({impact_finish_time:normaliseTimeInput(e.impact_finish_time)})} editable={!readOnly&&!e.impact_ongoing}/></View><Choice label="Still affecting work?" value={e.impact_ongoing?"yes":"no"} options={[["no","No"],["yes","Yes"]]} onChange={v=>onUpdateEvent({impact_ongoing:v==="yes",impact_finish_time:v==="yes"?"":e.impact_finish_time})} disabled={readOnly}/></>:<View style={styles.infoBoxBlue}><Text style={styles.infoBoxBlueText}>Resequenced work does not need an artificial delay start / finish.</Text></View>}
-      <Text style={styles.subHeading}>Who spent time searching / checking?</Text><View style={styles.chipGrid}>{employees.map(emp=>{const s=e.people.some(p=>p.employee_id===emp.id);return <Pressable key={emp.id} disabled={readOnly} onPress={()=>onToggleEmployee(emp)} style={[styles.chip,s&&styles.chipActiveBlue]}><Text style={[styles.chipText,s&&styles.chipTextActive]}>{s?"✓ ":"+ "}{emp.full_name}</Text></Pressable>})}</View>
+      <Text style={styles.subHeading}>Who spent time searching / checking?</Text>
+      <WorkerSearchSelector
+        workers={labourWorkers}
+        selectedNames={e.people.map(person=>person.employee_name)}
+        disabled={readOnly}
+        onToggle={onToggleWorker}
+      />
       {e.people.map((p,i)=><View key={p.ui_id} style={styles.timeDetailRow}><Text style={styles.timeDetailName}>{p.employee_name}</Text><View style={styles.workerTimeRow}><TimeMiniInput label="Start" value={p.started_at} onChange={v=>onUpdatePerson(i,{started_at:v})} onBlur={()=>onUpdatePerson(i,{started_at:normaliseTimeInput(p.started_at)})} editable={!readOnly}/><TimeMiniInput label="Finish" value={p.finished_at} onChange={v=>onUpdatePerson(i,{finished_at:v})} onBlur={()=>onUpdatePerson(i,{finished_at:normaliseTimeInput(p.finished_at)})} editable={!readOnly}/><MiniStat label="Hrs" value={durationHours(p.started_at,p.finished_at).toFixed(2)}/></View></View>)}
       <Text style={styles.subHeading}>Was any plant tied up?</Text><View style={styles.chipGrid}>{plantRows.map((r,i)=>{const name=plantDisplay(r),s=e.plant.some(p=>normaliseName(p.plant_name)===normaliseName(name));return <Pressable key={`${name}-${i}`} disabled={readOnly} onPress={()=>onTogglePlant(r)} style={[styles.chip,s&&styles.chipActivePurple]}><Text style={[styles.chipText,s&&styles.chipTextActive]}>{s?"✓ ":"+ "}{name}</Text></Pressable>})}</View>
       {e.plant.map((p,i)=><View key={p.ui_id} style={styles.timeDetailRow}><Text style={styles.timeDetailName}>{p.plant_name}</Text><View style={styles.workerTimeRow}><TimeMiniInput label="Start" value={p.started_at} onChange={v=>onUpdatePlant(i,{started_at:v})} onBlur={()=>onUpdatePlant(i,{started_at:normaliseTimeInput(p.started_at)})} editable={!readOnly}/><TimeMiniInput label="Finish" value={p.finished_at} onChange={v=>onUpdatePlant(i,{finished_at:v})} onBlur={()=>onUpdatePlant(i,{finished_at:normaliseTimeInput(p.finished_at)})} editable={!readOnly}/><MiniStat label="Hrs" value={durationHours(p.started_at,p.finished_at).toFixed(2)}/></View></View>)}
@@ -524,26 +1321,239 @@ function ExcessMaterialCard(props:{event:MaterialEventDraft;towers:Tower[];readO
 
 function MaterialItemEditor(props:{item:MaterialEventItemDraft;readOnly:boolean;onChange:(p:Partial<MaterialEventItemDraft>)=>void;onSearch:(q:string)=>void;onChoose:(i:MaterialCatalogItem)=>void;onRemove:()=>void;tone?:"amber"|"green";}){
   const {item,readOnly,onChange,onSearch,onChoose,onRemove,tone="amber"}=props;
+
   return <View style={[styles.materialItemCard,tone==="green"&&styles.materialItemCardGreen]}>
-    <View style={styles.rowHeader}><Text style={styles.rowTitle}>{item.material_kind==="registered"?"Search member / bundle / bolt":"Unlisted material"}</Text>{!readOnly&&<Pressable onPress={onRemove}><Ionicons name="close-circle-outline" size={18} color="#64748B"/></Pressable>}</View>
+    <View style={styles.rowHeader}>
+      <Text style={styles.rowTitle}>
+        {item.material_kind==="registered"
+          ?"Search member / bundle"
+          :item.material_kind==="manual_bolt"
+          ?"Manual bolt"
+          :"Unlisted material"}
+      </Text>
+      {!readOnly&&<Pressable onPress={onRemove}><Ionicons name="close-circle-outline" size={18} color="#64748B"/></Pressable>}
+    </View>
+
     {item.material_kind==="registered"?<>
-      <TextInput value={item.search_query} onChangeText={onSearch} editable={!readOnly} style={[styles.input,readOnly&&styles.inputDisabled]} placeholder="M1278, 23-04, M20x60…" placeholderTextColor="#94A3B8"/>
+      <TextInput
+        value={item.search_query}
+        onChangeText={onSearch}
+        editable={!readOnly}
+        style={[styles.input,readOnly&&styles.inputDisabled]}
+        placeholder="M1278, 23-04..."
+        placeholderTextColor="#94A3B8"
+      />
       {item.search_loading&&<View style={styles.searchResultLoading}><ActivityIndicator size="small" color="#2563EB"/><Text style={styles.searchResultLoadingText}>Searching…</Text></View>}
-      {!item.search_loading&&item.search_results.length>0&&<View style={styles.searchResults}>{item.search_results.slice(0,12).map(r=><Pressable key={`${r.source_table}:${r.source_record_id}`} onPress={()=>onChoose(r)} style={styles.searchResult}><Text style={styles.searchResultTitle}>{r.item_reference}</Text>{r.item_description?<Text style={styles.searchResultMeta}>{r.item_description}</Text>:null}</Pressable>)}</View>}
-      {item.item_reference?<View style={styles.selectedMaterial}><Text style={styles.selectedMaterialLabel}>Selected</Text><Text style={styles.selectedMaterialValue}>{item.item_reference}</Text>{item.item_description?<Text style={styles.selectedMaterialMeta}>{item.item_description}</Text>:null}</View>:null}
-      {!readOnly&&<Pressable style={styles.linkButton} onPress={()=>onChange({material_kind:"manual",manual_category:"",search_query:"",search_results:[],source_table:"",source_record_id:"",item_reference:"",item_description:""})}><Text style={styles.linkButtonText}>+ Add unlisted item</Text></Pressable>}
+      {!item.search_loading&&item.search_results.length>0&&<View style={styles.searchResults}>
+        {item.search_results.slice(0,12).map(row=>
+          <Pressable key={`${row.source_table}:${row.source_record_id}`} onPress={()=>onChoose(row)} style={styles.searchResult}>
+            <Text style={styles.searchResultTitle}>{row.item_reference}</Text>
+            {row.item_description?<Text style={styles.searchResultMeta}>{row.item_description}</Text>:null}
+          </Pressable>
+        )}
+      </View>}
+      {item.item_reference?<View style={styles.selectedMaterial}>
+        <Text style={styles.selectedMaterialLabel}>Selected</Text>
+        <Text style={styles.selectedMaterialValue}>{item.item_reference}</Text>
+        {item.item_description?<Text style={styles.selectedMaterialMeta}>{item.item_description}</Text>:null}
+      </View>:null}
+
+      {!readOnly&&<View style={styles.inlineLinks}>
+        <Pressable
+          style={styles.linkButton}
+          onPress={()=>onChange({
+            material_kind:"manual_bolt",
+            manual_category:"",
+            bolt_size:"",
+            search_query:"",
+            search_results:[],
+            source_table:"",
+            source_record_id:"",
+            item_reference:"",
+            item_description:"",
+            unit:"ea"
+          })}
+        >
+          <Text style={styles.linkButtonText}>+ Enter bolt manually</Text>
+        </Pressable>
+        <Pressable
+          style={styles.linkButton}
+          onPress={()=>onChange({
+            material_kind:"manual",
+            manual_category:"",
+            bolt_size:"",
+            search_query:"",
+            search_results:[],
+            source_table:"",
+            source_record_id:"",
+            item_reference:"",
+            item_description:"",
+            unit:"ea"
+          })}
+        >
+          <Text style={styles.linkButtonText}>+ Other unlisted item</Text>
+        </Pressable>
+      </View>}
+    </>:item.material_kind==="manual_bolt"?<>
+      <Field
+        label="Bolt Size"
+        value={item.bolt_size}
+        onChangeText={v=>onChange({bolt_size:v})}
+        editable={!readOnly}
+        placeholder="e.g. M16 x 45"
+      />
+      <TextArea
+        label="Description / Notes"
+        value={item.item_description}
+        onChangeText={v=>onChange({item_description:v})}
+        editable={!readOnly}
+      />
+      {!readOnly&&<Pressable style={styles.linkButton} onPress={()=>onChange({material_kind:"registered",bolt_size:"",item_reference:"",item_description:"",search_query:""})}>
+        <Text style={styles.linkButtonText}>Search registered steel / bundle</Text>
+      </Pressable>}
     </>:<>
-      <View style={styles.twoColumns}><SmallField label="Item type" value={item.manual_category} onChangeText={v=>onChange({manual_category:v})} editable={!readOnly} keyboard="default"/><SmallField label="Item" value={item.item_reference} onChangeText={v=>onChange({item_reference:v})} editable={!readOnly} keyboard="default"/></View>
-      {!readOnly&&<Pressable style={styles.linkButton} onPress={()=>onChange({material_kind:"registered",manual_category:"",item_reference:"",item_description:""})}><Text style={styles.linkButtonText}>Search registered material</Text></Pressable>}
+      <View style={styles.twoColumns}>
+        <SmallField label="Item type" value={item.manual_category} onChangeText={v=>onChange({manual_category:v})} editable={!readOnly} keyboard="default"/>
+        <SmallField label="Item" value={item.item_reference} onChangeText={v=>onChange({item_reference:v})} editable={!readOnly} keyboard="default"/>
+      </View>
+      {!readOnly&&<Pressable style={styles.linkButton} onPress={()=>onChange({material_kind:"registered",manual_category:"",bolt_size:"",item_reference:"",item_description:"",search_query:""})}>
+        <Text style={styles.linkButtonText}>Search registered steel / bundle</Text>
+      </Pressable>}
     </>}
-    <View style={styles.twoColumns}><SmallField label="Qty" value={item.quantity} onChangeText={v=>onChange({quantity:v})} editable={!readOnly}/><SmallField label="Unit" value={item.unit} onChangeText={v=>onChange({unit:v})} editable={!readOnly} keyboard="default"/></View>
+
+    <View style={styles.twoColumns}>
+      <SmallField label="Qty" value={item.quantity} onChangeText={v=>onChange({quantity:v})} editable={!readOnly}/>
+      <SmallField label="Unit" value={item.material_kind==="manual_bolt"?"ea":item.unit} onChangeText={v=>onChange({unit:v})} editable={!readOnly&&item.material_kind!=="manual_bolt"} keyboard="default"/>
+    </View>
   </View>;
 }
 
 function TowerPicker({visible,towers,search,onSearch,onClose,onSelect}:{visible:boolean;towers:Tower[];search:string;onSearch:(v:string)=>void;onClose:()=>void;onSelect:(t:Tower)=>void;}){
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safeArea}><View style={styles.modalHeader}><Pressable style={styles.backButton} onPress={onClose}><Ionicons name="close" size={22} color="#334155"/></Pressable><View style={styles.modalTitleWrap}><Text style={styles.modalTitle}>Select Tower</Text></View><View style={styles.modalSpacer}/></View><View style={styles.pickerContent}><View style={styles.searchBox}><Ionicons name="search" size={18} color="#64748B"/><TextInput value={search} onChangeText={onSearch} style={styles.searchInput} placeholder="Search towers…" placeholderTextColor="#94A3B8"/></View><FlatList data={towers} keyExtractor={i=>i.id} contentContainerStyle={styles.towerList} renderItem={({item})=><Pressable style={styles.towerOption} onPress={()=>onSelect(item)}><View style={styles.towerOptionText}><Text style={styles.towerOptionTitle}>{towerLabel(item)}</Text><Text style={styles.towerOptionMeta}>{item.status||"Not Started"} · {toNumber(item.progress)}%</Text></View><Ionicons name="chevron-forward" size={18} color="#94A3B8"/></Pressable>}/></View></SafeAreaView></Modal>;
 }
-function TowerChoice({label,value,towers,onChange,disabled}:{label:string;value:string;towers:Tower[];onChange:(v:string)=>void;disabled:boolean;}){return <SelectButtons label={label} value={value} options={towers.map(t=>({value:t.id,label:towerLabel(t)}))} onChange={onChange} disabled={disabled}/>;}
+function TowerChoice({label,value,towers,onChange,disabled}:{label:string;value:string;towers:Tower[];onChange:(v:string)=>void;disabled:boolean;}){
+  const [open,setOpen]=useState(false);
+  const [query,setQuery]=useState("");
+  const selected=towers.find(t=>t.id===value)??null;
+  const visible=useMemo(()=>{
+    const q=query.trim().toLowerCase();
+    if(!q)return towers.slice(0,20);
+    return towers.filter(t=>towerLabel(t).toLowerCase().includes(q)).slice(0,40);
+  },[query,towers]);
+
+  return <View style={styles.field}>
+    <Text style={styles.fieldLabel}>{label}</Text>
+    <Pressable
+      disabled={disabled}
+      onPress={()=>setOpen(true)}
+      style={[styles.searchSelectButton,disabled&&styles.inputDisabled]}
+    >
+      <Ionicons name="search" size={17} color="#64748B"/>
+      <Text style={styles.searchSelectValue}>{selected?towerLabel(selected):"Search tower..."}</Text>
+      <Ionicons name="chevron-forward" size={17} color="#94A3B8"/>
+    </Pressable>
+
+    <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={()=>setOpen(false)}>
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.modalHeader}>
+          <Pressable style={styles.backButton} onPress={()=>setOpen(false)}><Ionicons name="close" size={22} color="#334155"/></Pressable>
+          <View style={styles.modalTitleWrap}><Text style={styles.modalTitle}>{label}</Text></View>
+          <View style={styles.modalSpacer}/>
+        </View>
+        <View style={styles.pickerContent}>
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={18} color="#64748B"/>
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              style={styles.searchInput}
+              placeholder="Search tower..."
+              placeholderTextColor="#94A3B8"
+              autoFocus
+            />
+          </View>
+          <FlatList
+            data={visible}
+            keyboardShouldPersistTaps="handled"
+            keyExtractor={item=>item.id}
+            renderItem={({item})=>
+              <Pressable
+                style={[styles.towerOption,item.id===value&&styles.towerOptionSelected]}
+                onPress={()=>{onChange(item.id);setOpen(false);setQuery("");}}
+              >
+                <View style={styles.towerOptionText}>
+                  <Text style={styles.towerOptionTitle}>{towerLabel(item)}</Text>
+                  <Text style={styles.towerOptionMeta}>{item.status||"Not Started"} · {toNumber(item.progress)}%</Text>
+                </View>
+                {item.id===value?<Ionicons name="checkmark-circle" size={20} color="#2563EB"/>:<Ionicons name="chevron-forward" size={18} color="#94A3B8"/>}
+              </Pressable>
+            }
+          />
+        </View>
+      </SafeAreaView>
+    </Modal>
+  </View>;
+}
+
+function WorkerSearchSelector({workers,selectedNames,disabled,onToggle}:{workers:{id:string;name:string;role:string}[];selectedNames:string[];disabled:boolean;onToggle:(worker:{id:string;name:string;role:string})=>void;}){
+  const [query,setQuery]=useState("");
+  const selectedSet=useMemo(()=>new Set(selectedNames.map(normaliseName)),[selectedNames]);
+  const visible=useMemo(()=>{
+    const q=query.trim().toLowerCase();
+    if(!q)return [];
+    return workers
+      .filter(worker=>`${worker.name} ${worker.role}`.toLowerCase().includes(q))
+      .slice(0,8);
+  },[query,workers]);
+
+  const selectedWorkers=workers.filter(worker=>selectedSet.has(normaliseName(worker.name)));
+
+  return <View style={styles.field}>
+    {selectedWorkers.length>0&&<View style={styles.chipGrid}>
+      {selectedWorkers.map(worker=>
+        <Pressable
+          key={worker.id}
+          disabled={disabled}
+          onPress={()=>onToggle(worker)}
+          style={[styles.chip,styles.chipActiveBlue]}
+        >
+          <Text style={[styles.chipText,styles.chipTextActive]}>✓ {worker.name}</Text>
+        </Pressable>
+      )}
+    </View>}
+
+    {!disabled&&<>
+      <View style={styles.searchBoxCompact}>
+        <Ionicons name="search" size={17} color="#64748B"/>
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          style={styles.searchInput}
+          placeholder="Search workers on this docket..."
+          placeholderTextColor="#94A3B8"
+        />
+      </View>
+      {query.trim()!==""&&<View style={styles.workerSearchResults}>
+        {visible.length===0
+          ?<Text style={styles.searchEmptyText}>No worker on this docket matched.</Text>
+          :visible.map(worker=>{
+              const selected=selectedSet.has(normaliseName(worker.name));
+              return <Pressable
+                key={worker.id}
+                onPress={()=>{onToggle(worker);setQuery("");}}
+                style={styles.workerSearchResult}
+              >
+                <View style={{flex:1}}>
+                  <Text style={styles.searchResultTitle}>{worker.name}</Text>
+                  {worker.role?<Text style={styles.searchResultMeta}>{worker.role}</Text>:null}
+                </View>
+                <Ionicons name={selected?"checkmark-circle":"add-circle-outline"} size={20} color={selected?"#2563EB":"#64748B"}/>
+              </Pressable>;
+            })}
+      </View>}
+    </>}
+  </View>;
+}
 function CollapsibleSection({title,open,onToggle,badge,children,tone="slate"}:{title:string;open:boolean;onToggle:()=>void;badge?:string;children:React.ReactNode;tone?:"slate"|"amber"|"green"|"blue";}){return <View style={[styles.section,tone==="amber"&&styles.sectionAmber,tone==="green"&&styles.sectionGreen,tone==="blue"&&styles.sectionBlue]}><Pressable style={styles.sectionHeader} onPress={onToggle}><Text style={styles.sectionTitle}>{title}</Text>{badge&&<View style={styles.sectionBadge}><Text style={styles.sectionBadgeText}>{badge}</Text></View>}<Ionicons name={open?"chevron-up":"chevron-down"} size={19} color="#64748B"/></Pressable>{open&&<View style={styles.sectionBody}>{children}</View>}</View>;}
 function Field({label,value,onChangeText,editable=true,placeholder}:{label:string;value:string;onChangeText:(v:string)=>void;editable?:boolean;placeholder?:string;}){return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput value={value} onChangeText={onChangeText} style={[styles.input,!editable&&styles.inputDisabled]} editable={editable} placeholder={placeholder||label} placeholderTextColor="#94A3B8"/></View>;}
 function FieldCompact({label,value}:{label:string;value:string;}){return <View style={styles.smallField}><Text style={styles.fieldLabel}>{label}</Text><View style={styles.readOnlyField}><Text style={styles.readOnlyFieldText}>{value||"—"}</Text></View></View>;}
@@ -571,6 +1581,14 @@ const styles=StyleSheet.create({
   listContent:{padding:12,paddingBottom:100},towerSelector:{minHeight:60,borderRadius:15,borderWidth:1,borderColor:"#BFDBFE",backgroundColor:"#EFF6FF",flexDirection:"row",alignItems:"center",padding:12,marginBottom:10},towerText:{flex:1},towerLabel:{color:"#64748B",fontSize:8,fontWeight:"900"},towerValue:{color:"#0F172A",fontSize:13,fontWeight:"900",marginTop:3},
   summaryGrid:{flexDirection:"row",flexWrap:"wrap",gap:7,marginBottom:10},summaryCard:{width:"48%",minHeight:60,borderRadius:14,borderWidth:1,borderColor:"#E2E8F0",backgroundColor:"#FFF",padding:10},summaryLabel:{color:"#64748B",fontSize:8,fontWeight:"900",textTransform:"uppercase"},summaryValue:{color:"#0F172A",fontSize:18,fontWeight:"900",marginTop:4},
   searchBox:{minHeight:44,flexDirection:"row",alignItems:"center",borderRadius:13,borderWidth:1,borderColor:"#CBD5E1",backgroundColor:"#FFF",paddingHorizontal:11,marginBottom:10},searchInput:{flex:1,color:"#0F172A",fontSize:13,marginLeft:8},
+  searchBoxCompact:{minHeight:44,flexDirection:"row",alignItems:"center",borderRadius:12,borderWidth:1,borderColor:"#CBD5E1",backgroundColor:"#FFF",paddingHorizontal:10,marginBottom:6},
+  searchSelectButton:{minHeight:46,borderRadius:12,borderWidth:1,borderColor:"#CBD5E1",backgroundColor:"#FFF",flexDirection:"row",alignItems:"center",paddingHorizontal:11},
+  searchSelectValue:{flex:1,color:"#0F172A",fontSize:12,fontWeight:"800",marginHorizontal:8},
+  towerOptionSelected:{borderColor:"#93C5FD",backgroundColor:"#EFF6FF"},
+  workerSearchResults:{borderRadius:12,borderWidth:1,borderColor:"#CBD5E1",backgroundColor:"#FFF",overflow:"hidden",marginBottom:8},
+  workerSearchResult:{minHeight:48,flexDirection:"row",alignItems:"center",paddingHorizontal:11,paddingVertical:8,borderBottomWidth:1,borderBottomColor:"#F1F5F9"},
+  searchEmptyText:{color:"#64748B",fontSize:10,padding:11},
+  inlineLinks:{flexDirection:"row",flexWrap:"wrap",gap:10,alignItems:"center"},
   docketCard:{borderRadius:16,borderWidth:1,borderColor:"#E2E8F0",backgroundColor:"#FFF",padding:12,marginBottom:9},docketTop:{flexDirection:"row",alignItems:"flex-start"},docketText:{flex:1,marginRight:8},docketDate:{color:"#0F172A",fontSize:14,fontWeight:"900"},docketMeta:{color:"#64748B",fontSize:10,marginTop:4},
   cardPills:{flexDirection:"row",flexWrap:"wrap",gap:6,marginTop:8},infoPill:{borderRadius:999,paddingHorizontal:9,paddingVertical:5,borderWidth:1},infoPillAmber:{backgroundColor:"#FFFBEB",borderColor:"#FCD34D"},infoPillGreen:{backgroundColor:"#F0FDF4",borderColor:"#86EFAC"},infoPillText:{fontSize:8,fontWeight:"900"},infoPillTextAmber:{color:"#92400E"},infoPillTextGreen:{color:"#166534"},
   progressLine:{marginTop:10},progressTextRow:{flexDirection:"row",justifyContent:"space-between"},progressLabel:{color:"#475569",fontSize:9,fontWeight:"900"},progressValue:{color:"#0F172A",fontSize:11,fontWeight:"900"},progressTrack:{height:8,borderRadius:999,backgroundColor:"#E2E8F0",overflow:"hidden",marginTop:6},progressFill:{height:"100%",borderRadius:999,backgroundColor:"#2563EB"},
