@@ -5,6 +5,25 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import {
+  SECTION_PROGRESS_WEIGHTS,
+  SECTION_V2_DEFS,
+  calculateHours,
+  calculateProductionHours,
+  delayHoursForWorker,
+  calculateLabourRows,
+  calculateLabourTotals,
+  calculateMobilisationManhours,
+  calculateMobilisationWorkerCount,
+  calculateProgressTotals,
+  calculateTotalPlantDelayHours,
+  clampPercentString,
+  hoursToMinutes,
+  isBodyExtensionRow,
+  minutesToHours,
+  normalizeWorkerName,
+  toNumber,
+} from "@/lib/dockets/calculations";
 
 type LabourRow = {
   worker_name: string;
@@ -193,23 +212,6 @@ type SectionV2ProgressRow = {
   assembly_weight: number;
   erection_weight: number;
 };
-const SECTION_V2_DEFS = [
-  ["LE","LE"],["BE","BE"],["CB","CB"],["BSS","BSS"],["MSS","MSS"],["TSS","TSS"],
-  ["BX_ARMS","BX ARMS"],["MX_ARMS","MX ARMS"],["TX_ARMS","TX ARMS"],["EP","EP"],
-] as const;
-const SECTION_PROGRESS_WEIGHTS: Record<string, number> = {
-  LE: 20,
-  BE: 15,
-  CB: 15,
-  BSS: 10,
-  MSS: 10,
-  TSS: 10,
-  BX_ARMS: 5,
-  MX_ARMS: 5,
-  TX_ARMS: 5,
-  EP: 5,
-};
-
 function blankSectionV2Rows(): SectionV2ProgressRow[] {
   return SECTION_V2_DEFS.map(([section_code, section_label]) => ({
     section_code,
@@ -302,35 +304,9 @@ const DEFAULT_PROGRESS_ROWS: ProgressRow[] = [
   { section_label: "Crossarms", assembled_qty: "", erected_qty: "" },
 ];
 
-const BODY_EXTENSION_LABEL = "Body Extensions";
-
 function toStringValue(value: unknown) {
   if (value === null || value === undefined) return "";
   return String(value);
-}
-
-function toNumber(value: string | number | null | undefined) {
-  const n = Number(value || 0);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function hoursToMinutes(value: string | number | null | undefined) {
-  if (value === null || value === undefined || value === "") return "";
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "";
-  const minutes = n * 60;
-  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(2);
-}
-
-function minutesToHours(value: string | number | null | undefined) {
-  return toNumber(value) / 60;
-}
-
-function clampPercent(value: string) {
-  if (value === "") return "";
-  const n = Number(value);
-  if (Number.isNaN(n)) return "";
-  return String(Math.max(0, Math.min(100, n)));
 }
 
 function isClientSignedDocket(docket: {
@@ -340,41 +316,6 @@ function isClientSignedDocket(docket: {
   return Boolean(docket.client_rep_name?.trim() && docket.signed_date?.trim());
 }
 
-function calculateHours(timeIn: string, timeOut: string) {
-  if (!timeIn || !timeOut) return "";
-
-  const [h1, m1] = timeIn.split(":").map(Number);
-  const [h2, m2] = timeOut.split(":").map(Number);
-
-  if (
-    Number.isNaN(h1) ||
-    Number.isNaN(m1) ||
-    Number.isNaN(h2) ||
-    Number.isNaN(m2)
-  ) {
-    return "";
-  }
-
-  let diffMinutes = h2 * 60 + m2 - (h1 * 60 + m1);
-  if (diffMinutes < 0) diffMinutes += 24 * 60;
-
-  return (diffMinutes / 60).toFixed(2);
-}
-
-function calculateProductionHours(row: LabourRow, appliedDelayHours?: number) {
-  const raw = toNumber(row.total_hours);
-  const lunch = toNumber(row.lunch_minutes) / 60;
-  const travelIn = toNumber(row.travel_in_minutes) / 60;
-  const travelOut = toNumber(row.travel_out_minutes) / 60;
-  const mobilisation = minutesToHours(row.mobilisation_hours);
-  const delay = appliedDelayHours ?? toNumber(row.delay_hours);
-
-  return Math.max(0, raw - lunch - travelIn - travelOut - mobilisation - delay).toFixed(2);
-}
-
-function normalizeWorkerName(name: string) {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
-}
 
 function getDuplicateWorkerIndexes(rows: LabourRow[]) {
   const seen = new Map<string, number[]>();
@@ -393,10 +334,6 @@ function getDuplicateWorkerIndexes(rows: LabourRow[]) {
   });
 
   return duplicateIndexes;
-}
-
-function isBodyExtensionRow(row: ProgressRow) {
-  return row.section_label.trim().toLowerCase() === BODY_EXTENSION_LABEL.toLowerCase();
 }
 
 function normaliseText(value: unknown) {
@@ -815,26 +752,6 @@ function uniqueWorkerNames(rows: LabourRow[]) {
   });
 
   return names;
-}
-
-function delayAppliesToWorker(delay: DelayRow, workerName: string) {
-  if (delay.applies_to === "entire_crew") return true;
-  const target = normalizeWorkerName(workerName);
-  return delay.worker_names.some((name) => normalizeWorkerName(name) === target);
-}
-
-function delayTypeLabel(type: DelayType) {
-  switch (type) {
-    case "weather": return "Weather";
-    case "lightning": return "Lightning";
-    case "toolbox": return "Toolbox";
-    case "mobilisation": return "Mobilisation";
-    case "access": return "Access / Bogged";
-    case "plant": return "Plant / Equipment";
-    case "materials": return "Materials";
-    case "other":
-    default: return "Other";
-  }
 }
 
 function delayDayworkMeta(type: DelayType) {
@@ -1700,96 +1617,20 @@ export default function DailyDocketForm({
     return progressRows.filter((row) => !(!hasBodyExtension && isBodyExtensionRow(row)));
   }, [progressRows, hasBodyExtension]);
 
-  const totalAssemblyPercent = useMemo(() => {
-    if (progressModel === "section_v2") {
-      const applicableRows = sectionV2Rows.filter(
-        (row) => hasBodyExtension || row.section_code !== "BE"
-      );
-
-      const applicableWeight = applicableRows.reduce(
-        (sum, row) => sum + (SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0),
-        0
-      );
-
-      if (applicableWeight <= 0) return 0;
-
-      const weightedProgress = applicableRows.reduce((sum, row) => {
-        const progress = Math.max(0, Math.min(100, toNumber(row.assembly_today)));
-        const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
-        return sum + progress * weight;
-      }, 0);
-
-      return Math.round(weightedProgress / applicableWeight);
-    }
-
-    if (visibleProgressRows.length === 0) return 0;
-    const weight = 100 / visibleProgressRows.length;
-
-    return Math.round(
-      visibleProgressRows.reduce((sum, row) => {
-        const rowPercent = Math.max(
-          0,
-          Math.min(100, Number(row.assembled_qty || 0))
-        );
-        return sum + (rowPercent / 100) * weight;
-      }, 0)
-    );
-  }, [
-    progressModel,
-    sectionV2Rows,
-    hasBodyExtension,
-    visibleProgressRows,
-  ]);
-
-  const totalErectionPercent = useMemo(() => {
-    if (progressModel === "section_v2") {
-      const applicableRows = sectionV2Rows.filter(
-        (row) => hasBodyExtension || row.section_code !== "BE"
-      );
-
-      const applicableWeight = applicableRows.reduce(
-        (sum, row) => sum + (SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0),
-        0
-      );
-
-      if (applicableWeight <= 0) return 0;
-
-      const weightedProgress = applicableRows.reduce((sum, row) => {
-        const progress = Math.max(0, Math.min(100, toNumber(row.erection_today)));
-        const weight = SECTION_PROGRESS_WEIGHTS[row.section_code] ?? 0;
-        return sum + progress * weight;
-      }, 0);
-
-      return Math.round(weightedProgress / applicableWeight);
-    }
-
-    if (visibleProgressRows.length === 0) return 0;
-    const weight = 100 / visibleProgressRows.length;
-
-    return Math.round(
-      visibleProgressRows.reduce((sum, row) => {
-        const rowPercent = Math.max(
-          0,
-          Math.min(100, Number(row.erected_qty || 0))
-        );
-        return sum + (rowPercent / 100) * weight;
-      }, 0)
-    );
-  }, [
-    progressModel,
-    sectionV2Rows,
-    hasBodyExtension,
-    visibleProgressRows,
-  ]);
-
-  const displayProgress = useMemo(
+  const progressTotals = useMemo(
     () =>
-      Math.round(
-        totalAssemblyPercent * 0.5 +
-        totalErectionPercent * 0.5
-      ),
-    [totalAssemblyPercent, totalErectionPercent]
+      calculateProgressTotals({
+        progressModel,
+        sectionV2Rows,
+        legacyRows: visibleProgressRows,
+        hasBodyExtension,
+      }),
+    [progressModel, sectionV2Rows, visibleProgressRows, hasBodyExtension]
   );
+
+  const totalAssemblyPercent = progressTotals.assemblyPercent;
+  const totalErectionPercent = progressTotals.erectionPercent;
+  const displayProgress = progressTotals.totalProgressPercent;
 
   function updateSectionV2(
     index: number,
@@ -1801,7 +1642,7 @@ export default function DailyDocketForm({
     const nextValue =
       value.trim() === ""
         ? ""
-        : clampPercent(value);
+        : clampPercentString(value);
 
     setSectionV2Rows((prev) =>
       prev.map((row, i) =>
@@ -1814,62 +1655,29 @@ export default function DailyDocketForm({
 
   const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
 
-  function delayHoursForWorker(workerName: string) {
-    if (!workerName.trim()) return 0;
-    return delayRows.reduce((sum, delay) => {
-      if (!delayAppliesToWorker(delay, workerName)) return sum;
-      return sum + toNumber(delay.delay_hours);
-    }, 0);
-  }
-
-  function delayReasonsForWorker(workerName: string) {
-    if (!workerName.trim()) return "";
-    return delayRows
-      .filter((delay) => delayAppliesToWorker(delay, workerName) && toNumber(delay.delay_hours) > 0)
-      .map((delay) => `${delayTypeLabel(delay.delay_type)}: ${delay.delay_reason || "Delay"}`)
-      .join("; ");
-  }
-
-  const labourRowsWithProduction = labourRows.map((row) => {
-    const appliedDelayHours = delayHoursForWorker(row.worker_name);
-    const mobilisationAppliesToWorker =
-      mobilisation.enabled &&
-      (mobilisation.worker_names.length === 0 ||
-        mobilisation.worker_names.some(
-          (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
-        ));
-
-    const effectiveMobilisationMinutes = mobilisationAppliesToWorker
-      ? mobilisationHours
-      : "";
-
-    const next: LabourRow = {
-      ...row,
-      mobilisation_hours: effectiveMobilisationMinutes,
-      delay_hours: appliedDelayHours ? appliedDelayHours.toFixed(2) : "",
-      delay_reason: delayReasonsForWorker(row.worker_name),
-    };
-
-    return {
-      ...next,
-      production_hours: calculateProductionHours(next, appliedDelayHours),
-    };
-  });
-
-  const labourWorkerCount = useMemo(
-    () => labourRowsWithProduction.filter((row) => row.worker_name.trim()).length,
-    [labourRowsWithProduction]
+  const labourRowsWithProduction = useMemo(
+    () =>
+      calculateLabourRows(labourRows, delayRows, {
+        enabled: mobilisation.enabled,
+        durationMinutes: mobilisationHours,
+        workerNames: mobilisation.worker_names,
+      }) as LabourRow[],
+    [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
   );
 
-  const totalLabourHours = useMemo(
-    () => labourRowsWithProduction.reduce((sum, row) => sum + (Number(row.total_hours) || 0), 0),
-    [labourRowsWithProduction]
+  const labourTotals = useMemo(
+    () =>
+      calculateLabourTotals(labourRows, delayRows, {
+        enabled: mobilisation.enabled,
+        durationMinutes: mobilisationHours,
+        workerNames: mobilisation.worker_names,
+      }),
+    [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
   );
 
-  const totalProductionHours = useMemo(
-    () => labourRowsWithProduction.reduce((sum, row) => sum + (Number(row.production_hours) || 0), 0),
-    [labourRowsWithProduction]
-  );
+  const labourWorkerCount = labourTotals.workerCount;
+  const totalLabourHours = labourTotals.rawManhours;
+  const totalProductionHours = labourTotals.productionManhours;
 
   const plantRowsWithTotals = useMemo(() => {
     return plantRows.map((row) => ({
@@ -1907,62 +1715,35 @@ export default function DailyDocketForm({
 
   const plantSectionOpen = showPlantUsedSection || rateType === "schedule_of_rates";
 
-  const totalLunchHours = useMemo(
-    () => labourRowsWithProduction.reduce((sum, row) => sum + toNumber(row.lunch_minutes) / 60, 0),
-    [labourRowsWithProduction]
-  );
+  const totalLunchHours = labourTotals.lunchManhours;
 
-  const totalTravelHours = useMemo(
-    () =>
-      labourRowsWithProduction.reduce(
-        (sum, row) => sum + (toNumber(row.travel_in_minutes) + toNumber(row.travel_out_minutes)) / 60,
-        0
-      ),
-    [labourRowsWithProduction]
-  );
+  const totalTravelHours = labourTotals.travelManhours;
 
-  const totalMobilisationHours = useMemo(
-    () =>
-      labourRowsWithProduction.reduce(
-        (sum, row) => sum + minutesToHours(row.mobilisation_hours),
-        0
-      ),
-    [labourRowsWithProduction]
-  );
+  const totalMobilisationHours = labourTotals.mobilisationManhours;
 
-  const mobilisationDurationHours = useMemo(
-    () => (mobilisation.enabled ? minutesToHours(mobilisationHours) : 0),
-    [mobilisation.enabled, mobilisationHours]
-  );
+  const mobilisationDurationHours = mobilisation.enabled ? minutesToHours(mobilisationHours) : 0;
 
-  const mobilisationWorkerCount = useMemo(() => {
-    if (!mobilisation.enabled) return 0;
-    if (mobilisation.worker_names.length === 0) return labourWorkerCount;
-    return labourRowsWithProduction.filter((row) =>
-      mobilisation.worker_names.some(
-        (name) => normalizeWorkerName(name) === normalizeWorkerName(row.worker_name)
-      )
-    ).length;
-  }, [mobilisation.enabled, mobilisation.worker_names, labourWorkerCount, labourRowsWithProduction]);
+  const mobilisationWorkerCount = calculateMobilisationWorkerCount({
+    labourRows,
+    mobilisation: {
+      enabled: mobilisation.enabled,
+      durationMinutes: mobilisationHours,
+      workerNames: mobilisation.worker_names,
+    },
+  });
 
-  const mobilisationManhours = useMemo(
-    () => mobilisationDurationHours * mobilisationWorkerCount,
-    [mobilisationDurationHours, mobilisationWorkerCount]
-  );
+  const mobilisationManhours = calculateMobilisationManhours({
+    labourRows,
+    mobilisation: {
+      enabled: mobilisation.enabled,
+      durationMinutes: mobilisationHours,
+      workerNames: mobilisation.worker_names,
+    },
+  });
 
-  const totalDelayManhours = useMemo(
-    () => labourRowsWithProduction.reduce((sum, row) => sum + toNumber(row.delay_hours), 0),
-    [labourRowsWithProduction]
-  );
+  const totalDelayManhours = labourTotals.delayManhours;
 
-  const totalPlantDelayHours = useMemo(
-    () =>
-      delayRows.reduce((sum, row) => {
-        if (!delayIncludesPlant(row)) return sum;
-        return sum + toNumber(row.delay_hours) * row.plant_names.length;
-      }, 0),
-    [delayRows]
-  );
+  const totalPlantDelayHours = calculateTotalPlantDelayHours(delayRows);
 
   const totalDelayEvents = useMemo(
     () => delayRows.reduce((sum, row) => sum + toNumber(row.delay_hours), 0),
@@ -2230,7 +2011,7 @@ export default function DailyDocketForm({
 
   function updateProgressRow(index: number, key: keyof ProgressRow, value: string) {
     if (isView || locked) return;
-    const nextValue = key === "section_label" ? value : clampPercent(value);
+    const nextValue = key === "section_label" ? value : clampPercentString(value);
 
     setProgressRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, [key]: nextValue } : row))
@@ -2273,7 +2054,7 @@ export default function DailyDocketForm({
           ...next,
           production_hours: calculateProductionHours(
             next,
-            delayHoursForWorker(next.worker_name)
+            delayHoursForWorker(next.worker_name, delayRows)
           ),
         };
       })
@@ -3764,7 +3545,7 @@ export default function DailyDocketForm({
           ...next,
           production_hours: calculateProductionHours(
             next,
-            delayHoursForWorker(next.worker_name)
+            delayHoursForWorker(next.worker_name, delayRows)
           ),
         };
       })
@@ -4795,7 +4576,7 @@ export default function DailyDocketForm({
                 label="Progress %"
                 type="number"
                 value={mobilisation.percent_complete}
-                onChange={(v) => setMobilisation((prev) => ({ ...prev, percent_complete: clampPercent(v) }))}
+                onChange={(v) => setMobilisation((prev) => ({ ...prev, percent_complete: clampPercentString(v) }))}
                 disabled={locked || isView}
               />
 

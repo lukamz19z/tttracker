@@ -28,6 +28,7 @@ type DocketRow = {
   bc_rep_name: string | null;
   bc_signature_data_url: string | null;
   bc_signed_at: string | null;
+  approval_revision: number | null;
 };
 
 type ProjectRow = {
@@ -156,16 +157,24 @@ async function recordWorkflowEvent(
     docketId: string;
     projectId: string;
     actorUserId: string;
+    actorName?: string | null;
+    actorEmail?: string | null;
     eventType: string;
+    revision: number;
     comments?: string | null;
+    metadata?: Record<string, unknown>;
   },
 ) {
   const { error } = await service.from("tower_docket_workflow_events").insert({
     docket_id: values.docketId,
     project_id: values.projectId,
-    actor_user_id: values.actorUserId,
     event_type: values.eventType,
+    performed_by: values.actorUserId,
+    performed_by_name: values.actorName || null,
+    performed_by_email: values.actorEmail || null,
     comments: values.comments || null,
+    metadata: values.metadata ?? {},
+    revision: values.revision,
     created_at: new Date().toISOString(),
   });
 
@@ -216,7 +225,8 @@ export async function POST(
         approval_status,
         bc_rep_name,
         bc_signature_data_url,
-        bc_signed_at
+        bc_signed_at,
+        approval_revision
       `)
       .eq("id", docketId)
       .single();
@@ -310,6 +320,32 @@ export async function POST(
     }
 
     const submittedAt = new Date().toISOString();
+    const previousRevision = Math.max(
+      0,
+      Number(docket.approval_revision ?? 0) || 0,
+    );
+    const revision = previousRevision + 1;
+
+    // Any unused client links belong to an older draft and must never become
+    // valid again after the docket is resubmitted to BC.
+    const { error: supersedeClientError } = await service
+      .from("tower_docket_approvals")
+      .update({
+        token_superseded_at: submittedAt,
+        status: "superseded",
+      })
+      .eq("docket_id", docket.id)
+      .eq("stage", "client")
+      .eq("status", "pending");
+
+    if (supersedeClientError) {
+      return NextResponse.json(
+        {
+          error: `Previous client approval links could not be closed: ${supersedeClientError.message}`,
+        },
+        { status: 500 },
+      );
+    }
 
     const { data: updatedDocket, error: updateError } = await service
       .from("tower_daily_dockets")
@@ -317,6 +353,7 @@ export async function POST(
         approval_status: "submitted_bc",
         bc_submitted_at: submittedAt,
         bc_submitted_by: user.id,
+        approval_revision: revision,
       })
       .eq("id", docket.id)
       .in("approval_status", [
@@ -325,7 +362,7 @@ export async function POST(
         "bc_changes_requested",
         "client_changes_requested",
       ])
-      .select("id, approval_status")
+      .select("id, approval_status, approval_revision")
       .maybeSingle();
 
     if (updateError) {
@@ -350,8 +387,9 @@ export async function POST(
       project_id: docket.project_id,
       stage: "bc",
       status: "pending",
-      requested_at: submittedAt,
-      requested_by: user.id,
+      revision,
+      submitted_by: user.id,
+      submitted_at: submittedAt,
       created_at: submittedAt,
     });
 
@@ -359,7 +397,17 @@ export async function POST(
       docketId: docket.id,
       projectId: docket.project_id,
       actorUserId: user.id,
-      eventType: "bc_submitted",
+      actorName:
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        null,
+      actorEmail: user.email || null,
+      eventType: previousRevision > 0 ? "bc_resubmitted" : "bc_submitted",
+      revision,
+      metadata: {
+        previous_revision: previousRevision,
+        source_status: docket.approval_status || "legacy",
+      },
     });
 
     const [{ data: projectData }, { data: towerData }] = await Promise.all([
@@ -418,6 +466,10 @@ export async function POST(
               <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docketDate}</td>
             </tr>
             <tr>
+              <td style="padding:8px 0;color:#64748b;">Revision</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">R${String(revision).padStart(2, "0")}</td>
+            </tr>
+            <tr>
               <td style="padding:8px 0;color:#64748b;">Leading Hand</td>
               <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.leading_hand || "—"}</td>
             </tr>
@@ -462,6 +514,7 @@ export async function POST(
       success: true,
       status: "submitted_bc",
       submittedAt,
+      revision,
       reviewers: reviewers.length,
       warning: emailWarning,
     });

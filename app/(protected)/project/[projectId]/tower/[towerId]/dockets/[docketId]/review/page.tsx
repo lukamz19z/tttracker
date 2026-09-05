@@ -11,7 +11,9 @@ import {
   FileCheck2,
   Loader2,
   MessageSquareWarning,
+  Pencil,
   RotateCcw,
+  Save,
   ShieldCheck,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -26,6 +28,7 @@ type DocketRow = {
   weather: string | null;
   rate_type: string | null;
   approval_status: string | null;
+  approval_revision: number | null;
   progress_model: string | null;
   assembly_percent: number | null;
   erection_percent: number | null;
@@ -168,6 +171,23 @@ type RevisionAllocationRow = {
   hours: number | null;
   worker_names: string[] | null;
   reason: string | null;
+};
+
+
+
+type WorkflowEventRow = {
+  id: string;
+  event_type: string;
+  revision: number | null;
+  performed_by_name: string | null;
+  performed_by_email: string | null;
+  comments: string | null;
+  metadata: {
+    change_requests?: Array<{ category?: string; detail?: string }>;
+    action_required_by?: string;
+    [key: string]: unknown;
+  } | null;
+  created_at: string;
 };
 
 type ReviewResponse = {
@@ -466,6 +486,10 @@ export default function DailyDocketBcReviewPage() {
   const [revisionAllocations, setRevisionAllocations] = useState<
     RevisionAllocationRow[]
   >([]);
+  const [workflowEvents, setWorkflowEvents] = useState<WorkflowEventRow[]>([]);
+  const [editMode, setEditMode] = useState(false);
+  const [savingChanges, setSavingChanges] = useState(false);
+  const [reviewerMadeChanges, setReviewerMadeChanges] = useState(false);
 
   const [currentRole, setCurrentRole] = useState("");
   const [reviewerName, setReviewerName] = useState("");
@@ -519,6 +543,7 @@ export default function DailyDocketBcReviewPage() {
           progressRes,
           materialRes,
           revisionRes,
+          workflowRes,
           roleRes,
           configRes,
         ] = await Promise.all([
@@ -550,6 +575,7 @@ export default function DailyDocketBcReviewPage() {
               weather,
               rate_type,
               approval_status,
+              approval_revision,
               progress_model,
               assembly_percent,
               erection_percent,
@@ -684,6 +710,20 @@ export default function DailyDocketBcReviewPage() {
             .eq("docket_id", docketId)
             .order("created_at", { ascending: true }),
           supabase
+            .from("tower_docket_workflow_events")
+            .select(`
+              id,
+              event_type,
+              revision,
+              performed_by_name,
+              performed_by_email,
+              comments,
+              metadata,
+              created_at
+            `)
+            .eq("docket_id", docketId)
+            .order("created_at", { ascending: false }),
+          supabase
             .from("user_roles")
             .select("role")
             .eq("user_id", user.id)
@@ -713,6 +753,12 @@ export default function DailyDocketBcReviewPage() {
           );
         }
 
+        if (workflowRes.error) {
+          throw new Error(
+            "Daily Docket review history could not be loaded. Run the Daily Docket approval revision migration before reviewing this docket.",
+          );
+        }
+
         const role = normalizeRole(
           (roleRes.data as { role?: string | null } | null)?.role,
         );
@@ -738,6 +784,9 @@ export default function DailyDocketBcReviewPage() {
           setMaterialEvents((materialRes.data || []) as MaterialEventRow[]);
           setRevisionAllocations(
             (revisionRes.data || []) as RevisionAllocationRow[],
+          );
+          setWorkflowEvents(
+            (workflowRes.data || []) as WorkflowEventRow[],
           );
           setCurrentRole(role);
           setAllowedReviewer(configuredRoles.has(role));
@@ -811,6 +860,37 @@ export default function DailyDocketBcReviewPage() {
     [revisionAllocations],
   );
 
+  const currentRevision = Math.max(
+    1,
+    Number(docket?.approval_revision ?? 1) || 1,
+  );
+
+  const reviewActionable =
+    docket?.approval_status === "submitted_bc" ||
+    docket?.approval_status === "client_changes_requested";
+
+  const clientChangeEvent = useMemo(
+    () =>
+      workflowEvents.find(
+        (event) => event.event_type === "client_changes_requested",
+      ) || null,
+    [workflowEvents],
+  );
+
+  const previousReviewEvents = useMemo(
+    () =>
+      workflowEvents.filter((event) =>
+        [
+          "bc_changes_requested",
+          "client_changes_requested",
+          "bc_reviewer_corrected_docket",
+          "bc_corrected_client_changes",
+          "bc_resubmitted",
+        ].includes(event.event_type),
+      ),
+    [workflowEvents],
+  );
+
   const changeRequests = useMemo<ChangeRequest[]>(
     () =>
       selectedChangeCategories.map((category) => ({
@@ -829,6 +909,101 @@ export default function DailyDocketBcReviewPage() {
     setSubmitError(null);
   }
 
+  async function saveReviewerChanges() {
+    if (!docket || !allowedReviewer || !reviewActionable) return;
+
+    setSavingChanges(true);
+    setSubmitError(null);
+
+    try {
+      const docketUpdate = {
+        crew: docket.crew,
+        leading_hand: docket.leading_hand,
+        weather: docket.weather,
+        rate_type: docket.rate_type,
+        incident_occurred: docket.incident_occurred,
+        incident_type: docket.incident_type,
+        incident_notes: docket.incident_notes,
+        delays_comments: docket.delays_comments,
+        missing_items_bolts: docket.missing_items_bolts,
+      };
+
+      const { error: docketError } = await supabase
+        .from("tower_daily_dockets")
+        .update(docketUpdate)
+        .eq("id", docket.id);
+
+      if (docketError) throw docketError;
+
+      for (const row of progress) {
+        if (!row.id) continue;
+        const { error } = await supabase
+          .from("tower_docket_progress")
+          .update({
+            assembly_today: row.assembly_today,
+            assembly_overall: row.assembly_overall,
+            erection_today: row.erection_today,
+            erection_overall: row.erection_overall,
+            assembled_qty: row.assembled_qty,
+            erected_qty: row.erected_qty,
+          })
+          .eq("id", row.id)
+          .eq("docket_id", docket.id);
+        if (error) throw error;
+      }
+
+      for (const row of labour) {
+        if (!row.id) continue;
+        const { error } = await supabase
+          .from("tower_docket_labour")
+          .update({
+            time_in: row.time_in,
+            time_out: row.time_out,
+            total_hours: row.total_hours,
+            lunch_minutes: row.lunch_minutes,
+            travel_in_minutes: row.travel_in_minutes,
+            travel_out_minutes: row.travel_out_minutes,
+            mobilisation_hours: row.mobilisation_hours,
+            delay_hours: row.delay_hours,
+            delay_reason: row.delay_reason,
+            production_hours: row.production_hours,
+          })
+          .eq("id", row.id)
+          .eq("docket_id", docket.id);
+        if (error) throw error;
+      }
+
+      for (const row of delays) {
+        if (!row.id) continue;
+        const { error } = await supabase
+          .from("tower_docket_delays")
+          .update({
+            delay_type: row.delay_type,
+            delay_reason: row.delay_reason,
+            delay_hours: row.delay_hours,
+            applies_to: row.applies_to,
+            worker_names: row.worker_names,
+            delay_applies_mode: row.delay_applies_mode,
+            plant_names: row.plant_names,
+          })
+          .eq("id", row.id)
+          .eq("docket_id", docket.id);
+        if (error) throw error;
+      }
+
+      setReviewerMadeChanges(true);
+      setEditMode(false);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Reviewer changes could not be saved.",
+      );
+    } finally {
+      setSavingChanges(false);
+    }
+  }
+
   async function submitReview(action: "approve" | "request_changes") {
     if (!docketId || !docket) return;
 
@@ -837,8 +1012,10 @@ export default function DailyDocketBcReviewPage() {
       return;
     }
 
-    if (docket.approval_status !== "submitted_bc") {
-      setSubmitError("This Daily Docket is no longer awaiting BC approval.");
+    if (!reviewActionable) {
+      setSubmitError(
+        "This Daily Docket is no longer awaiting action from a BC reviewer.",
+      );
       return;
     }
 
@@ -878,8 +1055,12 @@ export default function DailyDocketBcReviewPage() {
 
     const confirmed = window.confirm(
       action === "approve"
-        ? "Approve this Daily Docket, generate the draft PDF and send it to the client for approval?"
-        : "Return this Daily Docket to the project team with the selected changes?",
+        ? docket.approval_status === "client_changes_requested"
+          ? "Approve the corrected Daily Docket as a new revision and resend it to the client?"
+          : "Approve this Daily Docket, generate the draft PDF and send it to the client for approval?"
+        : docket.approval_status === "client_changes_requested"
+          ? "Send the client's requested changes back to the docket preparer?"
+          : "Return this Daily Docket to the preparer with the selected changes?",
     );
 
     if (!confirmed) return;
@@ -902,6 +1083,8 @@ export default function DailyDocketBcReviewPage() {
               action === "request_changes" ? changeRequests : undefined,
             reviewer_signature_data_url:
               action === "approve" ? reviewerSignature : undefined,
+            reviewer_made_changes:
+              action === "approve" ? reviewerMadeChanges : undefined,
           }),
         },
       );
@@ -1000,7 +1183,7 @@ export default function DailyDocketBcReviewPage() {
             <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-600">
               {completed === "approved"
                 ? "The BC approval has been recorded. The draft Daily Docket has been published and the configured client contacts have been sent their approval link."
-                : "The Daily Docket has been returned to the project team with the requested changes."}
+                : "The Daily Docket has been returned to the preparer with the requested changes."}
             </p>
 
             <button
@@ -1040,9 +1223,14 @@ export default function DailyDocketBcReviewPage() {
             </div>
           </div>
 
-          <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
-            {statusLabel(docket.approval_status)}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+              R{String(currentRevision).padStart(2, "0")}
+            </span>
+            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
+              {statusLabel(docket.approval_status)}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -1062,6 +1250,67 @@ export default function DailyDocketBcReviewPage() {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {docket.approval_status === "client_changes_requested" ? (
+          <section className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <MessageSquareWarning className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="font-semibold text-red-950">
+                    Client changes requested
+                  </h2>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-200">
+                    Action required by BC reviewer
+                  </span>
+                </div>
+                <p className="mt-2 text-sm text-red-900">
+                  {clientChangeEvent?.performed_by_name ||
+                    clientChangeEvent?.performed_by_email ||
+                    "Client representative"}
+                  {" · "}
+                  {formatDateTime(clientChangeEvent?.created_at || null)}
+                </p>
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-red-900">
+                  {clientChangeEvent?.comments || "The client requested changes to this docket."}
+                </p>
+                <p className="mt-3 text-xs font-medium text-red-800">
+                  Correct the docket here and approve the new revision, or return it to the preparer using Request Changes.
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {previousReviewEvents.length ? (
+          <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-900">Previous Review History</h2>
+            <div className="mt-4 space-y-3">
+              {previousReviewEvents.slice(0, 6).map((event) => (
+                <div key={event.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-800">
+                      {titleCase(event.event_type)}
+                    </p>
+                    <span className="text-xs text-slate-500">
+                      R{String(Math.max(1, Number(event.revision || 1))).padStart(2, "0")} · {formatDateTime(event.created_at)}
+                    </span>
+                  </div>
+                  {event.performed_by_name || event.performed_by_email ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      {event.performed_by_name || event.performed_by_email}
+                    </p>
+                  ) : null}
+                  {event.comments ? (
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                      {event.comments}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
         ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -1198,7 +1447,22 @@ export default function DailyDocketBcReviewPage() {
                                 `Section ${index + 1}`}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
-                              {formatPercent(assemblyToday)}
+                              {editMode && isV2 ? (
+                                <PercentInput
+                                  value={assemblyToday}
+                                  onChange={(value) =>
+                                    setProgress((current) =>
+                                      current.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, assembly_today: value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                formatPercent(assemblyToday)
+                              )}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
                               {isV2
@@ -1206,7 +1470,22 @@ export default function DailyDocketBcReviewPage() {
                                 : "Legacy"}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
-                              {formatPercent(erectionToday)}
+                              {editMode && isV2 ? (
+                                <PercentInput
+                                  value={erectionToday}
+                                  onChange={(value) =>
+                                    setProgress((current) =>
+                                      current.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, erection_today: value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                formatPercent(erectionToday)
+                              )}
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
                               {isV2
@@ -1287,7 +1566,37 @@ export default function DailyDocketBcReviewPage() {
                             {row.worker_name || "—"}
                           </td>
                           <td className="px-4 py-3 text-slate-600">
-                            {row.time_in || "—"} - {row.time_out || "—"}
+                            {editMode ? (
+                              <div className="flex items-center gap-1">
+                                <TimeInput
+                                  value={row.time_in || ""}
+                                  onChange={(value) =>
+                                    setLabour((current) =>
+                                      current.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, time_in: value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                                <span>-</span>
+                                <TimeInput
+                                  value={row.time_out || ""}
+                                  onChange={(value) =>
+                                    setLabour((current) =>
+                                      current.map((item, itemIndex) =>
+                                        itemIndex === index
+                                          ? { ...item, time_out: value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </div>
+                            ) : (
+                              <>{row.time_in || "—"} - {row.time_out || "—"}</>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-700">
                             {formatHours(row.total_hours)}
@@ -1612,9 +1921,26 @@ export default function DailyDocketBcReviewPage() {
                           <p className="text-sm font-semibold text-slate-900">
                             {titleCase(row.delay_type || "Delay")}
                           </p>
-                          <p className="mt-1 text-sm text-slate-600">
-                            {row.delay_reason || "No reason entered"}
-                          </p>
+                          {editMode ? (
+                            <input
+                              value={row.delay_reason || ""}
+                              onChange={(event) =>
+                                setDelays((current) =>
+                                  current.map((item, itemIndex) =>
+                                    itemIndex === index
+                                      ? { ...item, delay_reason: event.target.value }
+                                      : item,
+                                  ),
+                                )
+                              }
+                              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700"
+                              placeholder="Delay reason"
+                            />
+                          ) : (
+                            <p className="mt-1 text-sm text-slate-600">
+                              {row.delay_reason || "No reason entered"}
+                            </p>
+                          )}
 
                           <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
                             <span className="rounded-full bg-white px-2 py-1 ring-1 ring-slate-200">
@@ -1635,9 +1961,25 @@ export default function DailyDocketBcReviewPage() {
                           </div>
                         </div>
 
-                        <span className="shrink-0 text-sm font-semibold text-slate-700">
-                          {formatHours(row.delay_hours)} hrs
-                        </span>
+                        {editMode ? (
+                          <NumberInput
+                            value={Number(row.delay_hours || 0)}
+                            step={0.25}
+                            onChange={(value) =>
+                              setDelays((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? { ...item, delay_hours: value }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        ) : (
+                          <span className="shrink-0 text-sm font-semibold text-slate-700">
+                            {formatHours(row.delay_hours)} hrs
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))
@@ -1933,7 +2275,7 @@ export default function DailyDocketBcReviewPage() {
                   value={reviewerSignature}
                   disabled={
                     !allowedReviewer ||
-                    docket.approval_status !== "submitted_bc" ||
+                    !reviewActionable ||
                     submitting !== null
                   }
                   onChange={setReviewerSignature}
@@ -1969,6 +2311,59 @@ export default function DailyDocketBcReviewPage() {
                 </p>
               </div>
 
+              {reviewActionable && allowedReviewer ? (
+                <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-sm font-semibold text-blue-950">
+                    Reviewer corrections
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-blue-800">
+                    You can correct progress, labour times and delays before approving. Saving a reviewer correction means approval will create the next revision.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    {!editMode ? (
+                      <button
+                        type="button"
+                        disabled={submitting !== null || savingChanges}
+                        onClick={() => setEditMode(true)}
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-800 hover:bg-blue-50 disabled:opacity-50"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit Docket
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled={savingChanges}
+                          onClick={() => setEditMode(false)}
+                          className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingChanges}
+                          onClick={() => void saveReviewerChanges()}
+                          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+                        >
+                          {savingChanges ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Save className="h-3.5 w-3.5" />
+                          )}
+                          Save Changes
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {reviewerMadeChanges ? (
+                    <p className="mt-2 text-xs font-semibold text-emerald-700">
+                      Reviewer corrections saved. Approval will issue the next revision.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className="mt-5">
                 <label
                   htmlFor="approval-comments"
@@ -1982,7 +2377,7 @@ export default function DailyDocketBcReviewPage() {
                   value={approvalComments}
                   disabled={
                     !allowedReviewer ||
-                    docket.approval_status !== "submitted_bc" ||
+                    !reviewActionable ||
                     submitting !== null
                   }
                   onChange={(event) => setApprovalComments(event.target.value)}
@@ -2002,7 +2397,7 @@ export default function DailyDocketBcReviewPage() {
                   type="button"
                   disabled={
                     !allowedReviewer ||
-                    docket.approval_status !== "submitted_bc" ||
+                    !reviewActionable ||
                     submitting !== null
                   }
                   onClick={() => void submitReview("approve")}
@@ -2013,7 +2408,9 @@ export default function DailyDocketBcReviewPage() {
                   ) : (
                     <FileCheck2 className="h-4 w-4" />
                   )}
-                  Approve & Send to Client
+                  {docket.approval_status === "client_changes_requested"
+                    ? "Approve Correction & Resend to Client"
+                    : "Approve & Send to Client"}
                 </button>
               </div>
             </section>
@@ -2045,7 +2442,7 @@ export default function DailyDocketBcReviewPage() {
                       type="button"
                       disabled={
                         !allowedReviewer ||
-                        docket.approval_status !== "submitted_bc" ||
+                        !reviewActionable ||
                         submitting !== null
                       }
                       onClick={() => toggleChangeCategory(category)}
@@ -2073,7 +2470,7 @@ export default function DailyDocketBcReviewPage() {
                         value={changeDetails[category] || ""}
                         disabled={
                           !allowedReviewer ||
-                          docket.approval_status !== "submitted_bc" ||
+                          !reviewActionable ||
                           submitting !== null
                         }
                         onChange={(event) =>
@@ -2098,7 +2495,7 @@ export default function DailyDocketBcReviewPage() {
                 type="button"
                 disabled={
                   !allowedReviewer ||
-                  docket.approval_status !== "submitted_bc" ||
+                  !reviewActionable ||
                   submitting !== null
                 }
                 onClick={() => void submitReview("request_changes")}
@@ -2109,7 +2506,9 @@ export default function DailyDocketBcReviewPage() {
                 ) : (
                   <MessageSquareWarning className="h-4 w-4" />
                 )}
-                Return for Changes
+                {docket.approval_status === "client_changes_requested"
+                  ? "Send Back to Preparer"
+                  : "Return for Changes"}
               </button>
             </section>
 
@@ -2142,6 +2541,71 @@ export default function DailyDocketBcReviewPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function PercentInput({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="ml-auto flex w-24 items-center overflow-hidden rounded-lg border border-slate-300 bg-white">
+      <input
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        value={value}
+        onChange={(event) =>
+          onChange(
+            Math.min(100, Math.max(0, Number(event.target.value || 0))),
+          )
+        }
+        className="w-full px-2 py-1.5 text-right text-sm outline-none"
+      />
+      <span className="pr-2 text-xs text-slate-500">%</span>
+    </div>
+  );
+}
+
+function TimeInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <input
+      type="time"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-25 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700"
+    />
+  );
+}
+
+function NumberInput({
+  value,
+  step,
+  onChange,
+}: {
+  value: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <input
+      type="number"
+      min={0}
+      step={step}
+      value={value}
+      onChange={(event) => onChange(Math.max(0, Number(event.target.value || 0)))}
+      className="w-24 shrink-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm font-semibold text-slate-700"
+    />
   );
 }
 

@@ -39,6 +39,7 @@ type ReviewBody = {
     detail?: string;
   }>;
   reviewer_signature_data_url?: string;
+  reviewer_made_changes?: boolean;
 };
 
 type DocketRow = {
@@ -54,6 +55,7 @@ type DocketRow = {
   bc_signed_at?: string | null;
   bc_submitted_by?: string | null;
   bc_submitted_at?: string | null;
+  approval_revision?: number | null;
   docket_file_url?: string | null;
   [key: string]: unknown;
 };
@@ -248,7 +250,12 @@ async function publishDraftPdf({
     docketDate,
   });
 
-  const fileName = baseFileName.replace(/\.pdf$/i, "-DRAFT.pdf");
+  const revision = Math.max(1, Number(docket.approval_revision ?? 1) || 1);
+  const revisionLabel = `R${String(revision).padStart(2, "0")}`;
+  const fileName = baseFileName.replace(
+    /\.pdf$/i,
+    `-${revisionLabel}-DRAFT.pdf`,
+  );
 
   const item = await uploadDriveItemContent({
     driveId: project.sharepoint_drive_id,
@@ -364,15 +371,26 @@ export async function POST(request: Request, context: RouteContext) {
       docket.project_id,
     );
 
-    if ((docket.approval_status || "") !== "submitted_bc") {
+    const reviewStatus = String(docket.approval_status || "");
+    const allowedReviewStatuses = new Set([
+      "submitted_bc",
+      "client_changes_requested",
+    ]);
+
+    if (!allowedReviewStatuses.has(reviewStatus)) {
       return NextResponse.json(
         {
           error:
-            "This Daily Docket is not currently awaiting BC approval.",
+            "This Daily Docket is not currently awaiting action from a BC reviewer.",
         },
         { status: 409 },
       );
     }
+
+    const currentRevision = Math.max(
+      1,
+      Number(docket.approval_revision ?? 1) || 1,
+    );
 
     const allowedReviewer = await isConfiguredBcReviewer(
       admin,
@@ -408,7 +426,10 @@ export async function POST(request: Request, context: RouteContext) {
           approval_status: "bc_changes_requested",
         })
         .eq("id", docketId)
-        .eq("approval_status", "submitted_bc");
+        .in("approval_status", [
+          "submitted_bc",
+          "client_changes_requested",
+        ]);
 
       if (docketUpdateError) {
         throw new Error(
@@ -416,29 +437,32 @@ export async function POST(request: Request, context: RouteContext) {
         );
       }
 
-      const { error: approvalUpdateError } = await admin
-        .from("tower_docket_approvals")
-        .update({
-          status: "changes_requested",
-          reviewed_by: user.id,
-          reviewed_by_name: reviewerName,
-          reviewed_by_email: reviewerEmail,
-          reviewed_at: reviewedAt,
-          comments:
-            comments ||
-            changeRequests
-              .map((request) => `${request.category}: ${request.detail}`)
-              .join("\n") ||
-            null,
-        })
-        .eq("docket_id", docketId)
-        .eq("stage", "bc")
-        .eq("status", "pending");
+      if (reviewStatus === "submitted_bc") {
+        const { error: approvalUpdateError } = await admin
+          .from("tower_docket_approvals")
+          .update({
+            status: "changes_requested",
+            reviewed_by: user.id,
+            reviewed_by_name: reviewerName,
+            reviewed_by_email: reviewerEmail,
+            reviewed_at: reviewedAt,
+            comments:
+              comments ||
+              changeRequests
+                .map((request) => `${request.category}: ${request.detail}`)
+                .join("\n") ||
+              null,
+          })
+          .eq("docket_id", docketId)
+          .eq("stage", "bc")
+          .eq("revision", currentRevision)
+          .eq("status", "pending");
 
-      if (approvalUpdateError) {
-        throw new Error(
-          `BC approval record could not be updated: ${approvalUpdateError.message}`,
-        );
+        if (approvalUpdateError) {
+          throw new Error(
+            `BC approval record could not be updated: ${approvalUpdateError.message}`,
+          );
+        }
       }
 
       const { error: workflowError } = await admin
@@ -456,8 +480,12 @@ export async function POST(request: Request, context: RouteContext) {
               .map((request) => `${request.category}: ${request.detail}`)
               .join("\n") ||
             null,
+          revision: currentRevision,
           metadata: {
             change_requests: changeRequests,
+            source_status: reviewStatus,
+            originated_from_client:
+              reviewStatus === "client_changes_requested",
           },
         });
 
@@ -547,6 +575,80 @@ export async function POST(request: Request, context: RouteContext) {
       });
     }
 
+    const reviewerMadeChanges = Boolean(body.reviewer_made_changes);
+    const createsNewRevision =
+      reviewStatus === "client_changes_requested" || reviewerMadeChanges;
+    const approvalRevision = createsNewRevision
+      ? currentRevision + 1
+      : currentRevision;
+
+    if (createsNewRevision) {
+      const { error: revisionUpdateError } = await admin
+        .from("tower_daily_dockets")
+        .update({
+          approval_revision: approvalRevision,
+        })
+        .eq("id", docketId)
+        .eq("approval_revision", currentRevision);
+
+      if (revisionUpdateError) {
+        throw new Error(
+          `The corrected Daily Docket revision could not be created: ${revisionUpdateError.message}`,
+        );
+      }
+
+      const { error: newBcApprovalError } = await admin
+        .from("tower_docket_approvals")
+        .insert({
+          docket_id: docketId,
+          project_id: docket.project_id,
+          stage: "bc",
+          status: "pending",
+          revision: approvalRevision,
+          submitted_by: user.id,
+          submitted_at: reviewedAt,
+          created_at: reviewedAt,
+        });
+
+      if (newBcApprovalError) {
+        throw new Error(
+          `The corrected BC approval attempt could not be created: ${newBcApprovalError.message}`,
+        );
+      }
+
+      const { error: revisionEventError } = await admin
+        .from("tower_docket_workflow_events")
+        .insert({
+          docket_id: docketId,
+          project_id: docket.project_id,
+          event_type:
+            reviewStatus === "client_changes_requested"
+              ? "bc_corrected_client_changes"
+              : "bc_reviewer_corrected_docket",
+          performed_by: user.id,
+          performed_by_name: reviewerName,
+          performed_by_email: reviewerEmail,
+          revision: approvalRevision,
+          metadata: {
+            from_revision: currentRevision,
+            to_revision: approvalRevision,
+            source_status: reviewStatus,
+            reviewer_made_changes: reviewerMadeChanges,
+          },
+        });
+
+      if (revisionEventError) {
+        throw new Error(
+          `The corrected revision history could not be recorded: ${revisionEventError.message}`,
+        );
+      }
+    }
+
+    const docketAtApproval: DocketRow = {
+      ...docket,
+      approval_revision: approvalRevision,
+    };
+
     const { data: contactsData, error: contactsError } = await admin
       .from("project_docket_contacts")
       .select(
@@ -587,7 +689,7 @@ export async function POST(request: Request, context: RouteContext) {
       .eq("id", docketId);
 
     const docketForPdf: DocketRow = {
-      ...docket,
+      ...docketAtApproval,
       bc_approved_at: reviewedAt,
       bc_approved_by: user.id,
       bc_approved_name: reviewerName,
@@ -608,7 +710,7 @@ export async function POST(request: Request, context: RouteContext) {
     const published = await publishDraftPdf({
       project,
       tower: bundle.tower,
-      docket,
+      docket: docketForPdf,
       pdf,
     });
 
@@ -628,6 +730,7 @@ export async function POST(request: Request, context: RouteContext) {
           project_id: docket.project_id,
           stage: "client",
           status: "pending",
+          revision: approvalRevision,
           recipient_name: contact.name,
           recipient_email: contact.email.trim().toLowerCase(),
           token_hash: tokenHash,
@@ -658,6 +761,7 @@ export async function POST(request: Request, context: RouteContext) {
       })
       .eq("docket_id", docketId)
       .eq("stage", "bc")
+      .eq("revision", approvalRevision)
       .eq("status", "pending");
 
     if (bcApprovalUpdateError) {
@@ -670,6 +774,7 @@ export async function POST(request: Request, context: RouteContext) {
       .from("tower_daily_dockets")
       .update({
         approval_status: "client_pending",
+        approval_revision: approvalRevision,
         bc_approved_at: reviewedAt,
         bc_approved_by: user.id,
         bc_approved_name: reviewerName,
@@ -708,7 +813,10 @@ export async function POST(request: Request, context: RouteContext) {
           null,
       })
       .eq("id", docketId)
-      .eq("approval_status", "submitted_bc");
+      .in("approval_status", [
+        "submitted_bc",
+        "client_changes_requested",
+      ]);
 
     if (docketUpdateError) {
       throw new Error(
@@ -723,18 +831,25 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docketId,
           project_id: docket.project_id,
           event_type: "bc_approved",
+          revision: approvalRevision,
           performed_by: user.id,
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
           comments: comments || null,
           metadata: {
             reviewer_signature_captured: Boolean(reviewerSignature),
+            from_revision: currentRevision,
+            revision: approvalRevision,
+            reviewer_made_changes: reviewerMadeChanges,
+            corrected_client_change_request:
+              reviewStatus === "client_changes_requested",
           },
         },
         {
           docket_id: docketId,
           project_id: docket.project_id,
           event_type: "draft_published_to_sharepoint",
+          revision: approvalRevision,
           performed_by: user.id,
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
@@ -744,6 +859,7 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docketId,
           project_id: docket.project_id,
           event_type: "client_approval_requested",
+          revision: approvalRevision,
           performed_by: user.id,
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
@@ -794,6 +910,10 @@ export async function POST(request: Request, context: RouteContext) {
                   <td style="padding:7px 0">${escapeHtml(published.docketDate)}</td>
                 </tr>
                 <tr>
+                  <td style="padding:7px 0;color:#64748b">Revision</td>
+                  <td style="padding:7px 0">R${String(approvalRevision).padStart(2, "0")}</td>
+                </tr>
+                <tr>
                   <td style="padding:7px 0;color:#64748b">BC Approved By</td>
                   <td style="padding:7px 0">${escapeHtml(reviewerName || reviewerEmail || "BC Reviewer")}</td>
                 </tr>
@@ -833,6 +953,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({
       success: true,
       status: "client_pending",
+      revision: approvalRevision,
       clientRecipients: approvalLinks.length,
       clientEmailsSent: approvalLinks.length - clientEmailFailures.length,
       warning:

@@ -45,6 +45,7 @@ type ApprovalRow = {
   token_expires_at: string | null;
   token_used_at: string | null;
   token_superseded_at: string | null;
+  revision: number | null;
 };
 
 type DocketRow = {
@@ -64,6 +65,8 @@ type DocketRow = {
   bc_approved_email?: string | null;
   client_rep_name?: string | null;
   signed_date?: string | null;
+  approval_revision?: number | null;
+  bc_submitted_by?: string | null;
   [key: string]: unknown;
 };
 
@@ -144,6 +147,9 @@ function publicDocketPayload({
       email: approval.recipient_email,
     },
     expiresAt: approval.token_expires_at,
+    revision:
+      approval.revision ??
+      Math.max(1, Number(docket.approval_revision ?? 1) || 1),
   };
 }
 
@@ -156,7 +162,7 @@ async function loadApproval(
   const { data, error } = await admin
     .from("tower_docket_approvals")
     .select(
-      "id,docket_id,project_id,stage,status,recipient_name,recipient_email,token_expires_at,token_used_at,token_superseded_at",
+      "id,docket_id,project_id,stage,status,recipient_name,recipient_email,token_expires_at,token_used_at,token_superseded_at,revision",
     )
     .eq("token_hash", hash)
     .eq("stage", "client")
@@ -397,7 +403,12 @@ async function publishFinalPdf({
     docketDate,
   });
 
-  const fileName = baseFileName.replace(/\.pdf$/i, "-FINAL.pdf");
+  const revision = Math.max(1, Number(docket.approval_revision ?? 1) || 1);
+  const revisionLabel = `R${String(revision).padStart(2, "0")}`;
+  const fileName = baseFileName.replace(
+    /\.pdf$/i,
+    `-${revisionLabel}-FINAL.pdf`,
+  );
 
   const item = await uploadDriveItemContent({
     driveId: project.sharepoint_drive_id,
@@ -632,10 +643,17 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "client_changes_requested",
+          revision:
+            approval.revision ??
+            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
           comments: comments || null,
+          metadata: {
+            action_required_by: "bc_reviewer",
+            client_approval_id: approval.id,
+          },
         });
 
       if (workflowError) {
@@ -656,9 +674,9 @@ export async function POST(request: Request, context: RouteContext) {
           process.env.NEXT_PUBLIC_APP_URL ||
           new URL(request.url).origin;
 
-        const editUrl =
+        const reviewUrl =
           `${origin}/project/${docket.project_id}` +
-          `/tower/${docket.tower_id}/dockets/${docket.id}`;
+          `/tower/${docket.tower_id}/dockets/${docket.id}/review`;
 
         const towerName = String(
           tower.tower_number ||
@@ -689,6 +707,13 @@ export async function POST(request: Request, context: RouteContext) {
                     <td style="padding:7px 0;font-weight:600">${escapeHtml(towerName)}</td>
                   </tr>
                   <tr>
+                    <td style="padding:7px 0;color:#64748b">Revision</td>
+                    <td style="padding:7px 0">R${String(
+                      approval.revision ??
+                        Math.max(1, Number(docket.approval_revision ?? 1) || 1),
+                    ).padStart(2, "0")}</td>
+                  </tr>
+                  <tr>
                     <td style="padding:7px 0;color:#64748b">Client Representative</td>
                     <td style="padding:7px 0">${escapeHtml(name)}</td>
                   </tr>
@@ -706,10 +731,10 @@ export async function POST(request: Request, context: RouteContext) {
 
                 <p style="margin:24px 0 8px">
                   <a
-                    href="${escapeHtml(editUrl)}"
+                    href="${escapeHtml(reviewUrl)}"
                     style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700"
                   >
-                    Open Daily Docket
+                    Review Client Changes
                   </a>
                 </p>
               `,
@@ -905,6 +930,9 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "client_approved",
+          revision:
+            approval.revision ??
+            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
@@ -914,6 +942,9 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "final_published_to_sharepoint",
+          revision:
+            approval.revision ??
+            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
@@ -970,11 +1001,22 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    let preparerEmail: string | null = null;
+
+    if (docket.bc_submitted_by) {
+      const { data: preparerAuth } = await admin.auth.admin.getUserById(
+        docket.bc_submitted_by,
+      );
+      preparerEmail =
+        String(preparerAuth?.user?.email ?? "").trim().toLowerCase() || null;
+    }
+
     const finalRecipients = [
       ...new Set(
         [
           ...finalContacts.map((contact) => contact.email),
           ...reviewers.map((reviewer) => reviewer.email),
+          preparerEmail,
         ]
           .map((email) => String(email || "").trim().toLowerCase())
           .filter(Boolean),
@@ -1042,6 +1084,9 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({
       success: true,
       status: "final",
+      revision:
+        approval.revision ??
+        Math.max(1, Number(docket.approval_revision ?? 1) || 1),
       warning: finalWarnings.length > 0 ? finalWarnings.join(" ") : null,
       final: {
         fileName: published.fileName,
