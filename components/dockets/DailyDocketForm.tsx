@@ -310,6 +310,14 @@ function toStringValue(value: unknown) {
   return String(value);
 }
 
+function stripMobilisationMetadata(value: unknown) {
+  return toStringValue(value)
+    .split("\n")
+    .filter((line) => !line.startsWith("MOBILISATION|"))
+    .join("\n")
+    .trim();
+}
+
 function isClientSignedDocket(docket: {
   client_rep_name?: string | null;
   signed_date?: string | null;
@@ -1191,12 +1199,7 @@ export default function DailyDocketForm({
         setOtherDelayReason(toStringValue(initialDocket.other_delay_reason));
         setMissingItemsBolts(toStringValue(initialDocket.missing_items_bolts));
         const initialDelayComments = toStringValue(initialDocket.delays_comments);
-        setDelaysComments(
-          initialDelayComments
-            .split("\n")
-            .filter((line) => !line.startsWith("MOBILISATION|"))
-            .join("\n")
-        );
+        setDelaysComments(stripMobilisationMetadata(initialDelayComments));
 
         const mobilisationLine = initialDelayComments
           .split("\n")
@@ -1427,7 +1430,7 @@ export default function DailyDocketForm({
       setOtherDelayHours(toStringValue(data.other_delay_hours));
       setOtherDelayReason(toStringValue(data.other_delay_reason));
       setMissingItemsBolts(toStringValue(data.missing_items_bolts));
-      setDelaysComments(toStringValue(data.delays_comments));
+      setDelaysComments(stripMobilisationMetadata(data.delays_comments));
 
       setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
       setTravelInMinutes(toStringValue(data.travel_in_minutes));
@@ -3534,7 +3537,7 @@ export default function DailyDocketForm({
       setOtherDelayHours(toStringValue(lastDocket.other_delay_hours));
       setOtherDelayReason(toStringValue(lastDocket.other_delay_reason));
       setMissingItemsBolts(toStringValue(lastDocket.missing_items_bolts));
-      setDelaysComments(toStringValue(lastDocket.delays_comments));
+      setDelaysComments(stripMobilisationMetadata(lastDocket.delays_comments));
 
       setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
       setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
@@ -3604,22 +3607,83 @@ export default function DailyDocketForm({
 
       if (progress && progress.length > 0 && lastDocket.progress_model === "section_v2") {
         const rawRows = progress as any[];
-        setSectionV2Rows((configured) => configured.map((cfg) => {
-          const r = rawRows.find((x) => String(x.section_code || "") === cfg.section_code);
-          return r ? {
-            ...cfg,
-            assembly_today: "",
-            erection_today: "",
-            assembly_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.assembly_weight,
-            erection_weight: SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.erection_weight,
-          } : cfg;
-        }));
+
+        // A section_v2 docket only stores the BE row when Body Extension was included.
+        // Carry that exact choice forward instead of re-applying the tower CSV default.
+        const previousHasBodyExtension = rawRows.some(
+          (row) => String(row.section_code || "").trim().toUpperCase() === "BE"
+        );
+        setHasBodyExtension(previousHasBodyExtension);
+
+        // Prefill the previous docket's closing section percentages as today's opening values.
+        // Prefer the explicit overall columns, then fall back to the compatibility/today columns
+        // for older section_v2 records.
+        setSectionV2Rows((configured) =>
+          configured.map((cfg) => {
+            const previous = rawRows.find(
+              (row) =>
+                String(row.section_code || "").trim().toUpperCase() ===
+                cfg.section_code
+            );
+
+            if (!previous) {
+              return {
+                ...cfg,
+                assembly_today: "",
+                erection_today: "",
+                assembly_weight:
+                  SECTION_PROGRESS_WEIGHTS[cfg.section_code] ??
+                  cfg.assembly_weight,
+                erection_weight:
+                  SECTION_PROGRESS_WEIGHTS[cfg.section_code] ??
+                  cfg.erection_weight,
+              };
+            }
+
+            return {
+              ...cfg,
+              section_label: toStringValue(
+                previous.section_label || cfg.section_label
+              ),
+              assembly_today: toStringValue(
+                previous.assembly_overall ??
+                  previous.assembly_today ??
+                  previous.assembled_qty
+              ),
+              erection_today: toStringValue(
+                previous.erection_overall ??
+                  previous.erection_today ??
+                  previous.erected_qty
+              ),
+              assembly_weight:
+                SECTION_PROGRESS_WEIGHTS[cfg.section_code] ??
+                cfg.assembly_weight,
+              erection_weight:
+                SECTION_PROGRESS_WEIGHTS[cfg.section_code] ??
+                cfg.erection_weight,
+            };
+          })
+        );
       } else {
         // Legacy history is intentionally not converted into v2 section percentages.
-        // The first v2 docket should establish the opening cumulative values per new section.
-        setSectionV2Rows((configured) => configured.map((r) => ({
-          ...r, assembly_today: "", erection_today: "",
-        })));
+        // Keep the tower's configured Body Extension default for the first section_v2 docket.
+        const { data: tower } = await supabase
+          .from("towers")
+          .select("id, name, line, extra_data")
+          .eq("id", towerId)
+          .single();
+
+        setHasBodyExtension(
+          inferTowerHasBodyExtension((tower as TowerRecord | null) || null)
+        );
+
+        setSectionV2Rows((configured) =>
+          configured.map((row) => ({
+            ...row,
+            assembly_today: "",
+            erection_today: "",
+          }))
+        );
       }
     } catch (err) {
       console.error(err);
