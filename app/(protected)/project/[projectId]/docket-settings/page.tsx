@@ -22,7 +22,6 @@ import {
   useState,
 } from "react";
 
-import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
 type RoleCode =
@@ -723,17 +722,14 @@ export default function DailyDocketApprovalSettingsPage() {
 
   if (loading) {
     return (
-      <AppShell>
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <Loader2 size={28} className="animate-spin text-slate-400" />
-        </div>
-      </AppShell>
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 size={28} className="animate-spin text-slate-400" />
+      </div>
     );
   }
 
   return (
-    <AppShell>
-      <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex items-center gap-2 text-slate-400">
@@ -1070,8 +1066,7 @@ export default function DailyDocketApprovalSettingsPage() {
             </div>
           </div>
         </form>
-      </div>
-    </AppShell>
+    </div>
   );
 }
 
