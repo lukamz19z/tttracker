@@ -25,6 +25,7 @@ type ApprovalResponse = {
   docket: {
     docketId: string;
     status: string | null;
+    revision: number | null;
     docketDate: string | null;
     crew: string | null;
     leadingHand: string | null;
@@ -96,6 +97,11 @@ function statusLabel(value: string | null) {
     default:
       return "Daily Docket";
   }
+}
+
+function signatureApproxBytes(dataUrl: string) {
+  const base64 = dataUrl.split(",")[1] || "";
+  return Math.ceil((base64.length * 3) / 4);
 }
 
 export default function ClientDailyDocketApprovalPage() {
@@ -196,12 +202,25 @@ export default function ClientDailyDocketApprovalPage() {
         return;
       }
 
+      if (action === "approve" && signatureApproxBytes(signature) > 400 * 1024) {
+        setSubmitError("Your signature is too large. Clear it and sign again.");
+        return;
+      }
+
       if (action === "request_changes" && !comments.trim()) {
         setSubmitError(
           "Please enter the changes required before sending the docket back.",
         );
         return;
       }
+
+      const confirmed = window.confirm(
+        action === "approve"
+          ? "Approve this Daily Docket? Your name, signature and approval time will be recorded on the final copy."
+          : "Send these requested changes back to BC for review?",
+      );
+
+      if (!confirmed) return;
 
       setSubmitError(null);
       setSubmitting(action);
@@ -335,6 +354,10 @@ export default function ClientDailyDocketApprovalPage() {
                     label="Docket Date"
                     value={formatDate(docket.docketDate)}
                   />
+                  <SummaryItem
+                    label="Revision"
+                    value={`R${String(Math.max(1, Number(docket.revision || 1))).padStart(2, "0")}`}
+                  />
                   <SummaryItem label="Client Representative" value={name} />
                 </div>
               </div>
@@ -388,9 +411,14 @@ export default function ClientDailyDocketApprovalPage() {
                     </p>
                   </div>
 
-                  <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                    {statusLabel(docket.status)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                      R{String(Math.max(1, Number(docket.revision || 1))).padStart(2, "0")}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                      {statusLabel(docket.status)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -424,6 +452,22 @@ export default function ClientDailyDocketApprovalPage() {
                       : undefined
                   }
                 />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-blue-200 bg-blue-50/40 p-6 shadow-sm">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Daily Docket PDF</h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Review the issued R{String(Math.max(1, Number(docket.revision || 1))).padStart(2, "0")} Daily Docket before submitting your response.
+                  </p>
+                </div>
+                <a href={pdfUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-blue-300 bg-white px-4 py-2.5 text-sm font-semibold text-blue-900 shadow-sm transition hover:bg-blue-50">
+                  <ExternalLink className="h-4 w-4" />
+                  View Daily Docket PDF
+                </a>
               </div>
             </div>
 
@@ -489,6 +533,7 @@ export default function ClientDailyDocketApprovalPage() {
                     id="client-name"
                     type="text"
                     value={name}
+                    disabled={submitting !== null}
                     onChange={(event) => setName(event.target.value)}
                     autoComplete="name"
                     className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -506,6 +551,7 @@ export default function ClientDailyDocketApprovalPage() {
                   <textarea
                     id="client-comments"
                     value={comments}
+                    disabled={submitting !== null}
                     onChange={(event) => setComments(event.target.value)}
                     rows={4}
                     className="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -527,18 +573,9 @@ export default function ClientDailyDocketApprovalPage() {
                   </div>
 
                   <div className="mt-2">
-                    
-              <a
-                href={pdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
-              >
-                <ExternalLink size={16} />
-                View Daily Docket PDF
-              </a>
-<SignaturePad
+                    <SignaturePad
                       value={signature}
+                      disabled={submitting !== null}
                       onChange={setSignature}
                     />
                   </div>
@@ -628,9 +665,11 @@ function SummaryItem({
 
 function SignaturePad({
   value,
+  disabled,
   onChange,
 }: {
   value: string;
+  disabled: boolean;
   onChange: (value: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -721,6 +760,7 @@ function SignaturePad({
   const startDrawing = (
     event: ReactPointerEvent<HTMLCanvasElement>,
   ) => {
+    if (disabled) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -730,7 +770,7 @@ function SignaturePad({
   };
 
   const draw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!drawingRef.current) return;
+    if (disabled || !drawingRef.current) return;
 
     const canvas = canvasRef.current;
     const previousPoint = lastPointRef.current;
@@ -768,6 +808,7 @@ function SignaturePad({
   };
 
   const clear = () => {
+    if (disabled) return;
     const canvas = canvasRef.current;
     if (!canvas) {
       onChange("");
@@ -788,7 +829,9 @@ function SignaturePad({
     <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">
       <canvas
         ref={canvasRef}
-        className="block h-40 w-full touch-none bg-white"
+        className={`block h-40 w-full touch-none ${
+          disabled ? "cursor-not-allowed bg-slate-100" : "cursor-crosshair bg-white"
+        }`}
         onPointerDown={startDrawing}
         onPointerMove={draw}
         onPointerUp={finishDrawing}
@@ -802,6 +845,7 @@ function SignaturePad({
         </p>
         <button
           type="button"
+          disabled={disabled || !value}
           onClick={clear}
           className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
         >

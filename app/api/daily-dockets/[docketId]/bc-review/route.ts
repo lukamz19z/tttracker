@@ -555,6 +555,22 @@ export async function POST(request: Request, context: RouteContext) {
                   }
                 </table>
 
+                ${
+                  changeRequests.length
+                    ? `
+                      <div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
+                        <div style="font-weight:700;margin-bottom:8px">Required changes</div>
+                        ${changeRequests
+                          .map(
+                            (item) =>
+                              `<div style="margin:6px 0"><strong>${escapeHtml(item.category)}:</strong> ${escapeHtml(item.detail)}</div>`,
+                          )
+                          .join("")}
+                      </div>
+                    `
+                    : ""
+                }
+
                 <p style="margin:24px 0 8px">
                   <a
                     href="${escapeHtml(editUrl)}"
@@ -694,6 +710,8 @@ export async function POST(request: Request, context: RouteContext) {
       bc_approved_by: user.id,
       bc_approved_name: reviewerName,
       bc_approved_email: reviewerEmail,
+      bc_reviewer_signature_data_url: reviewerSignature,
+      bc_approval_signature_data_url: reviewerSignature,
     };
 
     const pdf = generateDailyDocketPdf({
@@ -713,6 +731,22 @@ export async function POST(request: Request, context: RouteContext) {
       docket: docketForPdf,
       pdf,
     });
+
+    const { error: supersedeClientTokensError } = await admin
+      .from("tower_docket_approvals")
+      .update({
+        token_superseded_at: reviewedAt,
+        status: "superseded",
+      })
+      .eq("docket_id", docketId)
+      .eq("stage", "client")
+      .eq("status", "pending");
+
+    if (supersedeClientTokensError) {
+      throw new Error(
+        `Previous client approval links could not be superseded: ${supersedeClientTokensError.message}`,
+      );
+    }
 
     const tokenExpiry = addDaysIso(14);
     const approvalLinks: Array<{
@@ -887,7 +921,7 @@ export async function POST(request: Request, context: RouteContext) {
       try {
         await sendDailyDocketEmail({
           to: [contact.email],
-          subject: `Daily Docket approval required - ${published.towerName} - ${published.docketDate}`,
+          subject: `Daily Docket approval required - ${published.towerName} - ${published.docketDate} - R${String(approvalRevision).padStart(2, "0")}`,
           html: docketEmailShell(
             "Daily Docket approval required",
             `

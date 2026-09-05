@@ -19,6 +19,7 @@ type ApprovalRow = {
   docket_id: string;
   stage: string | null;
   status: string | null;
+  revision: number | null;
   token_expires_at: string | null;
   token_used_at: string | null;
   token_superseded_at: string | null;
@@ -27,10 +28,12 @@ type ApprovalRow = {
 type DocketRow = {
   id: string;
   approval_status: string | null;
+  approval_revision: number | null;
   draft_sharepoint_drive_id: string | null;
   draft_sharepoint_item_id: string | null;
-  pdf_file_name?: string | null;
-  docket_date?: string | null;
+  draft_pdf_file_name: string | null;
+  pdf_file_name: string | null;
+  docket_date: string | null;
 };
 
 function hashToken(token: string) {
@@ -70,10 +73,7 @@ function approvalUnavailableReason(approval: ApprovalRow | null) {
   return null;
 }
 
-export async function GET(
-  _request: Request,
-  context: RouteContext,
-) {
+export async function GET(_request: Request, context: RouteContext) {
   try {
     const { token } = await context.params;
     const rawToken = String(token || "").trim();
@@ -86,18 +86,22 @@ export async function GET(
     }
 
     const admin = createDocketAdminSupabase();
+    const tokenHash = hashToken(rawToken);
 
     const { data: approvalData, error: approvalError } = await admin
       .from("tower_docket_approvals")
       .select(
-        "id,docket_id,stage,status,token_expires_at,token_used_at,token_superseded_at",
+        "id,docket_id,stage,status,revision,token_expires_at,token_used_at,token_superseded_at",
       )
-      .eq("token_hash", hashToken(rawToken))
+      .eq("token_hash", tokenHash)
       .eq("stage", "client")
       .maybeSingle();
 
     if (approvalError) {
-      console.error("Could not load Daily Docket client approval", approvalError);
+      console.error(
+        "Could not load Daily Docket client approval",
+        approvalError,
+      );
 
       return NextResponse.json(
         { error: "The Daily Docket approval link could not be verified." },
@@ -118,13 +122,25 @@ export async function GET(
     const { data: docketData, error: docketError } = await admin
       .from("tower_daily_dockets")
       .select(
-        "id,approval_status,draft_sharepoint_drive_id,draft_sharepoint_item_id,pdf_file_name,docket_date",
+        [
+          "id",
+          "approval_status",
+          "approval_revision",
+          "draft_sharepoint_drive_id",
+          "draft_sharepoint_item_id",
+          "draft_pdf_file_name",
+          "pdf_file_name",
+          "docket_date",
+        ].join(","),
       )
       .eq("id", approval.docket_id)
       .maybeSingle();
 
     if (docketError) {
-      console.error("Could not load Daily Docket draft PDF reference", docketError);
+      console.error(
+        "Could not load Daily Docket draft PDF reference",
+        docketError,
+      );
 
       return NextResponse.json(
         { error: "The Daily Docket could not be loaded." },
@@ -145,6 +161,25 @@ export async function GET(
       return NextResponse.json(
         { error: "This Daily Docket is no longer awaiting client approval." },
         { status: 409 },
+      );
+    }
+
+    const approvalRevision = Math.max(
+      1,
+      Number(approval.revision || 0),
+    );
+    const docketRevision = Math.max(
+      1,
+      Number(docket.approval_revision || 0),
+    );
+
+    if (approvalRevision !== docketRevision) {
+      return NextResponse.json(
+        {
+          error:
+            "This approval link has been replaced by a newer Daily Docket revision.",
+        },
+        { status: 410 },
       );
     }
 
@@ -185,6 +220,31 @@ export async function GET(
         graphError,
       );
 
+      if (graphResponse.status === 404) {
+        return NextResponse.json(
+          {
+            error:
+              "The Daily Docket draft PDF could not be found in SharePoint.",
+          },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json(
+        { error: "The Daily Docket PDF could not be opened." },
+        { status: 502 },
+      );
+    }
+
+    const contentType =
+      graphResponse.headers.get("content-type") || "application/pdf";
+
+    if (!contentType.toLowerCase().includes("pdf")) {
+      console.error(
+        "Daily Docket SharePoint item did not return a PDF content type",
+        contentType,
+      );
+
       return NextResponse.json(
         { error: "The Daily Docket PDF could not be opened." },
         { status: 502 },
@@ -193,9 +253,19 @@ export async function GET(
 
     const pdfBytes = await graphResponse.arrayBuffer();
 
+    if (!pdfBytes.byteLength) {
+      return NextResponse.json(
+        { error: "The Daily Docket PDF is empty or unavailable." },
+        { status: 502 },
+      );
+    }
+
+    const revisionLabel = `R${String(docketRevision).padStart(2, "0")}`;
+
     const fileName = safeFileName(
-      docket.pdf_file_name ||
-        `Daily-Docket-${docket.docket_date || docket.id}.pdf`,
+      docket.draft_pdf_file_name ||
+        docket.pdf_file_name ||
+        `Daily-Docket-${docket.docket_date || docket.id}-${revisionLabel}-DRAFT.pdf`,
     );
 
     return new NextResponse(pdfBytes, {
@@ -204,9 +274,13 @@ export async function GET(
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="${fileName}"`,
         "Content-Length": String(pdfBytes.byteLength),
-        "Cache-Control": "private, no-store, max-age=0",
+        "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy":
+          "default-src 'none'; frame-ancestors 'self'; sandbox",
       },
     });
   } catch (error) {

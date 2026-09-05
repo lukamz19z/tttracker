@@ -63,6 +63,8 @@ type DocketRow = {
   bc_approved_by?: string | null;
   bc_approved_name?: string | null;
   bc_approved_email?: string | null;
+  bc_reviewer_signature_data_url?: string | null;
+  bc_approval_signature_data_url?: string | null;
   client_rep_name?: string | null;
   signed_date?: string | null;
   approval_revision?: number | null;
@@ -175,6 +177,24 @@ async function loadApproval(
   }
 
   return (data ?? null) as ApprovalRow | null;
+}
+
+function currentRevision(docket: DocketRow) {
+  return Math.max(1, Number(docket.approval_revision ?? 1) || 1);
+}
+
+function revisionMismatchReason(
+  approval: ApprovalRow,
+  docket: DocketRow,
+) {
+  const approvalRevision = Math.max(1, Number(approval.revision ?? 1) || 1);
+  const docketRevision = currentRevision(docket);
+
+  if (approvalRevision !== docketRevision) {
+    return "This approval link has been replaced by a newer Daily Docket revision.";
+  }
+
+  return null;
 }
 
 function approvalUnavailableReason(approval: ApprovalRow | null) {
@@ -461,6 +481,18 @@ export async function GET(_request: Request, context: RouteContext) {
       );
     }
 
+    const revisionUnavailable = revisionMismatchReason(
+      approval,
+      bundle.docket,
+    );
+
+    if (revisionUnavailable) {
+      return NextResponse.json(
+        { error: revisionUnavailable },
+        { status: 410 },
+      );
+    }
+
     return NextResponse.json({
       success: true,
       docket: publicDocketPayload({
@@ -551,6 +583,11 @@ export async function POST(request: Request, context: RouteContext) {
     const bundle = await loadBundle(admin, approval.docket_id);
     const { docket, project, tower } = bundle;
 
+    const approvalRevision = Math.max(
+      1,
+      Number(approval.revision ?? currentRevision(docket)) || 1,
+    );
+
     if (docket.approval_status !== "client_pending") {
       return NextResponse.json(
         {
@@ -558,6 +595,15 @@ export async function POST(request: Request, context: RouteContext) {
             "This Daily Docket is no longer awaiting client approval.",
         },
         { status: 409 },
+      );
+    }
+
+    const revisionUnavailable = revisionMismatchReason(approval, docket);
+
+    if (revisionUnavailable) {
+      return NextResponse.json(
+        { error: revisionUnavailable },
+        { status: 410 },
       );
     }
 
@@ -643,9 +689,7 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "client_changes_requested",
-          revision:
-            approval.revision ??
-            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
+          revision: approvalRevision,
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
@@ -766,8 +810,41 @@ export async function POST(request: Request, context: RouteContext) {
       Generate the final PDF with the client signature/approval details,
       publish it to SharePoint /Final, then close every outstanding token.
     */
+    const { data: bcApprovalData, error: bcApprovalError } = await admin
+      .from("tower_docket_approvals")
+      .select(
+        "signature_data_url,reviewed_by_name,reviewed_by_email,reviewed_at,status",
+      )
+      .eq("docket_id", docket.id)
+      .eq("stage", "bc")
+      .eq("revision", approvalRevision)
+      .eq("status", "approved")
+      .maybeSingle();
+
+    if (bcApprovalError) {
+      throw new Error(
+        `The BC approval record could not be loaded for the final PDF: ${bcApprovalError.message}`,
+      );
+    }
+
+    if (!bcApprovalData) {
+      throw new Error(
+        "The approved BC review record for this Daily Docket revision could not be found.",
+      );
+    }
+
     const finalDocketForPdf: DocketRow = {
       ...docket,
+      approval_revision: approvalRevision,
+      bc_approved_at: bcApprovalData.reviewed_at || docket.bc_approved_at,
+      bc_approved_name:
+        bcApprovalData.reviewed_by_name || docket.bc_approved_name,
+      bc_approved_email:
+        bcApprovalData.reviewed_by_email || docket.bc_approved_email,
+      bc_reviewer_signature_data_url:
+        bcApprovalData.signature_data_url || null,
+      bc_approval_signature_data_url:
+        bcApprovalData.signature_data_url || null,
       client_rep_name: name,
       signed_date: now.slice(0, 10),
       client_approved_at: now,
@@ -808,6 +885,7 @@ export async function POST(request: Request, context: RouteContext) {
       .from("tower_daily_dockets")
       .update({
         approval_status: "final",
+        approval_revision: approvalRevision,
 
         client_submitted_at: now,
         client_approved_at: now,
@@ -845,6 +923,7 @@ export async function POST(request: Request, context: RouteContext) {
       })
       .eq("id", docket.id)
       .eq("approval_status", "client_pending")
+      .eq("approval_revision", approvalRevision)
       .select("id,approval_status")
       .maybeSingle();
 
@@ -930,9 +1009,7 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "client_approved",
-          revision:
-            approval.revision ??
-            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
+          revision: approvalRevision,
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
@@ -942,9 +1019,7 @@ export async function POST(request: Request, context: RouteContext) {
           docket_id: docket.id,
           project_id: docket.project_id,
           event_type: "final_published_to_sharepoint",
-          revision:
-            approval.revision ??
-            Math.max(1, Number(docket.approval_revision ?? 1) || 1),
+          revision: approvalRevision,
           performed_by: null,
           performed_by_name: name,
           performed_by_email: recipientEmail,
@@ -1027,7 +1102,7 @@ export async function POST(request: Request, context: RouteContext) {
       try {
         await sendDailyDocketEmail({
           to: finalRecipients,
-          subject: `Approved Daily Docket - ${published.towerName} - ${published.docketDate}`,
+          subject: `Approved Daily Docket - ${published.towerName} - ${published.docketDate} - R${String(approvalRevision).padStart(2, "0")}`,
           html: docketEmailShell(
             "Daily Docket approved",
             `
@@ -1084,9 +1159,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({
       success: true,
       status: "final",
-      revision:
-        approval.revision ??
-        Math.max(1, Number(docket.approval_revision ?? 1) || 1),
+      revision: approvalRevision,
       warning: finalWarnings.length > 0 ? finalWarnings.join(" ") : null,
       final: {
         fileName: published.fileName,

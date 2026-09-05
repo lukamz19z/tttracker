@@ -17,6 +17,18 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import {
+  calculateHours,
+  calculateLabourRows,
+  calculateLabourTotals,
+  calculateProgressTotals,
+  calculateTotalDelayEventHours,
+  hoursToMinutes,
+  type DelayCalculationRow,
+  type LabourCalculationRow,
+  type LegacyProgressCalculationRow,
+  type SectionV2CalculationRow,
+} from "@/lib/dockets/calculations";
 
 type DocketRow = {
   id: string;
@@ -73,6 +85,7 @@ type TowerRow = {
   id: string;
   name: string | null;
   line: string | null;
+  extra_data?: Record<string, unknown> | null;
 };
 
 type LabourRow = {
@@ -452,6 +465,44 @@ function workOutcomeLabel(value: string | null) {
   }
 }
 
+
+function normaliseText(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function parsePositiveIndicator(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  const text = normaliseText(value);
+  if (!text) return null;
+  if (["yes", "y", "true", "included", "include", "with", "present"].includes(text)) return true;
+  if (["no", "n", "false", "excluded", "exclude", "without", "none", "not included"].includes(text)) return false;
+  const number = Number(text);
+  return Number.isFinite(number) ? number > 0 : null;
+}
+
+function inferTowerHasBodyExtension(tower: TowerRow | null): boolean {
+  if (!tower) return true;
+  const extra = tower.extra_data || {};
+  const keys = [
+    "body_extension",
+    "bodyExtension",
+    "body_extension_included",
+    "bodyExtensionIncluded",
+    "has_body_extension",
+    "hasBodyExtension",
+    "be",
+    "BE",
+  ];
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(extra, key)) {
+      const parsed = parsePositiveIndicator(extra[key]);
+      if (parsed !== null) return parsed;
+    }
+  }
+  return true;
+}
+
 function signatureApproxBytes(dataUrl: string) {
   const base64 = dataUrl.split(",")[1] || "";
   return Math.ceil((base64.length * 3) / 4);
@@ -554,13 +605,13 @@ export default function DailyDocketBcReviewPage() {
             .single(),
           supabase
             .from("towers")
-            .select("id, name, line")
+            .select("id, name, line, extra_data")
             .eq("id", towerId)
             .eq("project_id", projectId)
             .single(),
           supabase
             .from("towers")
-            .select("id, name, line")
+            .select("id, name, line, extra_data")
             .eq("project_id", projectId)
             .order("name"),
           supabase
@@ -828,19 +879,106 @@ export default function DailyDocketBcReviewPage() {
     );
   }, [projectTowers]);
 
-  const totalProgress = Math.round(
-    Number(docket?.assembly_percent || 0) * 0.5 +
-      Number(docket?.erection_percent || 0) * 0.5,
-  );
-
-  const totalDelayHours = delays.reduce(
-    (sum, row) => sum + Number(row.delay_hours || 0),
-    0,
-  );
-
   const mobilisation = useMemo(
     () => (docket ? parseMobilisation(docket, labour) : null),
     [docket, labour],
+  );
+
+  const hasBodyExtension = useMemo(
+    () => inferTowerHasBodyExtension(tower),
+    [tower],
+  );
+
+  const calculatedProgress = useMemo(() => {
+    const model = docket?.progress_model === "section_v2" ? "section_v2" : "legacy";
+
+    return calculateProgressTotals({
+      progressModel: model,
+      sectionV2Rows: progress.map((row) => ({
+        section_code: row.section_code || "",
+        section_label: row.section_label || row.section_code || "",
+        assembly_today: row.assembly_today ?? row.assembled_qty ?? 0,
+        erection_today: row.erection_today ?? row.erected_qty ?? 0,
+        assembly_weight: row.assembly_weight,
+        erection_weight: row.erection_weight,
+      })) as SectionV2CalculationRow[],
+      legacyRows: progress.map((row) => ({
+        section_label: row.section_label || row.section_code || "",
+        assembled_qty: row.assembled_qty ?? 0,
+        erected_qty: row.erected_qty ?? 0,
+      })) as LegacyProgressCalculationRow[],
+      hasBodyExtension,
+    });
+  }, [docket?.progress_model, hasBodyExtension, progress]);
+
+  const labourCalculationInput = useMemo<LabourCalculationRow[]>(
+    () =>
+      labour.map((row) => ({
+        worker_name: row.worker_name || "",
+        time_in: row.time_in || "",
+        time_out: row.time_out || "",
+        total_hours:
+          row.time_in && row.time_out
+            ? calculateHours(row.time_in, row.time_out)
+            : row.total_hours,
+        lunch_minutes: row.lunch_minutes,
+        travel_in_minutes: row.travel_in_minutes,
+        travel_out_minutes: row.travel_out_minutes,
+        // DB stores mobilisation in hours; the shared calculator consumes minutes.
+        mobilisation_hours: hoursToMinutes(row.mobilisation_hours),
+        delay_hours: row.delay_hours,
+        delay_reason: row.delay_reason,
+        production_hours: row.production_hours,
+      })),
+    [labour],
+  );
+
+  const delayCalculationInput = useMemo<DelayCalculationRow[]>(
+    () =>
+      delays.map((row) => ({
+        delay_type: row.delay_type || "other",
+        delay_reason: row.delay_reason,
+        delay_hours: row.delay_hours,
+        applies_to: row.applies_to || "entire_crew",
+        worker_names: row.worker_names || [],
+        delay_applies_mode: row.delay_applies_mode,
+        plant_names: row.plant_names || [],
+      })),
+    [delays],
+  );
+
+  const mobilisationCalculation = useMemo(
+    () => ({
+      enabled: Boolean(mobilisation?.included),
+      durationMinutes: mobilisation?.included ? mobilisation.minutes : 0,
+      workerNames: mobilisation?.workerNames || [],
+    }),
+    [mobilisation],
+  );
+
+  const calculatedLabourRows = useMemo(
+    () =>
+      calculateLabourRows(
+        labourCalculationInput,
+        delayCalculationInput,
+        mobilisationCalculation,
+      ),
+    [delayCalculationInput, labourCalculationInput, mobilisationCalculation],
+  );
+
+  const calculatedLabour = useMemo(
+    () =>
+      calculateLabourTotals(
+        labourCalculationInput,
+        delayCalculationInput,
+        mobilisationCalculation,
+      ),
+    [delayCalculationInput, labourCalculationInput, mobilisationCalculation],
+  );
+
+  const totalProgress = calculatedProgress.totalProgressPercent;
+  const totalDelayHours = calculateTotalDelayEventHours(
+    delayCalculationInput,
   );
 
   const siteComments = useMemo(
@@ -926,6 +1064,10 @@ export default function DailyDocketBcReviewPage() {
         incident_notes: docket.incident_notes,
         delays_comments: docket.delays_comments,
         missing_items_bolts: docket.missing_items_bolts,
+        assembly_percent: calculatedProgress.assemblyPercent,
+        erection_percent: calculatedProgress.erectionPercent,
+        raw_manhours: calculatedLabour.rawManhours,
+        production_manhours: calculatedLabour.productionManhours,
       };
 
       const { error: docketError } = await supabase
@@ -941,9 +1083,15 @@ export default function DailyDocketBcReviewPage() {
           .from("tower_docket_progress")
           .update({
             assembly_today: row.assembly_today,
-            assembly_overall: row.assembly_overall,
+            assembly_overall:
+              row.progress_model === "section_v2"
+                ? row.assembly_today
+                : row.assembly_overall,
             erection_today: row.erection_today,
-            erection_overall: row.erection_overall,
+            erection_overall:
+              row.progress_model === "section_v2"
+                ? row.erection_today
+                : row.erection_overall,
             assembled_qty: row.assembled_qty,
             erected_qty: row.erected_qty,
           })
@@ -952,21 +1100,23 @@ export default function DailyDocketBcReviewPage() {
         if (error) throw error;
       }
 
-      for (const row of labour) {
-        if (!row.id) continue;
+      for (let index = 0; index < labour.length; index += 1) {
+        const row = labour[index];
+        const calculated = calculatedLabourRows[index];
+        if (!row.id || !calculated) continue;
         const { error } = await supabase
           .from("tower_docket_labour")
           .update({
             time_in: row.time_in,
             time_out: row.time_out,
-            total_hours: row.total_hours,
+            total_hours: Number(calculated.total_hours || 0),
             lunch_minutes: row.lunch_minutes,
             travel_in_minutes: row.travel_in_minutes,
             travel_out_minutes: row.travel_out_minutes,
-            mobilisation_hours: row.mobilisation_hours,
-            delay_hours: row.delay_hours,
-            delay_reason: row.delay_reason,
-            production_hours: row.production_hours,
+            mobilisation_hours: Number(calculated.mobilisation_hours || 0) / 60,
+            delay_hours: Number(calculated.delay_hours || 0),
+            delay_reason: calculated.delay_reason,
+            production_hours: Number(calculated.production_hours || 0),
           })
           .eq("id", row.id)
           .eq("docket_id", docket.id);
@@ -991,6 +1141,42 @@ export default function DailyDocketBcReviewPage() {
         if (error) throw error;
       }
 
+      setDocket((current) =>
+        current
+          ? {
+              ...current,
+              assembly_percent: calculatedProgress.assemblyPercent,
+              erection_percent: calculatedProgress.erectionPercent,
+              raw_manhours: calculatedLabour.rawManhours,
+              production_manhours: calculatedLabour.productionManhours,
+            }
+          : current,
+      );
+      setLabour((current) =>
+        current.map((row, index) => {
+          const calculated = calculatedLabourRows[index];
+          if (!calculated) return row;
+          return {
+            ...row,
+            total_hours: Number(calculated.total_hours || 0),
+            mobilisation_hours: Number(calculated.mobilisation_hours || 0) / 60,
+            delay_hours: Number(calculated.delay_hours || 0),
+            delay_reason: calculated.delay_reason || null,
+            production_hours: Number(calculated.production_hours || 0),
+          };
+        }),
+      );
+      setProgress((current) =>
+        current.map((row) =>
+          row.progress_model === "section_v2"
+            ? {
+                ...row,
+                assembly_overall: Number(row.assembly_today || 0),
+                erection_overall: Number(row.erection_today || 0),
+              }
+            : row,
+        ),
+      );
       setReviewerMadeChanges(true);
       setEditMode(false);
     } catch (error) {
@@ -1015,6 +1201,13 @@ export default function DailyDocketBcReviewPage() {
     if (!reviewActionable) {
       setSubmitError(
         "This Daily Docket is no longer awaiting action from a BC reviewer.",
+      );
+      return;
+    }
+
+    if (editMode) {
+      setSubmitError(
+        "Save or cancel the reviewer edits before completing the BC review.",
       );
       return;
     }
@@ -1365,20 +1558,20 @@ export default function DailyDocketBcReviewPage() {
               <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <MetricCard
                   label="Assembly"
-                  value={formatPercent(docket.assembly_percent)}
+                  value={formatPercent(calculatedProgress.assemblyPercent)}
                 />
                 <MetricCard
                   label="Erection"
-                  value={formatPercent(docket.erection_percent)}
+                  value={formatPercent(calculatedProgress.erectionPercent)}
                 />
                 <MetricCard label="Total Progress" value={`${totalProgress}%`} />
                 <MetricCard
                   label="Raw MH"
-                  value={formatHours(docket.raw_manhours)}
+                  value={formatHours(calculatedLabour.rawManhours)}
                 />
                 <MetricCard
                   label="Production MH"
-                  value={formatHours(docket.production_manhours)}
+                  value={formatHours(calculatedLabour.productionManhours)}
                   internal
                 />
               </div>
@@ -1599,7 +1792,7 @@ export default function DailyDocketBcReviewPage() {
                             )}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-700">
-                            {formatHours(row.total_hours)}
+                            {formatHours(Number(calculatedLabourRows[index]?.total_hours || row.total_hours || 0))}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
                             {formatMinutes(row.lunch_minutes)}
@@ -1614,10 +1807,10 @@ export default function DailyDocketBcReviewPage() {
                             {formatHours(row.mobilisation_hours)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
-                            {formatHours(row.delay_hours)}
+                            {formatHours(Number(calculatedLabourRows[index]?.delay_hours || row.delay_hours || 0))}
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                            {formatHours(row.production_hours)}
+                            {formatHours(Number(calculatedLabourRows[index]?.production_hours || row.production_hours || 0))}
                           </td>
                         </tr>
                       ))
@@ -2398,6 +2591,7 @@ export default function DailyDocketBcReviewPage() {
                   disabled={
                     !allowedReviewer ||
                     !reviewActionable ||
+                    editMode ||
                     submitting !== null
                   }
                   onClick={() => void submitReview("approve")}
@@ -2496,6 +2690,7 @@ export default function DailyDocketBcReviewPage() {
                 disabled={
                   !allowedReviewer ||
                   !reviewActionable ||
+                  editMode ||
                   submitting !== null
                 }
                 onClick={() => void submitReview("request_changes")}

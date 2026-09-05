@@ -1,4 +1,9 @@
 import { jsPDF } from "jspdf";
+import {
+  calculateProgressTotals,
+  type LegacyProgressCalculationRow,
+  type SectionV2CalculationRow,
+} from "@/lib/dockets/calculations";
 
 type Row = Record<string, unknown>;
 
@@ -17,19 +22,6 @@ export type DailyDocketPdfData = {
   delays: Row[];
   progress: Row[];
   materialEvents: MaterialEvent[];
-};
-
-const SECTION_PROGRESS_WEIGHTS: Record<string, number> = {
-  LE: 20,
-  BE: 15,
-  CB: 15,
-  BSS: 10,
-  MSS: 10,
-  TSS: 10,
-  BX_ARMS: 5,
-  MX_ARMS: 5,
-  TX_ARMS: 5,
-  EP: 5,
 };
 
 const SECTION_ORDER = [
@@ -166,48 +158,26 @@ function applicableV2Rows(data: DailyDocketPdfData) {
   );
 }
 
-function calculateV2Overall(
-  data: DailyDocketPdfData,
-  field: "assembly_today" | "erection_today",
-) {
-  const rows = applicableV2Rows(data);
-
-  const totalWeight = rows.reduce(
-    (sum, row) => sum + (SECTION_PROGRESS_WEIGHTS[sectionCode(row)] ?? 0),
-    0,
-  );
-
-  if (totalWeight <= 0) return 0;
-
-  const weighted = rows.reduce((sum, row) => {
-    const code = sectionCode(row);
-    const weight = SECTION_PROGRESS_WEIGHTS[code] ?? 0;
-    return sum + clampPercent(row[field]) * weight;
-  }, 0);
-
-  return Math.round(weighted / totalWeight);
-}
-
 function overallProgress(data: DailyDocketPdfData) {
-  if (progressModel(data) === "section_v2") {
-    const assembly = calculateV2Overall(data, "assembly_today");
-    const erection = calculateV2Overall(data, "erection_today");
-
-    return {
-      assembly,
-      erection,
-      total: Math.round(assembly * 0.5 + erection * 0.5),
-    };
-  }
-
-  const assembly = clampPercent(data.docket.assembly_percent);
-  const erection = clampPercent(data.docket.erection_percent);
-
-  return {
-    assembly,
-    erection,
-    total: Math.round(assembly * 0.5 + erection * 0.5),
-  };
+  return calculateProgressTotals({
+    progressModel: progressModel(data),
+    sectionV2Rows: data.progress.map((row) => ({
+      section_code: sectionCode(row),
+      section_label: sectionLabel(row),
+      assembly_today:
+        row.assembly_today !== undefined ? row.assembly_today : row.assembled_qty,
+      erection_today:
+        row.erection_today !== undefined ? row.erection_today : row.erected_qty,
+      assembly_weight: row.assembly_weight,
+      erection_weight: row.erection_weight,
+    })) as SectionV2CalculationRow[],
+    legacyRows: data.progress.map((row) => ({
+      section_label: sectionLabel(row),
+      assembled_qty: row.assembled_qty,
+      erected_qty: row.erected_qty,
+    })) as LegacyProgressCalculationRow[],
+    hasBodyExtension: hasBodyExtension(data),
+  });
 }
 
 function documentState(data: DailyDocketPdfData): "DRAFT" | "FINAL" {
@@ -223,6 +193,72 @@ function documentState(data: DailyDocketPdfData): "DRAFT" | "FINAL" {
   }
 
   return "DRAFT";
+}
+
+
+function revisionNumber(data: DailyDocketPdfData) {
+  return Math.max(0, Math.round(number(data.docket.approval_revision)));
+}
+
+function revisionLabel(data: DailyDocketPdfData) {
+  return `R${String(revisionNumber(data)).padStart(2, "0")}`;
+}
+
+function parseMobilisation(data: DailyDocketPdfData) {
+  const comments = text(data.docket.delays_comments);
+  const line = comments
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith("MOBILISATION|"));
+
+  const values: Record<string, string> = {};
+  if (line) {
+    for (const piece of line.split("|").slice(1)) {
+      const index = piece.indexOf("=");
+      if (index === -1) continue;
+      values[piece.slice(0, index)] = piece.slice(index + 1);
+    }
+  }
+
+  const docketHours = number(data.docket.mobilisation_hours);
+  const parsedMinutes = number(values.minutes);
+  const parsedHours = number(values.hours);
+  const labourHasMob = data.labour.some(
+    (row) => number(row.mobilisation_hours) > 0,
+  );
+
+  const included =
+    Boolean(line) ||
+    docketHours > 0 ||
+    labourHasMob ||
+    Boolean(text(data.docket.mobilisation_notes).trim());
+
+  const hours =
+    parsedHours > 0
+      ? parsedHours
+      : parsedMinutes > 0
+        ? parsedMinutes / 60
+        : docketHours;
+
+  return {
+    included,
+    hours,
+    minutes: parsedMinutes > 0 ? parsedMinutes : Math.round(hours * 60),
+    from: values.from || "",
+    to: values.to || "",
+    status: values.status || "",
+    workers: values.workers
+      ? values.workers.split(",").map((value) => value.trim()).filter(Boolean)
+      : [],
+    notes: values.notes || text(data.docket.mobilisation_notes),
+  };
+}
+
+function generalSiteComments(value: unknown) {
+  return text(value)
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith("MOBILISATION|"))
+    .join("\n")
+    .trim();
 }
 
 function isPngDataUrl(value: unknown) {
@@ -436,11 +472,16 @@ export function generateDailyDocketPdf(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
   doc.setTextColor(15, 23, 42);
-  doc.text("BC CONTRACTING - DAILY DOCKET", marginX, y);
+  doc.text("BC CONTRACTING | DAILY DOCKET", marginX, y);
 
   doc.setFontSize(11);
   doc.setTextColor(state === "FINAL" ? 5 : 180, state === "FINAL" ? 150 : 83, state === "FINAL" ? 105 : 9);
-  doc.text(state, pageWidth - marginX, y, { align: "right" });
+  doc.text(
+    `${state} | ${revisionLabel(data)}`,
+    pageWidth - marginX,
+    y,
+    { align: "right" },
+  );
 
   y += 8;
 
@@ -454,7 +495,9 @@ export function generateDailyDocketPdf(
 
   rule();
 
-  sectionBox("Docket Details", () => {
+  sectionBox("01 | Docket Details", () => {
+    keyValue("Revision", revisionLabel(data));
+    keyValue("Document Status", state);
     keyValue("Crew", data.docket.crew);
     keyValue("Leading Hand", data.docket.leading_hand);
     keyValue("Weather", data.docket.weather);
@@ -465,7 +508,7 @@ export function generateDailyDocketPdf(
     }
   });
 
-  sectionBox("Progress", () => {
+  sectionBox("02 | Progress", () => {
     if (progressModel(data) === "section_v2") {
       paragraph(
         hasBodyExtension(data)
@@ -476,8 +519,16 @@ export function generateDailyDocketPdf(
       const rows = applicableV2Rows(data);
 
       for (const row of rows) {
-        const code = sectionCode(row);
-        const weight = SECTION_PROGRESS_WEIGHTS[code] ?? 0;
+        const weight =
+          row.section_code === "LE"
+            ? 20
+            : row.section_code === "BE"
+              ? 15
+              : ["CB"].includes(row.section_code)
+                ? 15
+                : ["BSS", "MSS", "TSS"].includes(row.section_code)
+                  ? 10
+                  : 5;
 
         paragraph(
           `${sectionLabel(row)} | Weight ${weight}% | Assembly Today ${clampPercent(
@@ -502,16 +553,16 @@ export function generateDailyDocketPdf(
     }
 
     paragraph(
-      `Overall Assembly ${calculated.assembly.toFixed(
+      `Overall Assembly ${calculated.assemblyPercent.toFixed(
         1,
-      )}% | Overall Erection ${calculated.erection.toFixed(
+      )}% | Overall Erection ${calculated.erectionPercent.toFixed(
         1,
-      )}% | Total Progress ${calculated.total.toFixed(1)}%`,
+      )}% | Total Progress ${calculated.totalProgressPercent.toFixed(1)}%`,
       true,
     );
   });
 
-  sectionBox("Labour", () => {
+  sectionBox("03 | Labour", () => {
     if (!data.labour.length) {
       paragraph("No labour rows recorded.");
     }
@@ -522,10 +573,6 @@ export function generateDailyDocketPdf(
           text(row.worker_name) || "Worker",
           `${text(row.time_in) || "-"} - ${text(row.time_out) || "-"}`,
           `Raw ${formatHours(row.total_hours)} h`,
-          `Production ${formatHours(row.production_hours)} h`,
-          number(row.delay_hours) > 0
-            ? `Delay ${formatHours(row.delay_hours)} h`
-            : "",
         ]
           .filter(Boolean)
           .join(" | "),
@@ -533,16 +580,40 @@ export function generateDailyDocketPdf(
     }
 
     paragraph(
-      `Raw man-hours: ${formatHours(
-        data.docket.raw_manhours,
-      )} | Production man-hours: ${formatHours(
-        data.docket.production_manhours,
-      )}`,
+      `Total raw man-hours: ${formatHours(data.docket.raw_manhours)}`,
       true,
     );
   });
 
-  sectionBox("Plant", () => {
+  const mobilisation = parseMobilisation(data);
+
+  sectionBox("04 | Mobilisation / Demobilisation", () => {
+    if (!mobilisation.included) {
+      paragraph("Mobilising: No");
+      return;
+    }
+
+    paragraph("Mobilising: Yes", true);
+
+    const details = [
+      mobilisation.from ? `From: ${mobilisation.from}` : "",
+      mobilisation.to ? `To: ${mobilisation.to}` : "",
+      mobilisation.status ? `Stage: ${titleCase(mobilisation.status)}` : "",
+      `Duration: ${formatHours(mobilisation.hours)} hrs`,
+    ].filter(Boolean);
+
+    paragraph(details.join(" | "));
+
+    if (mobilisation.workers.length) {
+      paragraph(`Workers: ${mobilisation.workers.join(", ")}`);
+    }
+
+    if (mobilisation.notes) {
+      paragraph(`Notes: ${mobilisation.notes}`);
+    }
+  });
+
+  sectionBox("05 | Plant", () => {
     if (!data.plant.length) {
       paragraph("No plant recorded.");
     }
@@ -564,7 +635,7 @@ export function generateDailyDocketPdf(
     }
   });
 
-  sectionBox("Delays & Issues", () => {
+  sectionBox("06 | Delays", () => {
     if (!data.delays.length) {
       paragraph("No general delay rows recorded.");
     }
@@ -587,14 +658,13 @@ export function generateDailyDocketPdf(
       );
     }
 
-    if (text(data.docket.delays_comments)) {
-      paragraph(
-        `General site comment: ${text(data.docket.delays_comments)}`,
-      );
+    const comments = generalSiteComments(data.docket.delays_comments);
+    if (comments) {
+      paragraph(`General site comment: ${comments}`);
     }
   });
 
-  sectionBox("Material Events", () => {
+  sectionBox("07 | Materials", () => {
     if (!data.materialEvents.length) {
       paragraph("No structured material events recorded.");
     }
@@ -689,7 +759,7 @@ export function generateDailyDocketPdf(
     }
   });
 
-  sectionBox("Safety", () => {
+  sectionBox("08 | Safety", () => {
     paragraph(
       `Incident occurred: ${
         data.docket.incident_occurred ? "Yes" : "No"
@@ -719,7 +789,7 @@ export function generateDailyDocketPdf(
     }
   });
 
-  heading("Sign-Off & Approval");
+  heading("09 | Sign-Off & Approval");
 
   signatureBlock({
     title: "BC Representative Sign-Off",
@@ -738,6 +808,9 @@ export function generateDailyDocketPdf(
       name: data.docket.bc_approved_name,
       email: data.docket.bc_approved_email,
       approvedAt: data.docket.bc_approved_at,
+      signatureDataUrl:
+        data.docket.bc_reviewer_signature_data_url ||
+        data.docket.bc_approval_signature_data_url,
     });
   }
 
@@ -767,24 +840,27 @@ export function generateDailyDocketPdf(
     y += 7;
   }
 
-  rule();
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-
-  const footer =
+  const pageCount = doc.getNumberOfPages();
+  const controlText =
     state === "FINAL"
-      ? "Generated by TTTracker from the approved Daily Docket record. Final controlled copy is stored in SharePoint. Uncontrolled when printed."
-      : "Generated by TTTracker for client review. DRAFT - not the final approved copy. Uncontrolled when printed.";
+      ? `FINAL | ${revisionLabel(data)} | Controlled copy stored in SharePoint | Uncontrolled when printed`
+      : `DRAFT | ${revisionLabel(data)} | For client review only | Uncontrolled when printed`;
 
-  const footerLines = doc.splitTextToSize(
-    footer,
-    contentWidth,
-  ) as string[];
-
-  ensureSpace(footerLines.length * 4 + 2);
-  doc.text(footerLines, marginX, y);
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    doc.setPage(pageNumber);
+    doc.setDrawColor(203, 213, 225);
+    doc.line(marginX, pageHeight - 11, pageWidth - marginX, pageHeight - 11);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text(controlText, marginX, pageHeight - 6);
+    doc.text(
+      `Page ${pageNumber} of ${pageCount}`,
+      pageWidth - marginX,
+      pageHeight - 6,
+      { align: "right" },
+    );
+  }
 
   return new Uint8Array(doc.output("arraybuffer"));
 }
