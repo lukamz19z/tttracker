@@ -3,6 +3,7 @@
 import {
   ArrowLeft,
   Check,
+  FileText,
   Loader2,
   Mail,
   Plus,
@@ -75,6 +76,47 @@ type MessageState = {
   tone: "success" | "error";
   text: string;
 } | null;
+
+type ClientContentKey =
+  | "progress"
+  | "workforce"
+  | "raw_manhours"
+  | "plant"
+  | "mobilisation"
+  | "travel"
+  | "delays"
+  | "missing_materials"
+  | "received_materials"
+  | "safety";
+
+type ClientContentRow = {
+  content_key: string;
+  included_by_default: boolean;
+};
+
+const CLIENT_CONTENT_OPTIONS: Array<{
+  value: ClientContentKey;
+  label: string;
+  detail: string;
+}> = [
+  { value: "progress", label: "Progress", detail: "Assembly and erection progress by tower section." },
+  { value: "workforce", label: "Workforce", detail: "Personnel and recorded site hours." },
+  { value: "raw_manhours", label: "Raw Manhours", detail: "Total raw manhours recorded for the docket." },
+  { value: "plant", label: "Plant & Equipment", detail: "Plant and equipment recorded against the docket." },
+  { value: "mobilisation", label: "Mobilisation", detail: "Recorded mobilisation details and crew involvement." },
+  { value: "travel", label: "Travel", detail: "Recorded travel-in and travel-out information." },
+  { value: "delays", label: "Delays / Disruptions", detail: "Recorded delay events, impacts and affected work." },
+  { value: "missing_materials", label: "Missing Materials", detail: "Recorded missing-material searches and impacts." },
+  { value: "received_materials", label: "Materials Received", detail: "Found, received and transferred material records." },
+  { value: "safety", label: "Safety / Incidents", detail: "Recorded safety checks and incident information." },
+];
+
+const DEFAULT_CLIENT_CONTENT: ClientContentKey[] =
+  CLIENT_CONTENT_OPTIONS.map((option) => option.value);
+
+function isClientContentKey(value: string): value is ClientContentKey {
+  return CLIENT_CONTENT_OPTIONS.some((option) => option.value === value);
+}
 
 const ROLE_OPTIONS: Array<{
   value: RoleCode;
@@ -178,6 +220,10 @@ export default function DailyDocketApprovalSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [savingRoles, setSavingRoles] = useState(false);
   const [savingContacts, setSavingContacts] = useState(false);
+  const [clientContent, setClientContent] = useState<ClientContentKey[]>(
+    DEFAULT_CLIENT_CONTENT,
+  );
+  const [savingClientContent, setSavingClientContent] = useState(false);
   const [canManage, setCanManage] = useState(false);
   const [message, setMessage] = useState<MessageState>(null);
 
@@ -233,7 +279,8 @@ export default function DailyDocketApprovalSettingsPage() {
 
     setProject(projectResult.data as ProjectRow);
 
-    const [approvalRolesResult, contactsResult] = await Promise.all([
+    const [approvalRolesResult, contactsResult, clientContentResult] =
+      await Promise.all([
       supabase
         .from("project_docket_approval_roles")
         .select(
@@ -248,6 +295,10 @@ export default function DailyDocketApprovalSettingsPage() {
         )
         .eq("project_id", projectId)
         .order("name"),
+      supabase
+        .from("project_docket_client_content")
+        .select("content_key, included_by_default")
+        .eq("project_id", projectId),
     ]);
 
     if (approvalRolesResult.error) {
@@ -267,6 +318,25 @@ export default function DailyDocketApprovalSettingsPage() {
     if (contactsResult.error) {
       throw new Error(contactsResult.error.message);
     }
+
+    if (clientContentResult.error) {
+      throw new Error(clientContentResult.error.message);
+    }
+
+    const savedClientContent = (
+      (clientContentResult.data ?? []) as ClientContentRow[]
+    )
+      .filter(
+        (row) =>
+          row.included_by_default && isClientContentKey(row.content_key),
+      )
+      .map((row) => row.content_key as ClientContentKey);
+
+    setClientContent(
+      (clientContentResult.data ?? []).length > 0
+        ? savedClientContent
+        : DEFAULT_CLIENT_CONTENT,
+    );
 
     const savedRoles = (
       (approvalRolesResult.data ?? []) as ApprovalRoleRow[]
@@ -382,6 +452,62 @@ export default function DailyDocketApprovalSettingsPage() {
       });
     } finally {
       setSavingRoles(false);
+    }
+  }
+
+  function toggleClientContent(contentKey: ClientContentKey) {
+    setMessage(null);
+    setClientContent((current) =>
+      current.includes(contentKey)
+        ? current.filter((item) => item !== contentKey)
+        : [...current, contentKey],
+    );
+  }
+
+  async function saveClientContentDefaults() {
+    if (!canManage || !projectId) return;
+
+    if (clientContent.length === 0) {
+      setMessage({
+        tone: "error",
+        text: "Select at least one section for the default client Daily Docket.",
+      });
+      return;
+    }
+
+    setSavingClientContent(true);
+    setMessage(null);
+
+    try {
+      const payload = CLIENT_CONTENT_OPTIONS.map((option) => ({
+        project_id: projectId,
+        content_key: option.value,
+        included_by_default: clientContent.includes(option.value),
+        updated_at: new Date().toISOString(),
+      }));
+
+      const result = await supabase
+        .from("project_docket_client_content")
+        .upsert(payload, { onConflict: "project_id,content_key" });
+
+      if (result.error) {
+        throw new Error(result.error.message);
+      }
+
+      setMessage({
+        tone: "success",
+        text: "Client Daily Docket defaults updated.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save client Daily Docket defaults.",
+      });
+    } finally {
+      setSavingClientContent(false);
     }
   }
 
@@ -608,39 +734,35 @@ export default function DailyDocketApprovalSettingsPage() {
   return (
     <AppShell>
       <div className="mx-auto max-w-6xl space-y-6">
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-slate-400">
-                <ShieldCheck size={18} />
-                <span className="text-sm font-semibold uppercase tracking-wider">
-                  Daily Dockets
-                </span>
-              </div>
-
-              <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
-                Approval Settings
-              </h1>
-
-              {project ? (
-                <p className="mt-2 text-sm font-medium text-slate-500">
-                  {project.name}
-                  {project.project_number
-                    ? ` · ${project.project_number}`
-                    : ""}
-                </p>
-              ) : null}
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-slate-400">
+              <ShieldCheck size={18} />
+              <span className="text-sm font-semibold uppercase tracking-wider">
+                Daily Dockets
+              </span>
             </div>
 
-            <Link
-              href={`/project/${projectId}`}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <ArrowLeft size={16} />
-              Back to Project
-            </Link>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+              Approval Settings
+            </h1>
+
+            {project ? (
+              <p className="mt-2 text-sm font-medium text-slate-500">
+                {project.name}
+                {project.project_number ? ` · ${project.project_number}` : ""}
+              </p>
+            ) : null}
           </div>
-        </section>
+
+          <Link
+            href={`/project/${projectId}`}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            Back to Project
+          </Link>
+        </div>
 
         {message ? (
           <section
@@ -716,6 +838,77 @@ export default function DailyDocketApprovalSettingsPage() {
                     </span>
                     <span className="mt-1 block text-xs leading-5 text-slate-500">
                       {role.detail}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <FileText size={19} className="text-slate-500" />
+                <h2 className="text-lg font-bold text-slate-950">
+                  Client Daily Docket Defaults
+                </h2>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                Choose the information normally included when this project&apos;s
+                Daily Dockets are issued to the client. The BC reviewer can
+                override these selections for an individual revision.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void saveClientContentDefaults()}
+              disabled={savingClientContent || !canManage}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {savingClientContent ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Save size={16} />
+              )}
+              Save Defaults
+            </button>
+          </div>
+
+          <div className="grid gap-3 p-6 md:grid-cols-2">
+            {CLIENT_CONTENT_OPTIONS.map((option) => {
+              const selected = clientContent.includes(option.value);
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => toggleClientContent(option.value)}
+                  disabled={!canManage}
+                  className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                    selected
+                      ? "border-slate-950 bg-slate-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  <span
+                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
+                      selected
+                        ? "border-slate-950 bg-slate-950 text-white"
+                        : "border-slate-300 bg-white text-transparent"
+                    }`}
+                  >
+                    <Check size={14} strokeWidth={3} />
+                  </span>
+
+                  <span>
+                    <span className="block text-sm font-bold text-slate-900">
+                      {option.label}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      {option.detail}
                     </span>
                   </span>
                 </button>

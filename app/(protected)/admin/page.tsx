@@ -121,6 +121,15 @@ type BrandingRecord = {
   logo_sharepoint_item_id: string | null;
   logo_sharepoint_drive_id: string | null;
   logo_updated_at: string | null;
+  abn: string | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  suburb: string | null;
+  state: string | null;
+  postcode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
 };
 
 type BrandingResponse = {
@@ -341,6 +350,15 @@ export default function AdminPage() {
     logo_sharepoint_item_id: null,
     logo_sharepoint_drive_id: null,
     logo_updated_at: null,
+    abn: null,
+    address_line_1: null,
+    address_line_2: null,
+    suburb: null,
+    state: null,
+    postcode: null,
+    phone: null,
+    email: null,
+    website: null,
   });
   const [brandingLogoUrl, setBrandingLogoUrl] = useState<string | null>(null);
   const [brandingFile, setBrandingFile] = useState<File | null>(null);
@@ -550,6 +568,15 @@ export default function AdminPage() {
     try {
       const formData = new FormData();
       formData.set("company_name", companyName);
+      formData.set("abn", branding.abn ?? "");
+      formData.set("address_line_1", branding.address_line_1 ?? "");
+      formData.set("address_line_2", branding.address_line_2 ?? "");
+      formData.set("suburb", branding.suburb ?? "");
+      formData.set("state", branding.state ?? "");
+      formData.set("postcode", branding.postcode ?? "");
+      formData.set("phone", branding.phone ?? "");
+      formData.set("email", branding.email ?? "");
+      formData.set("website", branding.website ?? "");
 
       if (brandingFile) {
         formData.set("logo", brandingFile);
@@ -1119,6 +1146,51 @@ export default function AdminPage() {
                     />
                   </Field>
 
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <h3 className="text-sm font-bold text-slate-950">
+                      Business information
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      These details are used on generated TTTracker documents.
+                    </p>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <Field label="ABN">
+                        <input value={branding.abn ?? ""} onChange={(event) => setBranding((current) => ({ ...current, abn: event.target.value }))} placeholder="00 000 000 000" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="Phone">
+                        <input value={branding.phone ?? ""} onChange={(event) => setBranding((current) => ({ ...current, phone: event.target.value }))} placeholder="02 0000 0000" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="Email">
+                        <input type="email" value={branding.email ?? ""} onChange={(event) => setBranding((current) => ({ ...current, email: event.target.value }))} placeholder="accounts@example.com.au" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="Website">
+                        <input value={branding.website ?? ""} onChange={(event) => setBranding((current) => ({ ...current, website: event.target.value }))} placeholder="www.example.com.au" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                    </div>
+
+                    <div className="mt-4 grid gap-4">
+                      <Field label="Address line 1">
+                        <input value={branding.address_line_1 ?? ""} onChange={(event) => setBranding((current) => ({ ...current, address_line_1: event.target.value }))} placeholder="Street address" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="Address line 2">
+                        <input value={branding.address_line_2 ?? ""} onChange={(event) => setBranding((current) => ({ ...current, address_line_2: event.target.value }))} placeholder="Unit, suite or building (optional)" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_120px_120px]">
+                      <Field label="Suburb">
+                        <input value={branding.suburb ?? ""} onChange={(event) => setBranding((current) => ({ ...current, suburb: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="State">
+                        <input value={branding.state ?? ""} onChange={(event) => setBranding((current) => ({ ...current, state: event.target.value }))} placeholder="NSW" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm uppercase outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                      <Field label="Postcode">
+                        <input inputMode="numeric" value={branding.postcode ?? ""} onChange={(event) => setBranding((current) => ({ ...current, postcode: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2" />
+                      </Field>
+                    </div>
+                  </div>
+
                   <div>
                     <div className="text-sm font-bold text-slate-900">
                       Company logo
@@ -1206,6 +1278,11 @@ export default function AdminPage() {
                           <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
                             Daily Docket
                           </div>
+                          {branding.abn ? (
+                            <div className="mt-1 text-[10px] text-slate-500">
+                              ABN {branding.abn}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
 
@@ -1215,6 +1292,29 @@ export default function AdminPage() {
                     </div>
 
                     <div className="space-y-3 p-5">
+                      {(branding.address_line_1 ||
+                        branding.suburb ||
+                        branding.phone ||
+                        branding.email ||
+                        branding.website) ? (
+                        <div className="border-b border-slate-100 pb-3 text-[10px] leading-4 text-slate-500">
+                          {[branding.address_line_1, branding.address_line_2]
+                            .filter(Boolean)
+                            .join(", ")}
+                          {(branding.suburb || branding.state || branding.postcode) ? (
+                            <div>
+                              {[branding.suburb, branding.state, branding.postcode]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </div>
+                          ) : null}
+                          {[branding.phone, branding.email, branding.website]
+                            .filter(Boolean)
+                            .map((value) => (
+                              <div key={value}>{value}</div>
+                            ))}
+                        </div>
+                      ) : null}
                       <div className="h-2 w-2/3 rounded bg-slate-200" />
                       <div className="h-2 w-full rounded bg-slate-100" />
                       <div className="h-2 w-5/6 rounded bg-slate-100" />

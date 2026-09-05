@@ -41,7 +41,37 @@ type ReviewBody = {
   }>;
   reviewer_signature_data_url?: string;
   reviewer_made_changes?: boolean;
+  client_content_keys?: string[];
 };
+
+const CLIENT_CONTENT_KEYS = [
+  "progress",
+  "workforce",
+  "raw_manhours",
+  "plant",
+  "mobilisation",
+  "travel",
+  "delays",
+  "missing_materials",
+  "received_materials",
+  "safety",
+] as const;
+
+type ClientContentKey = (typeof CLIENT_CONTENT_KEYS)[number];
+
+function normaliseClientContentKeys(value: unknown): ClientContentKey[] {
+  if (!Array.isArray(value)) return [];
+
+  const allowed = new Set<string>(CLIENT_CONTENT_KEYS);
+
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item ?? "").trim())
+        .filter((item): item is ClientContentKey => allowed.has(item)),
+    ),
+  );
+}
 
 type DocketRow = {
   id: string;
@@ -832,6 +862,67 @@ export async function POST(request: Request, context: RouteContext) {
       ...docket,
       approval_revision: approvalRevision,
     };
+
+    const clientContentKeys = normaliseClientContentKeys(
+      body.client_content_keys,
+    );
+
+    if (clientContentKeys.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Select at least one section to include in the client Daily Docket.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const { error: clearClientContentError } = await admin
+      .from("tower_docket_client_content")
+      .delete()
+      .eq("docket_id", docketId)
+      .eq("revision", approvalRevision);
+
+    if (clearClientContentError) {
+      throw new Error(
+        `The client docket content selection could not be prepared: ${clearClientContentError.message}`,
+      );
+    }
+
+    const selectedClientContent = CLIENT_CONTENT_KEYS.map((contentKey) => ({
+      docket_id: docketId,
+      project_id: docket.project_id,
+      revision: approvalRevision,
+      content_key: contentKey,
+      included: clientContentKeys.includes(contentKey),
+      selected_by: user.id,
+      selected_at: reviewedAt,
+    }));
+
+    const { error: clientContentError } = await admin
+      .from("tower_docket_client_content")
+      .insert(selectedClientContent);
+
+    if (clientContentError) {
+      throw new Error(
+        `The client docket content selection could not be saved: ${clientContentError.message}`,
+      );
+    }
+
+    await recordWorkflowEvents(admin, [
+      {
+        docket_id: docketId,
+        project_id: docket.project_id,
+        event_type: "client_content_selected",
+        performed_by: user.id,
+        performed_by_name: reviewerName,
+        performed_by_email: reviewerEmail,
+        revision: approvalRevision,
+        metadata: {
+          included_content: clientContentKeys,
+        },
+      },
+    ]);
 
     const { data: contactsData, error: contactsError } = await admin
       .from("project_docket_contacts")

@@ -17,18 +17,6 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import {
-  calculateHours,
-  calculateLabourRows,
-  calculateLabourTotals,
-  calculateProgressTotals,
-  calculateTotalDelayEventHours,
-  hoursToMinutes,
-  type DelayCalculationRow,
-  type LabourCalculationRow,
-  type LegacyProgressCalculationRow,
-  type SectionV2CalculationRow,
-} from "@/lib/dockets/calculations";
 
 type DocketRow = {
   id: string;
@@ -85,7 +73,6 @@ type TowerRow = {
   id: string;
   name: string | null;
   line: string | null;
-  extra_data?: Record<string, unknown> | null;
 };
 
 type LabourRow = {
@@ -223,6 +210,50 @@ type ChangeRequest = {
   category: ChangeCategory;
   detail: string;
 };
+
+type ClientContentKey =
+  | "progress"
+  | "workforce"
+  | "raw_manhours"
+  | "plant"
+  | "mobilisation"
+  | "travel"
+  | "delays"
+  | "missing_materials"
+  | "received_materials"
+  | "safety";
+
+type ClientContentConfigRow = {
+  content_key: string;
+  included_by_default: boolean;
+};
+
+type ClientContentSnapshotRow = {
+  content_key: string;
+  included: boolean;
+  revision: number;
+};
+
+const CLIENT_CONTENT_OPTIONS: Array<{
+  key: ClientContentKey;
+  label: string;
+  description: string;
+}> = [
+  { key: "progress", label: "Progress", description: "Assembly and erection progress by tower section." },
+  { key: "workforce", label: "Workforce", description: "Personnel names and recorded site hours." },
+  { key: "raw_manhours", label: "Raw Manhours", description: "Client-facing total raw manhours." },
+  { key: "plant", label: "Plant & Equipment", description: "Plant and equipment recorded against the docket." },
+  { key: "mobilisation", label: "Mobilisation", description: "Mobilisation details and recorded crew involvement." },
+  { key: "travel", label: "Travel", description: "Recorded travel-in and travel-out information." },
+  { key: "delays", label: "Delays / Disruptions", description: "Recorded delay events and affected work." },
+  { key: "missing_materials", label: "Missing Materials", description: "Missing steel, bolts, washers and other recorded material impacts." },
+  { key: "received_materials", label: "Materials Received", description: "Found, received and transferred material records." },
+  { key: "safety", label: "Safety / Incidents", description: "Recorded safety and incident information." },
+];
+
+function isClientContentKey(value: string): value is ClientContentKey {
+  return CLIENT_CONTENT_OPTIONS.some((option) => option.key === value);
+}
 
 type MobilisationReview = {
   included: boolean;
@@ -465,44 +496,6 @@ function workOutcomeLabel(value: string | null) {
   }
 }
 
-
-function normaliseText(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function parsePositiveIndicator(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value > 0;
-  const text = normaliseText(value);
-  if (!text) return null;
-  if (["yes", "y", "true", "included", "include", "with", "present"].includes(text)) return true;
-  if (["no", "n", "false", "excluded", "exclude", "without", "none", "not included"].includes(text)) return false;
-  const number = Number(text);
-  return Number.isFinite(number) ? number > 0 : null;
-}
-
-function inferTowerHasBodyExtension(tower: TowerRow | null): boolean {
-  if (!tower) return true;
-  const extra = tower.extra_data || {};
-  const keys = [
-    "body_extension",
-    "bodyExtension",
-    "body_extension_included",
-    "bodyExtensionIncluded",
-    "has_body_extension",
-    "hasBodyExtension",
-    "be",
-    "BE",
-  ];
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(extra, key)) {
-      const parsed = parsePositiveIndicator(extra[key]);
-      if (parsed !== null) return parsed;
-    }
-  }
-  return true;
-}
-
 function signatureApproxBytes(dataUrl: string) {
   const base64 = dataUrl.split(",")[1] || "";
   return Math.ceil((base64.length * 3) / 4);
@@ -541,6 +534,8 @@ export default function DailyDocketBcReviewPage() {
   const [editMode, setEditMode] = useState(false);
   const [savingChanges, setSavingChanges] = useState(false);
   const [reviewerMadeChanges, setReviewerMadeChanges] = useState(false);
+  const [clientContentKeys, setClientContentKeys] = useState<ClientContentKey[]>([]);
+  const [clientContentLoaded, setClientContentLoaded] = useState(false);
 
   const [currentRole, setCurrentRole] = useState("");
   const [reviewerName, setReviewerName] = useState("");
@@ -597,6 +592,8 @@ export default function DailyDocketBcReviewPage() {
           workflowRes,
           roleRes,
           configRes,
+          clientContentDefaultsRes,
+          clientContentSnapshotRes,
         ] = await Promise.all([
           supabase
             .from("projects")
@@ -605,13 +602,13 @@ export default function DailyDocketBcReviewPage() {
             .single(),
           supabase
             .from("towers")
-            .select("id, name, line, extra_data")
+            .select("id, name, line")
             .eq("id", towerId)
             .eq("project_id", projectId)
             .single(),
           supabase
             .from("towers")
-            .select("id, name, line, extra_data")
+            .select("id, name, line")
             .eq("project_id", projectId)
             .order("name"),
           supabase
@@ -784,6 +781,14 @@ export default function DailyDocketBcReviewPage() {
             .select("role, receives_bc_review")
             .eq("project_id", projectId)
             .eq("receives_bc_review", true),
+          supabase
+            .from("project_docket_client_content")
+            .select("content_key, included_by_default")
+            .eq("project_id", projectId),
+          supabase
+            .from("tower_docket_client_content")
+            .select("content_key, included, revision")
+            .eq("docket_id", docketId),
         ]);
 
         if (projectRes.error || !projectRes.data) {
@@ -809,6 +814,39 @@ export default function DailyDocketBcReviewPage() {
             "Daily Docket review history could not be loaded. Run the Daily Docket approval revision migration before reviewing this docket.",
           );
         }
+
+        if (clientContentDefaultsRes.error || clientContentSnapshotRes.error) {
+          throw new Error(
+            "Client docket content settings could not be loaded. Run the Daily Docket client-content migration before reviewing this docket.",
+          );
+        }
+
+        const defaultClientKeys = (
+          (clientContentDefaultsRes.data || []) as ClientContentConfigRow[]
+        )
+          .filter((row) => row.included_by_default && isClientContentKey(row.content_key))
+          .map((row) => row.content_key as ClientContentKey);
+
+        const resolvedApprovalRevision = Math.max(
+          1,
+          Number(
+            (docketRes.data as { approval_revision?: number | null } | null)
+              ?.approval_revision ?? 1,
+          ) || 1,
+        );
+
+        const snapshotRows = (
+          (clientContentSnapshotRes.data || []) as ClientContentSnapshotRow[]
+        ).filter(
+          (row) => Number(row.revision) === resolvedApprovalRevision,
+        );
+
+        const snapshotClientKeys = snapshotRows
+          .filter((row) => row.included && isClientContentKey(row.content_key))
+          .map((row) => row.content_key as ClientContentKey);
+
+        const resolvedClientKeys =
+          snapshotRows.length > 0 ? snapshotClientKeys : defaultClientKeys;
 
         const role = normalizeRole(
           (roleRes.data as { role?: string | null } | null)?.role,
@@ -839,6 +877,8 @@ export default function DailyDocketBcReviewPage() {
           setWorkflowEvents(
             (workflowRes.data || []) as WorkflowEventRow[],
           );
+          setClientContentKeys(resolvedClientKeys);
+          setClientContentLoaded(true);
           setCurrentRole(role);
           setAllowedReviewer(configuredRoles.has(role));
           setReviewerName(
@@ -879,106 +919,19 @@ export default function DailyDocketBcReviewPage() {
     );
   }, [projectTowers]);
 
+  const totalProgress = Math.round(
+    Number(docket?.assembly_percent || 0) * 0.5 +
+      Number(docket?.erection_percent || 0) * 0.5,
+  );
+
+  const totalDelayHours = delays.reduce(
+    (sum, row) => sum + Number(row.delay_hours || 0),
+    0,
+  );
+
   const mobilisation = useMemo(
     () => (docket ? parseMobilisation(docket, labour) : null),
     [docket, labour],
-  );
-
-  const hasBodyExtension = useMemo(
-    () => inferTowerHasBodyExtension(tower),
-    [tower],
-  );
-
-  const calculatedProgress = useMemo(() => {
-    const model = docket?.progress_model === "section_v2" ? "section_v2" : "legacy";
-
-    return calculateProgressTotals({
-      progressModel: model,
-      sectionV2Rows: progress.map((row) => ({
-        section_code: row.section_code || "",
-        section_label: row.section_label || row.section_code || "",
-        assembly_today: row.assembly_today ?? row.assembled_qty ?? 0,
-        erection_today: row.erection_today ?? row.erected_qty ?? 0,
-        assembly_weight: row.assembly_weight,
-        erection_weight: row.erection_weight,
-      })) as SectionV2CalculationRow[],
-      legacyRows: progress.map((row) => ({
-        section_label: row.section_label || row.section_code || "",
-        assembled_qty: row.assembled_qty ?? 0,
-        erected_qty: row.erected_qty ?? 0,
-      })) as LegacyProgressCalculationRow[],
-      hasBodyExtension,
-    });
-  }, [docket?.progress_model, hasBodyExtension, progress]);
-
-  const labourCalculationInput = useMemo<LabourCalculationRow[]>(
-    () =>
-      labour.map((row) => ({
-        worker_name: row.worker_name || "",
-        time_in: row.time_in || "",
-        time_out: row.time_out || "",
-        total_hours:
-          row.time_in && row.time_out
-            ? calculateHours(row.time_in, row.time_out)
-            : row.total_hours,
-        lunch_minutes: row.lunch_minutes,
-        travel_in_minutes: row.travel_in_minutes,
-        travel_out_minutes: row.travel_out_minutes,
-        // DB stores mobilisation in hours; the shared calculator consumes minutes.
-        mobilisation_hours: hoursToMinutes(row.mobilisation_hours),
-        delay_hours: row.delay_hours,
-        delay_reason: row.delay_reason,
-        production_hours: row.production_hours,
-      })),
-    [labour],
-  );
-
-  const delayCalculationInput = useMemo<DelayCalculationRow[]>(
-    () =>
-      delays.map((row) => ({
-        delay_type: row.delay_type || "other",
-        delay_reason: row.delay_reason,
-        delay_hours: row.delay_hours,
-        applies_to: row.applies_to || "entire_crew",
-        worker_names: row.worker_names || [],
-        delay_applies_mode: row.delay_applies_mode,
-        plant_names: row.plant_names || [],
-      })),
-    [delays],
-  );
-
-  const mobilisationCalculation = useMemo(
-    () => ({
-      enabled: Boolean(mobilisation?.included),
-      durationMinutes: mobilisation?.included ? mobilisation.minutes : 0,
-      workerNames: mobilisation?.workerNames || [],
-    }),
-    [mobilisation],
-  );
-
-  const calculatedLabourRows = useMemo(
-    () =>
-      calculateLabourRows(
-        labourCalculationInput,
-        delayCalculationInput,
-        mobilisationCalculation,
-      ),
-    [delayCalculationInput, labourCalculationInput, mobilisationCalculation],
-  );
-
-  const calculatedLabour = useMemo(
-    () =>
-      calculateLabourTotals(
-        labourCalculationInput,
-        delayCalculationInput,
-        mobilisationCalculation,
-      ),
-    [delayCalculationInput, labourCalculationInput, mobilisationCalculation],
-  );
-
-  const totalProgress = calculatedProgress.totalProgressPercent;
-  const totalDelayHours = calculateTotalDelayEventHours(
-    delayCalculationInput,
   );
 
   const siteComments = useMemo(
@@ -1047,6 +1000,15 @@ export default function DailyDocketBcReviewPage() {
     setSubmitError(null);
   }
 
+  function toggleClientContent(key: ClientContentKey) {
+    setClientContentKeys((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key],
+    );
+    setSubmitError(null);
+  }
+
   async function saveReviewerChanges() {
     if (!docket || !allowedReviewer || !reviewActionable) return;
 
@@ -1064,10 +1026,6 @@ export default function DailyDocketBcReviewPage() {
         incident_notes: docket.incident_notes,
         delays_comments: docket.delays_comments,
         missing_items_bolts: docket.missing_items_bolts,
-        assembly_percent: calculatedProgress.assemblyPercent,
-        erection_percent: calculatedProgress.erectionPercent,
-        raw_manhours: calculatedLabour.rawManhours,
-        production_manhours: calculatedLabour.productionManhours,
       };
 
       const { error: docketError } = await supabase
@@ -1083,15 +1041,9 @@ export default function DailyDocketBcReviewPage() {
           .from("tower_docket_progress")
           .update({
             assembly_today: row.assembly_today,
-            assembly_overall:
-              row.progress_model === "section_v2"
-                ? row.assembly_today
-                : row.assembly_overall,
+            assembly_overall: row.assembly_overall,
             erection_today: row.erection_today,
-            erection_overall:
-              row.progress_model === "section_v2"
-                ? row.erection_today
-                : row.erection_overall,
+            erection_overall: row.erection_overall,
             assembled_qty: row.assembled_qty,
             erected_qty: row.erected_qty,
           })
@@ -1100,23 +1052,21 @@ export default function DailyDocketBcReviewPage() {
         if (error) throw error;
       }
 
-      for (let index = 0; index < labour.length; index += 1) {
-        const row = labour[index];
-        const calculated = calculatedLabourRows[index];
-        if (!row.id || !calculated) continue;
+      for (const row of labour) {
+        if (!row.id) continue;
         const { error } = await supabase
           .from("tower_docket_labour")
           .update({
             time_in: row.time_in,
             time_out: row.time_out,
-            total_hours: Number(calculated.total_hours || 0),
+            total_hours: row.total_hours,
             lunch_minutes: row.lunch_minutes,
             travel_in_minutes: row.travel_in_minutes,
             travel_out_minutes: row.travel_out_minutes,
-            mobilisation_hours: Number(calculated.mobilisation_hours || 0) / 60,
-            delay_hours: Number(calculated.delay_hours || 0),
-            delay_reason: calculated.delay_reason,
-            production_hours: Number(calculated.production_hours || 0),
+            mobilisation_hours: row.mobilisation_hours,
+            delay_hours: row.delay_hours,
+            delay_reason: row.delay_reason,
+            production_hours: row.production_hours,
           })
           .eq("id", row.id)
           .eq("docket_id", docket.id);
@@ -1141,42 +1091,6 @@ export default function DailyDocketBcReviewPage() {
         if (error) throw error;
       }
 
-      setDocket((current) =>
-        current
-          ? {
-              ...current,
-              assembly_percent: calculatedProgress.assemblyPercent,
-              erection_percent: calculatedProgress.erectionPercent,
-              raw_manhours: calculatedLabour.rawManhours,
-              production_manhours: calculatedLabour.productionManhours,
-            }
-          : current,
-      );
-      setLabour((current) =>
-        current.map((row, index) => {
-          const calculated = calculatedLabourRows[index];
-          if (!calculated) return row;
-          return {
-            ...row,
-            total_hours: Number(calculated.total_hours || 0),
-            mobilisation_hours: Number(calculated.mobilisation_hours || 0) / 60,
-            delay_hours: Number(calculated.delay_hours || 0),
-            delay_reason: calculated.delay_reason || null,
-            production_hours: Number(calculated.production_hours || 0),
-          };
-        }),
-      );
-      setProgress((current) =>
-        current.map((row) =>
-          row.progress_model === "section_v2"
-            ? {
-                ...row,
-                assembly_overall: Number(row.assembly_today || 0),
-                erection_overall: Number(row.erection_today || 0),
-              }
-            : row,
-        ),
-      );
       setReviewerMadeChanges(true);
       setEditMode(false);
     } catch (error) {
@@ -1205,14 +1119,14 @@ export default function DailyDocketBcReviewPage() {
       return;
     }
 
-    if (editMode) {
-      setSubmitError(
-        "Save or cancel the reviewer edits before completing the BC review.",
-      );
-      return;
-    }
-
     if (action === "approve") {
+      if (!clientContentLoaded || clientContentKeys.length === 0) {
+        setSubmitError(
+          "Select at least one section to include in the client Daily Docket.",
+        );
+        return;
+      }
+
       if (!reviewerSignature) {
         setSubmitError("Capture the BC reviewer signature before approving.");
         return;
@@ -1278,6 +1192,8 @@ export default function DailyDocketBcReviewPage() {
               action === "approve" ? reviewerSignature : undefined,
             reviewer_made_changes:
               action === "approve" ? reviewerMadeChanges : undefined,
+            client_content_keys:
+              action === "approve" ? clientContentKeys : undefined,
           }),
         },
       );
@@ -1396,28 +1312,34 @@ export default function DailyDocketBcReviewPage() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
             <button
               type="button"
               onClick={() =>
                 router.push(`/project/${projectId}/tower/${towerId}/dockets`)
               }
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               aria-label="Back to Daily Dockets"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
-
             <div>
-              <p className="text-sm font-semibold text-slate-900">TTTracker</p>
-              <p className="text-xs text-slate-500">Daily Docket Review</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Daily Docket Review
+              </p>
+              <h1 className="mt-1 text-2xl font-bold text-slate-950">
+                {towerName} · {formatDate(docket.docket_date)}
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                {project.project_number ? `${project.project_number} · ` : ""}
+                {project.name || "Project"}
+              </p>
             </div>
           </div>
-
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
               R{String(currentRevision).padStart(2, "0")}
             </span>
             <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
@@ -1425,9 +1347,6 @@ export default function DailyDocketBcReviewPage() {
             </span>
           </div>
         </div>
-      </div>
-
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         {!allowedReviewer ? (
           <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <div className="flex gap-3">
@@ -1558,20 +1477,20 @@ export default function DailyDocketBcReviewPage() {
               <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <MetricCard
                   label="Assembly"
-                  value={formatPercent(calculatedProgress.assemblyPercent)}
+                  value={formatPercent(docket.assembly_percent)}
                 />
                 <MetricCard
                   label="Erection"
-                  value={formatPercent(calculatedProgress.erectionPercent)}
+                  value={formatPercent(docket.erection_percent)}
                 />
                 <MetricCard label="Total Progress" value={`${totalProgress}%`} />
                 <MetricCard
                   label="Raw MH"
-                  value={formatHours(calculatedLabour.rawManhours)}
+                  value={formatHours(docket.raw_manhours)}
                 />
                 <MetricCard
                   label="Production MH"
-                  value={formatHours(calculatedLabour.productionManhours)}
+                  value={formatHours(docket.production_manhours)}
                   internal
                 />
               </div>
@@ -1792,7 +1711,7 @@ export default function DailyDocketBcReviewPage() {
                             )}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-700">
-                            {formatHours(Number(calculatedLabourRows[index]?.total_hours || row.total_hours || 0))}
+                            {formatHours(row.total_hours)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
                             {formatMinutes(row.lunch_minutes)}
@@ -1807,10 +1726,10 @@ export default function DailyDocketBcReviewPage() {
                             {formatHours(row.mobilisation_hours)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
-                            {formatHours(Number(calculatedLabourRows[index]?.delay_hours || row.delay_hours || 0))}
+                            {formatHours(row.delay_hours)}
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-emerald-700">
-                            {formatHours(Number(calculatedLabourRows[index]?.production_hours || row.production_hours || 0))}
+                            {formatHours(row.production_hours)}
                           </td>
                         </tr>
                       ))
@@ -2557,6 +2476,62 @@ export default function DailyDocketBcReviewPage() {
                 </div>
               ) : null}
 
+              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Information to Include in Client Docket
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Project defaults are preselected. Change them for this revision before approving.
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                    R{String(currentRevision).padStart(2, "0")}
+                  </span>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {CLIENT_CONTENT_OPTIONS.map((option) => {
+                    const checked = clientContentKeys.includes(option.key);
+                    return (
+                      <label
+                        key={option.key}
+                        className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 transition ${
+                          checked
+                            ? "border-blue-200 bg-blue-50"
+                            : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={
+                            !allowedReviewer ||
+                            !reviewActionable ||
+                            submitting !== null
+                          }
+                          onChange={() => toggleClientContent(option.key)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-slate-900">
+                            {option.label}
+                          </span>
+                          <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                            {option.description}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <p className="mt-3 text-xs text-slate-500">
+                  The selection is saved against this approval revision so later project-setting changes do not alter the historical issue.
+                </p>
+              </div>
+
               <div className="mt-5">
                 <label
                   htmlFor="approval-comments"
@@ -2591,7 +2566,6 @@ export default function DailyDocketBcReviewPage() {
                   disabled={
                     !allowedReviewer ||
                     !reviewActionable ||
-                    editMode ||
                     submitting !== null
                   }
                   onClick={() => void submitReview("approve")}
@@ -2690,7 +2664,6 @@ export default function DailyDocketBcReviewPage() {
                 disabled={
                   !allowedReviewer ||
                   !reviewActionable ||
-                  editMode ||
                   submitting !== null
                 }
                 onClick={() => void submitReview("request_changes")}

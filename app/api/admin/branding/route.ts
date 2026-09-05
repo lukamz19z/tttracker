@@ -21,6 +21,15 @@ type BrandingRow = {
   logo_sharepoint_item_id: string | null;
   logo_sharepoint_drive_id: string | null;
   logo_updated_at: string | null;
+  abn: string | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  suburb: string | null;
+  state: string | null;
+  postcode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
 };
 
 const BRANDING_ID = 1;
@@ -112,6 +121,15 @@ async function readBranding(
         "logo_sharepoint_item_id",
         "logo_sharepoint_drive_id",
         "logo_updated_at",
+        "abn",
+        "address_line_1",
+        "address_line_2",
+        "suburb",
+        "state",
+        "postcode",
+        "phone",
+        "email",
+        "website",
       ].join(","),
     )
     .eq("id", BRANDING_ID)
@@ -129,6 +147,15 @@ async function readBranding(
     logo_sharepoint_item_id: null,
     logo_sharepoint_drive_id: null,
     logo_updated_at: null,
+    abn: null,
+    address_line_1: null,
+    address_line_2: null,
+    suburb: null,
+    state: null,
+    postcode: null,
+    phone: null,
+    email: null,
+    website: null,
   }) as BrandingRow;
 }
 
@@ -140,6 +167,15 @@ function publicBranding(row: BrandingRow) {
     logo_sharepoint_item_id: row.logo_sharepoint_item_id,
     logo_sharepoint_drive_id: row.logo_sharepoint_drive_id,
     logo_updated_at: row.logo_updated_at,
+    abn: row.abn,
+    address_line_1: row.address_line_1,
+    address_line_2: row.address_line_2,
+    suburb: row.suburb,
+    state: row.state,
+    postcode: row.postcode,
+    phone: row.phone,
+    email: row.email,
+    website: row.website,
   };
 }
 
@@ -295,6 +331,18 @@ export async function POST(request: Request) {
       );
     }
 
+    const businessDetails = {
+      abn: String(formData.get("abn") ?? "").trim() || null,
+      address_line_1: String(formData.get("address_line_1") ?? "").trim() || null,
+      address_line_2: String(formData.get("address_line_2") ?? "").trim() || null,
+      suburb: String(formData.get("suburb") ?? "").trim() || null,
+      state: String(formData.get("state") ?? "").trim() || null,
+      postcode: String(formData.get("postcode") ?? "").trim() || null,
+      phone: String(formData.get("phone") ?? "").trim() || null,
+      email: String(formData.get("email") ?? "").trim() || null,
+      website: String(formData.get("website") ?? "").trim() || null,
+    };
+
     const current = await readBranding(supabase);
 
     const formLogo = formData.get("logo");
@@ -339,6 +387,7 @@ export async function POST(request: Request) {
         {
           id: BRANDING_ID,
           company_name: companyName,
+          ...businessDetails,
           logo_file_name:
             uploaded?.fileName ?? current.logo_file_name,
           logo_content_type:
@@ -368,6 +417,15 @@ export async function POST(request: Request) {
           "logo_sharepoint_item_id",
           "logo_sharepoint_drive_id",
           "logo_updated_at",
+        "abn",
+        "address_line_1",
+        "address_line_2",
+        "suburb",
+        "state",
+        "postcode",
+        "phone",
+        "email",
+        "website",
         ].join(","),
       )
       .single();
@@ -419,6 +477,15 @@ export async function DELETE(request: Request) {
         {
           id: BRANDING_ID,
           company_name: current.company_name || "BC Contracting",
+          abn: current.abn,
+          address_line_1: current.address_line_1,
+          address_line_2: current.address_line_2,
+          suburb: current.suburb,
+          state: current.state,
+          postcode: current.postcode,
+          phone: current.phone,
+          email: current.email,
+          website: current.website,
           logo_file_name: null,
           logo_content_type: null,
           logo_sharepoint_item_id: null,
@@ -440,6 +507,15 @@ export async function DELETE(request: Request) {
           "logo_sharepoint_item_id",
           "logo_sharepoint_drive_id",
           "logo_updated_at",
+        "abn",
+        "address_line_1",
+        "address_line_2",
+        "suburb",
+        "state",
+        "postcode",
+        "phone",
+        "email",
+        "website",
         ].join(","),
       )
       .single();
