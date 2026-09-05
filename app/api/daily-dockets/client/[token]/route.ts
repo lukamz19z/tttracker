@@ -90,6 +90,105 @@ type ClientContactRow = {
   active: boolean;
 };
 
+const CLIENT_CONTENT_KEYS = [
+  "progress",
+  "workforce",
+  "raw_manhours",
+  "plant",
+  "mobilisation",
+  "travel",
+  "delays",
+  "missing_materials",
+  "received_materials",
+  "safety",
+] as const;
+
+type ClientContentKey = (typeof CLIENT_CONTENT_KEYS)[number];
+
+type ClientContentSnapshotRow = {
+  content_key: string;
+  included: boolean;
+};
+
+type ProjectClientContentRow = {
+  content_key: string;
+  included_by_default: boolean;
+};
+
+function isClientContentKey(value: string): value is ClientContentKey {
+  return (CLIENT_CONTENT_KEYS as readonly string[]).includes(value);
+}
+
+async function loadClientContentKeys({
+  admin,
+  docketId,
+  projectId,
+  revision,
+}: {
+  admin: ReturnType<typeof createDocketAdminSupabase>;
+  docketId: string;
+  projectId: string;
+  revision: number;
+}): Promise<ClientContentKey[]> {
+  const [snapshotResult, defaultsResult] = await Promise.all([
+    admin
+      .from("tower_docket_client_content")
+      .select("content_key,included")
+      .eq("docket_id", docketId)
+      .eq("revision", revision),
+    admin
+      .from("project_docket_client_content")
+      .select("content_key,included_by_default")
+      .eq("project_id", projectId),
+  ]);
+
+  if (snapshotResult.error) {
+    throw new Error(
+      `Client Daily Docket content snapshot could not be loaded: ${snapshotResult.error.message}`,
+    );
+  }
+
+  if (defaultsResult.error) {
+    throw new Error(
+      `Client Daily Docket defaults could not be loaded: ${defaultsResult.error.message}`,
+    );
+  }
+
+  const snapshotRows = (snapshotResult.data ?? []) as ClientContentSnapshotRow[];
+
+  if (snapshotRows.length > 0) {
+    const selected = snapshotRows
+      .filter((row) => row.included)
+      .map((row) => String(row.content_key ?? "").trim())
+      .filter(isClientContentKey);
+
+    if (selected.length === 0) {
+      throw new Error(
+        `Daily Docket R${String(revision).padStart(2, "0")} has no client-visible sections selected.`,
+      );
+    }
+
+    return [...new Set(selected)];
+  }
+
+  const defaultRows = (defaultsResult.data ?? []) as ProjectClientContentRow[];
+
+  if (defaultRows.length > 0) {
+    const selected = defaultRows
+      .filter((row) => row.included_by_default)
+      .map((row) => String(row.content_key ?? "").trim())
+      .filter(isClientContentKey);
+
+    if (selected.length > 0) {
+      return [...new Set(selected)];
+    }
+  }
+
+  // Backward compatibility for approvals created before client-content
+  // snapshots/defaults were introduced.
+  return [...CLIENT_CONTENT_KEYS];
+}
+
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -139,11 +238,7 @@ function publicDocketPayload({
       client: project.client,
     },
     tower: {
-      name:
-        tower.tower_number ||
-        tower.structure_number ||
-        tower.name ||
-        "Tower",
+      name: tower.name || "Tower",
     },
     recipient: {
       name: approval.recipient_name,
@@ -388,12 +483,7 @@ async function publishFinalPdf({
     );
   }
 
-  const towerName = String(
-    tower.tower_number ||
-      tower.structure_number ||
-      tower.name ||
-      "",
-  ).trim();
+  const towerName = String(tower.name || "").trim();
 
   if (!towerName) {
     throw new Error(
@@ -608,6 +698,13 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    const clientContentKeys = await loadClientContentKeys({
+      admin,
+      docketId: docket.id,
+      projectId: docket.project_id,
+      revision: approvalRevision,
+    });
+
     const now = new Date().toISOString();
 
     const tokenClaimed = await claimApprovalToken(
@@ -723,12 +820,7 @@ export async function POST(request: Request, context: RouteContext) {
           `${origin}/project/${docket.project_id}` +
           `/tower/${docket.tower_id}/dockets/${docket.id}/review`;
 
-        const towerName = String(
-          tower.tower_number ||
-            tower.structure_number ||
-            tower.name ||
-            "Tower",
-        );
+        const towerName = String(tower.name || "Tower");
 
         try {
           await sendDailyDocketEmail({
@@ -878,7 +970,17 @@ export async function POST(request: Request, context: RouteContext) {
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,
+        abn: branding.abn,
+        addressLine1: branding.addressLine1,
+        addressLine2: branding.addressLine2,
+        suburb: branding.suburb,
+        state: branding.state,
+        postcode: branding.postcode,
+        phone: branding.phone,
+        email: branding.email,
+        website: branding.website,
       },
+      clientContentKeys,
     });
 
     const published = await publishFinalPdf({
@@ -1021,6 +1123,10 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by_name: name,
           performed_by_email: recipientEmail,
           comments: comments || null,
+          metadata: {
+            client_approval_id: approval.id,
+            client_content: clientContentKeys,
+          },
         },
         {
           docket_id: docket.id,
@@ -1031,6 +1137,13 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by_name: name,
           performed_by_email: recipientEmail,
           comments: published.item.webUrl ?? null,
+          metadata: {
+            sharepoint_item_id: published.item.id,
+            sharepoint_folder_id: published.folder.id,
+            file_name: published.fileName,
+            web_url: published.item.webUrl ?? null,
+            client_content: clientContentKeys,
+          },
         },
       ]);
 

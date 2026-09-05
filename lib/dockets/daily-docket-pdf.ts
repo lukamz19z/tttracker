@@ -25,7 +25,17 @@ export type DailyDocketPdfData = {
   branding?: {
     logoDataUrl?: string | null;
     companyName?: string | null;
+    abn?: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    suburb?: string | null;
+    state?: string | null;
+    postcode?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    website?: string | null;
   };
+  clientContentKeys?: string[] | null;
 };
 
 const SECTION_ORDER = [
@@ -120,12 +130,6 @@ function applicableV2Rows(data: DailyDocketPdfData) {
     };
   });
 }
-function weightFor(code: string) {
-  if (code === "LE") return 20;
-  if (code === "BE" || code === "CB") return 15;
-  if (["BSS", "MSS", "TSS"].includes(code)) return 10;
-  return 5;
-}
 function overallProgress(data: DailyDocketPdfData) {
   return calculateProgressTotals({
     progressModel: progressModel(data),
@@ -145,6 +149,90 @@ function overallProgress(data: DailyDocketPdfData) {
     hasBodyExtension: hasBodyExtension(data),
   });
 }
+const CLIENT_CONTENT_KEYS = [
+  "progress",
+  "workforce",
+  "raw_manhours",
+  "plant",
+  "mobilisation",
+  "travel",
+  "delays",
+  "missing_materials",
+  "received_materials",
+  "safety",
+] as const;
+
+type ClientContentKey = (typeof CLIENT_CONTENT_KEYS)[number];
+
+function clientContentSet(data: DailyDocketPdfData) {
+  const supplied = Array.isArray(data.clientContentKeys)
+    ? data.clientContentKeys
+        .map(value => text(value).trim().toLowerCase())
+        .filter((value): value is ClientContentKey =>
+          (CLIENT_CONTENT_KEYS as readonly string[]).includes(value),
+        )
+    : [];
+
+  return new Set<ClientContentKey>(
+    supplied.length > 0 ? supplied : CLIENT_CONTENT_KEYS,
+  );
+}
+
+function isMissingMaterialEvent(event: MaterialEvent) {
+  const type = text(event.event_type).trim().toLowerCase();
+  return type.includes("missing") || type.includes("short");
+}
+
+function isReceivedMaterialEvent(event: MaterialEvent) {
+  const type = text(event.event_type).trim().toLowerCase();
+  return (
+    type.includes("received") ||
+    type.includes("found") ||
+    type.includes("deliver") ||
+    type.includes("transfer")
+  );
+}
+
+function selectedMaterialEvents(
+  data: DailyDocketPdfData,
+  visible: Set<ClientContentKey>,
+) {
+  const includeMissing = visible.has("missing_materials");
+  const includeReceived = visible.has("received_materials");
+
+  if (includeMissing && includeReceived) {
+    return data.materialEvents;
+  }
+
+  if (includeMissing) {
+    return data.materialEvents.filter(isMissingMaterialEvent);
+  }
+
+  if (includeReceived) {
+    return data.materialEvents.filter(isReceivedMaterialEvent);
+  }
+
+  return [];
+}
+
+function formatBusinessAddress(data: DailyDocketPdfData) {
+  const branding = data.branding;
+  const lineOne = [branding?.addressLine1, branding?.addressLine2]
+    .map(value => text(value).trim())
+    .filter(Boolean)
+    .join(", ");
+  const lineTwo = [
+    branding?.suburb,
+    branding?.state,
+    branding?.postcode,
+  ]
+    .map(value => text(value).trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return [lineOne, lineTwo].filter(Boolean);
+}
+
 function documentState(data: DailyDocketPdfData): "DRAFT" | "FINAL" {
   const status = text(data.docket.approval_status).toLowerCase();
   return status === "final" || status === "legacy_final" || Boolean(text(data.docket.client_approved_at))
@@ -199,9 +287,12 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   const state = documentState(data);
   const rev = revisionLabel(data);
   const calculated = overallProgress(data);
+  const visible = clientContentSet(data);
+  const materialEvents = selectedMaterialEvents(data, visible);
   const projectName = [text(data.project.project_number), text(data.project.name)].filter(Boolean).join(" - ");
   const tower = towerName(data);
-  let y = 36;
+  let y = 40;
+  let sectionIndex = 0;
 
   function setText(rgb: readonly [number, number, number]) {
     doc.setTextColor(rgb[0], rgb[1], rgb[2]);
@@ -214,58 +305,90 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   }
   function drawHeader() {
     setFill(C.white);
-    doc.rect(0, 0, pageWidth, 31, "F");
+    doc.rect(0, 0, pageWidth, 35, "F");
 
     const logo = data.branding?.logoDataUrl;
     if (logo && logo.startsWith("data:image/")) {
       try {
         const format = logo.startsWith("data:image/jpeg") ? "JPEG" : "PNG";
-        doc.addImage(logo, format, margin, 7, 25, 15, undefined, "FAST");
+        doc.addImage(logo, format, margin, 6.5, 24, 14, undefined, "FAST");
       } catch {
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(11);
+        doc.setFontSize(10.5);
         setText(C.navy);
         doc.text(
           text(data.branding?.companyName).trim() || "Company",
           margin,
-          17,
+          15.5,
         );
       }
     } else {
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(11);
+      doc.setFontSize(10.5);
       setText(C.navy);
       doc.text(
         text(data.branding?.companyName).trim() || "Company",
         margin,
-        17,
+        15.5,
       );
     }
 
-    doc.setFont("helvetica", "bold"); doc.setFontSize(15); setText(C.navy);
-    doc.text("DAILY DOCKET", 43, 13);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); setText(C.slate);
-    doc.text(projectName || "Project", 43, 19);
-    doc.text(`${tower}  •  ${formatDate(data.docket.docket_date)}`, 43, 24);
+    const companyName = text(data.branding?.companyName).trim() || "Company";
+    const businessAddress = formatBusinessAddress(data);
+    const businessDetails = [
+      text(data.branding?.abn).trim() ? `ABN ${text(data.branding?.abn).trim()}` : "",
+      ...businessAddress,
+      [text(data.branding?.phone).trim(), text(data.branding?.email).trim()]
+        .filter(Boolean)
+        .join("  •  "),
+      text(data.branding?.website).trim(),
+    ].filter(Boolean);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    setText(C.navy);
+    doc.text("DAILY DOCKET", 43, 11.5);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.9);
+    setText(C.slate);
+    doc.text(projectName || "Project", 43, 17);
+    doc.text(`${tower}  •  ${formatDate(data.docket.docket_date)}`, 43, 22);
+
+    if (businessDetails.length) {
+      doc.setFontSize(6.4);
+      setText(C.muted);
+      const businessLine = `${companyName}  •  ${businessDetails.join("  •  ")}`;
+      const wrapped = doc.splitTextToSize(businessLine, 118) as string[];
+      doc.text(wrapped.slice(0, 2), 43, 26.5);
+    }
 
     const statusColor = state === "FINAL" ? C.green : C.amber;
     const statusFill = state === "FINAL" ? C.greenPale : C.amberPale;
-    setFill(statusFill); doc.roundedRect(165, 8, 32, 14, 2, 2, "F");
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8); setText(statusColor);
+    setFill(statusFill);
+    doc.roundedRect(165, 8, 32, 14, 2, 2, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    setText(statusColor);
     doc.text(state, 181, 13, { align: "center" });
-    doc.setFontSize(10); doc.text(rev, 181, 19, { align: "center" });
+    doc.setFontSize(10);
+    doc.text(rev, 181, 19, { align: "center" });
 
-    setDraw(C.border); doc.line(margin, 29, pageWidth - margin, 29);
+    setDraw(C.border);
+    doc.line(margin, 33, pageWidth - margin, 33);
   }
+
   function newPage() {
     doc.addPage();
     drawHeader();
-    y = 36;
+    y = 40;
   }
   function ensure(height: number) {
     if (y + height > footerTop - 4) newPage();
   }
-  function section(title: string, numberLabel: string) {
+  function section(title: string) {
+    sectionIndex += 1;
+    const numberLabel = String(sectionIndex).padStart(2, "0");
     ensure(12);
     setFill(C.navy); doc.roundedRect(margin, y, contentWidth, 8, 1.5, 1.5, "F");
     doc.setFont("helvetica", "bold"); doc.setFontSize(9); setText(C.white);
@@ -359,7 +482,7 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
 
   drawHeader();
 
-  section("Docket Details", "01");
+  section("Docket Details");
   infoGrid([
     ["Crew", text(data.docket.crew) || "—"],
     ["Leading Hand", text(data.docket.leading_hand) || "—"],
@@ -369,133 +492,371 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
     ["Client Representative", text(data.docket.client_rep_name) || (state === "DRAFT" ? "Pending approval" : "—")],
   ]);
 
-  section("Progress", "02");
-  if (progressModel(data) === "section_v2") {
-    const rows = applicableV2Rows(data).map(row => [
-      sectionLabel(row),
-      `${weightFor(text(row.section_code))}%`,
-      `${clampPercent(row.assembly_today).toFixed(0)}%`,
-      `${clampPercent(row.erection_today).toFixed(0)}%`,
-    ]);
-    table(["Section", "Weight", "Assembly Today", "Erection Today"], rows, [62, 30, 46, 46], { compact: true });
-    const beText = hasBodyExtension(data) ? "Body Extension included" : "Body Extension excluded; remaining weights normalised";
-    paragraph(beText);
-  } else {
-    table(["Section", "Assembled", "Erected"], data.progress.map(row => [
-      sectionLabel(row), text(row.assembled_qty) || "0", text(row.erected_qty) || "0",
-    ]), [92, 46, 46], { compact: true });
+  if (visible.has("progress")) {
+    section("Progress");
+    if (progressModel(data) === "section_v2") {
+      const rows = applicableV2Rows(data).map(row => [
+        sectionLabel(row),
+        `${clampPercent(row.assembly_today).toFixed(0)}%`,
+        `${clampPercent(row.erection_today).toFixed(0)}%`,
+      ]);
+      table(
+        ["Section", "Assembly Today", "Erection Today"],
+        rows,
+        [82, 51, 51],
+        { compact: true },
+      );
+      paragraph(
+        hasBodyExtension(data)
+          ? "Body Extension included."
+          : "Body Extension excluded.",
+      );
+    } else {
+      table(
+        ["Section", "Assembled", "Erected"],
+        data.progress.map(row => [
+          sectionLabel(row),
+          text(row.assembled_qty) || "0",
+          text(row.erected_qty) || "0",
+        ]),
+        [92, 46, 46],
+        { compact: true },
+      );
+    }
+
+    table(
+      ["Overall Assembly", "Overall Erection", "Total Progress"],
+      [[
+        `${calculated.assemblyPercent.toFixed(1)}%`,
+        `${calculated.erectionPercent.toFixed(1)}%`,
+        `${calculated.totalProgressPercent.toFixed(1)}%`,
+      ]],
+      [61.3, 61.3, 61.4],
+      { headerFill: C.bluePale },
+    );
   }
-  table(["Overall Assembly", "Overall Erection", "Total Progress"], [[
-    `${calculated.assemblyPercent.toFixed(1)}%`,
-    `${calculated.erectionPercent.toFixed(1)}%`,
-    `${calculated.totalProgressPercent.toFixed(1)}%`,
-  ]], [61.3, 61.3, 61.4], { headerFill: C.bluePale });
 
-  section("Labour", "03");
-  table(["Personnel", "Time In", "Time Out", "Raw Hours"], data.labour.length ? data.labour.map(row => [
-    text(row.worker_name) || "Worker", text(row.time_in) || "—", text(row.time_out) || "—", formatHours(row.total_hours),
-  ]) : [["No labour recorded", "—", "—", "—"]], [88, 32, 32, 32], { compact: true });
-  callout("Total raw man-hours", formatHours(data.docket.raw_manhours), "blue");
+  if (visible.has("workforce") || visible.has("raw_manhours")) {
+    section("Workforce");
 
-  const mobilisation = parseMobilisation(data);
-  section("Mobilisation / Demobilisation", "04");
-  if (!mobilisation.included) {
-    callout("Mobilising", "No", "blue");
-  } else {
-    infoGrid([
-      ["Mobilising", "Yes"],
-      ["Duration", formatHours(mobilisation.hours)],
-      ["From", mobilisation.from || "—"],
-      ["To", mobilisation.to || "—"],
-      ["Stage", titleCase(mobilisation.status) || "—"],
-      ["Personnel", mobilisation.workers.length ? mobilisation.workers.join(", ") : "Crew / as recorded"],
-    ]);
-    if (mobilisation.notes) paragraph(`Notes: ${mobilisation.notes}`);
-  }
+    if (visible.has("workforce")) {
+      table(
+        ["Personnel", "Time In", "Time Out", "Raw Hours"],
+        data.labour.length
+          ? data.labour.map(row => [
+              text(row.worker_name) || "Worker",
+              text(row.time_in) || "—",
+              text(row.time_out) || "—",
+              formatHours(row.total_hours),
+            ])
+          : [["No labour recorded", "—", "—", "—"]],
+        [88, 32, 32, 32],
+        { compact: true },
+      );
+    }
 
-  section("Plant & Equipment", "05");
-  table(["Asset", "Type", "Time In", "Time Out", "Hours"], data.plant.length ? data.plant.map(row => [
-    text(row.plant_name) || text(row.asset_number) || text(row.asset_id) || "Plant",
-    text(row.plant_type) || "—", text(row.time_in) || "—", text(row.time_out) || "—", formatHours(row.total_hours),
-  ]) : [["No plant recorded", "—", "—", "—", "—"]], [70, 40, 25, 25, 24], { compact: true });
-
-  section("Delays & Disruptions", "06");
-  if (!data.delays.length) {
-    callout("Delay status", "No general delays recorded", "green");
-  } else {
-    table(["Type", "Hours", "Reason / Impact"], data.delays.map(row => [
-      titleCase(row.delay_type) || "Delay", formatHours(row.delay_hours), text(row.delay_reason) || "—",
-    ]), [43, 27, 114], { compact: true, headerFill: C.amberPale });
-    for (const row of data.delays) {
-      const affected = [
-        Array.isArray(row.worker_names) && row.worker_names.length ? `Personnel: ${row.worker_names.join(", ")}` : "",
-        Array.isArray(row.plant_names) && row.plant_names.length ? `Plant: ${row.plant_names.join(", ")}` : "",
-      ].filter(Boolean).join("  •  ");
-      if (affected) paragraph(affected);
+    if (visible.has("raw_manhours")) {
+      callout(
+        "Total raw man-hours",
+        formatHours(data.docket.raw_manhours),
+        "blue",
+      );
     }
   }
-  const comments = generalSiteComments(data.docket.delays_comments);
-  if (comments) paragraph(`Site comment: ${comments}`);
 
-  section("Materials", "07");
-  if (!data.materialEvents.length) {
-    callout("Material status", "No structured material events recorded", "green");
-  } else {
-    data.materialEvents.forEach((event, index) => {
-      ensure(15);
-      callout(
-        `${index + 1}. ${titleCase(event.event_type) || "Material Event"}`,
-        [text(event.affected_section), text(event.affected_activity)].filter(Boolean).join(" · ") || "Material event recorded",
-        text(event.event_type).toLowerCase().includes("missing") ? "amber" : "blue",
+  if (visible.has("mobilisation")) {
+    const mobilisation = parseMobilisation(data);
+    section("Mobilisation / Demobilisation");
+
+    if (!mobilisation.included) {
+      callout("Mobilising", "No", "blue");
+    } else {
+      infoGrid([
+        ["Mobilising", "Yes"],
+        ["Duration", formatHours(mobilisation.hours)],
+        ["From", mobilisation.from || "—"],
+        ["To", mobilisation.to || "—"],
+        ["Stage", titleCase(mobilisation.status) || "—"],
+        [
+          "Personnel",
+          mobilisation.workers.length
+            ? mobilisation.workers.join(", ")
+            : "Crew / as recorded",
+        ],
+      ]);
+
+      if (mobilisation.notes) {
+        paragraph(`Notes: ${mobilisation.notes}`);
+      }
+    }
+  }
+
+  if (visible.has("travel")) {
+    section("Travel");
+
+    const travelHours = number(data.docket.travel_hours);
+    const travelInHours = number(data.docket.travel_in_hours);
+    const travelOutHours = number(data.docket.travel_out_hours);
+    const travelNotes =
+      text(data.docket.travel_notes).trim() ||
+      text(data.docket.travel_comments).trim();
+
+    const travelItems: Array<[string, string]> = [];
+    if (travelHours > 0) travelItems.push(["Total Travel", formatHours(travelHours)]);
+    if (travelInHours > 0) travelItems.push(["Travel In", formatHours(travelInHours)]);
+    if (travelOutHours > 0) travelItems.push(["Travel Out", formatHours(travelOutHours)]);
+
+    if (travelItems.length > 0) {
+      infoGrid(travelItems);
+    } else {
+      callout("Travel", "No separate travel hours recorded", "blue");
+    }
+
+    if (travelNotes) {
+      paragraph(`Notes: ${travelNotes}`);
+    }
+  }
+
+  if (visible.has("plant")) {
+    section("Plant & Equipment");
+    table(
+      ["Asset", "Type", "Time In", "Time Out", "Hours"],
+      data.plant.length
+        ? data.plant.map(row => [
+            text(row.plant_name) ||
+              text(row.asset_number) ||
+              text(row.asset_id) ||
+              "Plant",
+            text(row.plant_type) || "—",
+            text(row.time_in) || "—",
+            text(row.time_out) || "—",
+            formatHours(row.total_hours),
+          ])
+        : [["No plant recorded", "—", "—", "—", "—"]],
+      [70, 40, 25, 25, 24],
+      { compact: true },
+    );
+  }
+
+  if (visible.has("delays")) {
+    section("Delays & Disruptions");
+
+    if (!data.delays.length) {
+      callout("Delay status", "No general delays recorded", "green");
+    } else {
+      table(
+        ["Type", "Hours", "Reason / Impact"],
+        data.delays.map(row => [
+          titleCase(row.delay_type) || "Delay",
+          formatHours(row.delay_hours),
+          text(row.delay_reason) || "—",
+        ]),
+        [43, 27, 114],
+        { compact: true, headerFill: C.amberPale },
       );
-      const items = event.tower_material_event_items ?? [];
-      if (items.length) table(["Qty", "Reference", "Description"], items.map(item => [
-        `${number(item.quantity)} ${text(item.unit) || "x"}`, text(item.item_reference) || "—", text(item.item_description) || "—",
-      ]), [30, 55, 99], { compact: true });
 
-      const people = event.tower_material_event_people ?? [];
-      if (people.length) {
-        table(["Personnel", "Start", "Finish", "Hours"], people.map(person => {
-          const hrs = durationHours(person.started_at, person.finished_at);
-          return [text(person.employee_name) || "—", text(person.started_at).slice(11,16) || "—", text(person.finished_at).slice(11,16) || "—", hrs === null ? "—" : `${hrs.toFixed(2)} h`];
-        }), [88, 32, 32, 32], { compact: true });
-      }
-      const eventPlant = event.tower_material_event_plant ?? [];
-      if (eventPlant.length) table(["Plant / Equipment", "Affected Hours"], eventPlant.map(item => {
-        const hrs = durationHours(item.started_at, item.finished_at);
-        return [text(item.plant_name) || "Plant", hrs === null ? "—" : `${hrs.toFixed(2)} h`];
-      }), [130, 54], { compact: true });
+      for (const row of data.delays) {
+        const affected = [
+          Array.isArray(row.worker_names) && row.worker_names.length
+            ? `Personnel: ${row.worker_names.join(", ")}`
+            : "",
+          Array.isArray(row.plant_names) && row.plant_names.length
+            ? `Plant: ${row.plant_names.join(", ")}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("  •  ");
 
-      const impactRows: Array<[string, string]> = [];
-      if (text(event.work_outcome)) impactRows.push(["Work Outcome", titleCase(event.work_outcome)]);
-      if (text(event.commercial_impact_type)) impactRows.push(["Impact", titleCase(event.commercial_impact_type)]);
-      if (text(event.current_effect)) impactRows.push(["Remaining Effect", titleCase(event.current_effect)]);
-      if (impactRows.length) infoGrid(impactRows);
-      if (Array.isArray(event.mitigation_actions) && event.mitigation_actions.length) {
-        paragraph(`Mitigation undertaken: ${event.mitigation_actions.map(titleCase).join("; ")}.`);
+        if (affected) {
+          paragraph(affected);
+        }
       }
-      if (text(event.notes)) paragraph(`Notes: ${text(event.notes)}`);
-    });
+    }
+
+    const comments = generalSiteComments(data.docket.delays_comments);
+    if (comments) {
+      paragraph(`Site comment: ${comments}`);
+    }
   }
 
-  section("Safety", "08");
-  const incident = Boolean(data.docket.incident_occurred);
-  callout("Incident / Event", incident ? "Yes — details recorded below" : "No incident recorded", incident ? "red" : "green");
-  if (incident) {
-    if (text(data.docket.incident_type)) paragraph(`Type: ${text(data.docket.incident_type)}`);
-    if (text(data.docket.incident_notes)) paragraph(`Details: ${text(data.docket.incident_notes)}`);
-  }
-  if (text(data.docket.safety_check_completed)) paragraph(`Safety check completed: ${text(data.docket.safety_check_completed)}`);
+  if (visible.has("missing_materials") || visible.has("received_materials")) {
+    section("Materials");
 
-  section("Sign-Off & Approval", "09");
-  signatureCard("BC Representative Sign-Off", data.docket.bc_rep_name, "", data.docket.bc_signed_at || data.docket.bc_submitted_at, data.docket.bc_signature_data_url);
+    if (!materialEvents.length) {
+      callout(
+        "Material status",
+        "No selected material events recorded",
+        "green",
+      );
+    } else {
+      materialEvents.forEach((event, index) => {
+        ensure(15);
+        callout(
+          `${index + 1}. ${titleCase(event.event_type) || "Material Event"}`,
+          [text(event.affected_section), text(event.affected_activity)]
+            .filter(Boolean)
+            .join(" · ") || "Material event recorded",
+          isMissingMaterialEvent(event) ? "amber" : "blue",
+        );
+
+        const items = event.tower_material_event_items ?? [];
+        if (items.length) {
+          table(
+            ["Qty", "Reference / Part", "Description"],
+            items.map(item => [
+              `${number(item.quantity)} ${text(item.unit) || "x"}`,
+              text(item.item_reference) ||
+                text(item.part_number) ||
+                text(item.bolt_size) ||
+                text(item.bundle_reference) ||
+                "—",
+              [
+                titleCase(item.material_type),
+                text(item.item_description),
+                text(item.drawing_number)
+                  ? `Drawing ${text(item.drawing_number)}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" · ") || "—",
+            ]),
+            [30, 55, 99],
+            { compact: true },
+          );
+        }
+
+        const people = event.tower_material_event_people ?? [];
+        if (people.length) {
+          table(
+            ["Personnel", "Start", "Finish", "Hours"],
+            people.map(person => {
+              const hrs = durationHours(person.started_at, person.finished_at);
+              return [
+                text(person.employee_name) || "—",
+                text(person.started_at).slice(11, 16) || "—",
+                text(person.finished_at).slice(11, 16) || "—",
+                hrs === null ? "—" : `${hrs.toFixed(2)} h`,
+              ];
+            }),
+            [88, 32, 32, 32],
+            { compact: true },
+          );
+        }
+
+        const eventPlant = event.tower_material_event_plant ?? [];
+        if (eventPlant.length) {
+          table(
+            ["Plant / Equipment", "Affected Hours"],
+            eventPlant.map(item => {
+              const hrs = durationHours(item.started_at, item.finished_at);
+              return [
+                text(item.plant_name) || "Plant",
+                hrs === null ? "—" : `${hrs.toFixed(2)} h`,
+              ];
+            }),
+            [130, 54],
+            { compact: true },
+          );
+        }
+
+        const impactRows: Array<[string, string]> = [];
+        if (text(event.work_outcome)) {
+          impactRows.push(["Work Outcome", titleCase(event.work_outcome)]);
+        }
+        if (text(event.commercial_impact_type)) {
+          impactRows.push([
+            "Impact",
+            titleCase(event.commercial_impact_type),
+          ]);
+        }
+        if (text(event.current_effect)) {
+          impactRows.push([
+            "Remaining Effect",
+            titleCase(event.current_effect),
+          ]);
+        }
+        if (impactRows.length) {
+          infoGrid(impactRows);
+        }
+
+        if (
+          Array.isArray(event.mitigation_actions) &&
+          event.mitigation_actions.length
+        ) {
+          paragraph(
+            `Mitigation undertaken: ${event.mitigation_actions
+              .map(titleCase)
+              .join("; ")}.`,
+          );
+        }
+
+        if (text(event.notes)) {
+          paragraph(`Notes: ${text(event.notes)}`);
+        }
+      });
+    }
+  }
+
+  if (visible.has("safety")) {
+    section("Safety");
+
+    const incident = Boolean(data.docket.incident_occurred);
+    callout(
+      "Incident / Event",
+      incident ? "Yes — details recorded below" : "No incident recorded",
+      incident ? "red" : "green",
+    );
+
+    if (incident) {
+      if (text(data.docket.incident_type)) {
+        paragraph(`Type: ${text(data.docket.incident_type)}`);
+      }
+      if (text(data.docket.incident_notes)) {
+        paragraph(`Details: ${text(data.docket.incident_notes)}`);
+      }
+    }
+
+    if (text(data.docket.safety_check_completed)) {
+      paragraph(
+        `Safety check completed: ${text(data.docket.safety_check_completed)}`,
+      );
+    }
+  }
+
+  section("Sign-Off & Approval");
+  signatureCard(
+    "BC Representative Sign-Off",
+    data.docket.bc_rep_name,
+    "",
+    data.docket.bc_signed_at || data.docket.bc_submitted_at,
+    data.docket.bc_signature_data_url,
+  );
+
   if (text(data.docket.bc_approved_name) || text(data.docket.bc_approved_at)) {
-    signatureCard("BC Approval", data.docket.bc_approved_name, data.docket.bc_approved_email, data.docket.bc_approved_at, data.docket.bc_reviewer_signature_data_url || data.docket.bc_approval_signature_data_url);
+    signatureCard(
+      "BC Approval",
+      data.docket.bc_approved_name,
+      data.docket.bc_approved_email,
+      data.docket.bc_approved_at,
+      data.docket.bc_reviewer_signature_data_url ||
+        data.docket.bc_approval_signature_data_url,
+    );
   }
+
   if (state === "FINAL") {
-    signatureCard("Client Approval", data.docket.client_approved_name || data.docket.client_rep_name, data.docket.client_approved_email, data.docket.client_approved_at || data.docket.signed_date, data.docket.client_signature_data_url);
+    signatureCard(
+      "Client Approval",
+      data.docket.client_approved_name || data.docket.client_rep_name,
+      data.docket.client_approved_email,
+      data.docket.client_approved_at || data.docket.signed_date,
+      data.docket.client_signature_data_url,
+    );
   } else {
-    callout("Client Approval", "Pending — this document is issued for client review only", "amber");
+    callout(
+      "Client Approval",
+      "Pending — this document is issued for client review only",
+      "amber",
+    );
   }
 
   const pageCount = doc.getNumberOfPages();

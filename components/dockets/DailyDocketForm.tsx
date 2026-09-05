@@ -105,8 +105,9 @@ type MaterialEventItemDraft = {
   ui_id: string;
   source_table: string;
   source_record_id: string;
-  material_kind: "registered" | "manual";
+  material_kind: "registered" | "manual" | "manual_bolt";
   manual_category: string;
+  bolt_size: string;
   search_query: string;
   search_loading: boolean;
   search_results: MaterialCatalogItem[];
@@ -796,6 +797,7 @@ function blankMaterialItem(): MaterialEventItemDraft {
     source_record_id: "",
     material_kind: "registered",
     manual_category: "",
+    bolt_size: "",
     search_query: "",
     search_loading: false,
     search_results: [],
@@ -1088,14 +1090,10 @@ export default function DailyDocketForm({
         return;
       }
 
-      const [membersRes, boltsRes, bundlesRes] = await Promise.all([
+      const [membersRes, bundlesRes] = await Promise.all([
         supabase
           .from("tower_material_members")
           .select("id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section")
-          .in("tower_id", towerIds),
-        supabase
-          .from("tower_material_bolts")
-          .select("id, tower_id, tower_segment, bolt_diameter, dn_sn, length, qty")
           .in("tower_id", towerIds),
         supabase
           .from("tower_required_bundles")
@@ -1123,22 +1121,6 @@ export default function DailyDocketForm({
         }
       }
 
-      if (!boltsRes.error) {
-        for (const row of boltsRes.data || []) {
-          catalog.push({
-            source_table: "tower_material_bolts",
-            source_record_id: String(row.id),
-            tower_id: String(row.tower_id),
-            item_reference: [
-              row.bolt_diameter,
-              row.length,
-              row.dn_sn,
-            ].filter(Boolean).join(" "),
-            item_description: row.tower_segment ? `Section ${row.tower_segment}` : "Bolt assembly",
-            unit: "ea",
-          });
-        }
-      }
 
       if (!bundlesRes.error) {
         for (const row of bundlesRes.data || []) {
@@ -1371,15 +1353,32 @@ export default function DailyDocketForm({
                 source_table: toStringValue(item.source_table),
                 source_record_id: toStringValue(item.source_record_id),
                 material_kind:
-                  item.source_table || item.source_record_id ? "registered" : "manual",
+                  item.material_type === "bolt" &&
+                  !item.source_table &&
+                  !item.source_record_id
+                    ? "manual_bolt"
+                    : item.source_table || item.source_record_id
+                    ? "registered"
+                    : "manual",
                 manual_category:
-                  !item.source_table && !item.source_record_id
+                  !item.source_table &&
+                  !item.source_record_id &&
+                  item.material_type !== "bolt"
                     ? toStringValue(item.item_description).split(" · ")[0] || ""
+                    : "",
+                bolt_size:
+                  item.material_type === "bolt"
+                    ? toStringValue(item.bolt_size || item.item_reference)
                     : "",
                 search_query: "",
                 search_loading: false,
                 search_results: [],
-                item_reference: toStringValue(item.item_reference),
+                item_reference:
+                  item.material_type === "bolt" &&
+                  !item.source_table &&
+                  !item.source_record_id
+                    ? ""
+                    : toStringValue(item.item_reference),
                 item_description: toStringValue(item.item_description),
                 quantity: toStringValue(item.quantity || 1),
                 unit: toStringValue(item.unit || "ea"),
@@ -1568,7 +1567,33 @@ export default function DailyDocketForm({
             ui_id: makeUiId(),
             source_table: toStringValue(item.source_table),
             source_record_id: toStringValue(item.source_record_id),
-            item_reference: toStringValue(item.item_reference),
+            material_kind:
+              item.material_type === "bolt" &&
+              !item.source_table &&
+              !item.source_record_id
+                ? "manual_bolt"
+                : item.source_table || item.source_record_id
+                ? "registered"
+                : "manual",
+            manual_category:
+              !item.source_table &&
+              !item.source_record_id &&
+              item.material_type !== "bolt"
+                ? toStringValue(item.item_description).split(" · ")[0] || ""
+                : "",
+            bolt_size:
+              item.material_type === "bolt"
+                ? toStringValue(item.bolt_size || item.item_reference)
+                : "",
+            search_query: "",
+            search_loading: false,
+            search_results: [],
+            item_reference:
+              item.material_type === "bolt" &&
+              !item.source_table &&
+              !item.source_record_id
+                ? ""
+                : toStringValue(item.item_reference),
             item_description: toStringValue(item.item_description),
             quantity: toStringValue(item.quantity || 1),
             unit: toStringValue(item.unit || "ea"),
@@ -2209,8 +2234,19 @@ export default function DailyDocketForm({
           .filter((event) => event.event_type === "missing")
           .flatMap((event) =>
             event.items
-              .filter((item) => item.item_reference.trim())
-              .map((item) => `${item.quantity || "1"} × ${item.item_reference.trim()}`)
+              .filter(
+                (item) =>
+                  item.item_reference.trim() ||
+                  (item.material_kind === "manual_bolt" && item.bolt_size.trim())
+              )
+              .map((item) => {
+                const reference =
+                  item.material_kind === "manual_bolt"
+                    ? item.bolt_size.trim()
+                    : item.item_reference.trim();
+
+                return `${item.quantity || "1"} × ${reference}`;
+              })
           )
           .join("; ") || missingItemsBolts,
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
@@ -2445,7 +2481,7 @@ export default function DailyDocketForm({
     const safe = trimmed.replace(/[,%()]/g, " ").trim();
     const pattern = `%${safe}%`;
 
-    const [membersRes, boltsRes, bundlesRes] = await Promise.all([
+    const [membersRes, bundlesRes] = await Promise.all([
       supabase
         .from("tower_material_members")
         .select(
@@ -2462,19 +2498,6 @@ export default function DailyDocketForm({
           ].join(",")
         )
         .limit(20),
-      supabase
-        .from("tower_material_bolts")
-        .select("id, tower_id, tower_segment, bolt_diameter, dn_sn, length, qty")
-        .eq("tower_id", searchTowerId)
-        .or(
-          [
-            `bolt_diameter.ilike.${pattern}`,
-            `dn_sn.ilike.${pattern}`,
-            `length.ilike.${pattern}`,
-            `tower_segment.ilike.${pattern}`,
-          ].join(",")
-        )
-        .limit(12),
       supabase
         .from("tower_required_bundles")
         .select("id, tower_id, bundle_no, section, qty_required, total_weight, member_qty")
@@ -2508,25 +2531,6 @@ export default function DailyDocketForm({
       }
     }
 
-    if (!boltsRes.error) {
-      for (const row of boltsRes.data || []) {
-        results.push({
-          source_table: "tower_material_bolts",
-          source_record_id: String(row.id),
-          tower_id: String(row.tower_id),
-          item_reference:
-            [row.bolt_diameter, row.length, row.dn_sn].filter(Boolean).join(" ") ||
-            "Bolt",
-          item_description: [
-            row.tower_segment ? `Section ${row.tower_segment}` : "",
-            row.qty != null ? `Qty ${row.qty}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-          unit: "ea",
-        });
-      }
-    }
 
     if (!bundlesRes.error) {
       for (const row of bundlesRes.data || []) {
@@ -2547,7 +2551,7 @@ export default function DailyDocketForm({
     }
 
     const searchError =
-      membersRes.error?.message || boltsRes.error?.message || bundlesRes.error?.message;
+      membersRes.error?.message || bundlesRes.error?.message;
 
     updateMaterialItem(eventIndex, itemIndex, {
       search_loading: false,
@@ -2580,6 +2584,7 @@ export default function DailyDocketForm({
         source_record_id: "",
         material_kind: "manual",
         manual_category: "",
+        bolt_size: "",
         item_reference: "",
         item_description: "",
         unit: "ea",
@@ -2592,12 +2597,49 @@ export default function DailyDocketForm({
       source_record_id: catalogItem.source_record_id,
       material_kind: "registered",
       manual_category: "",
+      bolt_size: "",
       search_query: catalogItem.item_reference,
       search_loading: false,
       search_results: [],
       item_reference: catalogItem.item_reference,
       item_description: catalogItem.item_description,
       unit: catalogItem.unit,
+    });
+  }
+
+  function setManualBoltItem(eventIndex: number, itemIndex: number) {
+    if (isView || locked) return;
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      material_kind: "manual_bolt",
+      source_table: "",
+      source_record_id: "",
+      manual_category: "",
+      bolt_size: "",
+      search_query: "",
+      search_loading: false,
+      search_results: [],
+      item_reference: "",
+      item_description: "",
+      unit: "ea",
+    });
+  }
+
+  function setManualUnlistedItem(eventIndex: number, itemIndex: number) {
+    if (isView || locked) return;
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      material_kind: "manual",
+      source_table: "",
+      source_record_id: "",
+      manual_category: "",
+      bolt_size: "",
+      search_query: "",
+      search_loading: false,
+      search_results: [],
+      item_reference: "",
+      item_description: "",
+      unit: "ea",
     });
   }
 
@@ -2766,7 +2808,11 @@ export default function DailyDocketForm({
     }
 
     for (const event of materialEvents) {
-      const meaningfulItems = event.items.filter((item) => item.item_reference.trim());
+      const meaningfulItems = event.items.filter(
+        (item) =>
+          item.item_reference.trim() ||
+          (item.material_kind === "manual_bolt" && item.bolt_size.trim())
+      );
       if (meaningfulItems.length === 0) continue;
 
       const eventInsert = await supabase
@@ -2813,18 +2859,32 @@ export default function DailyDocketForm({
       const eventId = eventInsert.data.id;
 
       const itemInsert = await supabase.from("tower_material_event_items").insert(
-        meaningfulItems.map((item) => ({
-          event_id: eventId,
-          source_table: item.source_table || null,
-          source_record_id: item.source_record_id || null,
-          item_reference: item.item_reference.trim(),
-          item_description:
-            item.material_kind === "manual"
-              ? [item.manual_category, item.item_description].filter(Boolean).join(" · ") || null
-              : item.item_description || null,
-          quantity: Number(item.quantity || 1),
-          unit: item.unit || null,
-        }))
+        meaningfulItems.map((item) => {
+          const isManualBolt = item.material_kind === "manual_bolt";
+
+          return {
+            event_id: eventId,
+            source_table: isManualBolt ? null : item.source_table || null,
+            source_record_id: isManualBolt ? null : item.source_record_id || null,
+            material_type: isManualBolt
+              ? "bolt"
+              : item.source_table === "tower_material_members"
+              ? "steel_member"
+              : "other",
+            bolt_size: isManualBolt ? item.bolt_size.trim() || null : null,
+            item_reference: isManualBolt ? null : item.item_reference.trim() || null,
+            item_description:
+              isManualBolt
+                ? item.item_description.trim() || null
+                : item.material_kind === "manual"
+                ? [item.manual_category, item.item_description]
+                    .filter(Boolean)
+                    .join(" · ") || null
+                : item.item_description || null,
+            quantity: Number(item.quantity || 1),
+            unit: isManualBolt ? "ea" : item.unit || null,
+          };
+        })
       );
 
       if (itemInsert.error) {
@@ -3100,7 +3160,7 @@ export default function DailyDocketForm({
     }
   }
 
-  async function handleCreate() {
+  async function handleCreate(options?: { navigate?: boolean }) {
     const docketFileUrl = await uploadFileIfNeeded();
 
     const { data: docket, error: docketError } = await supabase
@@ -3158,7 +3218,12 @@ export default function DailyDocketForm({
     await syncDelayDayworks(docket.id);
     await recalcTowerProgressAndStatus();
 
-    router.push(`/project/${projectId}/tower/${towerId}/dockets`);
+    if (options?.navigate !== false) {
+      router.push(`/project/${projectId}/tower/${towerId}/dockets`);
+      router.refresh();
+    }
+
+    return String(docket.id);
   }
 
   async function handleUpdate(options?: { navigate?: boolean }) {
@@ -3261,7 +3326,7 @@ export default function DailyDocketForm({
     setBcSignedAt(value ? new Date().toISOString() : "");
   }
 
-  async function handleSubmit() {
+  async function handleSaveDraft() {
     if (!projectId || !towerId) {
       alert("Invalid route");
       return;
@@ -3303,12 +3368,15 @@ export default function DailyDocketForm({
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Something went wrong");
+    } finally {
       setSaving(false);
     }
   }
 
   async function handleSubmitForApproval() {
-    if (mode !== "edit" || !docketId || locked || isView) return;
+    if (locked || isView) return;
+
+    if (mode !== "create" && mode !== "edit") return;
 
     if (!docketDate) {
       alert("Please enter docket date");
@@ -3321,7 +3389,9 @@ export default function DailyDocketForm({
     }
 
     if (hasDuplicateWorkers) {
-      alert("Duplicate worker names found. Each worker can only appear once in a daily docket.");
+      alert(
+        "Duplicate worker names found. Each worker can only appear once in a daily docket."
+      );
       return;
     }
 
@@ -3336,17 +3406,21 @@ export default function DailyDocketForm({
     }
 
     if (!bcRepName.trim()) {
-      alert("Please enter the BC Representative before submitting for approval.");
+      alert(
+        "Please enter the BC Representative before submitting for approval."
+      );
       return;
     }
 
     if (!bcSignatureDataUrl) {
-      alert("Please capture the BC Representative signature before submitting for approval.");
+      alert(
+        "Please capture the BC Representative signature before submitting for approval."
+      );
       return;
     }
 
     const confirmed = window.confirm(
-      "Submit this Daily Docket for BC approval? The docket will be locked while it is under review."
+      "Submit this Daily Docket for BC approval? Your latest changes will be saved first, then the docket will be locked while it is under review."
     );
 
     if (!confirmed) return;
@@ -3354,12 +3428,27 @@ export default function DailyDocketForm({
     setSubmittingApproval(true);
 
     try {
-      // Save the latest form data first. A normal save only updates Supabase;
-      // SharePoint publishing is handled later by the approval workflow.
-      await handleUpdate({ navigate: false });
+      let savedDocketId = docketId || "";
+
+      if (mode === "create") {
+        savedDocketId = await handleCreate({ navigate: false });
+      } else {
+        if (!docketId) {
+          throw new Error("Missing docket id.");
+        }
+
+        await handleUpdate({ navigate: false });
+        savedDocketId = docketId;
+      }
+
+      if (!savedDocketId) {
+        throw new Error(
+          "The Daily Docket was saved but its docket ID could not be resolved."
+        );
+      }
 
       const response = await fetch(
-        `/api/daily-dockets/${encodeURIComponent(docketId)}/submit-bc`,
+        `/api/daily-dockets/${encodeURIComponent(savedDocketId)}/submit-bc`,
         {
           method: "POST",
           headers: {
@@ -3369,18 +3458,24 @@ export default function DailyDocketForm({
       );
 
       const result = (await response.json().catch(() => null)) as
-        | { success?: boolean; error?: string; status?: string }
+        | {
+            success?: boolean;
+            error?: string;
+            status?: string;
+            revision?: number;
+          }
         | null;
 
       if (!response.ok) {
         throw new Error(
-          result?.error || "The Daily Docket could not be submitted for BC approval."
+          result?.error ||
+            "The Daily Docket could not be submitted for BC approval."
         );
       }
 
       setApprovalStatus("submitted_bc");
 
-      alert("Daily Docket submitted for BC approval.");
+      alert("Daily Docket saved and submitted for BC approval.");
 
       router.push(`/project/${projectId}/tower/${towerId}/dockets`);
       router.refresh();
@@ -4933,7 +5028,7 @@ export default function DailyDocketForm({
                       <div>
                         <div className="text-sm font-semibold text-slate-900">What material?</div>
                         <div className="text-xs text-slate-500 mt-0.5">
-                          Search the live tower material register, or add an unlisted item.
+                          Search the live steel/member register, or enter a bolt manually when no bolt list is available.
                         </div>
                       </div>
 
@@ -4946,13 +5041,13 @@ export default function DailyDocketForm({
                             <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                               <div className="relative">
                                 <label className="block text-sm font-semibold mb-1">
-                                  Search member / bundle / bolt
+                                  Search member / bundle
                                 </label>
                                 <input
                                   className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                                   value={item.search_query}
                                   disabled={locked || isView}
-                                  placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
+                                  placeholder="Type 2+ characters: M1278, 23-04..."
                                   onChange={(e) =>
                                     void searchProjectMaterial(
                                       eventIndex,
@@ -5003,14 +5098,37 @@ export default function DailyDocketForm({
                                           <div className="p-3 text-sm text-slate-500">
                                             {item.item_description.startsWith("Search error:")
                                               ? item.item_description
-                                              : "No registered member, bundle or bolt matched this search."}
+                                              : "No registered member or bundle matched this search."}
                                           </div>
                                         )}
                                     </div>
                                   )}
                               </div>
 
-                              {item.material_kind === "manual" ? (
+                              {item.material_kind === "manual_bolt" ? (
+                                <div className="grid grid-cols-2 gap-2">
+                                  <Input
+                                    label="Bolt Size"
+                                    value={item.bolt_size}
+                                    onChange={(v) =>
+                                      updateMaterialItem(eventIndex, itemIndex, {
+                                        bolt_size: v,
+                                      })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                  <Input
+                                    label="Description / Notes"
+                                    value={item.item_description}
+                                    onChange={(v) =>
+                                      updateMaterialItem(eventIndex, itemIndex, {
+                                        item_description: v,
+                                      })
+                                    }
+                                    disabled={locked || isView}
+                                  />
+                                </div>
+                              ) : item.material_kind === "manual" ? (
                                 <div className="grid grid-cols-2 gap-2">
                                   <Input
                                     label="Item type"
@@ -5058,7 +5176,7 @@ export default function DailyDocketForm({
                                 onChange={(v) =>
                                   updateMaterialItem(eventIndex, itemIndex, { unit: v })
                                 }
-                                disabled={locked || isView}
+                                disabled={locked || isView || item.material_kind === "manual_bolt"}
                               />
 
                               {!locked && !isView && (
@@ -5076,21 +5194,18 @@ export default function DailyDocketForm({
                               <div className="flex items-center gap-3 flex-wrap">
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    updateMaterialItem(eventIndex, itemIndex, {
-                                      material_kind: "manual",
-                                      source_table: "",
-                                      source_record_id: "",
-                                      search_query: "",
-                                      search_loading: false,
-                                      search_results: [],
-                                      item_reference: "",
-                                      item_description: "",
-                                    })
-                                  }
+                                  onClick={() => setManualBoltItem(eventIndex, itemIndex)}
                                   className="text-xs font-semibold text-blue-700"
                                 >
-                                  + Add an unlisted item (mesh clips, loose hardware, etc.)
+                                  + Enter bolt manually
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setManualUnlistedItem(eventIndex, itemIndex)}
+                                  className="text-xs font-semibold text-blue-700"
+                                >
+                                  + Add another unlisted item
                                 </button>
 
                                 <button
@@ -5478,7 +5593,7 @@ export default function DailyDocketForm({
                           Excess material record
                         </div>
                         <div className="text-xs text-slate-500 mt-0.5">
-                          Search a registered item or enter an unlisted material.
+                          Search a registered steel/member item, or enter a bolt manually.
                         </div>
                       </div>
 
@@ -5502,13 +5617,13 @@ export default function DailyDocketForm({
                           <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                             <div className="relative">
                               <label className="block text-sm font-semibold mb-1">
-                                Search member / bundle / bolt
+                                Search member / bundle
                               </label>
                               <input
                                 className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                                 value={item.search_query}
                                 disabled={locked || isView}
-                                placeholder="Type 2+ characters: M1278, 23-04, M20x60..."
+                                placeholder="Type 2+ characters: M1278, 23-04..."
                                 onChange={(e) =>
                                   void searchProjectMaterial(
                                     eventIndex,
@@ -5559,14 +5674,37 @@ export default function DailyDocketForm({
                                         <div className="p-3 text-sm text-slate-500">
                                           {item.item_description.startsWith("Search error:")
                                             ? item.item_description
-                                            : "No registered member, bundle or bolt matched this search."}
+                                            : "No registered member or bundle matched this search."}
                                         </div>
                                       )}
                                   </div>
                                 )}
                             </div>
 
-                            {item.material_kind === "manual" ? (
+                            {item.material_kind === "manual_bolt" ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input
+                                  label="Bolt Size"
+                                  value={item.bolt_size}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      bolt_size: v,
+                                    })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                                <Input
+                                  label="Description / Notes"
+                                  value={item.item_description}
+                                  onChange={(v) =>
+                                    updateMaterialItem(eventIndex, itemIndex, {
+                                      item_description: v,
+                                    })
+                                  }
+                                  disabled={locked || isView}
+                                />
+                              </div>
+                            ) : item.material_kind === "manual" ? (
                               <div className="grid grid-cols-2 gap-2">
                                 <Input
                                   label="Item type"
@@ -5636,21 +5774,18 @@ export default function DailyDocketForm({
                             <div className="flex items-center gap-3 flex-wrap">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  updateMaterialItem(eventIndex, itemIndex, {
-                                    material_kind: "manual",
-                                    source_table: "",
-                                    source_record_id: "",
-                                    search_query: "",
-                                    search_loading: false,
-                                    search_results: [],
-                                    item_reference: "",
-                                    item_description: "",
-                                  })
-                                }
+                                onClick={() => setManualBoltItem(eventIndex, itemIndex)}
                                 className="text-xs font-semibold text-emerald-800"
                               >
-                                + Add an unlisted item (mesh clips, loose hardware, etc.)
+                                + Enter bolt manually
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setManualUnlistedItem(eventIndex, itemIndex)}
+                                className="text-xs font-semibold text-emerald-800"
+                              >
+                                + Add another unlisted item
                               </button>
 
                               <button
@@ -5807,7 +5942,12 @@ export default function DailyDocketForm({
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <h2 className="text-xl font-semibold text-slate-900">Submission</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Submission</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Save the docket as an editable draft, or sign and submit it into the BC approval workflow.
+            </p>
+          </div>
 
           {mode !== "create" && (
             <span
@@ -5938,46 +6078,57 @@ export default function DailyDocketForm({
         )}
       </section>
 
-      <div className="sticky bottom-4 z-10 flex flex-wrap gap-3 bg-white/90 backdrop-blur border border-slate-200 rounded-2xl p-3 shadow-lg w-fit">
+      <div className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur">
         {!locked && !isView && (
           <button
             type="button"
-            onClick={handleSubmit}
+            onClick={handleSaveDraft}
             disabled={saving || submittingApproval}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60"
+            className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-6 py-3 font-semibold text-slate-800 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving
-              ? mode === "create"
-                ? "Saving..."
-                : "Updating..."
-              : mode === "create"
-              ? "Save Daily Docket"
-              : "Update Daily Docket"}
+            {saving ? "Saving Draft..." : "Save Draft"}
           </button>
         )}
 
-        {mode === "edit" &&
-          !locked &&
+        {!locked &&
           !isView &&
-          ["draft", "legacy", "bc_changes_requested", "client_changes_requested"].includes(
-            approvalStatus
-          ) && (
+          (mode === "create" ||
+            (mode === "edit" &&
+              [
+                "draft",
+                "legacy",
+                "bc_changes_requested",
+                "client_changes_requested",
+              ].includes(approvalStatus))) && (
             <button
               type="button"
               onClick={handleSubmitForApproval}
               disabled={saving || submittingApproval}
-              className="bg-emerald-700 text-white px-6 py-3 rounded-xl font-semibold hover:bg-emerald-800 disabled:opacity-60"
+              className="inline-flex items-center justify-center rounded-xl bg-emerald-700 px-6 py-3 font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submittingApproval ? "Submitting..." : "Submit for Approval"}
+              {submittingApproval
+                ? "Saving & Submitting..."
+                : "Submit for Approval"}
             </button>
           )}
+
+        {!locked && !isView && (
+          <div className="min-w-[220px] flex-1 text-xs leading-5 text-slate-500">
+            <strong className="text-slate-700">Save Draft</strong> keeps the
+            docket editable and does not send approval emails.{" "}
+            <strong className="text-slate-700">Submit for Approval</strong>{" "}
+            saves the latest changes first, then starts the BC approval
+            workflow.
+          </div>
+        )}
 
         <button
           type="button"
           onClick={() =>
             router.push(`/project/${projectId}/tower/${towerId}/dockets`)
           }
-          className="border border-slate-300 bg-white px-6 py-3 rounded-xl hover:bg-slate-100"
+          disabled={saving || submittingApproval}
+          className="rounded-xl border border-slate-300 bg-white px-6 py-3 font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {locked || isView ? "Back" : "Cancel"}
         </button>

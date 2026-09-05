@@ -8,11 +8,29 @@ type BrandingRow = {
   logo_sharepoint_drive_id: string | null;
   logo_sharepoint_item_id: string | null;
   logo_updated_at: string | null;
+  abn: string | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  suburb: string | null;
+  state: string | null;
+  postcode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
 };
 
 export type PdfBranding = {
   companyName: string;
   logoDataUrl: string | null;
+  abn: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  suburb: string | null;
+  state: string | null;
+  postcode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
 };
 
 function requiredEnv(name: string) {
@@ -47,13 +65,49 @@ function supportedImageType(value: string | null) {
   return null;
 }
 
+function nullableText(value: unknown) {
+  const cleaned = String(value ?? "").trim();
+  return cleaned || null;
+}
+
+function brandingWithoutLogo(row: BrandingRow | null): PdfBranding {
+  return {
+    companyName: nullableText(row?.company_name) ?? "BC Contracting",
+    logoDataUrl: null,
+    abn: nullableText(row?.abn),
+    addressLine1: nullableText(row?.address_line_1),
+    addressLine2: nullableText(row?.address_line_2),
+    suburb: nullableText(row?.suburb),
+    state: nullableText(row?.state),
+    postcode: nullableText(row?.postcode),
+    phone: nullableText(row?.phone),
+    email: nullableText(row?.email),
+    website: nullableText(row?.website),
+  };
+}
+
 export async function loadSystemPdfBranding(): Promise<PdfBranding> {
   const supabase = serviceClient();
 
   const { data, error } = await supabase
     .from("system_branding")
     .select(
-      "company_name,logo_content_type,logo_sharepoint_drive_id,logo_sharepoint_item_id,logo_updated_at",
+      [
+        "company_name",
+        "logo_content_type",
+        "logo_sharepoint_drive_id",
+        "logo_sharepoint_item_id",
+        "logo_updated_at",
+        "abn",
+        "address_line_1",
+        "address_line_2",
+        "suburb",
+        "state",
+        "postcode",
+        "phone",
+        "email",
+        "website",
+      ].join(","),
     )
     .eq("id", 1)
     .maybeSingle();
@@ -62,32 +116,25 @@ export async function loadSystemPdfBranding(): Promise<PdfBranding> {
     throw new Error(`System branding could not be loaded: ${error.message}`);
   }
 
-  const branding = (data ?? null) as BrandingRow | null;
-  const companyName =
-    String(branding?.company_name ?? "").trim() || "BC Contracting";
+  const row = (data ?? null) as BrandingRow | null;
+  const base = brandingWithoutLogo(row);
 
   if (
-    !branding?.logo_sharepoint_drive_id ||
-    !branding.logo_sharepoint_item_id
+    !row?.logo_sharepoint_drive_id ||
+    !row.logo_sharepoint_item_id
   ) {
-    return {
-      companyName,
-      logoDataUrl: null,
-    };
+    return base;
   }
 
-  const contentType = supportedImageType(branding.logo_content_type);
+  const contentType = supportedImageType(row.logo_content_type);
 
   if (!contentType) {
     console.error(
       "TTTracker system branding logo has an unsupported content type:",
-      branding.logo_content_type,
+      row.logo_content_type,
     );
 
-    return {
-      companyName,
-      logoDataUrl: null,
-    };
+    return base;
   }
 
   try {
@@ -95,10 +142,8 @@ export async function loadSystemPdfBranding(): Promise<PdfBranding> {
 
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(
-        branding.logo_sharepoint_drive_id,
-      )}/items/${encodeURIComponent(
-        branding.logo_sharepoint_item_id,
-      )}/content`,
+        row.logo_sharepoint_drive_id,
+      )}/items/${encodeURIComponent(row.logo_sharepoint_item_id)}/content`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -125,16 +170,12 @@ export async function loadSystemPdfBranding(): Promise<PdfBranding> {
     }
 
     return {
-      companyName,
+      ...base,
       logoDataUrl: `data:${contentType};base64,${bytes.toString("base64")}`,
     };
   } catch (error) {
     // Branding must not block a contractual docket from being generated.
     console.error("TTTracker PDF branding logo could not be loaded:", error);
-
-    return {
-      companyName,
-      logoDataUrl: null,
-    };
+    return base;
   }
 }
