@@ -691,7 +691,7 @@ export async function POST(request: Request, context: RouteContext) {
 
           const editUrl =
             `${origin}/project/${docket.project_id}` +
-            `/tower/${docket.tower_id}/dockets/${docketId}`;
+            `/tower/${docket.tower_id}/dockets/${docketId}/edit`;
 
           await sendDailyDocketEmail({
             to: [submitter.email],
