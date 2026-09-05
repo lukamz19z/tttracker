@@ -294,6 +294,31 @@ function validateReviewerSignature(value: unknown) {
   return { ok: true as const, signature };
 }
 
+async function recordWorkflowEvents(
+  admin: ReturnType<typeof createDocketAdminSupabase>,
+  events: Array<Record<string, unknown>>,
+) {
+  if (events.length === 0) return;
+
+  const safeEvents = events.map((event) => ({
+    ...event,
+    metadata:
+      event.metadata &&
+      typeof event.metadata === "object" &&
+      !Array.isArray(event.metadata)
+        ? event.metadata
+        : {},
+  }));
+
+  const { error } = await admin
+    .from("tower_docket_workflow_events")
+    .insert(safeEvents);
+
+  if (error) {
+    console.error("DAILY DOCKET WORKFLOW HISTORY ERROR", error);
+  }
+}
+
 function normaliseChangeRequests(value: ReviewBody["change_requests"]) {
   if (!Array.isArray(value)) return [];
 
@@ -462,9 +487,8 @@ export async function POST(request: Request, context: RouteContext) {
         }
       }
 
-      const { error: workflowError } = await admin
-        .from("tower_docket_workflow_events")
-        .insert({
+      await recordWorkflowEvents(admin, [
+        {
           docket_id: docketId,
           project_id: docket.project_id,
           event_type: "bc_changes_requested",
@@ -484,13 +508,8 @@ export async function POST(request: Request, context: RouteContext) {
             originated_from_client:
               reviewStatus === "client_changes_requested",
           },
-        });
-
-      if (workflowError) {
-        throw new Error(
-          `Workflow history could not be recorded: ${workflowError.message}`,
-        );
-      }
+        },
+      ]);
 
       if (docket.bc_submitted_by) {
         const submitterMap = await authUserEmailMap(admin, [
@@ -626,9 +645,8 @@ export async function POST(request: Request, context: RouteContext) {
         );
       }
 
-      const { error: revisionEventError } = await admin
-        .from("tower_docket_workflow_events")
-        .insert({
+      await recordWorkflowEvents(admin, [
+        {
           docket_id: docketId,
           project_id: docket.project_id,
           event_type:
@@ -645,13 +663,8 @@ export async function POST(request: Request, context: RouteContext) {
             source_status: reviewStatus,
             reviewer_made_changes: reviewerMadeChanges,
           },
-        });
-
-      if (revisionEventError) {
-        throw new Error(
-          `The corrected revision history could not be recorded: ${revisionEventError.message}`,
-        );
-      }
+        },
+      ]);
     }
 
     const docketAtApproval: DocketRow = {
@@ -798,7 +811,10 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const { error: docketUpdateError } = await admin
+    const {
+      data: docketUpdateData,
+      error: docketUpdateError,
+    } = await admin
       .from("tower_daily_dockets")
       .update({
         approval_status: "client_pending",
@@ -844,7 +860,10 @@ export async function POST(request: Request, context: RouteContext) {
       .in("approval_status", [
         "submitted_bc",
         "client_changes_requested",
-      ]);
+      ])
+      .eq("approval_revision", approvalRevision)
+      .select("id,approval_status,approval_revision")
+      .maybeSingle();
 
     if (docketUpdateError) {
       throw new Error(
@@ -852,9 +871,13 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const { error: workflowError } = await admin
-      .from("tower_docket_workflow_events")
-      .insert([
+    if (!docketUpdateData) {
+      throw new Error(
+        "The Daily Docket changed while BC approval was being completed. The draft PDF was uploaded, but the approval state was not overwritten.",
+      );
+    }
+
+    await recordWorkflowEvents(admin, [
         {
           docket_id: docketId,
           project_id: docket.project_id,
@@ -904,11 +927,6 @@ export async function POST(request: Request, context: RouteContext) {
         },
       ]);
 
-    if (workflowError) {
-      throw new Error(
-        `Workflow history could not be recorded: ${workflowError.message}`,
-      );
-    }
 
     const origin =
       process.env.NEXT_PUBLIC_APP_URL ||
@@ -1010,16 +1028,30 @@ export async function POST(request: Request, context: RouteContext) {
       const { docketId } = await context.params;
       const admin = createDocketAdminSupabase();
 
-      await admin
+      const { data: currentDocket } = await admin
         .from("tower_daily_dockets")
-        .update({
-          sharepoint_sync_status: "failed",
-          sharepoint_sync_error:
-            error instanceof Error
-              ? error.message
-              : "Daily Docket BC review failed.",
-        })
-        .eq("id", docketId);
+        .select(
+          "approval_status,draft_sharepoint_item_id,sharepoint_sync_status",
+        )
+        .eq("id", docketId)
+        .maybeSingle();
+
+      const alreadyPublished =
+        currentDocket?.approval_status === "client_pending" &&
+        Boolean(currentDocket?.draft_sharepoint_item_id);
+
+      if (!alreadyPublished) {
+        await admin
+          .from("tower_daily_dockets")
+          .update({
+            sharepoint_sync_status: "failed",
+            sharepoint_sync_error:
+              error instanceof Error
+                ? error.message
+                : "Daily Docket BC review failed.",
+          })
+          .eq("id", docketId);
+      }
     } catch (statusError) {
       console.error(
         "DAILY DOCKET BC REVIEW STATUS ERROR",
