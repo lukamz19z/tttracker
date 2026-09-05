@@ -215,10 +215,7 @@ async function publishDraftPdf({
   }
 
   const towerName = String(
-    tower.name ||
-      tower.tower_number ||
-      tower.structure_number ||
-      "",
+    tower.name || "",
   ).trim();
 
   if (!towerName) {
@@ -505,10 +502,7 @@ export async function POST(request: Request, context: RouteContext) {
           const bundle = await loadPdfBundle(admin, docket);
           const project = bundle.project;
           const towerName = String(
-            bundle.tower.tower_number ||
-              bundle.tower.structure_number ||
-              bundle.tower.name ||
-              "Tower",
+            bundle.tower.name || "Tower",
           );
 
           const origin =
@@ -888,6 +882,12 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
           comments: published.item.webUrl ?? null,
+          metadata: {
+            sharepoint_item_id: published.item.id,
+            sharepoint_folder_id: published.folder.id,
+            file_name: published.fileName,
+            web_url: published.item.webUrl ?? null,
+          },
         },
         {
           docket_id: docketId,
@@ -897,6 +897,10 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by: user.id,
           performed_by_name: reviewerName,
           performed_by_email: reviewerEmail,
+          metadata: {
+            client_recipient_count: approvalLinks.length,
+            token_expires_at: tokenExpiry,
+          },
         },
       ]);
 
