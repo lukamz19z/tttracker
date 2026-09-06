@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -354,6 +355,17 @@ function dateTimeIso(date:string,time:string){const t=normaliseTimeInput(time);r
 function timeFromIso(v:string|null|undefined){const m=v?.match(/T(\d{2}):(\d{2})/);return m?`${m[1]}:${m[2]}`:"";}
 
 export default function DailyDocketScreen() {
+  const routeParams = useLocalSearchParams<{
+    projectId?: string | string[];
+    towerId?: string | string[];
+    docketId?: string | string[];
+    source?: string | string[];
+  }>();
+
+  const routeProjectId = Array.isArray(routeParams.projectId) ? routeParams.projectId[0] : routeParams.projectId;
+  const routeTowerId = Array.isArray(routeParams.towerId) ? routeParams.towerId[0] : routeParams.towerId;
+  const routeDocketId = Array.isArray(routeParams.docketId) ? routeParams.docketId[0] : routeParams.docketId;
+
   const { profile } = useAuth();
   const p = profile as unknown as ProfileRecord | null;
   const projectId=clean(p?.projectId), projectName=clean(p?.projectName), projectNumber=clean(p?.projectNumber);
@@ -364,6 +376,11 @@ export default function DailyDocketScreen() {
   const [currentUserId,setCurrentUserId]=useState("");
   const [reviewerRoles,setReviewerRoles]=useState<string[]>([]);
   const [pendingReviewDocketId,setPendingReviewDocketId]=useState("");
+
+  useEffect(()=>{
+    if(routeDocketId)setPendingReviewDocketId(clean(routeDocketId));
+    if(routeTowerId)setSelectedTowerId(clean(routeTowerId));
+  },[routeDocketId,routeTowerId]);
 
   const loadData=useCallback(async(showLoader=true)=>{
     if(!projectId){setLoading(false);return;} if(showLoader)setLoading(true);
@@ -570,6 +587,14 @@ export default function DailyDocketScreen() {
       mobilisation:parseMobilisationLine(d.delays_comments)
     });
   }
+
+  useEffect(()=>{
+    if(!routeProjectId||!projectId||routeProjectId===projectId)return;
+    Alert.alert(
+      "Different project selected",
+      "This docket belongs to a different project. Select that project from Home, then open the approval link again."
+    );
+  },[routeProjectId,projectId]);
 
   useEffect(()=>{
     if(!pendingReviewDocketId||bundles.length===0)return;

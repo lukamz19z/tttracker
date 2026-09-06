@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   FolderKanban,
   Gauge,
+  ReceiptText,
   HardHat,
   LayoutDashboard,
   PackageSearch,
@@ -254,6 +255,14 @@ function getModulesForRole(
           href: "/commercial",
           icon: <BriefcaseBusiness size={21} />,
           accent: "amber",
+        },
+        {
+          title: "Expenses & Invoices",
+          description:
+            "Submit, review and manage company expense claims, invoices and approvals.",
+          href: "/expenses",
+          icon: <ReceiptText size={21} />,
+          accent: "violet",
         },
         {
           title: "Safety",
