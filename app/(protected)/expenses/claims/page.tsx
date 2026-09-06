@@ -112,7 +112,6 @@ type DraftItem = {
   id?: string;
   categoryId: string;
   expenseDate: string;
-  supplier: string;
   description: string;
   amountIncGst: string;
   gstAmount: string;
@@ -121,8 +120,6 @@ type DraftItem = {
 
 type ClaimDraft = {
   projectId: string;
-  claimPeriodStart: string;
-  claimPeriodEnd: string;
   description: string;
   notes: string;
   items: DraftItem[];
@@ -131,7 +128,6 @@ type ClaimDraft = {
 const EMPTY_ITEM: DraftItem = {
   categoryId: "",
   expenseDate: new Date().toISOString().slice(0, 10),
-  supplier: "",
   description: "",
   amountIncGst: "",
   gstAmount: "",
@@ -140,8 +136,6 @@ const EMPTY_ITEM: DraftItem = {
 
 const EMPTY_CLAIM: ClaimDraft = {
   projectId: "",
-  claimPeriodStart: "",
-  claimPeriodEnd: "",
   description: "",
   notes: "",
   items: [{ ...EMPTY_ITEM }],
@@ -384,7 +378,7 @@ export default function ExpenseClaimsPage() {
 
       const project = projects.find((item) => item.id === claim.project_id);
       const itemText = (claimItems.get(claim.id) ?? [])
-        .map((item) => `${item.supplier ?? ""} ${item.description}`)
+        .map((item) => item.description)
         .join(" ");
 
       return [
@@ -441,8 +435,6 @@ export default function ExpenseClaimsPage() {
     setEditingClaim(claim);
     setDraft({
       projectId: claim.project_id ?? "",
-      claimPeriodStart: claim.claim_period_start ?? "",
-      claimPeriodEnd: claim.claim_period_end ?? "",
       description: claim.description ?? "",
       notes: claim.notes ?? "",
       items:
@@ -451,7 +443,6 @@ export default function ExpenseClaimsPage() {
               id: item.id,
               categoryId: item.category_id ?? "",
               expenseDate: item.expense_date,
-              supplier: item.supplier ?? "",
               description: item.description,
               amountIncGst: String(item.amount_inc_gst ?? ""),
               gstAmount: String(item.gst_amount ?? ""),
@@ -535,8 +526,8 @@ export default function ExpenseClaimsPage() {
         created_by: editingClaim?.created_by ?? user.id,
         submitted_by: submitForApproval ? user.id : editingClaim?.submitted_by ?? null,
         project_id: draft.projectId || null,
-        claim_period_start: draft.claimPeriodStart || null,
-        claim_period_end: draft.claimPeriodEnd || null,
+        claim_period_start: null,
+        claim_period_end: null,
         description: draft.description.trim() || null,
         notes: draft.notes.trim() || null,
         submitted_at: submitForApproval
@@ -590,14 +581,14 @@ export default function ExpenseClaimsPage() {
       for (let index = 0; index < validItems.length; index += 1) {
         const item = validItems[index];
         const totalInc = asNumber(item.amountIncGst);
-        const gst = Math.max(0, asNumber(item.gstAmount));
-        const exGst = Math.max(0, totalInc - gst);
+        const gst = 0;
+        const exGst = totalInc;
 
         const payload = {
           submission_id: submissionId,
           category_id: item.categoryId || null,
           expense_date: item.expenseDate,
-          supplier: item.supplier.trim() || null,
+          supplier: null,
           description: item.description.trim(),
           quantity: 1,
           unit_amount_ex_gst: exGst,
@@ -831,7 +822,7 @@ export default function ExpenseClaimsPage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search claim number, project, supplier or description..."
+                placeholder="Search claim number, project or description..."
                 className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
               />
             </label>
@@ -937,14 +928,10 @@ export default function ExpenseClaimsPage() {
 
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        Claim period
+                        Submitted
                       </div>
                       <div className="mt-1 text-sm text-slate-600">
-                        {claim.claim_period_start || claim.claim_period_end
-                          ? `${shortDate(claim.claim_period_start)} – ${shortDate(
-                              claim.claim_period_end,
-                            )}`
-                          : shortDate(claim.created_at)}
+                        {shortDate(claim.submitted_at ?? claim.created_at)}
                       </div>
                     </div>
 
@@ -1001,7 +988,7 @@ export default function ExpenseClaimsPage() {
       {editorOpen ? (
         <ModalShell
           title={editingClaim ? "Edit Expense Claim" : "New Expense Claim"}
-          description="Enter each expense as a separate line item. Receipts can be linked to items once SharePoint upload is connected."
+          description="Enter each expense as a separate item. Keep it simple: date, category, what it was for, total amount and receipt."
           onClose={() => setEditorOpen(false)}
           wide
         >
@@ -1046,36 +1033,6 @@ export default function ExpenseClaimsPage() {
               </Field>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Claim period start">
-                <input
-                  type="date"
-                  value={draft.claimPeriodStart}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      claimPeriodStart: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-
-              <Field label="Claim period end">
-                <input
-                  type="date"
-                  value={draft.claimPeriodEnd}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      claimPeriodEnd: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-            </div>
-
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -1083,7 +1040,7 @@ export default function ExpenseClaimsPage() {
                     Expense Items
                   </h3>
                   <p className="mt-1 text-sm text-slate-500">
-                    Enter the total paid and GST shown on the receipt.
+                    Keep it simple: what was it for, how much was it, and upload the receipt.
                   </p>
                 </div>
 
@@ -1117,7 +1074,7 @@ export default function ExpenseClaimsPage() {
                       </button>
                     </div>
 
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                       <Field label="Date">
                         <input
                           type="date"
@@ -1151,20 +1108,7 @@ export default function ExpenseClaimsPage() {
                         />
                       </Field>
 
-                      <Field label="Supplier">
-                        <input
-                          value={item.supplier}
-                          onChange={(event) =>
-                            updateDraftItem(index, {
-                              supplier: event.target.value,
-                            })
-                          }
-                          placeholder="e.g. BP, Bunnings"
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                        />
-                      </Field>
-
-                      <Field label="Description">
+                      <Field label="What was it for?">
                         <input
                           value={item.description}
                           onChange={(event) =>
@@ -1178,28 +1122,14 @@ export default function ExpenseClaimsPage() {
                       </Field>
                     </div>
 
-                    <div className="mt-4 grid gap-4 md:grid-cols-3">
-                      <Field label="Amount paid (inc. GST)">
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <Field label="Total Amount">
                         <input
                           inputMode="decimal"
                           value={item.amountIncGst}
                           onChange={(event) =>
                             updateDraftItem(index, {
                               amountIncGst: event.target.value,
-                            })
-                          }
-                          placeholder="0.00"
-                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                        />
-                      </Field>
-
-                      <Field label="GST">
-                        <input
-                          inputMode="decimal"
-                          value={item.gstAmount}
-                          onChange={(event) =>
-                            updateDraftItem(index, {
-                              gstAmount: event.target.value,
                             })
                           }
                           placeholder="0.00"
