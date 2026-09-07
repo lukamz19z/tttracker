@@ -260,6 +260,33 @@ export default function ExpenseClaimsPage() {
     text: string;
   } | null>(null);
 
+  async function readApiJson<T extends { error?: string }>(
+    response: Response,
+  ): Promise<T> {
+    const contentType = response.headers.get("content-type") ?? "";
+    const text = await response.text();
+
+    if (!contentType.toLowerCase().includes("application/json")) {
+      const status = `${response.status} ${response.statusText}`.trim();
+
+      throw new Error(
+        `TTTracker API returned ${status || "an invalid response"}. ${
+          response.status === 404
+            ? "The Expense Claim submit API route was not found."
+            : "The server returned an HTML page instead of JSON."
+        }`,
+      );
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(
+        `TTTracker API returned invalid JSON (${response.status}).`,
+      );
+    }
+  }
+
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const {
@@ -854,20 +881,23 @@ export default function ExpenseClaimsPage() {
 
       if (submitForApproval) {
         const response = await apiFetch(
-          `/api/expenses/claims/${encodeURIComponent(submissionId)}/submit`,
+          "/api/expenses/claims/submit",
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
+            body: JSON.stringify({
+              submissionId,
+            }),
           },
         );
 
-        const payload = (await response.json()) as {
+        const payload = await readApiJson<{
           error?: string;
           warning?: string | null;
           revision?: number;
-        };
+        }>(response);
 
         if (!response.ok) {
           throw new Error(

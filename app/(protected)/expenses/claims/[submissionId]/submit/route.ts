@@ -6,8 +6,6 @@ import { docketEmailShell, sendDailyDocketEmail } from "@/lib/email/daily-docket
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type RouteContext = { params: Promise<{ submissionId: string }> };
-
 function env(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing environment variable: ${name}`);
@@ -60,9 +58,18 @@ async function roleFor(service: ReturnType<typeof serviceClient>, userId: string
   return String(data?.role ?? "").trim().toLowerCase();
 }
 
-export async function POST(request: Request, context: RouteContext) {
+export async function POST(request: Request) {
   try {
-    const { submissionId } = await context.params;
+    const body = (await request.json()) as { submissionId?: string };
+    const submissionId = String(body.submissionId ?? "").trim();
+
+    if (!submissionId) {
+      return NextResponse.json(
+        { error: "Expense Claim ID is required." },
+        { status: 400 },
+      );
+    }
+
     const { service, user } = await requireUser(request);
 
     const { data: claim, error: claimError } = await service
