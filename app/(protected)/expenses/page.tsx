@@ -8,7 +8,10 @@ import {
   ChevronDown,
   CircleDollarSign,
   FileText,
+  FolderOpen,
+  HardDrive,
   Loader2,
+  Mail,
   Pencil,
   Plus,
   ReceiptText,
@@ -16,6 +19,7 @@ import {
   Save,
   Settings,
   ShieldCheck,
+  Smartphone,
   Trash2,
   Users,
   WalletCards,
@@ -109,6 +113,52 @@ type FinancialAccessRule = {
   active: boolean;
 };
 
+
+type FinancialSettings = {
+  id: boolean;
+  sharepoint_site_id: string | null;
+  sharepoint_site_name: string | null;
+  sharepoint_site_url: string | null;
+  sharepoint_drive_id: string | null;
+  sharepoint_drive_name: string | null;
+  sharepoint_base_folder: string;
+  sharepoint_configured_at: string | null;
+  sharepoint_configured_by: string | null;
+  approval_email_enabled: boolean;
+  approval_in_app_enabled: boolean;
+  approval_push_enabled: boolean;
+  reminder_email_enabled: boolean;
+  reminder_in_app_enabled: boolean;
+  reminder_push_enabled: boolean;
+  claim_pending_reminder_days: number;
+  claim_pending_second_reminder_days: number;
+  approved_unpaid_reminder_days: number;
+  invoice_due_soon_days: number;
+  invoice_overdue_reminder_days: number;
+  reminders_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+type SharePointLibraryOption = {
+  id: string;
+  name: string;
+  webUrl: string | null;
+};
+
+type SharePointDiscoveryResponse = {
+  site?: {
+    id: string;
+    name: string;
+    webUrl: string | null;
+  };
+  libraries?: SharePointLibraryOption[];
+  settings?: FinancialSettings;
+  library?: SharePointLibraryOption;
+  error?: string;
+};
+
 type AdminApiUser = {
   user_id?: string;
   id?: string;
@@ -148,6 +198,34 @@ type RuleDraft = {
   canReviewEdit: boolean;
   canApprove: boolean;
   canMarkPaid: boolean;
+};
+
+
+const DEFAULT_FINANCIAL_SETTINGS: FinancialSettings = {
+  id: true,
+  sharepoint_site_id: null,
+  sharepoint_site_name: null,
+  sharepoint_site_url: null,
+  sharepoint_drive_id: null,
+  sharepoint_drive_name: null,
+  sharepoint_base_folder: "Expenses & Invoices",
+  sharepoint_configured_at: null,
+  sharepoint_configured_by: null,
+  approval_email_enabled: true,
+  approval_in_app_enabled: true,
+  approval_push_enabled: true,
+  reminder_email_enabled: true,
+  reminder_in_app_enabled: true,
+  reminder_push_enabled: true,
+  claim_pending_reminder_days: 2,
+  claim_pending_second_reminder_days: 5,
+  approved_unpaid_reminder_days: 3,
+  invoice_due_soon_days: 7,
+  invoice_overdue_reminder_days: 1,
+  reminders_enabled: true,
+  created_at: "",
+  updated_at: "",
+  updated_by: null,
 };
 
 const WEBSITE_ROLES: Array<{ value: WebsiteRole; label: string }> = [
@@ -343,6 +421,16 @@ export default function ExpensesDashboardPage() {
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [accessRules, setAccessRules] = useState<FinancialAccessRule[]>([]);
   const [reviewerUsers, setReviewerUsers] = useState<ReviewerUser[]>([]);
+  const [financeSettings, setFinanceSettings] = useState<FinancialSettings>(
+    DEFAULT_FINANCIAL_SETTINGS,
+  );
+  const [financeSettingsSaving, setFinanceSettingsSaving] = useState(false);
+  const [sharePointDiscovering, setSharePointDiscovering] = useState(false);
+  const [sharePointLibraries, setSharePointLibraries] = useState<
+    SharePointLibraryOption[]
+  >([]);
+  const [selectedSharePointDriveId, setSelectedSharePointDriveId] =
+    useState("");
 
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [editingCategory, setEditingCategory] =
@@ -449,17 +537,32 @@ export default function ExpensesDashboardPage() {
     setSettingsLoading(true);
 
     try {
-      const ruleResult = await supabase
-        .from("financial_access_rules")
-        .select(
-          "id, applies_to, principal_type, role, user_id, receives_email, receives_in_app, can_review_edit, can_approve, can_mark_paid, active",
-        )
-        .order("applies_to")
-        .order("principal_type");
+      const [ruleResult, settingsResult] = await Promise.all([
+        supabase
+          .from("financial_access_rules")
+          .select(
+            "id, applies_to, principal_type, role, user_id, receives_email, receives_in_app, can_review_edit, can_approve, can_mark_paid, active",
+          )
+          .order("applies_to")
+          .order("principal_type"),
+        supabase
+          .from("financial_settings")
+          .select(
+            "id, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
+          )
+          .eq("id", true)
+          .maybeSingle(),
+      ]);
 
       if (ruleResult.error) throw ruleResult.error;
+      if (settingsResult.error) throw settingsResult.error;
 
       setAccessRules((ruleResult.data ?? []) as FinancialAccessRule[]);
+      setFinanceSettings(
+        settingsResult.data
+          ? (settingsResult.data as FinancialSettings)
+          : DEFAULT_FINANCIAL_SETTINGS,
+      );
 
       const response = await apiFetch("/api/admin/users");
       const payload = (await response.json()) as AdminUsersResponse;
@@ -688,6 +791,237 @@ export default function ExpensesDashboardPage() {
         .slice(0, 8),
     [submissions],
   );
+
+
+  async function discoverSharePointLibraries() {
+    setSharePointDiscovering(true);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/expenses/sharepoint/discover");
+      const payload = (await response.json()) as SharePointDiscoveryResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error ?? "Could not discover SharePoint libraries.",
+        );
+      }
+
+      const libraries = payload.libraries ?? [];
+      setSharePointLibraries(libraries);
+
+      const existingDriveId = financeSettings.sharepoint_drive_id ?? "";
+      const existingStillAvailable = libraries.some(
+        (library) => library.id === existingDriveId,
+      );
+
+      const financeLibrary =
+        libraries.find(
+          (library) => library.name.trim().toLowerCase() === "finance",
+        ) ?? null;
+
+      const nextDriveId = existingStillAvailable
+        ? existingDriveId
+        : financeLibrary?.id ?? "";
+
+      setSelectedSharePointDriveId(nextDriveId);
+
+      setFinanceSettings((current) => ({
+        ...current,
+        sharepoint_site_id: payload.site?.id ?? current.sharepoint_site_id,
+        sharepoint_site_name:
+          payload.site?.name ?? current.sharepoint_site_name,
+        sharepoint_site_url:
+          payload.site?.webUrl ?? current.sharepoint_site_url,
+        sharepoint_drive_id: nextDriveId || current.sharepoint_drive_id,
+        sharepoint_drive_name:
+          libraries.find((library) => library.id === nextDriveId)?.name ??
+          current.sharepoint_drive_name,
+      }));
+
+      setMessage({
+        tone: "success",
+        text:
+          financeLibrary && !existingStillAvailable
+            ? 'SharePoint connected. The "Finance" library was found automatically.'
+            : `SharePoint connected. ${libraries.length} document ${
+                libraries.length === 1 ? "library" : "libraries"
+              } found.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not discover SharePoint libraries.",
+      });
+    } finally {
+      setSharePointDiscovering(false);
+    }
+  }
+
+  async function connectSharePointLibrary() {
+    if (!selectedSharePointDriveId) {
+      setMessage({
+        tone: "error",
+        text: "Select the Finance SharePoint library.",
+      });
+      return;
+    }
+
+    setSharePointDiscovering(true);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/expenses/sharepoint/discover", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          driveId: selectedSharePointDriveId,
+          baseFolder:
+            financeSettings.sharepoint_base_folder.trim() ||
+            "Expenses & Invoices",
+        }),
+      });
+
+      const payload = (await response.json()) as SharePointDiscoveryResponse;
+
+      if (!response.ok || !payload.settings) {
+        throw new Error(
+          payload.error ?? "Could not save the SharePoint destination.",
+        );
+      }
+
+      setFinanceSettings(payload.settings);
+      setSelectedSharePointDriveId(
+        payload.settings.sharepoint_drive_id ?? "",
+      );
+
+      setMessage({
+        tone: "success",
+        text: `${payload.library?.name ?? "Finance"} connected for Expenses & Invoices.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not save the SharePoint destination.",
+      });
+    } finally {
+      setSharePointDiscovering(false);
+    }
+  }
+
+  async function saveFinanceSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const siteId = financeSettings.sharepoint_site_id?.trim() || null;
+    const driveId = financeSettings.sharepoint_drive_id?.trim() || null;
+    const baseFolder = financeSettings.sharepoint_base_folder.trim();
+
+    if (!baseFolder) {
+      setMessage({
+        tone: "error",
+        text: "Enter a SharePoint base folder.",
+      });
+      return;
+    }
+
+    if (
+      financeSettings.claim_pending_second_reminder_days <
+      financeSettings.claim_pending_reminder_days
+    ) {
+      setMessage({
+        tone: "error",
+        text: "The second pending reminder cannot be earlier than the first reminder.",
+      });
+      return;
+    }
+
+    setFinanceSettingsSaving(true);
+    setMessage(null);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const now = new Date().toISOString();
+      const sharePointConfigured = Boolean(siteId && driveId);
+
+      const payload = {
+        sharepoint_site_id: siteId,
+        sharepoint_site_name:
+          financeSettings.sharepoint_site_name?.trim() || null,
+        sharepoint_site_url:
+          financeSettings.sharepoint_site_url?.trim() || null,
+        sharepoint_drive_id: driveId,
+        sharepoint_drive_name:
+          financeSettings.sharepoint_drive_name?.trim() || null,
+        sharepoint_base_folder: baseFolder,
+        sharepoint_configured_at: sharePointConfigured
+          ? financeSettings.sharepoint_configured_at ?? now
+          : null,
+        sharepoint_configured_by: sharePointConfigured
+          ? financeSettings.sharepoint_configured_by ?? user.id
+          : null,
+        approval_email_enabled: financeSettings.approval_email_enabled,
+        approval_in_app_enabled: financeSettings.approval_in_app_enabled,
+        approval_push_enabled: financeSettings.approval_push_enabled,
+        reminder_email_enabled: financeSettings.reminder_email_enabled,
+        reminder_in_app_enabled: financeSettings.reminder_in_app_enabled,
+        reminder_push_enabled: financeSettings.reminder_push_enabled,
+        claim_pending_reminder_days:
+          financeSettings.claim_pending_reminder_days,
+        claim_pending_second_reminder_days:
+          financeSettings.claim_pending_second_reminder_days,
+        approved_unpaid_reminder_days:
+          financeSettings.approved_unpaid_reminder_days,
+        invoice_due_soon_days: financeSettings.invoice_due_soon_days,
+        invoice_overdue_reminder_days:
+          financeSettings.invoice_overdue_reminder_days,
+        reminders_enabled: financeSettings.reminders_enabled,
+        updated_by: user.id,
+      };
+
+      const result = await supabase
+        .from("financial_settings")
+        .update(payload)
+        .eq("id", true)
+        .select(
+          "id, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
+        )
+        .single();
+
+      if (result.error) throw result.error;
+
+      setFinanceSettings(result.data as FinancialSettings);
+
+      setMessage({
+        tone: "success",
+        text: "Finance settings saved.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Failed to save finance settings.",
+      });
+    } finally {
+      setFinanceSettingsSaving(false);
+    }
+  }
 
   function openNewCategory() {
     setEditingCategory(null);
@@ -1328,6 +1662,413 @@ export default function ExpensesDashboardPage() {
               </div>
             ) : (
               <>
+                <form
+                  onSubmit={saveFinanceSettings}
+                  className="rounded-3xl border border-slate-200 bg-white shadow-sm"
+                >
+                  <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <HardDrive size={18} className="text-slate-400" />
+                        <h2 className="text-xl font-bold text-slate-950">
+                          Finance Storage & Notifications
+                        </h2>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Company-wide storage and reminder settings used by the
+                        website and mobile app.
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={financeSettingsSaving}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {financeSettingsSaving ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Save size={16} />
+                      )}
+                      Save Settings
+                    </button>
+                  </div>
+
+                  <div className="space-y-8 px-6 py-6">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <FolderOpen size={17} className="text-slate-400" />
+                        <h3 className="text-base font-bold text-slate-950">
+                          SharePoint Storage
+                        </h3>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Receipts, invoices and approved finance documents will
+                        be stored in this SharePoint library. These values are
+                        saved in TTTracker configuration, not hard-coded into
+                        the app.
+                      </p>
+
+                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${
+                                  financeSettings.sharepoint_site_id &&
+                                  financeSettings.sharepoint_drive_id
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-amber-100 text-amber-700"
+                                }`}
+                              >
+                                {financeSettings.sharepoint_site_id &&
+                                financeSettings.sharepoint_drive_id
+                                  ? "Connected"
+                                  : "Not Connected"}
+                              </span>
+
+                              {financeSettings.sharepoint_site_name ? (
+                                <span className="text-sm font-semibold text-slate-700">
+                                  {financeSettings.sharepoint_site_name}
+                                </span>
+                              ) : null}
+
+                              {financeSettings.sharepoint_drive_name ? (
+                                <span className="text-sm text-slate-500">
+                                  → {financeSettings.sharepoint_drive_name}
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <p className="mt-2 text-sm leading-6 text-slate-500">
+                              TTTracker finds the SharePoint site and document
+                              libraries automatically using the existing
+                              Microsoft Graph connection. You do not need to
+                              enter Site IDs or Drive IDs manually.
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => void discoverSharePointLibraries()}
+                            disabled={sharePointDiscovering}
+                            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            {sharePointDiscovering ? (
+                              <Loader2 size={16} className="animate-spin" />
+                            ) : (
+                              <RefreshCw size={16} />
+                            )}
+                            {financeSettings.sharepoint_drive_id
+                              ? "Change Library"
+                              : "Connect SharePoint"}
+                          </button>
+                        </div>
+
+                        {sharePointLibraries.length > 0 ? (
+                          <div className="mt-5 grid gap-4 border-t border-slate-200 pt-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+                            <Field label="SharePoint Library">
+                              <SelectField
+                                value={selectedSharePointDriveId}
+                                onChange={(value) => {
+                                  setSelectedSharePointDriveId(value);
+
+                                  const selected =
+                                    sharePointLibraries.find(
+                                      (library) => library.id === value,
+                                    ) ?? null;
+
+                                  setFinanceSettings((current) => ({
+                                    ...current,
+                                    sharepoint_drive_id: value || null,
+                                    sharepoint_drive_name:
+                                      selected?.name ?? null,
+                                  }));
+                                }}
+                                options={[
+                                  {
+                                    value: "",
+                                    label: "Select document library...",
+                                  },
+                                  ...sharePointLibraries.map((library) => ({
+                                    value: library.id,
+                                    label: library.name,
+                                  })),
+                                ]}
+                              />
+                            </Field>
+
+                            <Field label="Base Folder">
+                              <input
+                                value={financeSettings.sharepoint_base_folder}
+                                onChange={(event) =>
+                                  setFinanceSettings((current) => ({
+                                    ...current,
+                                    sharepoint_base_folder:
+                                      event.target.value,
+                                  }))
+                                }
+                                placeholder="Expenses & Invoices"
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                              />
+                            </Field>
+
+                            <button
+                              type="button"
+                              onClick={() => void connectSharePointLibrary()}
+                              disabled={
+                                sharePointDiscovering ||
+                                !selectedSharePointDriveId
+                              }
+                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                            >
+                              {sharePointDiscovering ? (
+                                <Loader2 size={16} className="animate-spin" />
+                              ) : (
+                                <Check size={16} />
+                              )}
+                              Use Library
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {financeSettings.sharepoint_configured_at ? (
+                          <div className="mt-3 text-xs text-slate-400">
+                            Connected{" "}
+                            {shortDate(
+                              financeSettings.sharepoint_configured_at,
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-8">
+                      <div className="flex items-center gap-2">
+                        <Bell size={17} className="text-slate-400" />
+                        <h3 className="text-base font-bold text-slate-950">
+                          Approval Notifications
+                        </h3>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        These are company-wide delivery channels. Individual
+                        reviewer rules still determine who receives them.
+                      </p>
+
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <CheckField
+                          label="Email"
+                          checked={financeSettings.approval_email_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              approval_email_enabled: checked,
+                            }))
+                          }
+                        />
+                        <CheckField
+                          label="In-App"
+                          checked={financeSettings.approval_in_app_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              approval_in_app_enabled: checked,
+                            }))
+                          }
+                        />
+                        <CheckField
+                          label="Phone Push"
+                          checked={financeSettings.approval_push_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              approval_push_enabled: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-8">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <CalendarDays
+                              size={17}
+                              className="text-slate-400"
+                            />
+                            <h3 className="text-base font-bold text-slate-950">
+                              Reminders
+                            </h3>
+                          </div>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Reminder timing is shared by Expense Claims and
+                            Invoices and can be changed here without a code
+                            update.
+                          </p>
+                        </div>
+
+                        <CheckField
+                          label="Enable Reminders"
+                          checked={financeSettings.reminders_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              reminders_enabled: checked,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <CheckField
+                          label="Reminder Email"
+                          checked={financeSettings.reminder_email_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              reminder_email_enabled: checked,
+                            }))
+                          }
+                        />
+                        <CheckField
+                          label="Reminder In-App"
+                          checked={financeSettings.reminder_in_app_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              reminder_in_app_enabled: checked,
+                            }))
+                          }
+                        />
+                        <CheckField
+                          label="Reminder Push"
+                          checked={financeSettings.reminder_push_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              reminder_push_enabled: checked,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                        <NumberField
+                          label="First Approval Reminder"
+                          value={financeSettings.claim_pending_reminder_days}
+                          suffix="days"
+                          min={1}
+                          max={30}
+                          onChange={(value) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              claim_pending_reminder_days: value,
+                            }))
+                          }
+                        />
+
+                        <NumberField
+                          label="Second Approval Reminder"
+                          value={
+                            financeSettings.claim_pending_second_reminder_days
+                          }
+                          suffix="days"
+                          min={1}
+                          max={60}
+                          onChange={(value) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              claim_pending_second_reminder_days: value,
+                            }))
+                          }
+                        />
+
+                        <NumberField
+                          label="Approved, Not Paid"
+                          value={
+                            financeSettings.approved_unpaid_reminder_days
+                          }
+                          suffix="days"
+                          min={1}
+                          max={60}
+                          onChange={(value) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              approved_unpaid_reminder_days: value,
+                            }))
+                          }
+                        />
+
+                        <NumberField
+                          label="Invoice Due Soon"
+                          value={financeSettings.invoice_due_soon_days}
+                          suffix="days before"
+                          min={0}
+                          max={60}
+                          onChange={(value) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              invoice_due_soon_days: value,
+                            }))
+                          }
+                        />
+
+                        <NumberField
+                          label="Overdue Reminder"
+                          value={
+                            financeSettings.invoice_overdue_reminder_days
+                          }
+                          suffix="days"
+                          min={1}
+                          max={30}
+                          onChange={(value) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              invoice_overdue_reminder_days: value,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <Mail size={17} className="text-slate-400" />
+                          <div className="mt-2 text-sm font-bold text-slate-900">
+                            Email
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Approval and reminder emails use configured finance
+                            recipients and the TTTracker review link.
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <Bell size={17} className="text-slate-400" />
+                          <div className="mt-2 text-sm font-bold text-slate-900">
+                            In-App
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Finance events will use the existing TTTracker
+                            notification centre.
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <Smartphone size={17} className="text-slate-400" />
+                          <div className="mt-2 text-sm font-bold text-slate-900">
+                            Phone Push
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Mobile users can be deep-linked directly to the
+                            relevant claim or invoice.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+
                 <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
                   <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -1856,6 +2597,44 @@ function CheckField({
       />
       <span className="text-sm font-semibold text-slate-700">{label}</span>
     </label>
+  );
+}
+
+
+function NumberField({
+  label,
+  value,
+  suffix,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  suffix: string;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <div className="relative">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            onChange(Number.isFinite(next) ? next : min);
+          }}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 pr-20 text-sm outline-none ring-slate-200 focus:ring-2"
+        />
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
+          {suffix}
+        </span>
+      </div>
+    </Field>
   );
 }
 

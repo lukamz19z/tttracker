@@ -6,9 +6,12 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDollarSign,
+  CreditCard,
+  Eye,
   FileText,
   Filter,
   Loader2,
+  MessageSquareText,
   Pencil,
   Plus,
   ReceiptText,
@@ -50,6 +53,7 @@ type ExpenseClaim = {
   submission_number: string;
   submission_type: "expense_claim";
   status: FinancialStatus;
+  revision: number;
   submitted_for_employee_id: string | null;
   created_by: string;
   submitted_by: string | null;
@@ -100,6 +104,22 @@ type ExpenseAttachment = {
   content_type: string | null;
   file_size_bytes: number | null;
   uploaded_at: string;
+};
+
+type AttachmentUploadResponse = {
+  attachment?: ExpenseAttachment;
+  error?: string;
+};
+
+type FinancialAccessRule = {
+  id: string;
+  principal_type: "role" | "user";
+  role: string | null;
+  user_id: string | null;
+  can_review_edit: boolean;
+  can_approve: boolean;
+  can_mark_paid: boolean;
+  active: boolean;
 };
 
 type Employee = {
@@ -213,6 +233,8 @@ export default function ExpenseClaimsPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
+  const [currentRole, setCurrentRole] = useState("");
+  const [accessRules, setAccessRules] = useState<FinancialAccessRule[]>([]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | FinancialStatus>("all");
@@ -222,11 +244,43 @@ export default function ExpenseClaimsPage() {
   const [editingClaim, setEditingClaim] = useState<ExpenseClaim | null>(null);
   const [draft, setDraft] = useState<ClaimDraft>(EMPTY_CLAIM);
   const [saving, setSaving] = useState(false);
+  const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
+  const [viewingAttachmentId, setViewingAttachmentId] = useState<string | null>(
+    null,
+  );
+
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewingClaim, setReviewingClaim] = useState<ExpenseClaim | null>(null);
+  const [reviewComments, setReviewComments] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [reviewSaving, setReviewSaving] = useState(false);
 
   const [message, setMessage] = useState<{
     tone: "success" | "error";
     text: string;
   } | null>(null);
+
+  const apiFetch = useCallback(
+    async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+
+      return fetch(input, {
+        ...init,
+        headers,
+        cache: "no-store",
+      });
+    },
+    [supabase],
+  );
 
   const loadAll = useCallback(async () => {
     const {
@@ -249,11 +303,13 @@ export default function ExpenseClaimsPage() {
       categoryResult,
       projectResult,
       employeeResult,
+      roleResult,
+      accessRuleResult,
     ] = await Promise.all([
       supabase
         .from("financial_submissions")
         .select(
-          "id, submission_number, submission_type, status, submitted_for_employee_id, created_by, submitted_by, project_id, claim_period_start, claim_period_end, description, notes, subtotal_ex_gst, gst_amount, total_amount, submitted_at, changes_requested_at, changes_required_reason, rejected_at, rejection_reason, approved_at, approved_by_name, approved_by_email, paid_at, payment_reference, created_at, updated_at",
+          "id, submission_number, submission_type, status, revision, submitted_for_employee_id, created_by, submitted_by, project_id, claim_period_start, claim_period_end, description, notes, subtotal_ex_gst, gst_amount, total_amount, submitted_at, changes_requested_at, changes_required_reason, rejected_at, rejection_reason, approved_at, approved_by_name, approved_by_email, paid_at, payment_reference, created_at, updated_at",
         )
         .eq("submission_type", "expense_claim")
         .order("created_at", { ascending: false }),
@@ -283,6 +339,18 @@ export default function ExpenseClaimsPage() {
         .from("employees")
         .select("id, full_name, user_id")
         .order("full_name"),
+      supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("financial_access_rules")
+        .select(
+          "id, principal_type, role, user_id, can_review_edit, can_approve, can_mark_paid, active",
+        )
+        .eq("active", true)
+        .or("applies_to.eq.all,applies_to.eq.expense_claim"),
     ]);
 
     if (claimResult.error) throw claimResult.error;
@@ -291,6 +359,8 @@ export default function ExpenseClaimsPage() {
     if (categoryResult.error) throw categoryResult.error;
     if (projectResult.error) throw projectResult.error;
     if (employeeResult.error) throw employeeResult.error;
+    if (roleResult.error) throw roleResult.error;
+    if (accessRuleResult.error) throw accessRuleResult.error;
 
     setClaims((claimResult.data ?? []) as ExpenseClaim[]);
     setItems((itemResult.data ?? []) as ExpenseItem[]);
@@ -298,6 +368,10 @@ export default function ExpenseClaimsPage() {
     setCategories((categoryResult.data ?? []) as FinancialCategory[]);
     setProjects((projectResult.data ?? []) as Project[]);
     setEmployees((employeeResult.data ?? []) as Employee[]);
+    setCurrentRole(String(roleResult.data?.role ?? "").trim().toLowerCase());
+    setAccessRules(
+      (accessRuleResult.data ?? []) as FinancialAccessRule[],
+    );
 
     const employee = (employeeResult.data ?? []).find(
       (row) => row.user_id === user.id,
@@ -327,6 +401,20 @@ export default function ExpenseClaimsPage() {
 
     return () => window.clearTimeout(timer);
   }, [loadAll]);
+
+  useEffect(() => {
+    if (loading || claims.length === 0) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get("open");
+
+    if (!openId || reviewOpen || editorOpen) return;
+
+    const claim = claims.find((item) => item.id === openId);
+    if (claim) {
+      openReviewClaim(claim);
+    }
+  }, [claims, editorOpen, loading, reviewOpen]);
 
   async function refreshData() {
     setRefreshing(true);
@@ -404,6 +492,29 @@ export default function ExpenseClaimsPage() {
     viewFilter,
   ]);
 
+  const financePermissions = useMemo(() => {
+    const role = currentRole.trim().toLowerCase();
+    const isAdmin = role === "admin";
+
+    const matching = accessRules.filter(
+      (rule) =>
+        rule.active &&
+        ((rule.principal_type === "user" &&
+          rule.user_id === currentUserId) ||
+          (rule.principal_type === "role" &&
+            String(rule.role ?? "").trim().toLowerCase() === role)),
+    );
+
+    return {
+      canReviewEdit:
+        isAdmin || matching.some((rule) => rule.can_review_edit),
+      canApprove:
+        isAdmin || matching.some((rule) => rule.can_approve),
+      canMarkPaid:
+        isAdmin || matching.some((rule) => rule.can_mark_paid),
+    };
+  }, [accessRules, currentRole, currentUserId]);
+
   const outstandingTotal = claims
     .filter((claim) =>
       ["submitted", "changes_required", "approved"].includes(claim.status),
@@ -419,6 +530,85 @@ export default function ExpenseClaimsPage() {
         ["submitted", "changes_required"].includes(claim.status),
     )
     .reduce((sum, claim) => sum + asNumber(claim.total_amount), 0);
+
+  function openReviewClaim(claim: ExpenseClaim) {
+    setReviewingClaim(claim);
+    setReviewComments("");
+    setPaymentReference(claim.payment_reference ?? "");
+    setReviewOpen(true);
+  }
+
+  async function runReviewAction(
+    action: "request_changes" | "approve" | "mark_paid",
+  ) {
+    if (!reviewingClaim) return;
+
+    if (action === "request_changes" && !reviewComments.trim()) {
+      setMessage({
+        tone: "error",
+        text: "Enter what needs to be changed.",
+      });
+      return;
+    }
+
+    setReviewSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/expenses/claims/${encodeURIComponent(
+          reviewingClaim.id,
+        )}/review`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action,
+            comments: reviewComments.trim(),
+            paymentReference: paymentReference.trim(),
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        error?: string;
+        status?: FinancialStatus;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Expense Claim review failed.");
+      }
+
+      await loadAll();
+
+      setReviewOpen(false);
+      setReviewingClaim(null);
+      setReviewComments("");
+      setPaymentReference("");
+
+      setMessage({
+        tone: "success",
+        text:
+          action === "request_changes"
+            ? "Changes requested."
+            : action === "approve"
+              ? "Expense Claim approved."
+              : "Expense Claim marked as paid.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Expense Claim review failed.",
+      });
+    } finally {
+      setReviewSaving(false);
+    }
+  }
 
   function openNewClaim() {
     setEditingClaim(null);
@@ -479,12 +669,7 @@ export default function ExpenseClaimsPage() {
     }));
   }
 
-  async function saveClaim(
-    event: FormEvent<HTMLFormElement>,
-    submitForApproval = false,
-  ) {
-    event.preventDefault();
-
+  function validateDraftItems() {
     const validItems = draft.items.filter(
       (item) =>
         item.description.trim() &&
@@ -492,20 +677,32 @@ export default function ExpenseClaimsPage() {
     );
 
     if (validItems.length === 0) {
-      setMessage({
-        tone: "error",
-        text: "Add at least one expense item with a description and amount.",
-      });
-      return;
+      throw new Error(
+        "Add at least one expense item with a description and amount.",
+      );
     }
 
     if (validItems.some((item) => !item.categoryId)) {
-      setMessage({
-        tone: "error",
-        text: "Select a category for each expense item.",
-      });
-      return;
+      throw new Error("Select a category for each expense item.");
     }
+
+    if (validItems.some((item) => !item.expenseDate)) {
+      throw new Error("Enter a date for each expense item.");
+    }
+
+    return validItems;
+  }
+
+  async function persistClaim({
+    submitForApproval,
+    closeAfterSave,
+    showSuccessMessage = true,
+  }: {
+    submitForApproval: boolean;
+    closeAfterSave: boolean;
+    showSuccessMessage?: boolean;
+  }) {
+    const validItems = validateDraftItems();
 
     setSaving(true);
     setMessage(null);
@@ -515,32 +712,34 @@ export default function ExpenseClaimsPage() {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user) throw new Error("Your session has expired.");
+      if (!user) {
+        throw new Error("Your session has expired.");
+      }
 
       let submissionId = editingClaim?.id ?? null;
+      const wasChangesRequired = editingClaim?.status === "changes_required";
+      const nextRevision = Math.max(
+        0,
+        Number(editingClaim?.revision ?? 0),
+      );
 
       const submissionPayload = {
-        submission_type: "expense_claim",
-        status: submitForApproval ? "submitted" : editingClaim?.status ?? "draft",
+        submission_type: "expense_claim" as const,
+        status: editingClaim?.status ?? "draft",
+        revision: nextRevision,
         submitted_for_employee_id: currentEmployeeId,
         created_by: editingClaim?.created_by ?? user.id,
-        submitted_by: submitForApproval ? user.id : editingClaim?.submitted_by ?? null,
+        submitted_by: editingClaim?.submitted_by ?? null,
         project_id: draft.projectId || null,
         claim_period_start: null,
         claim_period_end: null,
         description: draft.description.trim() || null,
         notes: draft.notes.trim() || null,
-        submitted_at: submitForApproval
-          ? new Date().toISOString()
-          : editingClaim?.submitted_at ?? null,
+        submitted_at: editingClaim?.submitted_at ?? null,
         changes_required_reason:
-          editingClaim?.status === "changes_required" && submitForApproval
-            ? null
-            : editingClaim?.changes_required_reason ?? null,
+          editingClaim?.changes_required_reason ?? null,
         changes_requested_at:
-          editingClaim?.status === "changes_required" && submitForApproval
-            ? null
-            : editingClaim?.changes_requested_at ?? null,
+          editingClaim?.changes_requested_at ?? null,
       };
 
       if (submissionId) {
@@ -561,13 +760,19 @@ export default function ExpenseClaimsPage() {
         submissionId = result.data.id;
       }
 
-      if (!submissionId) throw new Error("Could not save the expense claim.");
+      if (!submissionId) {
+        throw new Error("Could not save the expense claim.");
+      }
 
       const existing = claimItems.get(submissionId) ?? [];
       const existingIds = new Set(existing.map((item) => item.id));
-      const retainedIds = new Set(validItems.map((item) => item.id).filter(Boolean));
+      const retainedIds = new Set(
+        validItems.map((item) => item.id).filter(Boolean) as string[],
+      );
 
-      const idsToDelete = [...existingIds].filter((id) => !retainedIds.has(id));
+      const idsToDelete = [...existingIds].filter(
+        (id) => !retainedIds.has(id),
+      );
 
       if (idsToDelete.length > 0) {
         const deleteResult = await supabase
@@ -578,11 +783,11 @@ export default function ExpenseClaimsPage() {
         if (deleteResult.error) throw deleteResult.error;
       }
 
+      const savedItems: DraftItem[] = [];
+
       for (let index = 0; index < validItems.length; index += 1) {
         const item = validItems[index];
         const totalInc = asNumber(item.amountIncGst);
-        const gst = 0;
-        const exGst = totalInc;
 
         const payload = {
           submission_id: submissionId,
@@ -591,9 +796,9 @@ export default function ExpenseClaimsPage() {
           supplier: null,
           description: item.description.trim(),
           quantity: 1,
-          unit_amount_ex_gst: exGst,
-          amount_ex_gst: exGst,
-          gst_amount: gst,
+          unit_amount_ex_gst: totalInc,
+          amount_ex_gst: totalInc,
+          gst_amount: 0,
           amount_inc_gst: totalInc,
           notes: item.notes.trim() || null,
           sort_order: index,
@@ -606,54 +811,132 @@ export default function ExpenseClaimsPage() {
             .eq("id", item.id);
 
           if (updateResult.error) throw updateResult.error;
+
+          savedItems.push({
+            ...item,
+            id: item.id,
+          });
         } else {
           const insertResult = await supabase
             .from("financial_submission_items")
-            .insert(payload);
+            .insert(payload)
+            .select("id")
+            .single();
 
           if (insertResult.error) throw insertResult.error;
+
+          savedItems.push({
+            ...item,
+            id: insertResult.data.id,
+          });
         }
       }
 
-      const eventType = submitForApproval
-        ? editingClaim?.status === "changes_required"
-          ? "resubmitted"
-          : "submitted"
-        : editingClaim
-          ? "edited"
-          : "created";
+      if (!submitForApproval) {
+        const eventType = editingClaim ? "edited" : "created";
 
-      const eventResult = await supabase
-        .from("financial_submission_events")
-        .insert({
-          submission_id: submissionId,
-          revision: editingClaim?.status === "changes_required" && submitForApproval
-            ? (editingClaim ? 1 : 0)
-            : 0,
-          event_type: eventType,
-          performed_by: user.id,
-          comments: null,
-          metadata: {
-            source: "website",
-            submission_type: "expense_claim",
+        const eventResult = await supabase
+          .from("financial_submission_events")
+          .insert({
+            submission_id: submissionId,
+            revision: nextRevision,
+            event_type: eventType,
+            performed_by: user.id,
+            comments: null,
+            metadata: {
+              source: "website",
+              submission_type: "expense_claim",
+            },
+          });
+
+        if (eventResult.error) throw eventResult.error;
+      }
+
+      if (submitForApproval) {
+        const response = await apiFetch(
+          `/api/expenses/claims/${encodeURIComponent(submissionId)}/submit`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
           },
-        });
+        );
 
-      if (eventResult.error) throw eventResult.error;
+        const payload = (await response.json()) as {
+          error?: string;
+          warning?: string | null;
+          revision?: number;
+        };
+
+        if (!response.ok) {
+          throw new Error(
+            payload.error ??
+              "The Expense Claim could not be submitted for approval.",
+          );
+        }
+
+        if (payload.warning) {
+          setMessage({
+            tone: "error",
+            text: payload.warning,
+          });
+        }
+      }
+
+      const { data: savedClaim, error: savedClaimError } = await supabase
+        .from("financial_submissions")
+        .select(
+          "id, submission_number, submission_type, status, revision, submitted_for_employee_id, created_by, submitted_by, project_id, claim_period_start, claim_period_end, description, notes, subtotal_ex_gst, gst_amount, total_amount, submitted_at, changes_requested_at, changes_required_reason, rejected_at, rejection_reason, approved_at, approved_by_name, approved_by_email, paid_at, payment_reference, created_at, updated_at",
+        )
+        .eq("id", submissionId)
+        .single();
+
+      if (savedClaimError) throw savedClaimError;
 
       await loadAll();
-      setEditorOpen(false);
-      setEditingClaim(null);
-      setDraft({
-        ...EMPTY_CLAIM,
-        items: [{ ...EMPTY_ITEM }],
-      });
 
-      setMessage({
-        tone: "success",
-        text: submitForApproval
-          ? "Expense claim submitted for approval."
-          : "Expense claim saved.",
+      if (closeAfterSave) {
+        setEditorOpen(false);
+        setEditingClaim(null);
+        setDraft({
+          ...EMPTY_CLAIM,
+          items: [{ ...EMPTY_ITEM }],
+        });
+      } else {
+        setEditingClaim(savedClaim as ExpenseClaim);
+        setDraft((current) => ({
+          ...current,
+          items: savedItems,
+        }));
+      }
+
+      if (showSuccessMessage) {
+        setMessage({
+          tone: "success",
+          text: submitForApproval
+            ? "Expense claim submitted for approval."
+            : "Expense claim saved.",
+        });
+      }
+
+      return {
+        submissionId,
+        savedItems,
+        claim: savedClaim as ExpenseClaim,
+      };
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      await persistClaim({
+        submitForApproval: false,
+        closeAfterSave: true,
       });
     } catch (error) {
       setMessage({
@@ -663,8 +946,164 @@ export default function ExpenseClaimsPage() {
             ? error.message
             : "Failed to save the expense claim.",
       });
+    }
+  }
+
+  async function handleSubmitForApproval() {
+    try {
+      await persistClaim({
+        submitForApproval: true,
+        closeAfterSave: true,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Failed to submit the expense claim.",
+      });
+    }
+  }
+
+  async function chooseAndUploadReceipt(itemIndex: number) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept =
+      "application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif";
+    input.multiple = false;
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      void uploadReceipt(itemIndex, file);
+    };
+
+    input.click();
+  }
+
+  async function uploadReceipt(itemIndex: number, file: File) {
+    setMessage(null);
+
+    try {
+      let submissionId = editingClaim?.id ?? null;
+      let itemId = draft.items[itemIndex]?.id ?? null;
+
+      if (!submissionId || !itemId) {
+        const saved = await persistClaim({
+          submitForApproval: false,
+          closeAfterSave: false,
+          showSuccessMessage: false,
+        });
+
+        submissionId = saved.submissionId;
+        itemId = saved.savedItems[itemIndex]?.id ?? null;
+      }
+
+      if (!submissionId || !itemId) {
+        throw new Error(
+          "The expense item could not be saved before uploading its receipt.",
+        );
+      }
+
+      setUploadingItemId(itemId);
+
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("submissionId", submissionId);
+      formData.set("itemId", itemId);
+
+      const response = await apiFetch(
+        "/api/expenses/attachments/upload",
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+
+      const payload =
+        (await response.json()) as AttachmentUploadResponse;
+
+      if (!response.ok || !payload.attachment) {
+        throw new Error(payload.error ?? "Receipt upload failed.");
+      }
+
+      await loadAll();
+
+      setAttachments((current) => {
+        const withoutDuplicate = current.filter(
+          (attachment) => attachment.id !== payload.attachment?.id,
+        );
+
+        return payload.attachment
+          ? [payload.attachment, ...withoutDuplicate]
+          : current;
+      });
+
+      setMessage({
+        tone: "success",
+        text: `${file.name} uploaded.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Receipt upload failed.",
+      });
     } finally {
-      setSaving(false);
+      setUploadingItemId(null);
+    }
+  }
+
+  async function viewAttachment(attachment: ExpenseAttachment) {
+    setViewingAttachmentId(attachment.id);
+    setMessage(null);
+
+    const previewWindow = window.open("", "_blank");
+
+    try {
+      const response = await apiFetch(
+        `/api/expenses/attachments/${attachment.id}/content`,
+      );
+
+      if (!response.ok) {
+        let errorMessage = "Could not open the receipt.";
+
+        try {
+          const payload = (await response.json()) as { error?: string };
+          errorMessage = payload.error ?? errorMessage;
+        } catch {
+          // Use the fallback message.
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      if (previewWindow) {
+        previewWindow.location.href = objectUrl;
+      } else {
+        window.location.href = objectUrl;
+      }
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      previewWindow?.close();
+
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Could not open the receipt.",
+      });
+    } finally {
+      setViewingAttachmentId(null);
     }
   }
 
@@ -954,6 +1393,19 @@ export default function ExpenseClaimsPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-2 xl:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => openReviewClaim(claim)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <Eye size={15} />
+                        {claim.status === "submitted" &&
+                        (financePermissions.canReviewEdit ||
+                          financePermissions.canApprove)
+                          ? "Review"
+                          : "View"}
+                      </button>
+
                       {canEdit ? (
                         <button
                           type="button"
@@ -985,6 +1437,303 @@ export default function ExpenseClaimsPage() {
         </section>
       </div>
 
+      {reviewOpen && reviewingClaim ? (
+        <ModalShell
+          title={`Expense Claim ${reviewingClaim.submission_number}`}
+          description="Review the claim details and receipts before taking action."
+          onClose={() => {
+            if (!reviewSaving) {
+              setReviewOpen(false);
+              setReviewingClaim(null);
+            }
+          }}
+          wide
+        >
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Status
+                </div>
+                <div className="mt-2">
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(
+                      reviewingClaim.status,
+                    )}`}
+                  >
+                    {statusLabel(reviewingClaim.status)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Employee
+                </div>
+                <div className="mt-2 text-sm font-bold text-slate-900">
+                  {employees.find(
+                    (employee) =>
+                      employee.id ===
+                      reviewingClaim.submitted_for_employee_id,
+                  )?.full_name || "Employee not linked"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Project
+                </div>
+                <div className="mt-2 text-sm font-bold text-slate-900">
+                  {(() => {
+                    const project = projects.find(
+                      (item) => item.id === reviewingClaim.project_id,
+                    );
+                    return (
+                      project?.project_number ||
+                      project?.name ||
+                      "Company / General"
+                    );
+                  })()}
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-slate-950 p-4 text-white">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                  Total
+                </div>
+                <div className="mt-2 text-xl font-bold">
+                  {currency(asNumber(reviewingClaim.total_amount))}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="text-sm font-bold text-slate-950">
+                {reviewingClaim.description || "Expense Claim"}
+              </div>
+              {reviewingClaim.notes ? (
+                <div className="mt-2 text-sm leading-6 text-slate-600">
+                  {reviewingClaim.notes}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              {(claimItems.get(reviewingClaim.id) ?? []).map(
+                (item, index) => {
+                  const category = categories.find(
+                    (categoryItem) =>
+                      categoryItem.id === item.category_id,
+                  );
+                  const itemAttachments = attachments.filter(
+                    (attachment) =>
+                      attachment.submission_id === reviewingClaim.id &&
+                      attachment.item_id === item.id,
+                  );
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-2xl border border-slate-200 bg-white p-5"
+                    >
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Item {index + 1} · {category?.name || "No category"} ·{" "}
+                            {shortDate(item.expense_date)}
+                          </div>
+                          <div className="mt-1 text-base font-bold text-slate-950">
+                            {item.description}
+                          </div>
+                          {item.notes ? (
+                            <div className="mt-1 text-sm text-slate-500">
+                              {item.notes}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="shrink-0 text-lg font-bold text-slate-950">
+                          {currency(asNumber(item.amount_inc_gst))}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {itemAttachments.length ? (
+                          itemAttachments.map((attachment) => (
+                            <button
+                              key={attachment.id}
+                              type="button"
+                              onClick={() =>
+                                void viewAttachment(attachment)
+                              }
+                              disabled={
+                                viewingAttachmentId === attachment.id
+                              }
+                              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                            >
+                              {viewingAttachmentId === attachment.id ? (
+                                <Loader2
+                                  size={15}
+                                  className="animate-spin"
+                                />
+                              ) : (
+                                <Eye size={15} />
+                              )}
+                              {attachment.file_name}
+                            </button>
+                          ))
+                        ) : (
+                          <span className="text-sm font-semibold text-rose-600">
+                            No receipt uploaded
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                },
+              )}
+            </div>
+
+            {reviewingClaim.changes_required_reason ? (
+              <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
+                <div className="text-sm font-bold text-orange-800">
+                  Changes requested
+                </div>
+                <div className="mt-1 text-sm leading-6 text-orange-700">
+                  {reviewingClaim.changes_required_reason}
+                </div>
+              </div>
+            ) : null}
+
+            {reviewingClaim.status === "approved" ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-sm font-bold text-emerald-800">
+                  Approved
+                </div>
+                <div className="mt-1 text-sm text-emerald-700">
+                  {reviewingClaim.approved_by_name || "TTTracker reviewer"}
+                  {reviewingClaim.approved_at
+                    ? ` · ${shortDate(reviewingClaim.approved_at)}`
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+
+            {reviewingClaim.status === "paid" ? (
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <div className="text-sm font-bold text-blue-800">
+                  Paid
+                </div>
+                <div className="mt-1 text-sm text-blue-700">
+                  {shortDate(reviewingClaim.paid_at)}
+                  {reviewingClaim.payment_reference
+                    ? ` · ${reviewingClaim.payment_reference}`
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+
+            {reviewingClaim.status === "submitted" &&
+            (financePermissions.canReviewEdit ||
+              financePermissions.canApprove) ? (
+              <Field label="Reviewer comments">
+                <textarea
+                  value={reviewComments}
+                  onChange={(event) =>
+                    setReviewComments(event.target.value)
+                  }
+                  rows={4}
+                  placeholder="Add an approval comment, or explain what needs to be changed."
+                  className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </Field>
+            ) : null}
+
+            {reviewingClaim.status === "approved" &&
+            financePermissions.canMarkPaid ? (
+              <Field label="Payment reference">
+                <input
+                  value={paymentReference}
+                  onChange={(event) =>
+                    setPaymentReference(event.target.value)
+                  }
+                  placeholder="Optional payment reference"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                />
+              </Field>
+            ) : null}
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setReviewOpen(false);
+                  setReviewingClaim(null);
+                }}
+                disabled={reviewSaving}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Close
+              </button>
+
+              {reviewingClaim.status === "submitted" &&
+              (financePermissions.canReviewEdit ||
+                financePermissions.canApprove) ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runReviewAction("request_changes")
+                  }
+                  disabled={reviewSaving}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 hover:bg-orange-100 disabled:opacity-60"
+                >
+                  {reviewSaving ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <MessageSquareText size={16} />
+                  )}
+                  Request Changes
+                </button>
+              ) : null}
+
+              {reviewingClaim.status === "submitted" &&
+              financePermissions.canApprove ? (
+                <button
+                  type="button"
+                  onClick={() => void runReviewAction("approve")}
+                  disabled={reviewSaving}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+                >
+                  {reviewSaving ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <CheckCircle2 size={16} />
+                  )}
+                  Approve
+                </button>
+              ) : null}
+
+              {reviewingClaim.status === "approved" &&
+              financePermissions.canMarkPaid ? (
+                <button
+                  type="button"
+                  onClick={() => void runReviewAction("mark_paid")}
+                  disabled={reviewSaving}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+                >
+                  {reviewSaving ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <CreditCard size={16} />
+                  )}
+                  Mark Paid
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </ModalShell>
+      ) : null}
+
       {editorOpen ? (
         <ModalShell
           title={editingClaim ? "Edit Expense Claim" : "New Expense Claim"}
@@ -992,10 +1741,7 @@ export default function ExpenseClaimsPage() {
           onClose={() => setEditorOpen(false)}
           wide
         >
-          <form
-            onSubmit={(event) => void saveClaim(event, false)}
-            className="space-y-6"
-          >
+          <form onSubmit={handleSave} className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Project">
                 <SelectField
@@ -1138,15 +1884,57 @@ export default function ExpenseClaimsPage() {
                       </Field>
 
                       <Field label="Receipt">
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-3 py-2.5 text-sm font-semibold text-slate-400"
-                          title="SharePoint upload endpoint will be connected next."
-                        >
-                          <Upload size={15} />
-                          Upload Receipt
-                        </button>
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => void chooseAndUploadReceipt(index)}
+                            disabled={saving || Boolean(uploadingItemId)}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            {uploadingItemId &&
+                            uploadingItemId === item.id ? (
+                              <Loader2 size={15} className="animate-spin" />
+                            ) : (
+                              <Upload size={15} />
+                            )}
+                            {item.id
+                              ? "Upload Receipt"
+                              : "Save & Upload Receipt"}
+                          </button>
+
+                          {item.id
+                            ? attachments
+                                .filter(
+                                  (attachment) =>
+                                    attachment.item_id === item.id,
+                                )
+                                .map((attachment) => (
+                                  <button
+                                    key={attachment.id}
+                                    type="button"
+                                    onClick={() =>
+                                      void viewAttachment(attachment)
+                                    }
+                                    disabled={
+                                      viewingAttachmentId === attachment.id
+                                    }
+                                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                                  >
+                                    <span className="min-w-0 truncate">
+                                      {attachment.file_name}
+                                    </span>
+                                    {viewingAttachmentId === attachment.id ? (
+                                      <Loader2
+                                        size={14}
+                                        className="shrink-0 animate-spin"
+                                      />
+                                    ) : (
+                                      <Eye size={14} className="shrink-0" />
+                                    )}
+                                  </button>
+                                ))
+                            : null}
+                        </div>
                       </Field>
                     </div>
 
@@ -1224,7 +2012,7 @@ export default function ExpenseClaimsPage() {
 
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || Boolean(uploadingItemId)}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
@@ -1233,13 +2021,8 @@ export default function ExpenseClaimsPage() {
 
               <button
                 type="button"
-                onClick={(event) =>
-                  void saveClaim(
-                    event as unknown as FormEvent<HTMLFormElement>,
-                    true,
-                  )
-                }
-                disabled={saving}
+                onClick={() => void handleSubmitForApproval()}
+                disabled={saving || Boolean(uploadingItemId)}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 {saving ? (
