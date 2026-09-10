@@ -101,8 +101,11 @@ type MaterialEventPlantDraft = {
   finished_at: string;
 };
 
+type MaterialSearchMode = "member" | "bundle";
+
 type MaterialEventItemDraft = {
   ui_id: string;
+  search_mode: MaterialSearchMode;
   source_table: string;
   source_record_id: string;
   issue_key: string;
@@ -178,6 +181,26 @@ type MissingMaterialIssue = {
 type TowerOption = {
   id: string;
   name: string;
+  has_body_extension: boolean;
+};
+
+type ProductionActivity =
+  | "assembly"
+  | "erection"
+  | "mixed"
+  | "rectification"
+  | "other";
+
+type AdditionalTowerWork = {
+  id?: string;
+  ui_id: string;
+  target_tower_id: string;
+  hours: string;
+  worker_names: string[];
+  activity: ProductionActivity;
+  notes: string;
+  has_body_extension: boolean;
+  progress_rows: SectionV2ProgressRow[];
 };
 
 type MobilisationStatus =
@@ -858,6 +881,7 @@ function delayIncludesPlant(delay: DelayRow) {
 function blankMaterialItem(): MaterialEventItemDraft {
   return {
     ui_id: makeUiId(),
+    search_mode: "member",
     source_table: "",
     source_record_id: "",
     issue_key: "",
@@ -1035,6 +1059,11 @@ export default function DailyDocketForm({
   const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [towerRevisionAllocations, setTowerRevisionAllocations] = useState<TowerRevisionAllocation[]>([]);
+  const [primaryWorkHours, setPrimaryWorkHours] = useState("");
+  const [primaryWorkWorkerNames, setPrimaryWorkWorkerNames] = useState<string[]>([]);
+  const [primaryWorkActivity, setPrimaryWorkActivity] = useState<ProductionActivity>("mixed");
+  const [primaryWorkNotes, setPrimaryWorkNotes] = useState("");
+  const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
   const [missingMaterialIssues, setMissingMaterialIssues] = useState<MissingMaterialIssue[]>([]);
   const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
@@ -1073,7 +1102,41 @@ export default function DailyDocketForm({
   const [crews, setCrews] = useState<CrewRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [selectedCrewId, setSelectedCrewId] = useState("");
-  const [showProductionDefaults, setShowProductionDefaults] = useState(false);
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set(["header"])
+  );
+
+  function toggleSection(section: string) {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  }
+
+  function expandAllSections() {
+    setOpenSections(
+      new Set([
+        "header",
+        "progress",
+        "labour",
+        "safety",
+        "plant",
+        "lafha",
+        "revision",
+        "mobilisation",
+        "delays",
+        "summary",
+        "defaults",
+        "submission",
+      ])
+    );
+  }
+
+  function collapseAllSections() {
+    setOpenSections(new Set());
+  }
 
   useEffect(() => {
     async function loadCrewData() {
@@ -1158,6 +1221,7 @@ export default function DailyDocketForm({
           tower.extra_data?.tower_no ||
           "Tower"
         ),
+        has_body_extension: inferTowerHasBodyExtension(tower as TowerRecord),
       }));
 
       setProjectTowers(towersForProject);
@@ -1486,7 +1550,7 @@ export default function DailyDocketForm({
         if (initialPlantRows?.length) setPlantRows(initialPlantRows.map((r) => makePlantRow(r)));
 
         if (initialProgressRows?.length) {
-          const rawRows = initialProgressRows as any[];
+          const rawRows = (initialProgressRows as any[]).filter((row) => !row.tower_id || String(row.tower_id) === towerId);
           const isV2 = initialDocket.progress_model === "section_v2" || rawRows.some((r) => r.progress_model === "section_v2");
           if (isV2) {
             setProgressModel("section_v2");
@@ -1544,6 +1608,8 @@ export default function DailyDocketForm({
               notes: toStringValue(event.notes),
               items: (event.items || []).map((item: any) => ({
                 ui_id: makeUiId(),
+                search_mode:
+                  item.source_table === "tower_required_bundles" ? "bundle" : "member",
                 source_table: toStringValue(item.source_table),
                 source_record_id: toStringValue(item.source_record_id),
                 issue_key: toStringValue(item.issue_key),
@@ -1691,14 +1757,20 @@ export default function DailyDocketForm({
       if (labour && labour.length > 0) setLabourRows(labour.map((r) => makeLabourRow(r)));
 
       setTowerRevisionAllocations(
-        ((revisionAllocations || []) as any[]).map((row) => ({
-          id: row.id,
-          ui_id: row.id || makeUiId(),
-          target_tower_id: toStringValue(row.target_tower_id),
-          hours: toStringValue(row.hours),
-          worker_names: Array.isArray(row.worker_names) ? row.worker_names.map(String) : [],
-          reason: toStringValue(row.reason),
-        }))
+        ((revisionAllocations || []) as any[])
+          .filter(
+            (row) =>
+              !row.allocation_type ||
+              String(row.allocation_type) === "revision"
+          )
+          .map((row) => ({
+            id: row.id,
+            ui_id: row.id || makeUiId(),
+            target_tower_id: toStringValue(row.target_tower_id),
+            hours: toStringValue(row.hours),
+            worker_names: Array.isArray(row.worker_names) ? row.worker_names.map(String) : [],
+            reason: toStringValue(row.reason),
+          }))
       );
 
       if (delays && delays.length > 0) {
@@ -1722,7 +1794,7 @@ export default function DailyDocketForm({
       if (plant && plant.length > 0) setPlantRows(plant.map((r) => makePlantRow(r)));
 
       if (progress && progress.length > 0) {
-        const rawRows = progress as any[];
+        const rawRows = (progress as any[]).filter((row) => !row.tower_id || String(row.tower_id) === towerId);
         const isV2 = data.progress_model === "section_v2" || rawRows.some((r) => r.progress_model === "section_v2");
         if (isV2) {
           setProgressModel("section_v2");
@@ -1769,6 +1841,8 @@ export default function DailyDocketForm({
           notes: toStringValue(event.notes),
           items: (event.items || []).map((item: any) => ({
             ui_id: makeUiId(),
+            search_mode:
+              item.source_table === "tower_required_bundles" ? "bundle" : "member",
             source_table: toStringValue(item.source_table),
             source_record_id: toStringValue(item.source_record_id),
             issue_key: toStringValue(item.issue_key),
@@ -1838,6 +1912,143 @@ export default function DailyDocketForm({
     supabase,
     towerId,
   ]);
+
+  useEffect(() => {
+    if (!docketId) return;
+
+    async function loadProductionAllocations() {
+      const [{ data: allocationRows, error: allocationError }, { data: progressRowsData, error: progressError }] =
+        await Promise.all([
+          supabase
+            .from("tower_docket_hour_allocations")
+            .select("*")
+            .eq("docket_id", docketId)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("tower_docket_progress")
+            .select("*")
+            .eq("docket_id", docketId),
+        ]);
+
+      if (allocationError) {
+        console.warn("Production tower allocations could not be loaded", allocationError);
+        return;
+      }
+
+      if (progressError) {
+        console.warn("Additional tower progress could not be loaded", progressError);
+      }
+
+      const allAllocationRows = (allocationRows || []) as any[];
+
+      setTowerRevisionAllocations(
+        allAllocationRows
+          .filter(
+            (row) =>
+              !row.allocation_type ||
+              String(row.allocation_type) === "revision"
+          )
+          .map((row) => ({
+            id: row.id,
+            ui_id: row.id || makeUiId(),
+            target_tower_id: toStringValue(row.target_tower_id),
+            hours: toStringValue(row.hours),
+            worker_names: Array.isArray(row.worker_names)
+              ? row.worker_names.map(String)
+              : [],
+            reason: toStringValue(row.reason),
+          }))
+      );
+
+      const productionRows = allAllocationRows.filter(
+        (row) => String(row.allocation_type || "") === "production"
+      );
+      const primary = productionRows.find(
+        (row) => toStringValue(row.target_tower_id) === towerId
+      );
+
+      if (primary) {
+        setPrimaryWorkHours(toStringValue(primary.hours));
+        setPrimaryWorkWorkerNames(
+          Array.isArray(primary.worker_names) ? primary.worker_names.map(String) : []
+        );
+        setPrimaryWorkActivity(
+          (toStringValue(primary.activity) || "mixed") as ProductionActivity
+        );
+        setPrimaryWorkNotes(toStringValue(primary.reason));
+      } else {
+        setPrimaryWorkHours("");
+        setPrimaryWorkWorkerNames([]);
+        setPrimaryWorkActivity("mixed");
+        setPrimaryWorkNotes("");
+      }
+
+      const extraRows = productionRows.filter(
+        (row) =>
+          toStringValue(row.target_tower_id) &&
+          toStringValue(row.target_tower_id) !== towerId
+      );
+
+      const allProgress = (progressRowsData || []) as any[];
+
+      setAdditionalTowerWork(
+        extraRows.map((row) => {
+          const targetTowerId = toStringValue(row.target_tower_id);
+          const towerOption = projectTowers.find((tower) => tower.id === targetTowerId);
+          const savedProgress = allProgress.filter(
+            (progressRow) => toStringValue(progressRow.tower_id) === targetTowerId
+          );
+
+          const progressRowsForTower = blankSectionV2Rows().map((cfg) => {
+            const saved = savedProgress.find(
+              (progressRow) =>
+                toStringValue(progressRow.section_code).toUpperCase() ===
+                cfg.section_code.toUpperCase()
+            );
+
+            return saved
+              ? {
+                  ...cfg,
+                  section_label: toStringValue(saved.section_label) || cfg.section_label,
+                  assembly_today: toStringValue(
+                    saved.assembly_overall ??
+                      saved.assembly_today ??
+                      saved.assembled_qty
+                  ),
+                  erection_today: toStringValue(
+                    saved.erection_overall ??
+                      saved.erection_today ??
+                      saved.erected_qty
+                  ),
+                  assembly_weight:
+                    SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.assembly_weight,
+                  erection_weight:
+                    SECTION_PROGRESS_WEIGHTS[cfg.section_code] ?? cfg.erection_weight,
+                }
+              : cfg;
+          });
+
+          return {
+            id: row.id,
+            ui_id: row.id || makeUiId(),
+            target_tower_id: targetTowerId,
+            hours: toStringValue(row.hours),
+            worker_names: Array.isArray(row.worker_names)
+              ? row.worker_names.map(String)
+              : [],
+            activity:
+              (toStringValue(row.activity) || "mixed") as ProductionActivity,
+            notes: toStringValue(row.reason),
+            has_body_extension: towerOption?.has_body_extension ?? true,
+            progress_rows: progressRowsForTower,
+          };
+        })
+      );
+    }
+
+    const timer = window.setTimeout(() => void loadProductionAllocations(), 0);
+    return () => window.clearTimeout(timer);
+  }, [docketId, projectTowers, supabase, towerId]);
 
   const locked = useMemo(() => {
     if (isClientSignedDocket({ client_rep_name: clientRepName, signed_date: signedDate })) return true;
@@ -1912,6 +2123,34 @@ export default function DailyDocketForm({
   const labourWorkerCount = labourTotals.workerCount;
   const totalLabourHours = labourTotals.rawManhours;
   const totalProductionHours = labourTotals.productionManhours;
+
+  const primaryProductionAllocationMH =
+    toNumber(primaryWorkHours) * primaryWorkWorkerNames.length;
+
+  const additionalProductionAllocationMH = additionalTowerWork.reduce(
+    (sum, allocation) =>
+      sum + toNumber(allocation.hours) * allocation.worker_names.length,
+    0
+  );
+
+  const revisionAllocatedMH = towerRevisionAllocations.reduce(
+    (sum, allocation) =>
+      sum + toNumber(allocation.hours) * allocation.worker_names.length,
+    0
+  );
+
+  const productionAllocatedToTowersMH =
+    primaryProductionAllocationMH + additionalProductionAllocationMH;
+
+  const totalAttributedProductionMH =
+    productionAllocatedToTowersMH + revisionAllocatedMH;
+
+  const unallocatedProductionMH =
+    totalProductionHours - totalAttributedProductionMH;
+
+  const productionAllocationOverByMH =
+    unallocatedProductionMH < 0 ? Math.abs(unallocatedProductionMH) : 0;
+
 
   const plantRowsWithTotals = useMemo(() => {
     return plantRows.map((row) => ({
@@ -2143,6 +2382,133 @@ export default function DailyDocketForm({
     }
   }
 
+
+  function togglePrimaryWorkWorker(workerName: string) {
+    if (isView || locked) return;
+    setPrimaryWorkWorkerNames((prev) => {
+      const exists = prev.some(
+        (name) => normalizeWorkerName(name) === normalizeWorkerName(workerName)
+      );
+      return exists
+        ? prev.filter(
+            (name) => normalizeWorkerName(name) !== normalizeWorkerName(workerName)
+          )
+        : [...prev, workerName];
+    });
+  }
+
+  function addAdditionalTowerWork() {
+    if (isView || locked) return;
+
+    setAdditionalTowerWork((prev) => [
+      ...prev,
+      {
+        ui_id: makeUiId(),
+        target_tower_id: "",
+        hours: "",
+        worker_names: [...availableWorkerNames],
+        activity: "mixed",
+        notes: "",
+        has_body_extension: true,
+        progress_rows: blankSectionV2Rows(),
+      },
+    ]);
+
+    setOpenSections((prev) => new Set([...prev, "progress"]));
+  }
+
+  function updateAdditionalTowerWork(
+    index: number,
+    patch: Partial<AdditionalTowerWork>
+  ) {
+    if (isView || locked) return;
+
+    setAdditionalTowerWork((prev) =>
+      prev.map((row, i) => {
+        if (i !== index) return row;
+
+        if (patch.target_tower_id !== undefined) {
+          const towerOption = projectTowers.find(
+            (tower) => tower.id === patch.target_tower_id
+          );
+
+          return {
+            ...row,
+            ...patch,
+            has_body_extension:
+              towerOption?.has_body_extension ?? row.has_body_extension,
+          };
+        }
+
+        return { ...row, ...patch };
+      })
+    );
+  }
+
+  function removeAdditionalTowerWork(index: number) {
+    if (isView || locked) return;
+    setAdditionalTowerWork((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function toggleAdditionalTowerWorker(index: number, workerName: string) {
+    if (isView || locked) return;
+
+    setAdditionalTowerWork((prev) =>
+      prev.map((row, i) => {
+        if (i !== index) return row;
+
+        const exists = row.worker_names.some(
+          (name) => normalizeWorkerName(name) === normalizeWorkerName(workerName)
+        );
+
+        return {
+          ...row,
+          worker_names: exists
+            ? row.worker_names.filter(
+                (name) =>
+                  normalizeWorkerName(name) !== normalizeWorkerName(workerName)
+              )
+            : [...row.worker_names, workerName],
+        };
+      })
+    );
+  }
+
+  function updateAdditionalTowerProgress(
+    workIndex: number,
+    sectionCode: string,
+    key: "assembly_today" | "erection_today",
+    value: string
+  ) {
+    if (isView || locked) return;
+
+    const nextValue = value.trim() === "" ? "" : clampPercentString(value);
+
+    setAdditionalTowerWork((prev) =>
+      prev.map((work, index) =>
+        index !== workIndex
+          ? work
+          : {
+              ...work,
+              progress_rows: work.progress_rows.map((row) =>
+                row.section_code === sectionCode
+                  ? { ...row, [key]: nextValue }
+                  : row
+              ),
+            }
+      )
+    );
+  }
+
+  function additionalTowerProgressTotals(work: AdditionalTowerWork) {
+    return calculateProgressTotals({
+      progressModel: "section_v2",
+      sectionV2Rows: work.progress_rows,
+      legacyRows: [],
+      hasBodyExtension: work.has_body_extension,
+    });
+  }
+
   function buildTowerStatus(progress: number) {
     if (progress >= 100) return "Complete";
     if (progress > 0) return "In Progress";
@@ -2150,34 +2516,54 @@ export default function DailyDocketForm({
   }
 
   async function recalcTowerProgressAndStatus() {
-    const { data, error } = await supabase
-      .from("tower_daily_dockets")
-      .select("assembly_percent, erection_percent")
-      .eq("tower_id", towerId);
+    const targetProgress = new Map<string, number>();
+    targetProgress.set(towerId, displayProgress);
 
-    if (error) throw new Error("Failed to recalculate tower progress.");
+    additionalTowerWork.forEach((work) => {
+      if (!work.target_tower_id) return;
+      const totals = additionalTowerProgressTotals(work);
+      const current = targetProgress.get(work.target_tower_id) || 0;
+      targetProgress.set(
+        work.target_tower_id,
+        Math.max(current, totals.totalProgressPercent)
+      );
+    });
 
-    const maxProgress =
-      data?.reduce((max, d) => {
-        const assembly = Number(d.assembly_percent || 0);
-        const erection = Number(d.erection_percent || 0);
-        return Math.max(max, Math.max(assembly, erection));
-      }, 0) ?? 0;
+    for (const [targetTowerId, calculatedProgress] of targetProgress.entries()) {
+      const { data: towerRow, error: towerLoadError } = await supabase
+        .from("towers")
+        .select("id, progress")
+        .eq("id", targetTowerId)
+        .single();
 
-    const towerUpdateRes = await supabase
-      .from("towers")
-      .update({
-        progress: Math.round(maxProgress),
-        status: buildTowerStatus(maxProgress),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", towerId);
+      if (towerLoadError) {
+        throw new Error("Docket saved, but a worked tower could not be reloaded.");
+      }
 
-    if (towerUpdateRes.error) {
-      throw new Error("Docket saved, but tower status/progress failed to update.");
+      // Progress rows are cumulative overall percentages. Keep the existing
+      // tower value if an older docket is edited so historical edits cannot
+      // accidentally move a tower backwards.
+      const nextProgress = Math.max(
+        toNumber(towerRow?.progress),
+        calculatedProgress
+      );
+
+      const towerUpdateRes = await supabase
+        .from("towers")
+        .update({
+          progress: Math.round(nextProgress),
+          status: buildTowerStatus(nextProgress),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", targetTowerId);
+
+      if (towerUpdateRes.error) {
+        throw new Error(
+          "Docket saved, but a worked tower status/progress failed to update."
+        );
+      }
     }
   }
-
 
   function addLabourRow() {
     setLabourRows((prev) => {
@@ -2522,6 +2908,51 @@ export default function DailyDocketForm({
       }));
   }
 
+  function buildProductionAllocationPayload(docketIdValue: string) {
+    const rows: Array<Record<string, unknown>> = [];
+
+    if (
+      toNumber(primaryWorkHours) > 0 &&
+      primaryWorkWorkerNames.length > 0
+    ) {
+      rows.push({
+        docket_id: docketIdValue,
+        project_id: projectId,
+        source_tower_id: towerId,
+        target_tower_id: towerId,
+        allocation_type: "production",
+        activity: primaryWorkActivity,
+        hours: toNumber(primaryWorkHours),
+        worker_names: primaryWorkWorkerNames,
+        reason: primaryWorkNotes.trim() || null,
+      });
+    }
+
+    additionalTowerWork
+      .filter(
+        (allocation) =>
+          allocation.target_tower_id &&
+          allocation.target_tower_id !== towerId &&
+          toNumber(allocation.hours) > 0 &&
+          allocation.worker_names.length > 0
+      )
+      .forEach((allocation) => {
+        rows.push({
+          docket_id: docketIdValue,
+          project_id: projectId,
+          source_tower_id: towerId,
+          target_tower_id: allocation.target_tower_id,
+          allocation_type: "production",
+          activity: allocation.activity,
+          hours: toNumber(allocation.hours),
+          worker_names: allocation.worker_names,
+          reason: allocation.notes.trim() || null,
+        });
+      });
+
+    return rows;
+  }
+
   function buildTowerRevisionAllocationPayload(docketIdValue: string) {
     return towerRevisionAllocations
       .filter(
@@ -2536,6 +2967,8 @@ export default function DailyDocketForm({
         project_id: projectId,
         source_tower_id: towerId,
         target_tower_id: allocation.target_tower_id,
+        allocation_type: "revision",
+        activity: "rectification",
         hours: toNumber(allocation.hours),
         worker_names: allocation.worker_names,
         reason: allocation.reason.trim() || null,
@@ -2550,17 +2983,24 @@ export default function DailyDocketForm({
 
     if (deleteRes.error) {
       throw new Error(
-        "Daily docket saved, but tower revision allocations could not be refreshed. Run the tower_docket_hour_allocations SQL migration."
+        "Daily docket saved, but tower work allocations could not be refreshed. Run the multi-tower allocation SQL migration."
       );
     }
 
-    const payload = buildTowerRevisionAllocationPayload(docketIdValue);
+    const payload = [
+      ...buildProductionAllocationPayload(docketIdValue),
+      ...buildTowerRevisionAllocationPayload(docketIdValue),
+    ];
+
     if (payload.length === 0) return;
 
-    const insertRes = await supabase.from("tower_docket_hour_allocations").insert(payload);
+    const insertRes = await supabase
+      .from("tower_docket_hour_allocations")
+      .insert(payload);
+
     if (insertRes.error) {
       throw new Error(
-        "Daily docket saved, but tower revision allocations could not be saved. Run the tower_docket_hour_allocations SQL migration."
+        "Daily docket saved, but tower work allocations could not be saved. Run the multi-tower allocation SQL migration."
       );
     }
   }
@@ -2599,31 +3039,104 @@ export default function DailyDocketForm({
   }
 
   function buildProgressPayload(docketIdValue: string) {
-    if (progressModel === "section_v2") {
-      return sectionV2Rows.map((row) => ({
-        docket_id: docketIdValue,
-        progress_model: "section_v2",
-        section: row.section_code,
-        section_code: row.section_code,
-        section_label: row.section_label,
-        assembly_today: row.assembly_today.trim() === "" ? null : toNumber(row.assembly_today),
-        assembly_overall: row.assembly_today.trim() === "" ? null : toNumber(row.assembly_today),
-        erection_today: row.erection_today.trim() === "" ? null : toNumber(row.erection_today),
-        erection_overall: row.erection_today.trim() === "" ? null : toNumber(row.erection_today),
-        assembly_weight: row.assembly_weight,
-        erection_weight: row.erection_weight,
-        assembled_qty: row.assembly_today.trim() === "" ? 0 : toNumber(row.assembly_today),
-        erected_qty: row.erection_today.trim() === "" ? 0 : toNumber(row.erection_today),
-      }));
-    }
-    return progressRows.map((row) => ({
-      docket_id: docketIdValue,
-      progress_model: "legacy",
-      section: row.section_label,
-      section_label: row.section_label,
-      assembled_qty: !hasBodyExtension && isBodyExtensionRow(row) ? 0 : Number(row.assembled_qty || 0),
-      erected_qty: !hasBodyExtension && isBodyExtensionRow(row) ? 0 : Number(row.erected_qty || 0),
-    }));
+    const primaryRows =
+      progressModel === "section_v2"
+        ? sectionV2Rows
+            .filter((row) => hasBodyExtension || row.section_code !== "BE")
+            .map((row) => ({
+              docket_id: docketIdValue,
+              tower_id: towerId,
+              progress_model: "section_v2",
+              section: row.section_code,
+              section_code: row.section_code,
+              section_label: row.section_label,
+              assembly_today:
+                row.assembly_today.trim() === ""
+                  ? null
+                  : toNumber(row.assembly_today),
+              assembly_overall:
+                row.assembly_today.trim() === ""
+                  ? null
+                  : toNumber(row.assembly_today),
+              erection_today:
+                row.erection_today.trim() === ""
+                  ? null
+                  : toNumber(row.erection_today),
+              erection_overall:
+                row.erection_today.trim() === ""
+                  ? null
+                  : toNumber(row.erection_today),
+              assembly_weight: row.assembly_weight,
+              erection_weight: row.erection_weight,
+              assembled_qty:
+                row.assembly_today.trim() === ""
+                  ? 0
+                  : toNumber(row.assembly_today),
+              erected_qty:
+                row.erection_today.trim() === ""
+                  ? 0
+                  : toNumber(row.erection_today),
+            }))
+        : progressRows.map((row) => ({
+            docket_id: docketIdValue,
+            tower_id: towerId,
+            progress_model: "legacy",
+            section: row.section_label,
+            section_label: row.section_label,
+            assembled_qty:
+              !hasBodyExtension && isBodyExtensionRow(row)
+                ? 0
+                : Number(row.assembled_qty || 0),
+            erected_qty:
+              !hasBodyExtension && isBodyExtensionRow(row)
+                ? 0
+                : Number(row.erected_qty || 0),
+          }));
+
+    const additionalRows = additionalTowerWork.flatMap((work) => {
+      if (!work.target_tower_id) return [];
+
+      return work.progress_rows
+        .filter(
+          (row) => work.has_body_extension || row.section_code !== "BE"
+        )
+        .map((row) => ({
+          docket_id: docketIdValue,
+          tower_id: work.target_tower_id,
+          progress_model: "section_v2",
+          section: row.section_code,
+          section_code: row.section_code,
+          section_label: row.section_label,
+          assembly_today:
+            row.assembly_today.trim() === ""
+              ? null
+              : toNumber(row.assembly_today),
+          assembly_overall:
+            row.assembly_today.trim() === ""
+              ? null
+              : toNumber(row.assembly_today),
+          erection_today:
+            row.erection_today.trim() === ""
+              ? null
+              : toNumber(row.erection_today),
+          erection_overall:
+            row.erection_today.trim() === ""
+              ? null
+              : toNumber(row.erection_today),
+          assembly_weight: row.assembly_weight,
+          erection_weight: row.erection_weight,
+          assembled_qty:
+            row.assembly_today.trim() === ""
+              ? 0
+              : toNumber(row.assembly_today),
+          erected_qty:
+            row.erection_today.trim() === ""
+              ? 0
+              : toNumber(row.erection_today),
+        }));
+    });
+
+    return [...primaryRows, ...additionalRows];
   }
 
 
@@ -2676,28 +3189,55 @@ export default function DailyDocketForm({
     );
   }
 
+  function setMaterialSearchMode(
+    eventIndex: number,
+    itemIndex: number,
+    searchMode: MaterialSearchMode
+  ) {
+    if (isView || locked) return;
+
+    updateMaterialItem(eventIndex, itemIndex, {
+      search_mode: searchMode,
+      source_table: "",
+      source_record_id: "",
+      bundle_id: "",
+      bundle_no: "",
+      bundle_section: "",
+      source_issue_key: "",
+      material_kind: "registered",
+      manual_category: "",
+      bolt_size: "",
+      search_query: "",
+      search_loading: false,
+      search_results: [],
+      item_reference: "",
+      item_description: "",
+      unit: searchMode === "bundle" ? "bundle" : "ea",
+    });
+  }
+
   async function searchProjectMaterial(
     eventIndex: number,
     itemIndex: number,
     query: string
   ) {
     const trimmed = query.trim();
+    const currentEvent = materialEvents[eventIndex];
+    const currentItem = currentEvent?.items[itemIndex];
+    const searchMode = currentItem?.search_mode || "member";
 
     updateMaterialItem(eventIndex, itemIndex, {
       search_query: query,
       material_kind: "registered",
       search_loading: trimmed.length >= 2,
-      search_results: trimmed.length >= 2 ? [] : [],
+      search_results: [],
     });
 
-    if (trimmed.length < 2) return;
-
-    const event = materialEvents[eventIndex];
-    if (!event) return;
+    if (trimmed.length < 2 || !currentEvent) return;
 
     const searchTowerId =
-      event.event_type === "taken_from_another_tower"
-        ? event.source_tower_id
+      currentEvent.event_type === "taken_from_another_tower"
+        ? currentEvent.source_tower_id
         : towerId;
 
     if (!searchTowerId) {
@@ -2708,14 +3248,13 @@ export default function DailyDocketForm({
       return;
     }
 
-    // Keep the search scoped to the relevant tower and query live material registers.
-    // This avoids depending on a large project-wide preload and mirrors the existing
-    // tower-linked material data model.
     const safe = trimmed.replace(/[,%()]/g, " ").trim();
     const pattern = `%${safe}%`;
+    const results: MaterialCatalogItem[] = [];
+    let searchError = "";
 
-    const [membersRes, bundlesRes] = await Promise.all([
-      supabase
+    if (searchMode === "member") {
+      const membersRes = await supabase
         .from("tower_material_members")
         .select(
           "id, tower_id, bundle_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section, tower_segment"
@@ -2731,67 +3270,71 @@ export default function DailyDocketForm({
             `tower_segment.ilike.${pattern}`,
           ].join(",")
         )
-        .limit(20),
-      supabase
+        .limit(25);
+
+      if (membersRes.error) {
+        searchError = membersRes.error.message;
+      } else {
+        for (const row of membersRes.data || []) {
+          results.push({
+            source_table: "tower_material_members",
+            source_record_id: String(row.id),
+            bundle_id: toStringValue(row.bundle_id),
+            bundle_no: toStringValue(row.bundle_reference),
+            bundle_section: toStringValue(row.tower_segment),
+            tower_id: String(row.tower_id),
+            item_reference: String(
+              row.mark_no || row.pn_final || row.bundle_reference || "Member"
+            ),
+            item_description: [
+              row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
+              row.tower_segment ? `Bundle section ${row.tower_segment}` : "",
+              row.drawing_number ? `Drawing ${row.drawing_number}` : "",
+              row.section ? `Profile ${row.section}` : "",
+              row.qty_per_tower != null ? `Qty/Tower ${row.qty_per_tower}` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            unit: "ea",
+          });
+        }
+      }
+    } else {
+      const bundlesRes = await supabase
         .from("tower_required_bundles")
-        .select("id, tower_id, bundle_no, section, qty_required, total_weight, member_qty")
+        .select(
+          "id, tower_id, bundle_no, section, qty_required, total_weight, member_qty"
+        )
         .eq("tower_id", searchTowerId)
-        .or([`bundle_no.ilike.${pattern}`, `section.ilike.${pattern}`].join(","))
-        .limit(12),
-    ]);
+        .or(
+          [`bundle_no.ilike.${pattern}`, `section.ilike.${pattern}`].join(",")
+        )
+        .limit(25);
 
-    const results: MaterialCatalogItem[] = [];
-
-    if (!membersRes.error) {
-      for (const row of membersRes.data || []) {
-        results.push({
-          source_table: "tower_material_members",
-          source_record_id: String(row.id),
-          bundle_id: toStringValue(row.bundle_id),
-          bundle_no: toStringValue(row.bundle_reference),
-          bundle_section: toStringValue(row.tower_segment),
-          tower_id: String(row.tower_id),
-          item_reference: String(
-            row.mark_no || row.pn_final || row.bundle_reference || "Member"
-          ),
-          item_description: [
-            row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
-            row.tower_segment ? `Bundle section ${row.tower_segment}` : "",
-            row.drawing_number ? `Drawing ${row.drawing_number}` : "",
-            row.section ? `Profile ${row.section}` : "",
-            row.qty_per_tower != null ? `Qty/Tower ${row.qty_per_tower}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-          unit: "ea",
-        });
+      if (bundlesRes.error) {
+        searchError = bundlesRes.error.message;
+      } else {
+        for (const row of bundlesRes.data || []) {
+          results.push({
+            source_table: "tower_required_bundles",
+            source_record_id: String(row.id),
+            bundle_id: String(row.id),
+            bundle_no: toStringValue(row.bundle_no),
+            bundle_section: toStringValue(row.section),
+            tower_id: String(row.tower_id),
+            item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
+            item_description: [
+              row.section ? `Bundle section ${row.section}` : "",
+              row.qty_required != null ? `Required ${row.qty_required}` : "",
+              row.member_qty != null ? `${row.member_qty} member lines` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            unit: "bundle",
+          });
+        }
       }
     }
-
-
-    if (!bundlesRes.error) {
-      for (const row of bundlesRes.data || []) {
-        results.push({
-          source_table: "tower_required_bundles",
-          source_record_id: String(row.id),
-          bundle_id: String(row.id),
-          bundle_no: toStringValue(row.bundle_no),
-          bundle_section: toStringValue(row.section),
-          tower_id: String(row.tower_id),
-          item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
-          item_description: [
-            row.section ? `Bundle section ${row.section}` : "",
-            row.qty_required != null ? `Required ${row.qty_required}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-          unit: "bundle",
-        });
-      }
-    }
-
-    const searchError =
-      membersRes.error?.message || bundlesRes.error?.message;
 
     updateMaterialItem(eventIndex, itemIndex, {
       search_loading: false,
@@ -2931,7 +3474,7 @@ export default function DailyDocketForm({
   function recordMissingDelivery(issue: MissingMaterialIssue) {
     if (isView || locked || issue.remaining_quantity <= 0) return;
 
-    const receiptEvent = {
+    const receiptEvent: MaterialEventDraft = {
       ...blankMaterialEvent(),
       event_type: "found_received" as MaterialEventType,
       occurred_time: "",
@@ -2942,6 +3485,8 @@ export default function DailyDocketForm({
       items: [
         {
           ...blankMaterialItem(),
+          search_mode:
+            issue.source_table === "tower_required_bundles" ? "bundle" : "member",
           source_table: issue.source_table,
           source_record_id: issue.source_record_id,
           source_issue_key: issue.issue_key,
@@ -3635,6 +4180,62 @@ export default function DailyDocketForm({
     setBcSignedAt(value ? new Date().toISOString() : "");
   }
 
+  function validateTowerWorkAllocations() {
+    const usedTowerIds = new Set<string>();
+
+    for (const work of additionalTowerWork) {
+      const hasAnyEntry =
+        Boolean(work.target_tower_id) ||
+        toNumber(work.hours) > 0 ||
+        work.worker_names.length > 0 ||
+        work.progress_rows.some(
+          (row) =>
+            row.assembly_today.trim() !== "" ||
+            row.erection_today.trim() !== ""
+        );
+
+      if (!hasAnyEntry) continue;
+
+      if (!work.target_tower_id) {
+        return "Select the additional tower worked before saving the docket.";
+      }
+
+      if (work.target_tower_id === towerId) {
+        return "The primary tower is already shown above. Do not add it again as an additional tower.";
+      }
+
+      if (usedTowerIds.has(work.target_tower_id)) {
+        return "The same additional tower has been added more than once. Combine its work into one tower allocation.";
+      }
+      usedTowerIds.add(work.target_tower_id);
+
+      if (toNumber(work.hours) <= 0 || work.worker_names.length === 0) {
+        return "Each additional tower worked needs hours per worker and the workers who performed that work.";
+      }
+    }
+
+    const hasSplitTowerDay = additionalTowerWork.some(
+      (work) => Boolean(work.target_tower_id)
+    );
+
+    if (productionAllocationOverByMH > 0.01) {
+      return `Allocated production exceeds the available production time by ${productionAllocationOverByMH.toFixed(
+        2
+      )} MH. Reduce the tower/revision allocations before saving.`;
+    }
+
+    if (hasSplitTowerDay && Math.abs(unallocatedProductionMH) > 0.25) {
+      return `This is a multi-tower docket, so productive hours must be fully attributed. ${Math.max(
+        unallocatedProductionMH,
+        0
+      ).toFixed(
+        2
+      )} MH are still unallocated. Adjust the primary/additional tower hours so the allocation matches Production MH.`;
+    }
+
+    return "";
+  }
+
   async function handleSaveDraft() {
     if (!projectId || !towerId) {
       alert("Invalid route");
@@ -3663,6 +4264,13 @@ export default function DailyDocketForm({
 
     if (incidentOccurred && !incidentNotes.trim()) {
       alert("Please enter incident notes/action required.");
+      return;
+    }
+
+    const allocationError = validateTowerWorkAllocations();
+    if (allocationError) {
+      alert(allocationError);
+      setOpenSections((prev) => new Set([...prev, "progress"]));
       return;
     }
 
@@ -3711,6 +4319,13 @@ export default function DailyDocketForm({
 
     if (incidentOccurred && !incidentNotes.trim()) {
       alert("Please enter incident notes/action required.");
+      return;
+    }
+
+    const allocationError = validateTowerWorkAllocations();
+    if (allocationError) {
+      alert(allocationError);
+      setOpenSections((prev) => new Set([...prev, "progress"]));
       return;
     }
 
@@ -3898,6 +4513,12 @@ export default function DailyDocketForm({
 
       setDelayRows([]);
       setMaterialEvents([]);
+      setTowerRevisionAllocations([]);
+      setPrimaryWorkHours("");
+      setPrimaryWorkWorkerNames([]);
+      setPrimaryWorkActivity("mixed");
+      setPrimaryWorkNotes("");
+      setAdditionalTowerWork([]);
       setMobilisation({
         enabled: false,
         from_tower_id: "",
@@ -3914,7 +4535,7 @@ export default function DailyDocketForm({
       setMobilisationNotes("");
 
       if (progress && progress.length > 0 && lastDocket.progress_model === "section_v2") {
-        const rawRows = progress as any[];
+        const rawRows = (progress as any[]).filter((row) => !row.tower_id || String(row.tower_id) === towerId);
 
         // A section_v2 docket only stores the BE row when Body Extension was included.
         // Carry that exact choice forward instead of re-applying the tower CSV default.
@@ -4093,6 +4714,23 @@ export default function DailyDocketForm({
             </button>
           )}
 
+          <div className="inline-flex overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={expandAllSections}
+              className="px-3 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+            >
+              Expand All
+            </button>
+            <button
+              type="button"
+              onClick={collapseAllSections}
+              className="border-l border-slate-200 px-3 py-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+            >
+              Collapse All
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={() =>
@@ -4121,10 +4759,18 @@ export default function DailyDocketForm({
         </div>
       )}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
+      <CollapsibleSection
+        id="header"
+        title="Docket Header"
+        subtitle="Crew, date, weather and commercial rate type."
+        open={openSections.has("header")}
+        onToggle={() => toggleSection("header")}
+        badge={rateType === "schedule_of_rates" ? "Schedule of Rates" : "Tonnage Rate"}
+        tone="slate"
+      >
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Docket Header</h2>
+            <h2 className="sr-only">Docket Header</h2>
             <p className="text-sm text-slate-500 mt-1">
               Select whether this docket is claimed under tonnage rate or schedule of rates.
             </p>
@@ -4219,110 +4865,453 @@ export default function DailyDocketForm({
             Schedule of Rates selected. The docket will include a Plant & Equipment section for cranes, telehandlers, EWP, trucks, or other hired plant used that day.
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">Tower Progress</h2>
+      <CollapsibleSection
+        id="progress"
+        title="Tower Progress & Work Split"
+        subtitle="Track every tower worked by this crew on the same day and attribute production MH without creating a second docket."
+        open={openSections.has("progress")}
+        onToggle={() => toggleSection("progress")}
+        badge={`${1 + additionalTowerWork.length} tower${additionalTowerWork.length === 0 ? "" : "s"}`}
+      >
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <AllocationMetric
+            label="Production MH"
+            value={totalProductionHours.toFixed(2)}
+            tone="emerald"
+          />
+          <AllocationMetric
+            label="Tower Work MH"
+            value={productionAllocatedToTowersMH.toFixed(2)}
+            tone="blue"
+          />
+          <AllocationMetric
+            label="Revision MH"
+            value={revisionAllocatedMH.toFixed(2)}
+            tone="amber"
+          />
+          <AllocationMetric
+            label={unallocatedProductionMH < 0 ? "Over Allocated" : "Unallocated"}
+            value={`${Math.abs(unallocatedProductionMH).toFixed(2)} MH`}
+            tone={
+              productionAllocationOverByMH > 0.01
+                ? "red"
+                : Math.abs(unallocatedProductionMH) <= 0.25
+                ? "emerald"
+                : "slate"
+            }
+          />
         </div>
 
-        {progressModel === "section_v2" ? (
-          <>
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-sm font-semibold text-slate-900">
-                Body Extension
-              </div>
-
-              <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={hasBodyExtension}
-                  disabled={locked || isView}
-                  onChange={(e) => setHasBodyExtension(e.target.checked)}
-                  className="h-4 w-4"
-                />
-                {hasBodyExtension ? "Included" : "Excluded"}
-              </label>
-            </div>
-
-            <div className="border border-slate-200 rounded-xl overflow-x-auto bg-white">
-              <table className="w-full min-w-155">
-                <thead className="bg-slate-100 text-sm text-slate-600">
-                  <tr>
-                    <th className="p-3 text-left">Section</th>
-                    <th className="p-3 text-center border-l">Assembly Progress Today</th>
-                    <th className="p-3 text-center border-l">Erection Progress Today</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sectionV2Rows
-                    .filter((row) => hasBodyExtension || row.section_code !== "BE")
-                    .map((row) => {
-                      const actualIndex = sectionV2Rows.findIndex((r) => r.section_code === row.section_code);
-                      return (
-                        <tr key={row.section_code} className="border-t">
-                          <td className="p-3 font-bold">{row.section_label}</td>
-                          <td className="p-2 border-l">
-                            <input type="number" min="0" max="100" step="1" placeholder="—"
-                              className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                              value={row.assembly_today} disabled={locked || isView}
-                              onChange={(e) => updateSectionV2(actualIndex, "assembly_today", e.target.value)} />
-                          </td>
-                          <td className="p-2 border-l">
-                            <input type="number" min="0" max="100" step="1" placeholder="—"
-                              className="border rounded-lg p-2 w-full disabled:bg-slate-100"
-                              value={row.erection_today} disabled={locked || isView}
-                              onChange={(e) => updateSectionV2(actualIndex, "erection_today", e.target.value)} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-              <div className="grid sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t">
-                <KpiPill label="Overall Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
-                <KpiPill label="Overall Erection" value={`${totalErectionPercent}%`} tone="emerald" />
-                <KpiPill label="Total Progress" value={`${displayProgress}%`} tone="purple" />
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <label className="inline-flex items-center gap-3 text-sm font-medium rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <input type="checkbox" checked={hasBodyExtension} disabled={locked || isView}
-                onChange={(e) => handleBodyExtensionToggle(e.target.checked)} className="h-4 w-4" />
-              This tower has body extensions
-            </label>
-            <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-              <table className="w-full">
-                <thead className="bg-slate-100 text-left text-sm text-slate-600">
-                  <tr><th className="p-3">Section</th><th className="p-3">Assembly %</th><th className="p-3">Erection %</th></tr>
-                </thead>
-                <tbody>
-                  {visibleProgressRows.map((row) => {
-                    const actualIndex = progressRows.findIndex((r) => r.section_label === row.section_label);
-                    return <tr key={row.section_label} className="border-t">
-                      <td className="p-3 font-medium">{row.section_label}</td>
-                      <td className="p-3"><input className="border rounded-lg p-2 w-full disabled:bg-slate-100" type="number" min="0" max="100" value={row.assembled_qty} disabled={locked || isView} onChange={(e)=>updateProgressRow(actualIndex,"assembled_qty",e.target.value)} /></td>
-                      <td className="p-3"><input className="border rounded-lg p-2 w-full disabled:bg-slate-100" type="number" min="0" max="100" value={row.erected_qty} disabled={locked || isView} onChange={(e)=>updateProgressRow(actualIndex,"erected_qty",e.target.value)} /></td>
-                    </tr>
-                  })}
-                </tbody>
-              </table>
-              <div className="grid sm:grid-cols-3 gap-3 p-4 bg-slate-50 border-t">
-                <KpiPill label="Total Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
-                <KpiPill label="Total Erection" value={`${totalErectionPercent}%`} tone="emerald" />
-                <KpiPill label="Tower Progress Used" value={`${displayProgress}%`} tone="purple" />
-              </div>
-            </div>
-          </>
+        {additionalTowerWork.length > 0 && Math.abs(unallocatedProductionMH) > 0.25 && (
+          <div
+            className={`rounded-xl border px-4 py-3 text-sm font-semibold ${
+              productionAllocationOverByMH > 0
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-amber-200 bg-amber-50 text-amber-800"
+            }`}
+          >
+            {productionAllocationOverByMH > 0
+              ? `Tower/revision allocations exceed available Production MH by ${productionAllocationOverByMH.toFixed(2)} MH.`
+              : `${unallocatedProductionMH.toFixed(2)} Production MH still need to be attributed across the towers worked today.`}
+          </div>
         )}
-      </section>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/30 p-4 space-y-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="rounded-full bg-blue-700 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-white">
+                  Primary Tower
+                </span>
+                <h3 className="text-lg font-black text-slate-950">
+                  {towerLabel || "Current Tower"}
+                </h3>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Enter the productive time actually spent on this tower. Raw crew MH remains recorded once for the whole docket.
+              </p>
+            </div>
+            <div className="rounded-xl border border-blue-200 bg-white px-3 py-2 text-right">
+              <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                Allocated
+              </div>
+              <div className="text-lg font-black text-blue-800">
+                {primaryProductionAllocationMH.toFixed(2)} MH
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[180px_150px_1fr]">
+            <div>
+              <label className="block text-xs font-black uppercase tracking-wide text-slate-500 mb-1">
+                Work Type
+              </label>
+              <select
+                value={primaryWorkActivity}
+                disabled={locked || isView}
+                onChange={(e) => setPrimaryWorkActivity(e.target.value as ProductionActivity)}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+              >
+                <option value="mixed">Mixed Assembly / Erection</option>
+                <option value="assembly">Assembly</option>
+                <option value="erection">Erection</option>
+                <option value="rectification">Rectification</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <Input
+              label="Hours / Worker"
+              type="number"
+              value={primaryWorkHours}
+              onChange={setPrimaryWorkHours}
+              disabled={locked || isView}
+            />
+
+            <Input
+              label="Work Notes (optional)"
+              value={primaryWorkNotes}
+              onChange={setPrimaryWorkNotes}
+              disabled={locked || isView}
+            />
+          </div>
+
+          <WorkerAllocationPicker
+            workers={availableWorkerNames}
+            selected={primaryWorkWorkerNames}
+            disabled={locked || isView}
+            onToggle={togglePrimaryWorkWorker}
+            onSelectAll={() => setPrimaryWorkWorkerNames([...availableWorkerNames])}
+            onClear={() => setPrimaryWorkWorkerNames([])}
+          />
+
+          <div className="border-t border-blue-100 pt-4">
+            {progressModel === "section_v2" ? (
+              <>
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div>
+                    <div className="text-sm font-black text-slate-900">Body Extension</div>
+                    <div className="text-xs text-slate-500">Controls whether the BE progress row is included.</div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={hasBodyExtension}
+                      disabled={locked || isView}
+                      onChange={(e) => setHasBodyExtension(e.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    {hasBodyExtension ? "Included" : "Excluded"}
+                  </label>
+                </div>
+
+                <SectionProgressTable
+                  rows={sectionV2Rows}
+                  hasBodyExtension={hasBodyExtension}
+                  disabled={locked || isView}
+                  totals={{
+                    assemblyPercent: totalAssemblyPercent,
+                    erectionPercent: totalErectionPercent,
+                    totalProgressPercent: displayProgress,
+                  }}
+                  onChange={(sectionCode, key, value) => {
+                    const actualIndex = sectionV2Rows.findIndex(
+                      (row) => row.section_code === sectionCode
+                    );
+                    if (actualIndex >= 0) updateSectionV2(actualIndex, key, value);
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <label className="mb-3 inline-flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={hasBodyExtension}
+                    disabled={locked || isView}
+                    onChange={(e) => handleBodyExtensionToggle(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  This tower has body extensions
+                </label>
+
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <table className="w-full">
+                    <thead className="bg-slate-100 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="p-3">Section</th>
+                        <th className="p-3">Assembly %</th>
+                        <th className="p-3">Erection %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleProgressRows.map((row) => {
+                        const actualIndex = progressRows.findIndex(
+                          (r) => r.section_label === row.section_label
+                        );
+                        return (
+                          <tr key={row.section_label} className="border-t border-slate-100">
+                            <td className="p-3 font-bold">{row.section_label}</td>
+                            <td className="p-3">
+                              <input
+                                className="w-full rounded-lg border p-2 disabled:bg-slate-100"
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={row.assembled_qty}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateProgressRow(actualIndex, "assembled_qty", e.target.value)
+                                }
+                              />
+                            </td>
+                            <td className="p-3">
+                              <input
+                                className="w-full rounded-lg border p-2 disabled:bg-slate-100"
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={row.erected_qty}
+                                disabled={locked || isView}
+                                onChange={(e) =>
+                                  updateProgressRow(actualIndex, "erected_qty", e.target.value)
+                                }
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="grid gap-2 border-t bg-slate-50 p-3 sm:grid-cols-3">
+                    <KpiPill label="Total Assembly" value={`${totalAssemblyPercent}%`} tone="blue" />
+                    <KpiPill label="Total Erection" value={`${totalErectionPercent}%`} tone="emerald" />
+                    <KpiPill label="Tower Progress" value={`${displayProgress}%`} tone="purple" />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {additionalTowerWork.map((work, workIndex) => {
+          const workTower = projectTowers.find(
+            (tower) => tower.id === work.target_tower_id
+          );
+          const workTotals = additionalTowerProgressTotals(work);
+          const workMh = toNumber(work.hours) * work.worker_names.length;
+
+          return (
+            <div
+              key={work.ui_id}
+              className="rounded-2xl border border-emerald-200 bg-emerald-50/30 p-4 space-y-4"
+            >
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="rounded-full bg-emerald-700 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-white">
+                      Additional Tower
+                    </span>
+                    <h3 className="text-lg font-black text-slate-950">
+                      {workTower?.name || "Select tower"}
+                    </h3>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Productive time and progress for the second workfront remain on this same crew/day docket.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-right">
+                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                      Allocated
+                    </div>
+                    <div className="text-lg font-black text-emerald-800">
+                      {workMh.toFixed(2)} MH
+                    </div>
+                  </div>
+                  {!locked && !isView && (
+                    <button
+                      type="button"
+                      onClick={() => removeAdditionalTowerWork(workIndex)}
+                      className="rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-black text-red-700 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_150px_minmax(220px,1fr)]">
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wide text-slate-500 mb-1">
+                    Tower Worked
+                  </label>
+                  <select
+                    value={work.target_tower_id}
+                    disabled={locked || isView}
+                    onChange={(e) =>
+                      updateAdditionalTowerWork(workIndex, {
+                        target_tower_id: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                  >
+                    <option value="">Select tower...</option>
+                    {projectTowers
+                      .filter(
+                        (tower) =>
+                          tower.id !== towerId &&
+                          (!additionalTowerWork.some(
+                            (other, otherIndex) =>
+                              otherIndex !== workIndex &&
+                              other.target_tower_id === tower.id
+                          ) ||
+                            tower.id === work.target_tower_id)
+                      )
+                      .map((tower) => (
+                        <option key={tower.id} value={tower.id}>
+                          {tower.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wide text-slate-500 mb-1">
+                    Work Type
+                  </label>
+                  <select
+                    value={work.activity}
+                    disabled={locked || isView}
+                    onChange={(e) =>
+                      updateAdditionalTowerWork(workIndex, {
+                        activity: e.target.value as ProductionActivity,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                  >
+                    <option value="mixed">Mixed Assembly / Erection</option>
+                    <option value="assembly">Assembly</option>
+                    <option value="erection">Erection</option>
+                    <option value="rectification">Rectification</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <Input
+                  label="Hours / Worker"
+                  type="number"
+                  value={work.hours}
+                  onChange={(value) =>
+                    updateAdditionalTowerWork(workIndex, { hours: value })
+                  }
+                  disabled={locked || isView}
+                />
+
+                <Input
+                  label="Work Notes (optional)"
+                  value={work.notes}
+                  onChange={(value) =>
+                    updateAdditionalTowerWork(workIndex, { notes: value })
+                  }
+                  disabled={locked || isView}
+                />
+              </div>
+
+              <WorkerAllocationPicker
+                workers={availableWorkerNames}
+                selected={work.worker_names}
+                disabled={locked || isView}
+                onToggle={(workerName) =>
+                  toggleAdditionalTowerWorker(workIndex, workerName)
+                }
+                onSelectAll={() =>
+                  updateAdditionalTowerWork(workIndex, {
+                    worker_names: [...availableWorkerNames],
+                  })
+                }
+                onClear={() =>
+                  updateAdditionalTowerWork(workIndex, { worker_names: [] })
+                }
+              />
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <div>
+                  <div className="text-sm font-black text-slate-900">Body Extension</div>
+                  <div className="text-xs text-slate-500">
+                    Loaded from the selected tower where available.
+                  </div>
+                </div>
+                <label className="inline-flex items-center gap-2 text-sm font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={work.has_body_extension}
+                    disabled={locked || isView}
+                    onChange={(e) =>
+                      updateAdditionalTowerWork(workIndex, {
+                        has_body_extension: e.target.checked,
+                      })
+                    }
+                    className="h-4 w-4"
+                  />
+                  {work.has_body_extension ? "Included" : "Excluded"}
+                </label>
+              </div>
+
+              <SectionProgressTable
+                rows={work.progress_rows}
+                hasBodyExtension={work.has_body_extension}
+                disabled={locked || isView}
+                totals={{
+                  assemblyPercent: workTotals.assemblyPercent,
+                  erectionPercent: workTotals.erectionPercent,
+                  totalProgressPercent: workTotals.totalProgressPercent,
+                }}
+                onChange={(sectionCode, key, value) =>
+                  updateAdditionalTowerProgress(
+                    workIndex,
+                    sectionCode,
+                    key,
+                    value
+                  )
+                }
+              />
+            </div>
+          );
+        })}
+
+        {!locked && !isView && (
+          <button
+            type="button"
+            onClick={addAdditionalTowerWork}
+            className="w-full rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50/40 px-4 py-4 text-sm font-black text-emerald-800 hover:bg-emerald-50"
+          >
+            + Add Another Tower Worked Today
+          </button>
+        )}
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
+          <strong className="text-slate-900">How allocation works:</strong> Raw MH is stored once for this crew/day docket.
+          Lunch, travel, mobilisation and delays reduce it to Production MH. Production/revision work is then attributed to the
+          tower where it was actually performed, so a morning mobilisation and afternoon start on another tower does not skew either tower&apos;s MH/T.
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        id="labour"
+        title="Labour"
+        subtitle="Enter crew times once; TTTracker calculates raw and productive manhours."
+        open={openSections.has("labour")}
+        onToggle={() => toggleSection("labour")}
+        badge={`${labourWorkerCount} workers · ${totalProductionHours.toFixed(1)} Prod MH`}
+        tone="slate"
+      >
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Labour</h2>
+            <h2 className="sr-only">Labour</h2>
             <p className="text-sm text-slate-500 mt-1">
               Keep the daily times quick to enter. Lunch and travel can be adjusted per worker; mobilisation and delays are applied from their sections below.
             </p>
@@ -4511,11 +5500,19 @@ export default function DailyDocketForm({
             </div>
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="safety"
+        title="Safety / Incident"
+        subtitle="Confirm whether any incident occurred during the shift."
+        open={openSections.has("safety")}
+        onToggle={() => toggleSection("safety")}
+        badge={incidentOccurred ? "Incident recorded" : "No incident"}
+        tone="slate"
+      >
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Safety / Incident Check</h2>
+          <h2 className="sr-only">Safety / Incident Check</h2>
           <p className="text-sm text-slate-500 mt-1">
             Confirm whether an incident occurred during this docket shift.
           </p>
@@ -4587,13 +5584,21 @@ export default function DailyDocketForm({
             />
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
 
-      <section className="bg-white border border-purple-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="plant"
+        title="Plant & Vehicles"
+        subtitle="Crew-assigned assets and Schedule of Rates plant usage."
+        open={openSections.has("plant")}
+        onToggle={() => toggleSection("plant")}
+        badge={`${plantItemCount} item${plantItemCount === 1 ? "" : "s"}`}
+        tone="purple"
+      >
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Plant & Vehicles Used</h2>
+            <h2 className="sr-only">Plant & Vehicles Used</h2>
             <p className="text-sm text-slate-500 mt-1">
               Crew-assigned assets are auto-added. Keep this as a quick register of what was used; hours are only required for Schedule of Rates.
             </p>
@@ -4740,13 +5745,21 @@ export default function DailyDocketForm({
             )}
           </>
         )}
-      </section>
+      </CollapsibleSection>
 
       {rateType === "schedule_of_rates" && (
-        <section className="bg-white border border-purple-200 rounded-2xl p-4 shadow-sm">
+        <CollapsibleSection
+        id="lafha"
+        title="LAFHA"
+        subtitle="Automatically calculated from the workers recorded on this docket."
+        open={openSections.has("lafha")}
+        onToggle={() => toggleSection("lafha")}
+        badge={`${labourWorkerCount} workers`}
+        tone="purple"
+      >
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">LAFHA</h2>
+              <h2 className="sr-only">LAFHA</h2>
               <p className="text-sm text-slate-500 mt-1">
                 Automatically calculated from workers on this docket.
               </p>
@@ -4757,13 +5770,21 @@ export default function DailyDocketForm({
               <MiniSummary label="LAFHA Required" value={String(labourWorkerCount)} />
             </div>
           </div>
-        </section>
+              </CollapsibleSection>
       )}
 
-      <section className="bg-white border border-amber-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="revision"
+        title="Tower Revision / Reallocation"
+        subtitle="Attribute revision or rectification worker-hours to another tower."
+        open={openSections.has("revision")}
+        onToggle={() => toggleSection("revision")}
+        badge={`${towerRevisionAllocations.length} allocation${towerRevisionAllocations.length === 1 ? "" : "s"}`}
+        tone="amber"
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Tower Revision / Reallocation</h2>
+            <h2 className="sr-only">Tower Revision / Reallocation</h2>
             <p className="text-sm text-slate-500 mt-1">
               Allocate specific worker-hours from this docket to revision or rectification work on another tower. These hours remain traceable to this docket but can be attributed to the selected tower for internal production reporting.
             </p>
@@ -4904,12 +5925,20 @@ export default function DailyDocketForm({
             ))}
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-blue-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="mobilisation"
+        title="Mobilising / Demobilising"
+        subtitle="Record movement between workfronts and deduct only the workers involved."
+        open={openSections.has("mobilisation")}
+        onToggle={() => toggleSection("mobilisation")}
+        badge={mobilisation.enabled ? `${mobilisationDurationHours.toFixed(2)} hrs · ${mobilisationManhours.toFixed(2)} MH` : "None"}
+        tone="blue"
+      >
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Mobilising / Demobilising</h2>
+            <h2 className="sr-only">Mobilising / Demobilising</h2>
             <p className="text-sm text-slate-500 mt-1">
               Record the crew move and the time spent on it. This time is deducted from production hours in the same way as a delay, while remaining visible as mobilisation on the docket.
             </p>
@@ -5100,12 +6129,20 @@ export default function DailyDocketForm({
             No mobilisation or demobilisation recorded for this docket.
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
+      <CollapsibleSection
+        id="delays"
+        title="Delays & Materials"
+        subtitle="General delays, missing materials, receipts, movements and excess material."
+        open={openSections.has("delays")}
+        onToggle={() => toggleSection("delays")}
+        badge={`${delayRows.length} delays · ${outstandingMissingIssues.length} missing`}
+        tone="amber"
+      >
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Delays & Materials</h2>
+            <h2 className="sr-only">Delays & Materials</h2>
             <p className="text-sm text-slate-500 mt-1">
               Record what happened on site. TTTracker calculates the affected labour/plant time and keeps the formal commercial wording out of the site form.
             </p>
@@ -5495,8 +6532,54 @@ export default function DailyDocketForm({
                             <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                               <div className="relative">
                                 <label className="block text-sm font-semibold mb-1">
-                                  {item.source_issue_key ? "Missing item being delivered" : "Search member / bundle no / drawing"}
+                                  {item.source_issue_key
+                                    ? "Missing item being delivered"
+                                    : item.search_mode === "member"
+                                    ? "Search Member Register"
+                                    : "Search Bundle Register"}
                                 </label>
+
+                                {!item.source_issue_key &&
+                                  item.material_kind === "registered" && (
+                                    <div className="mb-2 inline-flex rounded-xl border border-slate-200 bg-slate-100 p-1">
+                                      <button
+                                        type="button"
+                                        disabled={locked || isView}
+                                        onClick={() =>
+                                          setMaterialSearchMode(
+                                            eventIndex,
+                                            itemIndex,
+                                            "member"
+                                          )
+                                        }
+                                        className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${
+                                          item.search_mode === "member"
+                                            ? "bg-white text-slate-950 shadow-sm"
+                                            : "text-slate-500 hover:text-slate-800"
+                                        } disabled:opacity-60`}
+                                      >
+                                        Members
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={locked || isView}
+                                        onClick={() =>
+                                          setMaterialSearchMode(
+                                            eventIndex,
+                                            itemIndex,
+                                            "bundle"
+                                          )
+                                        }
+                                        className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${
+                                          item.search_mode === "bundle"
+                                            ? "bg-white text-slate-950 shadow-sm"
+                                            : "text-slate-500 hover:text-slate-800"
+                                        } disabled:opacity-60`}
+                                      >
+                                        Bundles
+                                      </button>
+                                    </div>
+                                  )}
 
                                 {item.source_issue_key ? (
                                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
@@ -5514,7 +6597,11 @@ export default function DailyDocketForm({
                                     className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                                     value={item.search_query}
                                     disabled={locked || isView}
-                                    placeholder="Member no, bundle no, drawing no, section..."
+                                    placeholder={
+                                      item.search_mode === "member"
+                                        ? "Member no, drawing, profile, bundle ref..."
+                                        : "Bundle no or bundle section..."
+                                    }
                                     onChange={(e) =>
                                       void searchProjectMaterial(
                                         eventIndex,
@@ -5575,7 +6662,7 @@ export default function DailyDocketForm({
                                           <div className="p-3 text-sm text-slate-500">
                                             {item.item_description.startsWith("Search error:")
                                               ? item.item_description
-                                              : "No registered member or bundle matched this search."}
+                                              : item.search_mode === "member" ? "No registered members matched this search." : "No registered bundles matched this search."}
                                           </div>
                                         )}
                                     </div>
@@ -6118,13 +7205,61 @@ export default function DailyDocketForm({
                           <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                             <div className="relative">
                               <label className="block text-sm font-semibold mb-1">
-                                Search member / bundle no / drawing
+                                {item.search_mode === "member"
+                                  ? "Search Member Register"
+                                  : "Search Bundle Register"}
                               </label>
+
+                              {item.material_kind === "registered" && (
+                                <div className="mb-2 inline-flex rounded-xl border border-slate-200 bg-slate-100 p-1">
+                                  <button
+                                    type="button"
+                                    disabled={locked || isView}
+                                    onClick={() =>
+                                      setMaterialSearchMode(
+                                        eventIndex,
+                                        itemIndex,
+                                        "member"
+                                      )
+                                    }
+                                    className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${
+                                      item.search_mode === "member"
+                                        ? "bg-white text-slate-950 shadow-sm"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    } disabled:opacity-60`}
+                                  >
+                                    Members
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={locked || isView}
+                                    onClick={() =>
+                                      setMaterialSearchMode(
+                                        eventIndex,
+                                        itemIndex,
+                                        "bundle"
+                                      )
+                                    }
+                                    className={`rounded-lg px-3 py-1.5 text-xs font-black transition ${
+                                      item.search_mode === "bundle"
+                                        ? "bg-white text-slate-950 shadow-sm"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    } disabled:opacity-60`}
+                                  >
+                                    Bundles
+                                  </button>
+                                </div>
+                              )}
+
                               <input
                                 className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                                 value={item.search_query}
                                 disabled={locked || isView}
-                                placeholder="Member no, bundle no, drawing no, section..."
+                                placeholder={
+                                  item.search_mode === "member"
+                                    ? "Member no, drawing, profile, bundle ref..."
+                                    : "Bundle no or bundle section..."
+                                }
                                 onChange={(e) =>
                                   void searchProjectMaterial(
                                     eventIndex,
@@ -6183,7 +7318,7 @@ export default function DailyDocketForm({
                                         <div className="p-3 text-sm text-slate-500">
                                           {item.item_description.startsWith("Search error:")
                                             ? item.item_description
-                                            : "No registered member or bundle matched this search."}
+                                            : item.search_mode === "member" ? "No registered members matched this search." : "No registered bundles matched this search."}
                                         </div>
                                       )}
                                   </div>
@@ -6389,11 +7524,19 @@ export default function DailyDocketForm({
           )}
         </div>
 
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="summary"
+        title="Daily Site Summary"
+        subtitle="Short shift summary and RFI references for the formal docket record."
+        open={openSections.has("summary")}
+        onToggle={() => toggleSection("summary")}
+        badge={dailySiteSummary.trim() ? "Completed" : "Not entered"}
+        tone="slate"
+      >
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Daily Site Summary</h2>
+          <h2 className="sr-only">Daily Site Summary</h2>
           <p className="text-sm text-slate-500 mt-1">
             Summarise the work completed, site conditions, key coordination points and anything the next shift should know. Keep delay details in the delay section above.
           </p>
@@ -6431,12 +7574,20 @@ export default function DailyDocketForm({
         <p className="text-xs text-slate-500">
           Enter multiple RFIs separated by commas, semicolons or new lines. These references can be linked to the project RFI Register when that module is enabled.
         </p>
-      </section>
+            </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+      <CollapsibleSection
+        id="defaults"
+        title="Production Defaults"
+        subtitle="Default lunch and travel deductions applied to labour rows."
+        open={openSections.has("defaults")}
+        onToggle={() => toggleSection("defaults")}
+        badge={`${lunchBreakMinutes || "0"}m lunch`}
+        tone="slate"
+      >
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">
+            <h2 className="sr-only">
               Docket Production Defaults
             </h2>
             <p className="text-sm text-slate-500 mt-1">
@@ -6444,18 +7595,9 @@ export default function DailyDocketForm({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowProductionDefaults((prev) => !prev)}
-            className="border border-slate-300 bg-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-slate-50"
-          >
-            {showProductionDefaults ? "Hide Defaults" : "Show Defaults"}
-          </button>
         </div>
 
-        {showProductionDefaults && (
-          <>
-            <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-3 gap-4">
               <Input
                 label="Lunch Break Minutes"
                 type="number"
@@ -6488,14 +7630,20 @@ export default function DailyDocketForm({
                 ⚠ Apply Defaults to Workers
               </button>
             )}
-          </>
-        )}
-      </section>
+      </CollapsibleSection>
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
+      <CollapsibleSection
+        id="submission"
+        title="Submission"
+        subtitle="BC representative signature, approval status and supporting files."
+        open={openSections.has("submission")}
+        onToggle={() => toggleSection("submission")}
+        badge={approvalStatus || "draft"}
+        tone="emerald"
+      >
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Submission</h2>
+            <h2 className="sr-only">Submission</h2>
             <p className="mt-1 text-sm text-slate-500">
               Save the docket as an editable draft, or sign and submit it into the BC approval workflow.
             </p>
@@ -6628,7 +7776,7 @@ export default function DailyDocketForm({
             )}
           </div>
         )}
-      </section>
+            </CollapsibleSection>
 
       <div className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur">
         {!locked && !isView && (
@@ -6665,7 +7813,7 @@ export default function DailyDocketForm({
           )}
 
         {!locked && !isView && (
-          <div className="min-w-[220px] flex-1 text-xs leading-5 text-slate-500">
+          <div className="min-w-55 flex-1 text-xs leading-5 text-slate-500">
             <strong className="text-slate-700">Save Draft</strong> keeps the
             docket editable and does not send approval emails.{" "}
             <strong className="text-slate-700">Submit for Approval</strong>{" "}
@@ -6684,6 +7832,306 @@ export default function DailyDocketForm({
         >
           {locked || isView ? "Back" : "Cancel"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+
+function CollapsibleSection({
+  id,
+  title,
+  subtitle,
+  open,
+  onToggle,
+  badge,
+  tone = "slate",
+  children,
+}: {
+  id: string;
+  title: string;
+  subtitle: string;
+  open: boolean;
+  onToggle: () => void;
+  badge?: string;
+  tone?: "slate" | "purple" | "amber" | "blue" | "emerald";
+  children: React.ReactNode;
+}) {
+  const toneClasses = {
+    slate: "border-slate-200",
+    purple: "border-purple-200",
+    amber: "border-amber-200",
+    blue: "border-blue-200",
+    emerald: "border-emerald-200",
+  };
+
+  const badgeClasses = {
+    slate: "border-slate-200 bg-slate-50 text-slate-700",
+    purple: "border-purple-200 bg-purple-50 text-purple-800",
+    amber: "border-amber-200 bg-amber-50 text-amber-800",
+    blue: "border-blue-200 bg-blue-50 text-blue-800",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  };
+
+  return (
+    <div
+      id={`docket-section-${id}`}
+      className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${toneClasses[tone]}`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition hover:bg-slate-50 md:px-5"
+      >
+        <div className="min-w-0">
+          <div className="text-base font-black text-slate-950 md:text-lg">
+            {title}
+          </div>
+          <div className="mt-0.5 hidden text-xs text-slate-500 sm:block">
+            {subtitle}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {badge && (
+            <span
+              className={`max-w-60 truncate rounded-full border px-2.5 py-1 text-[10px] font-black md:text-xs ${badgeClasses[tone]}`}
+            >
+              {badge}
+            </span>
+          )}
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-lg font-black text-slate-500 transition ${
+              open ? "rotate-180" : ""
+            }`}
+            aria-hidden="true"
+          >
+            ⌄
+          </span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="space-y-4 border-t border-slate-100 p-4 md:p-5">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AllocationMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "slate" | "blue" | "amber" | "emerald" | "red";
+}) {
+  const classes = {
+    slate: "border-slate-200 bg-white text-slate-900",
+    blue: "border-blue-200 bg-blue-50 text-blue-900",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    red: "border-red-200 bg-red-50 text-red-900",
+  };
+
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 ${classes[tone]}`}>
+      <div className="text-[9px] font-black uppercase tracking-wide opacity-50">
+        {label}
+      </div>
+      <div className="mt-0.5 text-lg font-black">{value}</div>
+    </div>
+  );
+}
+
+function WorkerAllocationPicker({
+  workers,
+  selected,
+  disabled,
+  onToggle,
+  onSelectAll,
+  onClear,
+}: {
+  workers: string[];
+  selected: string[];
+  disabled: boolean;
+  onToggle: (workerName: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-black uppercase tracking-wide text-slate-500">
+            Workers on this tower
+          </div>
+          <div className="mt-0.5 text-xs text-slate-400">
+            Hours / Worker × selected workers = allocated production MH.
+          </div>
+        </div>
+
+        {!disabled && workers.length > 0 && (
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={onSelectAll}
+              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-200"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={onClear}
+              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-200"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+      </div>
+
+      {workers.length === 0 ? (
+        <div className="mt-2 text-xs text-slate-500">
+          Add workers in the Labour section first.
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {workers.map((workerName) => {
+            const isSelected = selected.some(
+              (name) =>
+                normalizeWorkerName(name) === normalizeWorkerName(workerName)
+            );
+
+            return (
+              <button
+                key={workerName}
+                type="button"
+                disabled={disabled}
+                onClick={() => onToggle(workerName)}
+                className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
+                  isSelected
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
+                } disabled:opacity-60`}
+              >
+                {isSelected ? "✓ " : ""}
+                {workerName}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionProgressTable({
+  rows,
+  hasBodyExtension,
+  disabled,
+  totals,
+  onChange,
+}: {
+  rows: SectionV2ProgressRow[];
+  hasBodyExtension: boolean;
+  disabled: boolean;
+  totals: {
+    assemblyPercent: number;
+    erectionPercent: number;
+    totalProgressPercent: number;
+  };
+  onChange: (
+    sectionCode: string,
+    key: "assembly_today" | "erection_today",
+    value: string
+  ) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-155">
+          <thead className="bg-slate-100 text-xs font-black uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="p-3 text-left">Section</th>
+              <th className="border-l p-3 text-center">Assembly %</th>
+              <th className="border-l p-3 text-center">Erection %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows
+              .filter(
+                (row) => hasBodyExtension || row.section_code !== "BE"
+              )
+              .map((row) => (
+                <tr key={row.section_code} className="border-t border-slate-100">
+                  <td className="p-3 font-bold text-slate-900">
+                    {row.section_label}
+                  </td>
+                  <td className="border-l p-2">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      placeholder="—"
+                      className="w-full rounded-lg border border-slate-300 p-2 text-center font-semibold disabled:bg-slate-100"
+                      value={row.assembly_today}
+                      disabled={disabled}
+                      onChange={(e) =>
+                        onChange(
+                          row.section_code,
+                          "assembly_today",
+                          e.target.value
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="border-l p-2">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      placeholder="—"
+                      className="w-full rounded-lg border border-slate-300 p-2 text-center font-semibold disabled:bg-slate-100"
+                      value={row.erection_today}
+                      disabled={disabled}
+                      onChange={(e) =>
+                        onChange(
+                          row.section_code,
+                          "erection_today",
+                          e.target.value
+                        )
+                      }
+                    />
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid gap-2 border-t bg-slate-50 p-3 sm:grid-cols-3">
+        <KpiPill
+          label="Overall Assembly"
+          value={`${totals.assemblyPercent}%`}
+          tone="blue"
+        />
+        <KpiPill
+          label="Overall Erection"
+          value={`${totals.erectionPercent}%`}
+          tone="emerald"
+        />
+        <KpiPill
+          label="Total Progress"
+          value={`${totals.totalProgressPercent}%`}
+          tone="purple"
+        />
       </div>
     </div>
   );
