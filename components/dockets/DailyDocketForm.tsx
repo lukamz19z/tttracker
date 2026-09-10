@@ -30,6 +30,7 @@ type LabourRow = {
   time_in: string;
   time_out: string;
   total_hours: string;
+  prestart_minutes: string;
   lunch_minutes: string;
   travel_in_minutes: string;
   travel_out_minutes: string;
@@ -296,6 +297,7 @@ type DocketRecord = {
   client_rep_name: string | null;
   signed_date: string | null;
   docket_file_url: string | null;
+  prestart_minutes?: number | null;
   lunch_break_minutes?: number | null;
   travel_in_minutes?: number | null;
   travel_out_minutes?: number | null;
@@ -525,6 +527,22 @@ function parseRfiReferences(value: string) {
   );
 }
 
+function calculateProductionHoursWithPrestart(
+  row: LabourRow,
+  delayHoursOverride?: number
+) {
+  const base = toNumber(
+    calculateProductionHours(
+      row,
+      delayHoursOverride
+    )
+  );
+
+  const prestartHours = Math.max(toNumber(row.prestart_minutes), 0) / 60;
+
+  return Math.max(base - prestartHours, 0).toFixed(2);
+}
+
 function makeLabourRow(
   row?: Partial<LabourRow> | any,
   options?: { mobilisationIsMinutes?: boolean }
@@ -534,6 +552,7 @@ function makeLabourRow(
     time_in: toStringValue(row?.time_in),
     time_out: toStringValue(row?.time_out),
     total_hours: toStringValue(row?.total_hours),
+    prestart_minutes: toStringValue(row?.prestart_minutes),
     lunch_minutes: toStringValue(row?.lunch_minutes),
     travel_in_minutes: toStringValue(row?.travel_in_minutes),
     travel_out_minutes: toStringValue(row?.travel_out_minutes),
@@ -545,11 +564,12 @@ function makeLabourRow(
     production_hours: toStringValue(row?.production_hours),
   };
 
-  mapped.production_hours = calculateProductionHours(mapped);
+  mapped.production_hours = calculateProductionHoursWithPrestart(mapped);
   return mapped;
 }
 
 function blankLabourRow(defaults?: {
+  prestartMinutes?: string;
   lunchBreakMinutes?: string;
   travelInMinutes?: string;
   travelOutMinutes?: string;
@@ -561,6 +581,7 @@ function blankLabourRow(defaults?: {
       time_in: "",
       time_out: "",
       total_hours: "",
+      prestart_minutes: defaults?.prestartMinutes || "",
       lunch_minutes: defaults?.lunchBreakMinutes || "",
       travel_in_minutes: defaults?.travelInMinutes || "",
       travel_out_minutes: defaults?.travelOutMinutes || "",
@@ -1028,6 +1049,7 @@ export default function DailyDocketForm({
   const [bulkPlantTimeOut, setBulkPlantTimeOut] = useState("");
   const [showPlantUsedSection, setShowPlantUsedSection] = useState(rateType === "schedule_of_rates");
 
+  const [prestartMinutes, setPrestartMinutes] = useState(toStringValue(initialDocket?.prestart_minutes));
   const [lunchBreakMinutes, setLunchBreakMinutes] = useState(toStringValue(initialDocket?.lunch_break_minutes));
   const [travelInMinutes, setTravelInMinutes] = useState(toStringValue(initialDocket?.travel_in_minutes));
   const [travelOutMinutes, setTravelOutMinutes] = useState(toStringValue(initialDocket?.travel_out_minutes));
@@ -1491,6 +1513,7 @@ export default function DailyDocketForm({
           if (values.notes) setMobilisationNotes(values.notes);
         }
 
+        setPrestartMinutes(toStringValue(initialDocket.prestart_minutes));
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
         setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
@@ -1698,6 +1721,7 @@ export default function DailyDocketForm({
       );
       setRfiReferencesText(rfiReferencesToText(data.rfi_references));
 
+      setPrestartMinutes(toStringValue(data.prestart_minutes));
       setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
       setTravelInMinutes(toStringValue(data.travel_in_minutes));
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
@@ -2093,15 +2117,29 @@ export default function DailyDocketForm({
 
   const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
 
-  const labourRowsWithProduction = useMemo(
-    () =>
-      calculateLabourRows(labourRows, delayRows, {
-        enabled: mobilisation.enabled,
-        durationMinutes: hoursToMinutes(mobilisationHours),
-        workerNames: mobilisation.worker_names,
-      }) as LabourRow[],
-    [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
-  );
+  const labourRowsWithProduction = useMemo(() => {
+    const baseRows = calculateLabourRows(labourRows, delayRows, {
+      enabled: mobilisation.enabled,
+      durationMinutes: hoursToMinutes(mobilisationHours),
+      workerNames: mobilisation.worker_names,
+    }) as LabourRow[];
+
+    return baseRows.map((row) => {
+      const prestartHours = Math.max(toNumber(row.prestart_minutes), 0) / 60;
+      const baseProductionHours = Math.max(toNumber(row.production_hours), 0);
+
+      return {
+        ...row,
+        production_hours: Math.max(baseProductionHours - prestartHours, 0).toFixed(2),
+      };
+    });
+  }, [
+    labourRows,
+    delayRows,
+    mobilisation.enabled,
+    mobilisation.worker_names,
+    mobilisationHours,
+  ]);
 
   const labourTotals = useMemo(
     () =>
@@ -2115,7 +2153,24 @@ export default function DailyDocketForm({
 
   const labourWorkerCount = labourTotals.workerCount;
   const totalLabourHours = labourTotals.rawManhours;
-  const totalProductionHours = labourTotals.productionManhours;
+  const totalProductionHours = useMemo(
+    () =>
+      labourRowsWithProduction
+        .filter((row) => row.worker_name.trim())
+        .reduce((sum, row) => sum + Math.max(toNumber(row.production_hours), 0), 0),
+    [labourRowsWithProduction]
+  );
+
+  const totalPrestartHours = useMemo(
+    () =>
+      labourRows
+        .filter((row) => row.worker_name.trim())
+        .reduce(
+          (sum, row) => sum + Math.max(toNumber(row.prestart_minutes), 0) / 60,
+          0
+        ),
+    [labourRows]
+  );
 
   const revisionAllocatedMH = towerRevisionAllocations.reduce(
     (sum, allocation) =>
@@ -2394,6 +2449,7 @@ export default function DailyDocketForm({
     if (members.length > 0) {
       const mappedWorkers = members.map(() =>
         blankLabourRow({
+          prestartMinutes,
           lunchBreakMinutes,
           travelInMinutes,
           travelOutMinutes,
@@ -2402,7 +2458,7 @@ export default function DailyDocketForm({
 
       mappedWorkers.forEach((row, index) => {
         row.worker_name = members[index]?.full_name || "";
-        row.production_hours = calculateProductionHours(row);
+        row.production_hours = calculateProductionHoursWithPrestart(row);
       });
 
       setLabourRows(mappedWorkers);
@@ -2563,6 +2619,7 @@ export default function DailyDocketForm({
       if (!previous) {
         return [
           blankLabourRow({
+            prestartMinutes,
             lunchBreakMinutes,
             travelInMinutes,
             travelOutMinutes,
@@ -2581,6 +2638,7 @@ export default function DailyDocketForm({
           time_in,
           time_out,
           total_hours,
+          prestart_minutes: previous.prestart_minutes || prestartMinutes,
           lunch_minutes: previous.lunch_minutes || lunchBreakMinutes,
           travel_in_minutes: previous.travel_in_minutes || travelInMinutes,
           travel_out_minutes: previous.travel_out_minutes || travelOutMinutes,
@@ -2592,7 +2650,7 @@ export default function DailyDocketForm({
         { mobilisationIsMinutes: true }
       );
 
-      next.production_hours = calculateProductionHours(next);
+      next.production_hours = calculateProductionHoursWithPrestart(next);
       return [...prev, next];
     });
   }
@@ -2637,7 +2695,7 @@ export default function DailyDocketForm({
         current.total_hours = autoHours || current.total_hours;
       }
 
-      current.production_hours = calculateProductionHours(current);
+      current.production_hours = calculateProductionHoursWithPrestart(current);
       return updated;
     });
   }
@@ -2678,6 +2736,7 @@ export default function DailyDocketForm({
 
         const next = {
           ...row,
+          prestart_minutes: prestartMinutes,
           lunch_minutes: lunchBreakMinutes,
           travel_in_minutes: travelInMinutes,
           travel_out_minutes: travelOutMinutes,
@@ -2685,7 +2744,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHours(
+          production_hours: calculateProductionHoursWithPrestart(
             next,
             delayHoursForWorker(next.worker_name, delayRows)
           ),
@@ -2859,6 +2918,7 @@ export default function DailyDocketForm({
               })
           )
           .join("; ") || missingItemsBolts,
+      prestart_minutes: Number(prestartMinutes || 0),
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
@@ -2889,6 +2949,7 @@ export default function DailyDocketForm({
         time_in: row.time_in || null,
         time_out: row.time_out || null,
         total_hours: Number(row.total_hours || 0),
+        prestart_minutes: Number(row.prestart_minutes || 0),
         lunch_minutes: Number(row.lunch_minutes || 0),
         travel_in_minutes: Number(row.travel_in_minutes || 0),
         travel_out_minutes: Number(row.travel_out_minutes || 0),
@@ -4454,6 +4515,7 @@ export default function DailyDocketForm({
       setDailySiteSummary("");
       setRfiReferencesText("");
 
+      setPrestartMinutes(toStringValue(lastDocket.prestart_minutes));
       setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
       setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
       setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
@@ -4490,6 +4552,7 @@ export default function DailyDocketForm({
       } else {
         setLabourRows([
           blankLabourRow({
+            prestartMinutes: toStringValue(lastDocket.prestart_minutes),
             lunchBreakMinutes: toStringValue(lastDocket.lunch_break_minutes),
             travelInMinutes: toStringValue(lastDocket.travel_in_minutes),
             travelOutMinutes: toStringValue(lastDocket.travel_out_minutes),
@@ -4621,7 +4684,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHours(
+          production_hours: calculateProductionHoursWithPrestart(
             next,
             delayHoursForWorker(next.worker_name, delayRows)
           ),
@@ -5299,14 +5362,15 @@ export default function DailyDocketForm({
           <div>
             <h2 className="sr-only">Labour</h2>
             <p className="text-sm text-slate-500 mt-1">
-              Keep the daily times quick to enter. Lunch and travel can be adjusted per worker; mobilisation and delays are applied from their sections below.
+              Keep the daily times quick to enter. Prestart, lunch and travel can be adjusted per worker; mobilisation and delays are applied from their sections below.
             </p>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-right">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 text-right">
             <MiniSummary label="Workers" value={String(labourWorkerCount)} />
             <MiniSummary label="Raw MH" value={totalLabourHours.toFixed(2)} />
             <MiniSummary label="Production MH" value={totalProductionHours.toFixed(2)} />
+            <MiniSummary label="Prestart MH" value={totalPrestartHours.toFixed(2)} />
             <MiniSummary label="Lunch MH" value={totalLunchHours.toFixed(2)} />
             <MiniSummary label="Travel MH" value={totalTravelHours.toFixed(2)} />
             <MiniSummary label="Delay / Mob MH" value={(totalDelayManhours + totalMobilisationHours).toFixed(2)} />
@@ -5330,6 +5394,7 @@ export default function DailyDocketForm({
               const travelMinutes = toNumber(row.travel_in_minutes) + toNumber(row.travel_out_minutes);
               const mobHours = minutesToHours(row.mobilisation_hours);
               const deductionParts = [
+                toNumber(row.prestart_minutes) > 0 ? `Prestart ${toNumber(row.prestart_minutes)}m` : "",
                 toNumber(row.lunch_minutes) > 0 ? `Lunch ${toNumber(row.lunch_minutes)}m` : "",
                 travelMinutes > 0 ? `Travel ${travelMinutes}m` : "",
                 mobHours > 0 ? `Mob ${mobHours.toFixed(2)}h` : "",
@@ -5416,9 +5481,17 @@ export default function DailyDocketForm({
 
                   <details className="mt-2 group">
                     <summary className="cursor-pointer select-none text-xs font-semibold text-slate-500 hover:text-slate-800 w-fit">
-                      Adjust lunch / travel
+                      Adjust production deductions
                     </summary>
-                    <div className="mt-3 grid grid-cols-2 md:grid-cols-[120px_120px_120px_140px_1fr] gap-2 items-end rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 items-end rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <LabourInput
+                        label="Prestart Min"
+                        id={`labour-prestart-${index}`}
+                        type="number"
+                        value={row.prestart_minutes}
+                        disabled={locked || isView}
+                        onChange={(v) => updateLabourRow(index, "prestart_minutes", v)}
+                      />
                       <LabourInput
                         label="Lunch Min"
                         id={`labour-lunch-${index}`}
@@ -7591,7 +7664,7 @@ export default function DailyDocketForm({
         subtitle="Default lunch and travel deductions applied to labour rows."
         open={openSections.has("defaults")}
         onToggle={() => toggleSection("defaults")}
-        badge={`${lunchBreakMinutes || "0"}m lunch`}
+        badge={`${prestartMinutes || "0"}m prestart · ${lunchBreakMinutes || "0"}m lunch`}
         tone="slate"
       >
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -7600,13 +7673,20 @@ export default function DailyDocketForm({
               Docket Production Defaults
             </h2>
             <p className="text-sm text-slate-500 mt-1">
-              Lunch and travel defaults used to calculate production hours. Mobilisation is entered in the Mobilising / Demobilising section above.
+              Prestart, lunch and travel are production deductions. Set the normal crew defaults here, then apply them to all workers. Mobilisation remains in the Mobilising / Demobilising section.
             </p>
           </div>
 
         </div>
 
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <Input
+                label="Prestart Minutes"
+                type="number"
+                value={prestartMinutes}
+                onChange={setPrestartMinutes}
+                disabled={locked || isView}
+              />
               <Input
                 label="Lunch Break Minutes"
                 type="number"
