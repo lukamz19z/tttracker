@@ -1,23 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Papa, { ParseResult } from "papaparse";
 import { useParams } from "next/navigation";
 import {
+  AlertCircle,
   Boxes,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   CirclePlus,
+  ClipboardList,
+  Database,
+  Download,
   ExternalLink,
   Minus,
   PackageCheck,
   PackageOpen,
+  Pencil,
   Plus,
   Printer,
+  RefreshCw,
   RotateCcw,
+  Save,
   Search,
-  Settings2,
+  Trash2,
   TriangleAlert,
+  Truck,
+  Upload,
   Wrench,
   X,
 } from "lucide-react";
@@ -125,6 +136,11 @@ type MaterialEventItem = {
   quantity?: number | null;
   unit?: string | null;
   notes?: string | null;
+  issue_key?: string | null;
+  source_issue_key?: string | null;
+  bundle_id?: string | null;
+  bundle_no?: string | null;
+  bundle_section?: string | null;
 };
 
 type MaterialEvent = {
@@ -159,6 +175,34 @@ type DocketSummary = {
   leading_hand?: string | null;
 };
 
+
+type MissingIssueStatus = "open" | "partial" | "resolved";
+
+type MissingIssueReceipt = {
+  event: MaterialEvent;
+  item: MaterialEventItem;
+};
+
+type MissingIssueRow = {
+  issueKey: string;
+  event: MaterialEvent;
+  item: MaterialEventItem;
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: MissingIssueStatus;
+  reportedAt: string | null;
+  lastDeliveryAt: string | null;
+  receipts: MissingIssueReceipt[];
+};
+
+type ImportMode = "replace" | "merge";
+type DataManagerTab = "bundles" | "members" | "bolts";
+type IssueFilter = "all" | "open" | "partial" | "resolved" | "excess" | "damaged" | "movements";
+
+type CsvRow = Record<string, string | undefined>;
+type ImportSourceRow = Record<string, unknown>;
+
 type MaterialsData = {
   tower: TowerRecord | null;
   latestDate: string | null;
@@ -169,12 +213,14 @@ type MaterialsData = {
   memberChecks: MemberCheck[];
   materialEvents: MaterialEvent[];
   dockets: DocketSummary[];
+  deliveries: Delivery[];
   docketMap: Map<string, DocketSummary>;
   missingEvents: MaterialEvent[];
   excessEvents: MaterialEvent[];
   loading: boolean;
   saving: boolean;
   duplicateBundleRefs: Set<string>;
+  resolveBundleForMember: (member: Member) => Bundle | undefined;
   deliveredQty: (bundle: Bundle) => number;
   receivedQty: (bundle: Bundle) => number;
   getMemberCheck: (member: Member) => MemberCheck | undefined;
@@ -205,6 +251,390 @@ function normaliseBundleKey(value: unknown): string {
 
 function normaliseSearch(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function normaliseHeader(value: string): string {
+  return value
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[()]/g, "")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function getRowValue(row: ImportSourceRow, aliases: string[]): unknown {
+  const wanted = new Set(aliases.map(normaliseHeader));
+  for (const [key, value] of Object.entries(row)) {
+    if (wanted.has(normaliseHeader(key))) return value;
+  }
+  return undefined;
+}
+
+function normaliseTowerText(value: unknown): string {
+  return safeString(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[–—]/g, "-")
+    .replace(/\s*([/.\-])\s*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normaliseNumericTowerSuffix(value: string): string {
+  const match = value.trim().toUpperCase().match(/^0*(\d+)([A-Z]?)$/);
+  if (!match) return "";
+  return `${Number(match[1])}${match[2]}`;
+}
+
+function towerIdentifierTokens(value: unknown): string[] {
+  const raw = normaliseTowerText(value);
+  if (!raw) return [];
+
+  const tokens = new Set<string>();
+  const fullMatches = raw.match(/[A-Z0-9]+(?:\/|\.)[A-Z0-9]+-0*\d+[A-Z]?/g) || [];
+
+  fullMatches.forEach((match) => {
+    const slashForm = match.replace(".", "/");
+    tokens.add(`FULL:${slashForm}`);
+    const suffix = slashForm.match(/-([0-9]+[A-Z]?)$/)?.[1] || "";
+    const normalisedSuffix = normaliseNumericTowerSuffix(suffix);
+    if (normalisedSuffix) tokens.add(`NO:${normalisedSuffix}`);
+  });
+
+  const labelledMatches = raw.matchAll(
+    /(?:TOWER|TWR|STRUCTURE|STR)\.?\s*(?:NO\.?|NUMBER|NUM)?\s*[:#-]?\s*(0*\d+(?:\.0+)?[A-Z]?)/g,
+  );
+
+  for (const match of labelledMatches) {
+    const numericText = match[1].replace(/\.0+(?=[A-Z]?$)/, "");
+    const suffix = normaliseNumericTowerSuffix(numericText);
+    if (suffix) tokens.add(`NO:${suffix}`);
+  }
+
+  const simple = raw.match(/^0*(\d+)(?:\.0+)?([A-Z]?)$/);
+  if (simple) tokens.add(`NO:${Number(simple[1])}${simple[2]}`);
+
+  return Array.from(tokens);
+}
+
+function trustedTowerIdentifierTokens(value: unknown): string[] {
+  const tokens = new Set(towerIdentifierTokens(value));
+  const raw = normaliseTowerText(value);
+  if (!raw) return Array.from(tokens);
+
+  const patterns = [
+    /^0*(\d{1,5})([A-Z]?)\b/,
+    /\b0*(\d{1,5})([A-Z]?)$/,
+    /^(?:T|TWR|TOWER|STRUCTURE|STR)[-\s:#.]*0*(\d{1,5})([A-Z]?)\b/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match) continue;
+    const suffix = normaliseNumericTowerSuffix(`${match[1]}${match[2] || ""}`);
+    if (suffix) tokens.add(`NO:${suffix}`);
+  }
+
+  return Array.from(tokens);
+}
+
+function collectFullTowerReferences(value: unknown, output: Set<string>) {
+  if (value == null) return;
+
+  if (typeof value === "string" || typeof value === "number") {
+    const tokens = towerIdentifierTokens(value);
+    if (tokens.some((token) => token.startsWith("FULL:"))) {
+      tokens.forEach((token) => output.add(token));
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectFullTowerReferences(item, output));
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.values(value as Record<string, unknown>).forEach((nested) =>
+      collectFullTowerReferences(nested, output),
+    );
+  }
+}
+
+function looksLikeTowerIdentifierField(fieldName: string): boolean {
+  const key = normaliseHeader(fieldName);
+  return (
+    key.includes("tower") ||
+    key.includes("twr") ||
+    key.includes("structure") ||
+    key === "label" ||
+    key === "name"
+  );
+}
+
+function collectTowerCandidatesFromExtraData(value: unknown, path: string, output: unknown[]) {
+  if (value == null) return;
+
+  if (typeof value === "string" || typeof value === "number") {
+    if (looksLikeTowerIdentifierField(path)) output.push(value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectTowerCandidatesFromExtraData(item, `${path} ${index}`, output),
+    );
+    return;
+  }
+
+  if (typeof value === "object") {
+    Object.entries(value as Record<string, unknown>).forEach(([key, nested]) => {
+      collectTowerCandidatesFromExtraData(nested, `${path} ${key}`, output);
+    });
+  }
+}
+
+function getTowerIdentifierKeys(tower: TowerRecord | null): Set<string> {
+  const keys = new Set<string>();
+  if (!tower) return keys;
+
+  collectFullTowerReferences(tower, keys);
+
+  const candidates: unknown[] = [
+    tower.tower_number,
+    tower.structure_number,
+    tower.tower_no,
+    tower.name,
+  ];
+
+  const extra = tower.extra_data || {};
+  Object.entries(extra).forEach(([key, value]) => {
+    if (looksLikeTowerIdentifierField(key)) {
+      if (typeof value === "string" || typeof value === "number") {
+        candidates.push(value);
+      } else {
+        collectTowerCandidatesFromExtraData(value, key, candidates);
+      }
+      return;
+    }
+
+    if (value && typeof value === "object") {
+      collectTowerCandidatesFromExtraData(value, key, candidates);
+    }
+  });
+
+  candidates.forEach((candidate) => {
+    trustedTowerIdentifierTokens(candidate).forEach((token) => keys.add(token));
+  });
+
+  return keys;
+}
+
+function parseApplicableTowerKeys(value: unknown): Set<string> {
+  const keys = new Set<string>();
+  const raw = safeString(value).trim();
+  if (!raw) return keys;
+
+  raw
+    .split(/[,;|\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => {
+      towerIdentifierTokens(item).forEach((token) => keys.add(token));
+    });
+
+  return keys;
+}
+
+function currentTowerMatchesApplicability(
+  towerKeys: Set<string>,
+  applicableTowerKeys: Set<string>,
+): boolean {
+  if (applicableTowerKeys.size === 0) return true;
+  if (towerKeys.size === 0) return false;
+
+  const towerFull = new Set(Array.from(towerKeys).filter((key) => key.startsWith("FULL:")));
+  const applicableFull = new Set(
+    Array.from(applicableTowerKeys).filter((key) => key.startsWith("FULL:")),
+  );
+
+  if (towerFull.size > 0 && applicableFull.size > 0) {
+    for (const key of towerFull) {
+      if (applicableFull.has(key)) return true;
+    }
+    return false;
+  }
+
+  for (const key of towerKeys) {
+    if (applicableTowerKeys.has(key)) return true;
+  }
+
+  return false;
+}
+
+function getTowerMatchDisplay(towerKeys: Set<string>): string {
+  const full = Array.from(towerKeys).find((key) => key.startsWith("FULL:"));
+  if (full) return full.replace(/^FULL:/, "");
+
+  const number = Array.from(towerKeys).find((key) => key.startsWith("NO:"));
+  if (number) return number.replace(/^NO:/, "");
+
+  return "not detected";
+}
+
+
+function normaliseBoltDiameter(value: string): string {
+  const trimmed = value.trim().toUpperCase();
+  if (!trimmed) return "";
+  return trimmed.startsWith("M") ? trimmed : `M${trimmed}`;
+}
+
+function csvEscape(value: string | number | null | undefined): string {
+  const str = value == null ? "" : String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function downloadTextFile(filename: string, content: string, mimeType = "text/csv;charset=utf-8;") {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function parseImportFile(file: File): Promise<ImportSourceRow[]> {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "csv") {
+    return new Promise((resolve, reject) => {
+      Papa.parse<ImportSourceRow>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (res: ParseResult<ImportSourceRow>) => resolve(res.data),
+        error: reject,
+      });
+    });
+  }
+
+  if (extension === "xlsx" || extension === "xls") {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array" });
+
+    let bestRows: ImportSourceRow[] = [];
+    let bestScore = -1;
+
+    workbook.SheetNames.forEach((sheetName) => {
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json<ImportSourceRow>(sheet, {
+        defval: "",
+        raw: false,
+      });
+
+      if (!rows.length) return;
+
+      const headers = Object.keys(rows[0]).map(normaliseHeader);
+      const score =
+        (headers.some((h) => ["member mark", "member number", "member no", "mark no"].includes(h)) ? 5 : 0) +
+        (headers.some((h) => ["bundle no", "bundle number", "bundle reference", "bundle ref"].includes(h)) ? 5 : 0) +
+        (headers.some((h) => h.includes("tower")) ? 2 : 0) +
+        (headers.some((h) => h.includes("section") || h.includes("profile")) ? 1 : 0) +
+        (headers.some((h) => h.includes("drawing")) ? 1 : 0) +
+        (headers.some((h) => h.includes("qty")) ? 1 : 0);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestRows = rows;
+      }
+    });
+
+    if (!bestRows.length) {
+      throw new Error("No readable worksheet was found in the workbook.");
+    }
+
+    return bestRows;
+  }
+
+  throw new Error("Unsupported file type.");
+}
+
+function itemDisplayReference(item: MaterialEventItem): string {
+  return item.item_reference || item.bolt_size || item.bundle_no || "Unlisted material";
+}
+
+function missingIssueStatusLabel(status: MissingIssueStatus): string {
+  if (status === "resolved") return "Resolved";
+  if (status === "partial") return "Partially Delivered";
+  return "Open";
+}
+
+function missingIssueStatusClasses(status: MissingIssueStatus): string {
+  if (status === "resolved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "partial") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function buildMissingIssues(data: MaterialsData): MissingIssueRow[] {
+  const receiptsByIssue = new Map<string, MissingIssueReceipt[]>();
+
+  data.materialEvents
+    .filter((event) => event.event_type === "found_received")
+    .forEach((event) => {
+      event.items.forEach((item) => {
+        const sourceIssueKey = item.source_issue_key?.trim();
+        if (!sourceIssueKey) return;
+        const list = receiptsByIssue.get(sourceIssueKey) || [];
+        list.push({ event, item });
+        receiptsByIssue.set(sourceIssueKey, list);
+      });
+    });
+
+  const rows: MissingIssueRow[] = [];
+
+  data.materialEvents
+    .filter((event) => event.event_type === "missing")
+    .forEach((event) => {
+      event.items.forEach((item) => {
+        const issueKey = item.issue_key?.trim() || `legacy:${item.id}`;
+        const receipts = item.issue_key ? receiptsByIssue.get(item.issue_key) || [] : [];
+        const originalQty = Math.max(safeNumber(item.quantity, 1), 0);
+        const deliveredQty = receipts.reduce(
+          (sum, receipt) => sum + Math.max(safeNumber(receipt.item.quantity, 0), 0),
+          0,
+        );
+        const remainingQty = Math.max(originalQty - deliveredQty, 0);
+        const status: MissingIssueStatus =
+          remainingQty <= 0 ? "resolved" : deliveredQty > 0 ? "partial" : "open";
+        const sortedReceipts = [...receipts].sort((a, b) =>
+          safeString(a.event.occurred_at).localeCompare(safeString(b.event.occurred_at)),
+        );
+
+        rows.push({
+          issueKey,
+          event,
+          item,
+          originalQty,
+          deliveredQty,
+          remainingQty,
+          status,
+          reportedAt: event.occurred_at || null,
+          lastDeliveryAt: sortedReceipts.at(-1)?.event.occurred_at || null,
+          receipts: sortedReceipts,
+        });
+      });
+    });
+
+  return rows.sort((a, b) => {
+    const order: Record<MissingIssueStatus, number> = { open: 0, partial: 1, resolved: 2 };
+    if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
+    return safeString(b.reportedAt).localeCompare(safeString(a.reportedAt));
+  });
 }
 
 function normaliseSegment(value: string): string {
@@ -370,7 +800,12 @@ function useMaterialsData(towerId: string) {
               item_description,
               quantity,
               unit,
-              notes
+              notes,
+              issue_key,
+              source_issue_key,
+              bundle_id,
+              bundle_no,
+              bundle_section
             )
           `)
           .eq("tower_id", towerId)
@@ -631,7 +1066,7 @@ function useMaterialsData(towerId: string) {
     forcedStatus?: BundleCheckStatus,
   ) => {
     if (!bundle.id) {
-      alert("Save this bundle in Register & Imports before recording a site check.");
+      alert("Save this bundle in Data & Imports before recording a site check.");
       return;
     }
 
@@ -699,7 +1134,7 @@ function useMaterialsData(towerId: string) {
     if (!bundle?.id) {
       alert(
         `TTTracker cannot safely resolve the bundle for member ${member.mark_no}. ` +
-          "Check the member's Tower Segment in Register & Imports.",
+          "Check the member's Tower Segment in Data & Imports.",
       );
       return;
     }
@@ -776,12 +1211,14 @@ function useMaterialsData(towerId: string) {
     memberChecks,
     materialEvents,
     dockets,
+    deliveries,
     docketMap,
     missingEvents,
     excessEvents,
     loading,
     saving,
     duplicateBundleRefs,
+    resolveBundleForMember,
     deliveredQty,
     receivedQty,
     getMemberCheck,
@@ -860,7 +1297,7 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
           {memberResults.length === 0 ? <SearchEmpty text={`No members match “${query}”.`} /> : memberResults.map((member: Member) => (
             <div key={member.id || `${member.bundle_reference}-${member.mark_no}`} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div><div className="text-base font-black text-slate-950">{member.mark_no}</div><div className="mt-1 text-xs text-slate-500">Bundle <strong className="text-slate-800">{member.bundle_reference || "—"}</strong> · Drawing {member.drawing_number || "—"}</div></div>
+                <div><div className="text-base font-black text-slate-950">{member.mark_no}</div><div className="mt-1 text-xs text-slate-500">Bundle <strong className="text-slate-800">{member.bundle_reference || "—"}{data.resolveBundleForMember(member)?.section ? ` · ${data.resolveBundleForMember(member)?.section}` : ""}</strong> · Drawing {member.drawing_number || "—"}</div></div>
                 <div className="grid grid-cols-3 gap-2 text-xs md:min-w-97.5">
                   <SearchInfo label="Profile" value={member.section || "—"} />
                   <SearchInfo label="Qty / Tower" value={member.qty_per_tower ?? "—"} />
@@ -1092,122 +1529,558 @@ function BundleEmpty({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">{text}</div>;
 }
 
-function MaterialIssues({
-  mode,
+
+function OverviewWorkspace({
+  data,
+  projectId,
+  towerId,
+  onOpenIssues,
+  onOpenBundles,
+  onOpenData,
+}: {
+  data: MaterialsData;
+  projectId: string;
+  towerId: string;
+  onOpenIssues: () => void;
+  onOpenBundles: () => void;
+  onOpenData: () => void;
+}) {
+  const missingIssues = buildMissingIssues(data);
+  const open = missingIssues.filter((row) => row.status === "open");
+  const partial = missingIssues.filter((row) => row.status === "partial");
+  const resolved = missingIssues.filter((row) => row.status === "resolved");
+  const outstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
+  const completedBundles = data.bundles.filter((bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
+  const outstandingBundles = Math.max(data.bundles.length - completedBundles, 0);
+  const overBundles = data.bundles.filter((bundle) => data.receivedQty(bundle) > bundle.qty_required);
+  const recentReceipts = data.materialEvents
+    .filter((event) => event.event_type === "found_received")
+    .flatMap((event) => event.items.map((item) => ({ event, item })))
+    .slice(0, 6);
+
+  const unmatchedMembers = data.members.filter((member) => !data.resolveBundleForMember(member));
+  const membersWithoutBundleId = data.members.filter((member) => !member.bundle_id).length;
+  const missingWithoutIssueKey = data.materialEvents
+    .filter((event) => event.event_type === "missing")
+    .flatMap((event) => event.items)
+    .filter((item) => !item.issue_key).length;
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
+        <DashboardMetric label="Bundles" value={data.bundles.length} icon={Boxes} />
+        <DashboardMetric label="Bundle Complete" value={completedBundles} tone="green" icon={PackageCheck} />
+        <DashboardMetric label="Bundle Outstanding" value={outstandingBundles} tone="amber" icon={PackageOpen} />
+        <DashboardMetric label="Missing Open" value={open.length} tone="red" icon={TriangleAlert} />
+        <DashboardMetric label="Part Delivered" value={partial.length} tone="amber" icon={Truck} />
+        <DashboardMetric label="Missing Resolved" value={resolved.length} tone="green" icon={CheckCircle2} />
+        <DashboardMetric label="Missing Qty Left" value={outstandingQty} tone="red" icon={AlertCircle} />
+        <DashboardMetric label="Excess Bundles" value={overBundles.length} tone="blue" icon={CirclePlus} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+        <section className="rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+            <div>
+              <h3 className="font-black text-slate-950">Missing material supply status</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Daily Docket missing items stay open until linked receipt quantities bring the remaining quantity to zero.
+              </p>
+            </div>
+            <button type="button" onClick={onOpenIssues} className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white">
+              View Issues
+            </button>
+          </div>
+
+          <div className="p-3">
+            {missingIssues.length === 0 ? (
+              <IssueEmpty text="No missing-material issues have been recorded for this tower." />
+            ) : (
+              <div className="space-y-2">
+                {missingIssues.slice(0, 8).map((row) => (
+                  <MissingIssueCompact key={row.issueKey} row={row} data={data} />
+                ))}
+                {missingIssues.length > 8 && (
+                  <button type="button" onClick={onOpenIssues} className="w-full rounded-xl bg-slate-50 px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-100">
+                    View all {missingIssues.length} missing-material records
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-black text-slate-950">Recent deliveries to site</h3>
+                <p className="mt-1 text-xs text-slate-500">Receipts recorded against material issues in Daily Dockets.</p>
+              </div>
+              <Truck size={18} className="text-slate-400" />
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {recentReceipts.length === 0 ? (
+                <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">No linked material receipts recorded yet.</div>
+              ) : recentReceipts.map(({ event, item }) => (
+                <div key={`${event.id}-${item.id}`} className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-black text-slate-950">{itemDisplayReference(item)}</div>
+                      <div className="mt-0.5 text-[11px] text-slate-500">
+                        {item.bundle_no ? `Bundle ${item.bundle_no}${item.bundle_section ? ` · ${item.bundle_section}` : ""} · ` : ""}
+                        {formatDate(event.occurred_at)}
+                      </div>
+                    </div>
+                    <span className="shrink-0 rounded-lg bg-white px-2 py-1 text-xs font-black text-emerald-700">
+                      +{safeNumber(item.quantity, 0)} {item.unit || "ea"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Link
+              href={`/project/${projectId}/tower/${towerId}/dockets`}
+              className="mt-3 inline-flex items-center gap-1 text-xs font-black text-slate-600 hover:text-slate-950"
+            >
+              <ExternalLink size={12} /> Open Daily Dockets
+            </Link>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-black text-slate-950">Data health</h3>
+              <button type="button" onClick={onOpenData} className="text-xs font-black text-blue-700">Manage data</button>
+            </div>
+            <div className="mt-3 space-y-2 text-xs">
+              <HealthRow good={unmatchedMembers.length === 0} label="Members matched to bundle" value={`${data.members.length - unmatchedMembers.length}/${data.members.length}`} />
+              <HealthRow good={membersWithoutBundleId === 0} label="Members with bundle UUID" value={membersWithoutBundleId === 0 ? "Complete" : `${membersWithoutBundleId} missing`} />
+              <HealthRow good={missingWithoutIssueKey === 0} label="Missing issues with close-out key" value={missingWithoutIssueKey === 0 ? "Complete" : `${missingWithoutIssueKey} legacy`} />
+              <HealthRow good={data.duplicateBundleRefs.size === 0} label="Duplicate display refs" value={data.duplicateBundleRefs.size === 0 ? "None" : String(data.duplicateBundleRefs.size)} />
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <QuickAction title="Bundle Control" description="Review delivered, site received, outstanding and over-received packs." icon={PackageCheck} onClick={onOpenBundles} />
+        <QuickAction title="Issues & Deliveries" description="Track missing, partial deliveries, resolved items, excess and damage." icon={TriangleAlert} onClick={onOpenIssues} />
+        <QuickAction title="Data & Imports" description="Upload, replace, merge, correct and delete master material data." icon={Database} onClick={onOpenData} />
+      </div>
+    </div>
+  );
+}
+
+function DashboardMetric({
+  label,
+  value,
+  icon: Icon,
+  tone = "slate",
+}: {
+  label: string;
+  value: string | number;
+  icon: typeof Boxes;
+  tone?: "slate" | "green" | "amber" | "red" | "blue";
+}) {
+  const styles = {
+    slate: "border-slate-200 bg-white text-slate-950",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-950",
+    amber: "border-amber-200 bg-amber-50 text-amber-950",
+    red: "border-rose-200 bg-rose-50 text-rose-950",
+    blue: "border-blue-200 bg-blue-50 text-blue-950",
+  };
+  return (
+    <div className={`rounded-2xl border p-3 ${styles[tone]}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[9px] font-black uppercase tracking-wide opacity-50">{label}</div>
+        <Icon size={14} className="opacity-40" />
+      </div>
+      <div className="mt-1 text-2xl font-black">{value}</div>
+    </div>
+  );
+}
+
+function MissingIssueCompact({ row, data }: { row: MissingIssueRow; data: MaterialsData }) {
+  const docket = row.event.docket_id ? data.docketMap.get(row.event.docket_id) : undefined;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-black text-slate-950">{itemDisplayReference(row.item)}</div>
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${missingIssueStatusClasses(row.status)}`}>
+              {missingIssueStatusLabel(row.status)}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {row.item.bundle_no ? `Bundle ${row.item.bundle_no}${row.item.bundle_section ? ` · ${row.item.bundle_section}` : ""} · ` : ""}
+            Reported {formatDate(docket?.docket_date || row.reportedAt)}
+          </div>
+        </div>
+        <div className="grid shrink-0 grid-cols-3 gap-1.5">
+          <TinyQty label="Missing" value={row.originalQty} />
+          <TinyQty label="Delivered" value={row.deliveredQty} tone="green" />
+          <TinyQty label="Remaining" value={row.remainingQty} tone={row.remainingQty > 0 ? "red" : "green"} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TinyQty({ label, value, tone = "slate" }: { label: string; value: number; tone?: "slate" | "green" | "red" }) {
+  const style = tone === "green" ? "bg-emerald-50 text-emerald-800" : tone === "red" ? "bg-rose-50 text-rose-800" : "bg-white text-slate-800";
+  return (
+    <div className={`min-w-17 rounded-lg px-2 py-1.5 text-center ${style}`}>
+      <div className="text-[8px] font-black uppercase tracking-wide opacity-60">{label}</div>
+      <div className="text-sm font-black">{value}</div>
+    </div>
+  );
+}
+
+function HealthRow({ good, label, value }: { good: boolean; label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+      <div className="flex items-center gap-2 text-slate-700">
+        {good ? <CheckCircle2 size={14} className="text-emerald-600" /> : <AlertCircle size={14} className="text-amber-600" />}
+        <span>{label}</span>
+      </div>
+      <span className="font-black text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function QuickAction({
+  title,
+  description,
+  icon: Icon,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  icon: typeof Boxes;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className="rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-400 hover:shadow-sm">
+      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100"><Icon size={17} /></div>
+      <div className="mt-3 font-black text-slate-950">{title}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-500">{description}</div>
+    </button>
+  );
+}
+
+function IssuesWorkspace({
   data,
   projectId,
   towerId,
 }: {
-  mode: "missing" | "excess";
   data: MaterialsData;
   projectId: string;
   towerId: string;
 }) {
+  const [filter, setFilter] = useState<IssueFilter>("all");
   const [query, setQuery] = useState("");
-  const isMissing = mode === "missing";
-  const events = isMissing ? data.missingEvents : data.excessEvents;
+  const [expandedIssue, setExpandedIssue] = useState<string | null>(null);
+
+  const missingIssues = buildMissingIssues(data);
+  const open = missingIssues.filter((row) => row.status === "open");
+  const partial = missingIssues.filter((row) => row.status === "partial");
+  const resolved = missingIssues.filter((row) => row.status === "resolved");
+
+  const excessEvents = data.materialEvents.filter((event) => event.event_type === "excess");
+  const damagedEvents = data.materialEvents.filter((event) => event.event_type === "damaged_incorrect");
+  const movementEvents = data.materialEvents.filter((event) =>
+    event.event_type === "taken_from_another_tower" || event.event_type === "sent_to_another_tower",
+  );
+  const unlinkedReceipts = data.materialEvents
+    .filter((event) => event.event_type === "found_received")
+    .flatMap((event) => event.items.map((item) => ({ event, item })))
+    .filter(({ item }) => !item.source_issue_key);
+
+  const overReceived = data.bundles
+    .map((bundle) => ({
+      bundle,
+      received: data.receivedQty(bundle),
+      excess: Math.max(data.receivedQty(bundle) - bundle.qty_required, 0),
+    }))
+    .filter((row) => row.excess > 0);
+
   const q = normaliseSearch(query);
+  const missingByFilter =
+    filter === "open" ? open :
+    filter === "partial" ? partial :
+    filter === "resolved" ? resolved :
+    missingIssues;
 
-  const filteredEvents = !q
-    ? events
-    : events.filter((event: MaterialEvent) =>
-        [
-          event.notes,
-          event.affected_activity,
-          event.affected_section,
-          event.current_effect,
-          event.work_outcome,
-          ...event.items.flatMap((item) => [item.item_reference, item.item_description, item.material_type, item.bolt_size]),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q),
-      );
+  const filteredMissing = missingByFilter.filter((row) => {
+    if (!q) return true;
+    return [
+      itemDisplayReference(row.item),
+      row.item.item_description,
+      row.item.bundle_no,
+      row.item.bundle_section,
+      row.event.notes,
+      row.event.affected_activity,
+      row.event.affected_section,
+      row.event.current_effect,
+    ].join(" ").toLowerCase().includes(q);
+  });
 
-  const siteMissingMembers: Member[] = isMissing
-    ? data.members.filter((member: Member) => data.getMemberCheck(member)?.status === "missing")
-    : [];
-
-  const siteMissingBundles: Bundle[] = isMissing
-    ? data.bundles.filter((bundle: Bundle) => data.deriveBundleStatus(bundle) === "missing")
-    : [];
-
-  const overReceived = !isMissing
-    ? data.bundles
-        .map((bundle: Bundle) => {
-          const received = data.receivedQty(bundle);
-          return { bundle, received, excess: Math.max(received - bundle.qty_required, 0) };
-        })
-        .filter((row) => row.excess > 0)
-    : [];
-
-  const docketItemCount = events.reduce((sum: number, event: MaterialEvent) => sum + event.items.length, 0);
-  const otherCount = isMissing ? siteMissingMembers.length + siteMissingBundles.length : overReceived.length;
+  const showMissing = ["all", "open", "partial", "resolved"].includes(filter);
+  const outstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
 
   return (
-    <div>
-      <div className="grid grid-cols-2 gap-2 md:max-w-lg">
-        <IssueSummary label={isMissing ? "Docket Missing Items" : "Docket Excess Items"} value={docketItemCount} />
-        <IssueSummary label={isMissing ? "Site Checks Missing" : "Bundle Overages"} value={otherCount} />
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+        <IssueMetric label="Open" value={open.length} tone="red" />
+        <IssueMetric label="Part Delivered" value={partial.length} tone="amber" />
+        <IssueMetric label="Resolved" value={resolved.length} tone="green" />
+        <IssueMetric label="Qty Remaining" value={outstandingQty} tone="red" />
+        <IssueMetric label="Excess" value={excessEvents.reduce((sum, event) => sum + event.items.length, 0) + overReceived.length} tone="blue" />
+        <IssueMetric label="Damaged / Incorrect" value={damagedEvents.reduce((sum, event) => sum + event.items.length, 0)} />
+        <IssueMetric label="Movements" value={movementEvents.reduce((sum, event) => sum + event.items.length, 0)} />
       </div>
 
-      <div className="relative mt-3">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={`Search ${isMissing ? "missing" : "excess"} material records…`}
-          className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-4 focus:ring-slate-100"
-        />
-      </div>
-
-      <section className="mt-4">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-black uppercase tracking-wide text-slate-400">Daily Docket Records</div>
-            <div className="mt-0.5 text-xs text-slate-500">These are read directly from the existing structured material events saved by Daily Dockets.</div>
-          </div>
-          <Link href={`/project/${projectId}/tower/${towerId}/dockets`} className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200"><ExternalLink size={12} /> Dockets</Link>
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2">
+        <div className="flex gap-1 overflow-x-auto">
+          {([
+            ["all", "All"],
+            ["open", "Open"],
+            ["partial", "Part Delivered"],
+            ["resolved", "Resolved"],
+            ["excess", "Excess"],
+            ["damaged", "Damaged / Incorrect"],
+            ["movements", "Movements"],
+          ] as Array<[IssueFilter, string]>).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setFilter(id)}
+              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black ${
+                filter === id ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+      </div>
 
-        {filteredEvents.length === 0 ? (
-          <IssueEmpty text={`No ${isMissing ? "missing" : "excess"} Daily Docket records match the current search.`} />
-        ) : (
-          <div className="space-y-2">
-            {filteredEvents.map((event: MaterialEvent) => (
-              <MaterialEventCard key={event.id} event={event} data={data} tone={isMissing ? "rose" : "blue"} />
+      <div className="flex flex-col gap-2 md:flex-row">
+        <div className="relative flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search member, bundle, section, notes or status…"
+            className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-4 focus:ring-slate-100"
+          />
+        </div>
+        <Link href={`/project/${projectId}/tower/${towerId}/dockets`} className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white">
+          <ClipboardList size={14} /> Daily Dockets
+        </Link>
+      </div>
+
+      {showMissing && (
+        <section>
+          <div className="mb-2">
+            <h3 className="font-black text-slate-950">Missing material & delivery close-out</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Delivered-to-site quantities come from linked Found / Received Daily Docket entries. A specific missing item is not auto-resolved from the truck bundle register alone.
+            </p>
+          </div>
+
+          {filteredMissing.length === 0 ? (
+            <IssueEmpty text="No missing-material records match the current filter." />
+          ) : (
+            <div className="space-y-2">
+              {filteredMissing.map((row) => {
+                const openRow = expandedIssue === row.issueKey;
+                const docket = row.event.docket_id ? data.docketMap.get(row.event.docket_id) : undefined;
+                const linkedBundle = row.item.bundle_id
+                  ? data.bundles.find((bundle) => bundle.id === row.item.bundle_id)
+                  : undefined;
+                const bundleDelivered = linkedBundle ? data.deliveredQty(linkedBundle) : null;
+
+                return (
+                  <div key={row.issueKey} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedIssue(openRow ? null : row.issueKey)}
+                      className="flex w-full flex-col gap-3 p-4 text-left hover:bg-slate-50 md:flex-row md:items-start md:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-base font-black text-slate-950">{itemDisplayReference(row.item)}</div>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${missingIssueStatusClasses(row.status)}`}>
+                            {missingIssueStatusLabel(row.status)}
+                          </span>
+                          {!row.item.issue_key && (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                              LEGACY UNLINKED
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {row.item.bundle_no ? `Bundle ${row.item.bundle_no}${row.item.bundle_section ? ` · ${row.item.bundle_section}` : ""} · ` : ""}
+                          Reported {formatDate(docket?.docket_date || row.reportedAt)}
+                          {docket?.crew ? ` · ${docket.crew}` : ""}
+                        </div>
+                        {row.item.item_description && <div className="mt-1 text-xs text-slate-600">{row.item.item_description}</div>}
+                      </div>
+
+                      <div className="grid shrink-0 grid-cols-3 gap-2">
+                        <IssueQty label="Missing" value={row.originalQty} />
+                        <IssueQty label="Delivered" value={row.deliveredQty} tone="green" />
+                        <IssueQty label="Remaining" value={row.remainingQty} tone={row.remainingQty > 0 ? "red" : "green"} />
+                      </div>
+                    </button>
+
+                    {openRow && (
+                      <div className="border-t border-slate-200 bg-slate-50 p-3 md:p-4">
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <DetailCard label="First reported" value={formatDate(row.reportedAt)} />
+                          <DetailCard label="Last material receipt" value={row.lastDeliveryAt ? formatDate(row.lastDeliveryAt) : "Not delivered yet"} />
+                          <DetailCard label="Bundle delivery register" value={bundleDelivered == null ? "No linked bundle" : `${bundleDelivered} bundle(s) delivered`} />
+                          <DetailCard label="Current effect" value={row.event.current_effect || "—"} />
+                        </div>
+
+                        <div className="mt-4">
+                          <div className="text-xs font-black uppercase tracking-wide text-slate-400">Delivery history</div>
+                          {row.receipts.length === 0 ? (
+                            <div className="mt-2 rounded-xl border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500">
+                              No linked delivery has been recorded yet. Crew receipts should be entered from the Daily Docket.
+                            </div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {row.receipts.map(({ event, item }, index) => {
+                                const receiptDocket = event.docket_id ? data.docketMap.get(event.docket_id) : undefined;
+                                return (
+                                  <div key={`${event.id}-${item.id}`} className="flex flex-col gap-2 rounded-xl border border-emerald-200 bg-white p-3 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                      <div className="text-sm font-black text-slate-950">
+                                        Delivery {index + 1} · {formatDate(receiptDocket?.docket_date || event.occurred_at)}
+                                      </div>
+                                      <div className="mt-0.5 text-xs text-slate-500">
+                                        {receiptDocket?.crew ? `${receiptDocket.crew} · ` : ""}
+                                        {event.notes || "Received / delivered to site"}
+                                      </div>
+                                    </div>
+                                    <div className="rounded-xl bg-emerald-50 px-3 py-2 text-center">
+                                      <div className="text-[9px] font-black uppercase text-emerald-500">Delivered</div>
+                                      <div className="text-lg font-black text-emerald-800">+{safeNumber(item.quantity, 0)} {item.unit || "ea"}</div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {(filter === "all" || filter === "excess") && (
+        <section className="border-t border-slate-200 pt-4">
+          <h3 className="font-black text-slate-950">Excess material</h3>
+          <div className="mt-2 space-y-2">
+            {excessEvents.length === 0 && overReceived.length === 0 ? (
+              <IssueEmpty text="No excess material is currently recorded." />
+            ) : (
+              <>
+                {excessEvents.map((event) => (
+                  <MaterialEventCard key={event.id} event={event} data={data} tone="blue" />
+                ))}
+                {overReceived.map(({ bundle, received, excess }) => (
+                  <div key={bundleUiKey(bundle)} className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-black text-slate-950">{bundle.bundle_no} · {bundle.section}</div>
+                        <div className="mt-1 text-xs text-slate-500">Required {bundle.qty_required} · Site confirmed {received}</div>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-2 text-center">
+                        <div className="text-[9px] font-black uppercase text-blue-500">Excess</div>
+                        <div className="text-xl font-black text-blue-800">+{excess}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </section>
+      )}
+
+      {(filter === "all" || filter === "damaged") && (
+        <section className="border-t border-slate-200 pt-4">
+          <h3 className="font-black text-slate-950">Damaged / incorrect material</h3>
+          <div className="mt-2 space-y-2">
+            {damagedEvents.length === 0 ? <IssueEmpty text="No damaged or incorrect material records." /> : damagedEvents.map((event) => (
+              <MaterialEventCard key={event.id} event={event} data={data} tone="rose" />
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      {isMissing ? (
-        <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <section>
-            <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Bundles Marked Missing</div>
-            {siteMissingBundles.length === 0 ? <IssueEmpty text="No bundle checks are currently marked missing." /> : <div className="space-y-2">{siteMissingBundles.map((bundle: Bundle) => <div key={bundle.id || `${bundle.bundle_no}-${bundle.section}`} className="rounded-2xl border border-rose-200 bg-white p-3 shadow-sm"><div className="font-black text-slate-950">{bundle.bundle_no}</div><div className="mt-1 text-xs text-slate-500">{bundle.section} · Required {bundle.qty_required} · Site received {data.receivedQty(bundle)}</div></div>)}</div>}
-          </section>
+      {(filter === "all" || filter === "movements") && (
+        <section className="border-t border-slate-200 pt-4">
+          <h3 className="font-black text-slate-950">Material movements</h3>
+          <div className="mt-2 space-y-2">
+            {movementEvents.length === 0 ? <IssueEmpty text="No inter-tower material movements recorded." /> : movementEvents.map((event) => (
+              <MaterialEventCard key={event.id} event={event} data={data} tone="blue" />
+            ))}
+          </div>
+        </section>
+      )}
 
-          <section>
-            <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Members Marked Missing</div>
-            {siteMissingMembers.length === 0 ? <IssueEmpty text="No member checks are currently marked missing." /> : <div className="space-y-2">{siteMissingMembers.map((member: Member) => <div key={member.id || `${member.bundle_reference}-${member.mark_no}`} className="rounded-2xl border border-rose-200 bg-white p-3 shadow-sm"><div className="font-black text-slate-950">{member.mark_no}</div><div className="mt-1 text-xs text-slate-500">Bundle {member.bundle_reference} · {member.section || "—"} · {member.tower_segment || "—"}</div></div>)}</div>}
-          </section>
-        </div>
-      ) : (
-        <section className="mt-6">
-          <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Bundle Quantity Overages</div>
-          {overReceived.length === 0 ? <IssueEmpty text="No bundle quantities are currently recorded above the tower requirement." /> : <div className="space-y-2">{overReceived.map(({ bundle, received, excess }) => (
-            <div key={bundle.id || `${bundle.bundle_no}-${bundle.section}`} className="rounded-2xl border border-blue-200 bg-white p-3 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <div><div className="font-black text-slate-950">{bundle.bundle_no}</div><div className="mt-1 text-xs text-slate-500">{bundle.section} · Required {bundle.qty_required} · Received {received}</div></div>
-                <div className="rounded-xl bg-blue-50 px-3 py-2 text-center"><div className="text-[9px] font-black uppercase tracking-wide text-blue-500">Excess</div><div className="text-xl font-black text-blue-800">+{excess}</div></div>
+      {filter === "all" && unlinkedReceipts.length > 0 && (
+        <section className="border-t border-slate-200 pt-4">
+          <h3 className="font-black text-slate-950">Legacy / unlinked receipts</h3>
+          <p className="mt-1 text-xs text-slate-500">These receipts pre-date the close-out link or were entered without selecting an outstanding missing item.</p>
+          <div className="mt-2 space-y-2">
+            {unlinkedReceipts.map(({ event, item }) => (
+              <div key={`${event.id}-${item.id}`} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-black text-slate-950">{itemDisplayReference(item)}</div>
+                    <div className="mt-1 text-xs text-slate-500">{formatDate(event.occurred_at)} · {event.notes || "Found / Received"}</div>
+                  </div>
+                  <div className="font-black text-amber-800">+{safeNumber(item.quantity, 0)} {item.unit || "ea"}</div>
+                </div>
               </div>
-            </div>
-          ))}</div>}
+            ))}
+          </div>
         </section>
       )}
     </div>
   );
+}
+
+function IssueMetric({ label, value, tone = "slate" }: { label: string; value: number; tone?: "slate" | "green" | "amber" | "red" | "blue" }) {
+  const style =
+    tone === "green" ? "border-emerald-200 bg-emerald-50 text-emerald-900" :
+    tone === "amber" ? "border-amber-200 bg-amber-50 text-amber-900" :
+    tone === "red" ? "border-rose-200 bg-rose-50 text-rose-900" :
+    tone === "blue" ? "border-blue-200 bg-blue-50 text-blue-900" :
+    "border-slate-200 bg-slate-50 text-slate-900";
+  return <div className={`rounded-xl border p-3 ${style}`}><div className="text-[9px] font-black uppercase tracking-wide opacity-50">{label}</div><div className="mt-1 text-xl font-black">{value}</div></div>;
+}
+
+function IssueQty({ label, value, tone = "slate" }: { label: string; value: number; tone?: "slate" | "green" | "red" }) {
+  const style = tone === "green" ? "bg-emerald-50 text-emerald-800" : tone === "red" ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-800";
+  return <div className={`min-w-20 rounded-xl px-3 py-2 text-center ${style}`}><div className="text-[8px] font-black uppercase tracking-wide opacity-60">{label}</div><div className="text-lg font-black">{value}</div></div>;
+}
+
+function DetailCard({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div><div className="mt-1 text-sm font-black text-slate-900">{value}</div></div>;
 }
 
 function MaterialEventCard({ event, data, tone }: { event: MaterialEvent; data: MaterialsData; tone: "rose" | "blue" }) {
@@ -1228,7 +2101,13 @@ function MaterialEventCard({ event, data, tone }: { event: MaterialEvent; data: 
         {event.items.length === 0 ? <div className="rounded-xl bg-white p-2.5 text-xs text-slate-500">No item rows were stored on this event.</div> : event.items.map((item) => (
           <div key={item.id} className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
             <div className="min-w-16 text-center"><div className="text-[9px] font-black uppercase text-slate-400">Qty</div><div className="font-black text-slate-950">{item.quantity ?? 1} {item.unit || "ea"}</div></div>
-            <div className="min-w-0"><div className="font-black text-slate-950">{item.item_reference || item.bolt_size || "Unlisted material"}</div><div className="mt-0.5 text-xs text-slate-500">{item.item_description || item.material_type || "—"}</div></div>
+            <div className="min-w-0">
+              <div className="font-black text-slate-950">{itemDisplayReference(item)}</div>
+              <div className="mt-0.5 text-xs text-slate-500">
+                {item.bundle_no ? `Bundle ${item.bundle_no}${item.bundle_section ? ` · ${item.bundle_section}` : ""}` : item.item_description || item.material_type || "—"}
+              </div>
+              {item.bundle_no && item.item_description && <div className="mt-0.5 text-xs text-slate-500">{item.item_description}</div>}
+            </div>
           </div>
         ))}
       </div>
@@ -1244,12 +2123,757 @@ function MaterialEventCard({ event, data, tone }: { event: MaterialEvent; data: 
   );
 }
 
-function IssueSummary({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div><div className="mt-1 text-xl font-black text-slate-950">{value}</div></div>;
-}
-
 function IssueEmpty({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">{text}</div>;
+}
+
+
+function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId: string }) {
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const [tab, setTab] = useState<DataManagerTab>("bundles");
+  const [importMode, setImportMode] = useState<ImportMode>("merge");
+  const [busy, setBusy] = useState("");
+  const [query, setQuery] = useState("");
+  const bundleInputRef = useRef<HTMLInputElement | null>(null);
+  const memberInputRef = useRef<HTMLInputElement | null>(null);
+  const boltInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [bundleDraft, setBundleDraft] = useState<Bundle | null>(null);
+  const [memberDraft, setMemberDraft] = useState<Member | null>(null);
+  const [boltDraft, setBoltDraft] = useState<Bolt | null>(null);
+
+  const q = normaliseSearch(query);
+  const unmatchedMembers = data.members.filter((member) => !data.resolveBundleForMember(member));
+  const membersWithoutBundleId = data.members.filter((member) => !member.bundle_id).length;
+
+  const filteredBundles = data.bundles.filter((bundle) =>
+    !q || [bundle.bundle_no, bundle.section, bundle.qty_required, bundle.member_qty, bundle.total_weight]
+      .join(" ").toLowerCase().includes(q),
+  );
+  const filteredMembers = data.members.filter((member) =>
+    !q || [member.mark_no, member.bundle_reference, member.drawing_number, member.section, member.tower_segment]
+      .join(" ").toLowerCase().includes(q),
+  );
+  const filteredBolts = data.bolts.filter((bolt) =>
+    !q || [bolt.tower_segment, bolt.bolt_diameter, bolt.dn_sn, bolt.length, bolt.qty]
+      .join(" ").toLowerCase().includes(q),
+  );
+
+  async function importBundles(file: File) {
+    setBusy("bundles");
+    try {
+      const rows = await parseImportFile(file);
+      const mapped = rows.map((row) => {
+        const bundleNo = safeString(getRowValue(row, [
+          "bundle_no", "Bundle No", "Bundle Number", "Bundle Reference", "Bundle Ref", "Bundle",
+        ])).trim();
+        if (!bundleNo) return null;
+
+        const section = normaliseSegment(safeString(getRowValue(row, [
+          "section", "Section", "Tower Segment", "Segment", "Bundle Segment", "Bundle Group",
+        ]), "General"));
+
+        return {
+          tower_id: towerId,
+          bundle_no: bundleNo,
+          section,
+          qty_required: Math.max(safeNumber(getRowValue(row, [
+            "qty_required", "Qty Required", "Bundle Qty", "Bundle Quantity", "Qty/Tower", "Quantity of Bundles For Tower", "NO.",
+          ]), 0), 0),
+          member_qty: Math.max(safeNumber(getRowValue(row, [
+            "member_qty", "Member Qty", "Member Quantity", "Members", "No. Members", "Member Count",
+          ]), 0), 0),
+          total_weight: (() => {
+            const value = getRowValue(row, ["total_weight", "Total Weight", "Bundle Mass", "Bundle Weight"]);
+            if (value == null || safeString(value).trim() === "") return null;
+            return safeNumber(value, 0);
+          })(),
+        };
+      }).filter(Boolean) as Array<Omit<Bundle, "id">>;
+
+      const unique = new Map<string, Omit<Bundle, "id">>();
+      mapped.forEach((row) => unique.set(`${normaliseBundleKey(row.bundle_no)}__${normaliseSegment(row.section)}`, row));
+      const payload = Array.from(unique.values());
+
+      if (!payload.length) throw new Error("No valid bundle rows were found.");
+
+      if (importMode === "replace") {
+        const clear = await supabase.from("tower_required_bundles").delete().eq("tower_id", towerId);
+        if (clear.error) throw clear.error;
+      }
+
+      const result = await supabase
+        .from("tower_required_bundles")
+        .upsert(payload, { onConflict: "tower_id,bundle_no,section" });
+
+      if (result.error) throw result.error;
+      await data.refresh();
+      alert(`Bundle import complete: ${payload.length} row(s).`);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Bundle import failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function resolveImportBundle(bundleReference: string, towerSegment: string): Bundle | undefined {
+    const candidates = data.bundles.filter(
+      (bundle) => normaliseBundleKey(bundle.bundle_no) === normaliseBundleKey(bundleReference),
+    );
+    if (candidates.length === 1) return candidates[0];
+
+    const segment = normaliseSegment(towerSegment || "General");
+    const exact = candidates.filter((bundle) => normaliseSegment(bundle.section) === segment);
+    return exact.length === 1 ? exact[0] : undefined;
+  }
+
+  async function importMembers(file: File) {
+    setBusy("members");
+    try {
+      const rows = await parseImportFile(file);
+      const currentTowerKeys = getTowerIdentifierKeys(data.tower);
+      const currentTowerDisplay = getTowerMatchDisplay(currentTowerKeys);
+      let ambiguous = 0;
+      let invalid = 0;
+      let otherTower = 0;
+      let towerRestrictedRows = 0;
+      let towerRestrictedMatched = 0;
+
+      const payload = rows.map((row) => {
+        const markNo = safeString(getRowValue(row, [
+          "mark_no", "Mark No", "Mark No.", "Member Mark", "Member Number", "Member No", "Mark",
+        ])).trim();
+        const bundleReference = safeString(getRowValue(row, [
+          "bundle_reference", "Bundle Reference", "Bundle Ref", "bundle_no", "Bundle No", "Bundle Number",
+        ])).trim();
+        if (!markNo || !bundleReference) {
+          invalid += 1;
+          return null;
+        }
+
+        const applicableTowerValue = getRowValue(row, [
+          "applicable_towers",
+          "Applicable Towers",
+          "Applicable Tower No(s)",
+          "Applicable Tower Nos",
+          "Tower No(s)",
+          "Tower No",
+          "Tower Nos",
+          "Tower Number",
+          "Tower Numbers",
+          "Structure No",
+          "Structure Number",
+          "Applicable Structures",
+        ]);
+
+        const applicableTowerKeys = parseApplicableTowerKeys(applicableTowerValue);
+        if (applicableTowerKeys.size > 0) {
+          towerRestrictedRows += 1;
+          if (!currentTowerMatchesApplicability(currentTowerKeys, applicableTowerKeys)) {
+            otherTower += 1;
+            return null;
+          }
+          towerRestrictedMatched += 1;
+        }
+
+        const towerSegment = normaliseSegment(safeString(getRowValue(row, [
+          "tower_segment", "Tower Segment", "Member Segment", "Structure Segment", "Tower Section", "Assembly Segment",
+        ]), "General"));
+        const bundle = resolveImportBundle(bundleReference, towerSegment);
+
+        if (!bundle?.id) {
+          ambiguous += 1;
+          return null;
+        }
+
+        const qty = safeNumber(getRowValue(row, [
+          "qty_per_tower", "Qty/Tower", "QTY/Tower", "Qty per Tower", "Quantity per Tower", "Tower Qty",
+        ]), 0);
+
+        if (qty <= 0) {
+          invalid += 1;
+          return null;
+        }
+
+        return {
+          tower_id: towerId,
+          bundle_id: bundle.id,
+          bundle_reference: bundleReference,
+          drawing_number: safeString(getRowValue(row, [
+            "drawing_number", "Drawing Number", "Drawing No", "Drawing", "Drg No",
+          ])).trim(),
+          mark_no: markNo,
+          qty_per_tower: qty,
+          section: safeString(getRowValue(row, [
+            "section", "Section", "Section(s)", "Profile", "Member Section", "Steel Section", "Section / Profile",
+          ])).trim(),
+          tower_segment: towerSegment,
+        };
+      }).filter(Boolean) as Array<Omit<Member, "id">>;
+
+      const unique = new Map<string, Omit<Member, "id">>();
+      payload.forEach((row) => unique.set(`${row.bundle_id}__${row.mark_no.toUpperCase()}`, row));
+      const finalRows = Array.from(unique.values());
+
+      if (towerRestrictedRows > 0 && currentTowerKeys.size === 0) {
+        throw new Error(
+          `This file contains tower-specific member rows, but TTTracker could not identify the current tower number from this tower record. Displayed tower: ${safeString(data.tower?.name, "Unknown")}.`,
+        );
+      }
+
+      if (!finalRows.length) {
+        throw new Error(
+          `No members could be imported for tower ${currentTowerDisplay}. ` +
+          `${ambiguous} row(s) could not be matched to a unique bundle, ` +
+          `${otherTower} row(s) belonged to other towers and ${invalid} row(s) were invalid.`,
+        );
+      }
+
+      if (importMode === "replace") {
+        const clear = await supabase.from("tower_material_members").delete().eq("tower_id", towerId);
+        if (clear.error) throw clear.error;
+      }
+
+      const result = await supabase
+        .from("tower_material_members")
+        .upsert(finalRows, { onConflict: "tower_id,bundle_reference,mark_no,tower_segment" });
+
+      if (result.error) throw result.error;
+      await data.refresh();
+      alert(
+        [
+          "Member import complete.",
+          `Tower resolved as: ${currentTowerDisplay}`,
+          `Imported: ${finalRows.length}`,
+          `Tower-specific matched: ${towerRestrictedMatched}/${towerRestrictedRows}`,
+          `Other-tower rows ignored: ${otherTower}`,
+          `Ambiguous duplicate-bundle rows ignored: ${ambiguous}`,
+          `Invalid rows ignored: ${invalid}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Member import failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function importBolts(file: File) {
+    setBusy("bolts");
+    try {
+      const rows = await parseImportFile(file);
+      const mapped = rows.map((row) => {
+        const diameter = normaliseBoltDiameter(safeString(getRowValue(row, [
+          "bolt_diameter", "Bolt Diameter", "Diameter", "Bolt",
+        ])));
+        const length = safeString(getRowValue(row, ["length", "Length", "Bolt Length"])).trim();
+        if (!diameter || !length) return null;
+        return {
+          tower_id: towerId,
+          tower_segment: normaliseSegment(safeString(getRowValue(row, [
+            "tower_segment", "Tower Segment", "Segment", "Section",
+          ]), "General")),
+          bolt_diameter: diameter,
+          dn_sn: safeString(getRowValue(row, ["dn_sn", "DN/SN", "DN / SN", "DN-SN", "Type"])).trim(),
+          length,
+          qty: Math.max(safeNumber(getRowValue(row, ["qty", "Qty", "QTY", "Quantity"]), 0), 0),
+        };
+      }).filter(Boolean) as Array<Omit<Bolt, "id">>;
+
+      const unique = new Map<string, Omit<Bolt, "id">>();
+      mapped.forEach((row) => {
+        const key = [row.tower_segment, row.bolt_diameter, row.dn_sn, row.length].join("__");
+        const existing = unique.get(key);
+        unique.set(key, existing ? { ...existing, qty: existing.qty + row.qty } : row);
+      });
+      const payload = Array.from(unique.values());
+
+      if (!payload.length) throw new Error("No valid bolt rows were found.");
+
+      if (importMode === "replace") {
+        const clear = await supabase.from("tower_material_bolts").delete().eq("tower_id", towerId);
+        if (clear.error) throw clear.error;
+      }
+
+      const result = await supabase
+        .from("tower_material_bolts")
+        .upsert(payload, { onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length" });
+
+      if (result.error) throw result.error;
+      await data.refresh();
+      alert(`Bolt import complete: ${payload.length} row(s).`);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Bolt import failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveBundle() {
+    if (!bundleDraft?.bundle_no.trim()) return;
+    setBusy("save");
+    try {
+      const payload = {
+        tower_id: towerId,
+        bundle_no: bundleDraft.bundle_no.trim(),
+        section: normaliseSegment(bundleDraft.section),
+        qty_required: Math.max(safeNumber(bundleDraft.qty_required), 0),
+        member_qty: Math.max(safeNumber(bundleDraft.member_qty), 0),
+        total_weight: bundleDraft.total_weight == null ? null : safeNumber(bundleDraft.total_weight),
+      };
+
+      const result = bundleDraft.id
+        ? await supabase.from("tower_required_bundles").update(payload).eq("id", bundleDraft.id)
+        : await supabase.from("tower_required_bundles").insert(payload);
+
+      if (result.error) throw result.error;
+
+      // bundle_id remains the real identity, but keep all human-readable
+      // bundle references in sync when an office user corrects the bundle.
+      if (bundleDraft.id) {
+        const syncResults = await Promise.all([
+          supabase
+            .from("tower_material_members")
+            .update({
+              bundle_reference: payload.bundle_no,
+              tower_segment: payload.section,
+            })
+            .eq("bundle_id", bundleDraft.id),
+          supabase
+            .from("tower_material_bundle_checks")
+            .update({ bundle_no: payload.bundle_no })
+            .eq("bundle_id", bundleDraft.id),
+          supabase
+            .from("tower_material_member_checks")
+            .update({ bundle_no: payload.bundle_no })
+            .eq("bundle_id", bundleDraft.id),
+          supabase
+            .from("tower_bundle_delivery_items")
+            .update({ bundle_no: payload.bundle_no })
+            .eq("bundle_id", bundleDraft.id),
+          supabase
+            .from("tower_material_event_items")
+            .update({
+              bundle_no: payload.bundle_no,
+              bundle_section: payload.section,
+            })
+            .eq("bundle_id", bundleDraft.id),
+        ]);
+
+        const syncError = syncResults.find((item) => item.error)?.error;
+        if (syncError) {
+          console.warn("Bundle saved but a linked display reference could not be synchronised", syncError);
+        }
+      }
+
+      setBundleDraft(null);
+      await data.refresh();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Bundle save failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveMember() {
+    if (!memberDraft?.mark_no.trim()) return;
+    setBusy("save");
+    try {
+      const selectedBundle = memberDraft.bundle_id
+        ? data.bundles.find((bundle) => bundle.id === memberDraft.bundle_id)
+        : resolveImportBundle(memberDraft.bundle_reference, memberDraft.tower_segment);
+
+      if (!selectedBundle?.id) {
+        throw new Error("Select a unique bundle before saving this member.");
+      }
+
+      const payload = {
+        tower_id: towerId,
+        bundle_id: selectedBundle.id,
+        bundle_reference: selectedBundle.bundle_no,
+        drawing_number: memberDraft.drawing_number.trim(),
+        mark_no: memberDraft.mark_no.trim(),
+        qty_per_tower: Math.max(safeNumber(memberDraft.qty_per_tower), 0),
+        section: memberDraft.section.trim(),
+        tower_segment: normaliseSegment(selectedBundle.section),
+      };
+
+      const result = memberDraft.id
+        ? await supabase.from("tower_material_members").update(payload).eq("id", memberDraft.id)
+        : await supabase.from("tower_material_members").insert(payload);
+
+      if (result.error) throw result.error;
+      setMemberDraft(null);
+      await data.refresh();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Member save failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveBolt() {
+    if (!boltDraft?.bolt_diameter.trim() || !boltDraft.length.trim()) return;
+    setBusy("save");
+    try {
+      const payload = {
+        tower_id: towerId,
+        tower_segment: normaliseSegment(boltDraft.tower_segment),
+        bolt_diameter: normaliseBoltDiameter(boltDraft.bolt_diameter),
+        dn_sn: boltDraft.dn_sn.trim(),
+        length: boltDraft.length.trim(),
+        qty: Math.max(safeNumber(boltDraft.qty), 0),
+      };
+
+      const result = boltDraft.id
+        ? await supabase.from("tower_material_bolts").update(payload).eq("id", boltDraft.id)
+        : await supabase.from("tower_material_bolts").insert(payload);
+
+      if (result.error) throw result.error;
+      setBoltDraft(null);
+      await data.refresh();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Bolt save failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteRow(table: string, id: string | undefined, label: string) {
+    if (!id) return;
+    if (!window.confirm(`Delete ${label}?`)) return;
+    setBusy("delete");
+    try {
+      const result = await supabase.from(table).delete().eq("id", id);
+      if (result.error) throw result.error;
+      await data.refresh();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : `Could not delete ${label}.`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function exportMasterData() {
+    let rows: Array<Array<string | number | null | undefined>> = [];
+    let filename = "";
+
+    if (tab === "bundles") {
+      filename = "materials_bundle_register.csv";
+      rows = [
+        ["Bundle ID", "Bundle No", "Section", "Qty Required", "Member Qty", "Total Weight"],
+        ...data.bundles.map((row) => [row.id, row.bundle_no, row.section, row.qty_required, row.member_qty, row.total_weight]),
+      ];
+    } else if (tab === "members") {
+      filename = "materials_member_register.csv";
+      rows = [
+        ["Member ID", "Bundle ID", "Bundle Reference", "Drawing Number", "Member Number", "Profile", "Qty/Tower", "Tower Segment"],
+        ...data.members.map((row) => [row.id, row.bundle_id, row.bundle_reference, row.drawing_number, row.mark_no, row.section, row.qty_per_tower, row.tower_segment]),
+      ];
+    } else {
+      filename = "materials_bolt_register.csv";
+      rows = [
+        ["Bolt ID", "Tower Segment", "Bolt Diameter", "DN/SN", "Length", "Qty"],
+        ...data.bolts.map((row) => [row.id, row.tower_segment, row.bolt_diameter, row.dn_sn, row.length, row.qty]),
+      ];
+    }
+
+    downloadTextFile(filename, rows.map((row) => row.map(csvEscape).join(",")).join("\n"));
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <h3 className="font-black text-blue-950">Data & Imports</h3>
+            <p className="mt-1 text-xs text-blue-800">
+              Website-only management area for replacing, merging, correcting and exporting tower material data.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={importMode} onChange={(event) => setImportMode(event.target.value as ImportMode)} className="rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-black">
+              <option value="merge">Add / merge</option>
+              <option value="replace">Replace current tower data</option>
+            </select>
+            <button type="button" onClick={() => void data.refresh()} className="inline-flex items-center gap-1 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-black text-blue-900">
+              <RefreshCw size={13} /> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 md:grid-cols-3">
+          <ImportCard
+            title="Bundle Register"
+            description="CSV. Duplicate display refs are kept separate by bundle section."
+            busy={busy === "bundles"}
+            onClick={() => bundleInputRef.current?.click()}
+          />
+          <ImportCard
+            title="Member Register"
+            description="CSV / XLSX / XLS. Members are linked to bundle UUID + section."
+            busy={busy === "members"}
+            onClick={() => memberInputRef.current?.click()}
+          />
+          <ImportCard
+            title="Bolt Register"
+            description="CSV. Imports by tower segment, diameter, DN/SN and length."
+            busy={busy === "bolts"}
+            onClick={() => boltInputRef.current?.click()}
+          />
+        </div>
+
+        <input ref={bundleInputRef} type="file" accept=".csv" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBundles(file); event.currentTarget.value = ""; }} />
+        <input ref={memberInputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importMembers(file); event.currentTarget.value = ""; }} />
+        <input ref={boltInputRef} type="file" accept=".csv" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBolts(file); event.currentTarget.value = ""; }} />
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-4">
+        <DataHealthCard label="Bundles" value={data.bundles.length} good />
+        <DataHealthCard label="Members" value={data.members.length} good />
+        <DataHealthCard label="Unmatched Members" value={unmatchedMembers.length} good={unmatchedMembers.length === 0} />
+        <DataHealthCard label="No Bundle UUID" value={membersWithoutBundleId} good={membersWithoutBundleId === 0} />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 p-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+              {(["bundles", "members", "bolts"] as DataManagerTab[]).map((id) => (
+                <button key={id} type="button" onClick={() => { setTab(id); setQuery(""); }} className={`rounded-lg px-3 py-2 text-xs font-black capitalize ${tab === id ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>
+                  {id}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-1 gap-2 md:max-w-xl">
+              <div className="relative flex-1">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab}…`} className="w-full rounded-xl border border-slate-300 py-2 pl-8 pr-3 text-xs" />
+              </div>
+              <button type="button" onClick={exportMasterData} className="inline-flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700">
+                <Download size={13} /> Export
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tab === "bundles") setBundleDraft({ tower_id: towerId, bundle_no: "", section: "General", qty_required: 1, member_qty: 0, total_weight: null });
+                  if (tab === "members") setMemberDraft({ tower_id: towerId, bundle_id: null, bundle_reference: "", drawing_number: "", mark_no: "", qty_per_tower: 1, section: "", tower_segment: "General" });
+                  if (tab === "bolts") setBoltDraft({ tower_id: towerId, tower_segment: "General", bolt_diameter: "", dn_sn: "", length: "", qty: 0 });
+                }}
+                className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white"
+              >
+                <Plus size={13} /> Add
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          {tab === "bundles" && (
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wide text-slate-400">
+                <tr><th className="px-3 py-2 text-left">Bundle</th><th className="px-3 py-2 text-left">Section</th><th className="px-3 py-2 text-center">Required</th><th className="px-3 py-2 text-center">Members</th><th className="px-3 py-2 text-center">Weight</th><th className="px-3 py-2 text-right">Actions</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredBundles.map((row) => (
+                  <tr key={bundleUiKey(row)}>
+                    <td className="px-3 py-2.5 font-black text-slate-950">{row.bundle_no}</td>
+                    <td className="px-3 py-2.5">{row.section}</td>
+                    <td className="px-3 py-2.5 text-center font-bold">{row.qty_required}</td>
+                    <td className="px-3 py-2.5 text-center">{row.member_qty}</td>
+                    <td className="px-3 py-2.5 text-center">{row.total_weight ?? "—"}</td>
+                    <td className="px-3 py-2.5"><DataActions onEdit={() => setBundleDraft({ ...row })} onDelete={() => void deleteRow("tower_required_bundles", row.id, `${row.bundle_no} · ${row.section}`)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {tab === "members" && (
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wide text-slate-400">
+                <tr><th className="px-3 py-2 text-left">Member</th><th className="px-3 py-2 text-left">Bundle</th><th className="px-3 py-2 text-left">Drawing</th><th className="px-3 py-2 text-left">Profile</th><th className="px-3 py-2 text-center">Qty/Tower</th><th className="px-3 py-2 text-left">Segment</th><th className="px-3 py-2 text-right">Actions</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredMembers.map((row) => (
+                  <tr key={row.id || `${row.bundle_reference}-${row.mark_no}-${row.tower_segment}`}>
+                    <td className="px-3 py-2.5 font-black text-slate-950">{row.mark_no}</td>
+                    <td className="px-3 py-2.5">{row.bundle_reference}{!row.bundle_id && <span className="ml-1 text-[9px] font-black text-amber-600">UNLINKED</span>}</td>
+                    <td className="px-3 py-2.5">{row.drawing_number || "—"}</td>
+                    <td className="px-3 py-2.5">{row.section || "—"}</td>
+                    <td className="px-3 py-2.5 text-center">{row.qty_per_tower ?? "—"}</td>
+                    <td className="px-3 py-2.5">{row.tower_segment || "—"}</td>
+                    <td className="px-3 py-2.5"><DataActions onEdit={() => setMemberDraft({ ...row })} onDelete={() => void deleteRow("tower_material_members", row.id, row.mark_no)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {tab === "bolts" && (
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wide text-slate-400">
+                <tr><th className="px-3 py-2 text-left">Segment</th><th className="px-3 py-2 text-center">Diameter</th><th className="px-3 py-2 text-center">DN/SN</th><th className="px-3 py-2 text-center">Length</th><th className="px-3 py-2 text-center">Qty</th><th className="px-3 py-2 text-right">Actions</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredBolts.map((row) => (
+                  <tr key={row.id || `${row.tower_segment}-${row.bolt_diameter}-${row.dn_sn}-${row.length}`}>
+                    <td className="px-3 py-2.5 font-black text-slate-950">{row.tower_segment}</td>
+                    <td className="px-3 py-2.5 text-center font-black">{row.bolt_diameter}</td>
+                    <td className="px-3 py-2.5 text-center">{row.dn_sn || "—"}</td>
+                    <td className="px-3 py-2.5 text-center">{row.length}</td>
+                    <td className="px-3 py-2.5 text-center font-black">{row.qty}</td>
+                    <td className="px-3 py-2.5"><DataActions onEdit={() => setBoltDraft({ ...row })} onDelete={() => void deleteRow("tower_material_bolts", row.id, `${row.bolt_diameter} ${row.length}`)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {bundleDraft && (
+        <EditPanel title={bundleDraft.id ? "Edit Bundle" : "Add Bundle"} onClose={() => setBundleDraft(null)} onSave={() => void saveBundle()} saving={busy === "save"}>
+          <EditInput label="Bundle No" value={bundleDraft.bundle_no} onChange={(value) => setBundleDraft((prev) => prev ? { ...prev, bundle_no: value } : prev)} />
+          <EditInput label="Section" value={bundleDraft.section} onChange={(value) => setBundleDraft((prev) => prev ? { ...prev, section: value } : prev)} />
+          <EditInput label="Qty Required" type="number" value={bundleDraft.qty_required} onChange={(value) => setBundleDraft((prev) => prev ? { ...prev, qty_required: safeNumber(value) } : prev)} />
+          <EditInput label="Member Qty" type="number" value={bundleDraft.member_qty} onChange={(value) => setBundleDraft((prev) => prev ? { ...prev, member_qty: safeNumber(value) } : prev)} />
+          <EditInput label="Total Weight" type="number" value={bundleDraft.total_weight ?? ""} onChange={(value) => setBundleDraft((prev) => prev ? { ...prev, total_weight: value === "" ? null : safeNumber(value) } : prev)} />
+        </EditPanel>
+      )}
+
+      {memberDraft && (
+        <EditPanel title={memberDraft.id ? "Edit Member" : "Add Member"} onClose={() => setMemberDraft(null)} onSave={() => void saveMember()} saving={busy === "save"}>
+          <EditInput label="Member Number" value={memberDraft.mark_no} onChange={(value) => setMemberDraft((prev) => prev ? { ...prev, mark_no: value } : prev)} />
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Bundle</label>
+            <select
+              value={memberDraft.bundle_id || ""}
+              onChange={(event) => {
+                const bundle = data.bundles.find((row) => row.id === event.target.value);
+                setMemberDraft((prev) => prev ? {
+                  ...prev,
+                  bundle_id: bundle?.id || null,
+                  bundle_reference: bundle?.bundle_no || "",
+                  tower_segment: bundle?.section || "General",
+                } : prev);
+              }}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            >
+              <option value="">Select bundle…</option>
+              {data.bundles.map((bundle) => <option key={bundleUiKey(bundle)} value={bundle.id || ""}>{bundle.bundle_no} · {bundle.section}</option>)}
+            </select>
+          </div>
+          <EditInput label="Drawing Number" value={memberDraft.drawing_number} onChange={(value) => setMemberDraft((prev) => prev ? { ...prev, drawing_number: value } : prev)} />
+          <EditInput label="Profile / Section" value={memberDraft.section} onChange={(value) => setMemberDraft((prev) => prev ? { ...prev, section: value } : prev)} />
+          <EditInput label="Qty / Tower" type="number" value={memberDraft.qty_per_tower ?? ""} onChange={(value) => setMemberDraft((prev) => prev ? { ...prev, qty_per_tower: safeNumber(value) } : prev)} />
+          <EditInput label="Tower Segment" value={memberDraft.tower_segment} onChange={(value) => setMemberDraft((prev) => prev ? { ...prev, tower_segment: value } : prev)} />
+        </EditPanel>
+      )}
+
+      {boltDraft && (
+        <EditPanel title={boltDraft.id ? "Edit Bolt" : "Add Bolt"} onClose={() => setBoltDraft(null)} onSave={() => void saveBolt()} saving={busy === "save"}>
+          <EditInput label="Tower Segment" value={boltDraft.tower_segment} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, tower_segment: value } : prev)} />
+          <EditInput label="Bolt Diameter" value={boltDraft.bolt_diameter} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, bolt_diameter: value } : prev)} />
+          <EditInput label="DN/SN" value={boltDraft.dn_sn} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, dn_sn: value } : prev)} />
+          <EditInput label="Length" value={boltDraft.length} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, length: value } : prev)} />
+          <EditInput label="Qty" type="number" value={boltDraft.qty} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, qty: safeNumber(value) } : prev)} />
+        </EditPanel>
+      )}
+    </div>
+  );
+}
+
+function ImportCard({ title, description, busy, onClick }: { title: string; description: string; busy: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} disabled={busy} className="rounded-2xl border border-blue-200 bg-white p-4 text-left hover:border-blue-400 disabled:opacity-60">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Upload size={16} /></div>
+        {busy && <RefreshCw size={15} className="animate-spin text-blue-600" />}
+      </div>
+      <div className="mt-3 font-black text-slate-950">{title}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-500">{description}</div>
+    </button>
+  );
+}
+
+function DataHealthCard({ label, value, good }: { label: string; value: number; good: boolean }) {
+  return (
+    <div className={`rounded-xl border p-3 ${good ? "border-slate-200 bg-white" : "border-amber-200 bg-amber-50"}`}>
+      <div className="flex items-center justify-between">
+        <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div>
+        {good ? <CheckCircle2 size={13} className="text-emerald-600" /> : <AlertCircle size={13} className="text-amber-600" />}
+      </div>
+      <div className="mt-1 text-xl font-black text-slate-950">{value}</div>
+    </div>
+  );
+}
+
+function DataActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+  return (
+    <div className="flex justify-end gap-1">
+      <button type="button" onClick={onEdit} className="rounded-lg bg-slate-100 p-2 text-slate-600 hover:bg-slate-200" title="Edit"><Pencil size={13} /></button>
+      <button type="button" onClick={onDelete} className="rounded-lg bg-rose-50 p-2 text-rose-600 hover:bg-rose-100" title="Delete"><Trash2 size={13} /></button>
+    </div>
+  );
+}
+
+function EditPanel({
+  title,
+  children,
+  onClose,
+  onSave,
+  saving,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/30 p-2 md:items-center">
+      <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 p-4">
+          <h3 className="text-lg font-black text-slate-950">{title}</h3>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100"><X size={17} /></button>
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-2">{children}</div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 p-4">
+          <button type="button" onClick={onClose} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-black text-slate-700">Cancel</button>
+          <button type="button" onClick={onSave} disabled={saving} className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-4 py-2 text-sm font-black text-white disabled:opacity-60">
+            <Save size={14} /> {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditInput({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  type?: "text" | "number";
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-black text-slate-500">{label}</label>
+      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" />
+    </div>
+  );
 }
 
 function BoltRegister({ bolts }: { bolts: Bolt[] }) {
@@ -1312,14 +2936,16 @@ function BoltSummary({ label, value }: { label: string; value: number }) {
   return <div className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div><div className="text-xl font-black text-slate-950">{value}</div></div>;
 }
 
-type Tab = "search" | "bundles" | "missing" | "excess" | "bolts";
+
+type Tab = "overview" | "search" | "bundles" | "issues" | "bolts" | "data";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
+  { id: "overview", label: "Overview", icon: Boxes },
   { id: "search", label: "Search", icon: Search },
-  { id: "bundles", label: "Bundle Control", icon: PackageCheck },
-  { id: "missing", label: "Missing", icon: TriangleAlert },
-  { id: "excess", label: "Excess", icon: CirclePlus },
+  { id: "bundles", label: "Bundles", icon: PackageCheck },
+  { id: "issues", label: "Issues", icon: TriangleAlert },
   { id: "bolts", label: "Bolts", icon: Wrench },
+  { id: "data", label: "Data & Imports", icon: Database },
 ];
 
 export default function MaterialsControlPage() {
@@ -1327,20 +2953,16 @@ export default function MaterialsControlPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
   const data = useMaterialsData(towerId);
-  const [activeTab, setActiveTab] = useState<Tab>("search");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
 
-  const bundleMissing = data.bundles.filter((bundle: Bundle) => data.deriveBundleStatus(bundle) === "missing").length;
-  const memberMissing = data.members.filter((member: Member) => data.getMemberCheck(member)?.status === "missing").length;
-  const docketMissingItems = data.missingEvents.reduce((sum: number, event) => sum + event.items.length, 0);
-  const docketExcessItems = data.excessEvents.reduce((sum: number, event) => sum + event.items.length, 0);
-  const overReceived = data.bundles.filter((bundle: Bundle) => data.receivedQty(bundle) > bundle.qty_required).length;
-  const completed = data.bundles.filter((bundle: Bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
-
-  const stats = {
-    completed,
-    missing: docketMissingItems + bundleMissing + memberMissing,
-    excess: docketExcessItems + overReceived,
-  };
+  const missingIssues = buildMissingIssues(data);
+  const openMissing = missingIssues.filter((row) => row.status === "open").length;
+  const partialMissing = missingIssues.filter((row) => row.status === "partial").length;
+  const missingOutstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
+  const excessCount =
+    data.excessEvents.reduce((sum, event) => sum + event.items.length, 0) +
+    data.bundles.filter((bundle) => data.receivedQty(bundle) > bundle.qty_required).length;
+  const completed = data.bundles.filter((bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
 
   if (data.loading) {
     return <div className="min-h-screen bg-slate-50 p-6 text-sm text-slate-500">Loading materials control…</div>;
@@ -1356,21 +2978,33 @@ export default function MaterialsControlPage() {
             <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div className="flex items-center gap-2">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-white"><Boxes size={19} /></div>
-                <div><h1 className="text-xl font-black tracking-tight text-slate-950 md:text-2xl">Materials Control</h1><p className="mt-0.5 max-w-3xl text-sm text-slate-500">One workspace for material lookup, bundle receiving, Daily Docket missing/excess records and bolts.</p></div>
+                <div>
+                  <h1 className="text-xl font-black tracking-tight text-slate-950 md:text-2xl">Materials Control</h1>
+                  <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+                    Website management workspace for material search, bundle control, missing-material delivery close-out, bolts and master data.
+                  </p>
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 {data.saving && <span className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">Saving…</span>}
-                <Link href={`/project/${projectId}/tower/${towerId}/materials/register`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-200"><Settings2 size={14} /> Register & Imports</Link>
+                <button type="button" onClick={() => void data.refresh()} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50">
+                  <RefreshCw size={14} /> Refresh
+                </button>
+                <Link href={`/project/${projectId}/tower/${towerId}/dockets`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-200">
+                  <ClipboardList size={14} /> Daily Dockets
+                </Link>
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
               <MainSummary label="Bundles" value={data.bundles.length} />
-              <MainSummary label="Received" value={stats.completed} tone="green" />
+              <MainSummary label="Complete" value={completed} tone="green" />
               <MainSummary label="Members" value={data.members.length} />
-              <MainSummary label="Missing" value={stats.missing} tone="red" />
-              <MainSummary label="Excess" value={stats.excess} tone="blue" />
+              <MainSummary label="Missing Open" value={openMissing} tone="red" />
+              <MainSummary label="Part Delivered" value={partialMissing} tone="amber" />
+              <MainSummary label="Missing Qty Left" value={missingOutstandingQty} tone="red" />
+              <MainSummary label="Excess" value={excessCount} tone="blue" />
               <MainSummary label="Bolts" value={data.bolts.length} />
             </div>
           </div>
@@ -1380,18 +3014,48 @@ export default function MaterialsControlPage() {
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 const active = activeTab === tab.id;
-                const count = tab.id === "missing" ? stats.missing : tab.id === "excess" ? stats.excess : null;
-                return <button type="button" key={tab.id} onClick={() => setActiveTab(tab.id)} className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black transition ${active ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-950"}`}><Icon size={15} />{tab.label}{count !== null && count > 0 && <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-black ${active ? "bg-white/15 text-white" : tab.id === "missing" ? "bg-rose-100 text-rose-700" : "bg-blue-100 text-blue-700"}`}>{count}</span>}</button>;
+                const count =
+                  tab.id === "issues"
+                    ? openMissing + partialMissing
+                    : null;
+                return (
+                  <button
+                    type="button"
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-black transition ${
+                      active ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-950"
+                    }`}
+                  >
+                    <Icon size={15} />
+                    {tab.label}
+                    {count !== null && count > 0 && (
+                      <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-black ${active ? "bg-white/15 text-white" : "bg-rose-100 text-rose-700"}`}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
               })}
             </div>
           </div>
 
           <div className="p-3 md:p-5">
+            {activeTab === "overview" && (
+              <OverviewWorkspace
+                data={data}
+                projectId={projectId}
+                towerId={towerId}
+                onOpenIssues={() => setActiveTab("issues")}
+                onOpenBundles={() => setActiveTab("bundles")}
+                onOpenData={() => setActiveTab("data")}
+              />
+            )}
             {activeTab === "search" && <MaterialsSearch data={data} />}
             {activeTab === "bundles" && <BundleControl data={data} />}
-            {activeTab === "missing" && <MaterialIssues mode="missing" data={data} projectId={projectId} towerId={towerId} />}
-            {activeTab === "excess" && <MaterialIssues mode="excess" data={data} projectId={projectId} towerId={towerId} />}
+            {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} />}
             {activeTab === "bolts" && <BoltRegister bolts={data.bolts} />}
+            {activeTab === "data" && <DataImportsWorkspace data={data} towerId={towerId} />}
           </div>
         </div>
       </div>
@@ -1399,10 +3063,11 @@ export default function MaterialsControlPage() {
   );
 }
 
-function MainSummary({ label, value, tone = "slate" }: { label: string; value: string | number; tone?: "slate" | "green" | "red" | "blue" }) {
+function MainSummary({ label, value, tone = "slate" }: { label: string; value: string | number; tone?: "slate" | "green" | "amber" | "red" | "blue" }) {
   const styles = {
     slate: "border-slate-200 bg-slate-50 text-slate-950",
     green: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
     red: "border-rose-200 bg-rose-50 text-rose-900",
     blue: "border-blue-200 bg-blue-50 text-blue-900",
   };
