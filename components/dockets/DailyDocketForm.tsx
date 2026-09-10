@@ -105,6 +105,11 @@ type MaterialEventItemDraft = {
   ui_id: string;
   source_table: string;
   source_record_id: string;
+  issue_key: string;
+  source_issue_key: string;
+  bundle_id: string;
+  bundle_no: string;
+  bundle_section: string;
   material_kind: "registered" | "manual" | "manual_bolt";
   manual_category: string;
   bolt_size: string;
@@ -144,10 +149,30 @@ type MaterialEventDraft = {
 type MaterialCatalogItem = {
   source_table: string;
   source_record_id: string;
+  bundle_id: string;
+  bundle_no: string;
+  bundle_section: string;
   item_reference: string;
   item_description: string;
   unit: string;
   tower_id: string;
+};
+
+type MissingMaterialIssue = {
+  issue_key: string;
+  source_table: string;
+  source_record_id: string;
+  bundle_id: string;
+  bundle_no: string;
+  bundle_section: string;
+  item_reference: string;
+  item_description: string;
+  original_quantity: number;
+  received_quantity: number;
+  remaining_quantity: number;
+  unit: string;
+  first_reported_at: string;
+  source_docket_id: string;
 };
 
 type TowerOption = {
@@ -241,6 +266,8 @@ type DocketRecord = {
   other_delay_hours: number | null;
   other_delay_reason: string | null;
   delays_comments: string | null;
+  daily_site_summary?: string | null;
+  rfi_references?: string[] | null;
   missing_items_bolts: string | null;
   bc_rep_name: string | null;
   client_rep_name: string | null;
@@ -443,6 +470,36 @@ function makeUiId() {
     return crypto.randomUUID();
   }
   return `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function makeUuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
+function rfiReferencesToText(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => toStringValue(item).trim()).filter(Boolean).join(", ");
+  }
+  return toStringValue(value);
+}
+
+function parseRfiReferences(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,;\n\r]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 function makeLabourRow(
@@ -803,6 +860,11 @@ function blankMaterialItem(): MaterialEventItemDraft {
     ui_id: makeUiId(),
     source_table: "",
     source_record_id: "",
+    issue_key: "",
+    source_issue_key: "",
+    bundle_id: "",
+    bundle_no: "",
+    bundle_section: "",
     material_kind: "registered",
     manual_category: "",
     bolt_size: "",
@@ -916,6 +978,13 @@ export default function DailyDocketForm({
   const [otherDelayReason, setOtherDelayReason] = useState(toStringValue(initialDocket?.other_delay_reason));
   const [missingItemsBolts, setMissingItemsBolts] = useState(toStringValue(initialDocket?.missing_items_bolts));
   const [delaysComments, setDelaysComments] = useState(toStringValue(initialDocket?.delays_comments));
+  const [dailySiteSummary, setDailySiteSummary] = useState(
+    toStringValue(initialDocket?.daily_site_summary) ||
+      stripMobilisationMetadata(initialDocket?.delays_comments)
+  );
+  const [rfiReferencesText, setRfiReferencesText] = useState(
+    rfiReferencesToText(initialDocket?.rfi_references)
+  );
   const [bcRepName, setBcRepName] = useState(toStringValue(initialDocket?.bc_rep_name));
   const [bcSignatureDataUrl, setBcSignatureDataUrl] = useState(
     toStringValue(initialDocket?.bc_signature_data_url)
@@ -938,7 +1007,7 @@ export default function DailyDocketForm({
   const [lunchBreakMinutes, setLunchBreakMinutes] = useState(toStringValue(initialDocket?.lunch_break_minutes));
   const [travelInMinutes, setTravelInMinutes] = useState(toStringValue(initialDocket?.travel_in_minutes));
   const [travelOutMinutes, setTravelOutMinutes] = useState(toStringValue(initialDocket?.travel_out_minutes));
-  const [mobilisationHours, setMobilisationHours] = useState(hoursToMinutes(initialDocket?.mobilisation_hours));
+  const [mobilisationHours, setMobilisationHours] = useState(toStringValue(initialDocket?.mobilisation_hours));
   const [mobilisationNotes, setMobilisationNotes] = useState(toStringValue(initialDocket?.mobilisation_notes));
   const [incidentOccurred, setIncidentOccurred] = useState(Boolean(initialDocket?.incident_occurred));
   const [incidentType, setIncidentType] = useState(toStringValue(initialDocket?.incident_type));
@@ -967,6 +1036,7 @@ export default function DailyDocketForm({
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [towerRevisionAllocations, setTowerRevisionAllocations] = useState<TowerRevisionAllocation[]>([]);
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
+  const [missingMaterialIssues, setMissingMaterialIssues] = useState<MissingMaterialIssue[]>([]);
   const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
     enabled:
       toNumber(initialDocket?.mobilisation_hours) > 0 ||
@@ -1101,7 +1171,7 @@ export default function DailyDocketForm({
       const [membersRes, bundlesRes] = await Promise.all([
         supabase
           .from("tower_material_members")
-          .select("id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section")
+          .select("id, tower_id, bundle_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section, tower_segment")
           .in("tower_id", towerIds),
         supabase
           .from("tower_required_bundles")
@@ -1116,13 +1186,17 @@ export default function DailyDocketForm({
           catalog.push({
             source_table: "tower_material_members",
             source_record_id: String(row.id),
+            bundle_id: toStringValue(row.bundle_id),
+            bundle_no: toStringValue(row.bundle_reference),
+            bundle_section: toStringValue(row.tower_segment),
             tower_id: String(row.tower_id),
             item_reference: String(row.mark_no || row.pn_final || row.bundle_reference || "Member"),
             item_description: [
-              row.drawing_number ? `Drawing ${row.drawing_number}` : "",
               row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
-              row.section ? `Section ${row.section}` : "",
-              row.pn_final ? `Profile ${row.pn_final}` : "",
+              row.tower_segment ? `Bundle section ${row.tower_segment}` : "",
+              row.drawing_number ? `Drawing ${row.drawing_number}` : "",
+              row.section ? `Profile ${row.section}` : "",
+              row.qty_per_tower != null ? `Qty/Tower ${row.qty_per_tower}` : "",
             ].filter(Boolean).join(" · "),
             unit: "ea",
           });
@@ -1135,9 +1209,15 @@ export default function DailyDocketForm({
           catalog.push({
             source_table: "tower_required_bundles",
             source_record_id: String(row.id),
+            bundle_id: String(row.id),
+            bundle_no: toStringValue(row.bundle_no),
+            bundle_section: toStringValue(row.section),
             tower_id: String(row.tower_id),
             item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
-            item_description: row.section ? `Section ${row.section}` : "Bundle",
+            item_description: [
+              row.section ? `Bundle section ${row.section}` : "",
+              row.qty_required != null ? `Required ${row.qty_required}` : "",
+            ].filter(Boolean).join(" · ") || "Bundle",
             unit: "bundle",
           });
         }
@@ -1149,6 +1229,112 @@ export default function DailyDocketForm({
     const timer = window.setTimeout(() => void loadMaterialContext(), 0);
     return () => window.clearTimeout(timer);
   }, [projectId, supabase]);
+
+  useEffect(() => {
+    async function loadMissingMaterialIssues() {
+      const [missingEventsRes, receivedEventsRes] = await Promise.all([
+        supabase
+          .from("tower_material_events")
+          .select(`
+            id,
+            docket_id,
+            occurred_at,
+            items:tower_material_event_items(
+              id,
+              issue_key,
+              source_issue_key,
+              source_table,
+              source_record_id,
+              bundle_id,
+              bundle_no,
+              bundle_section,
+              material_type,
+              bolt_size,
+              item_reference,
+              item_description,
+              quantity,
+              unit
+            )
+          `)
+          .eq("tower_id", towerId)
+          .eq("event_type", "missing")
+          .order("occurred_at", { ascending: true }),
+        supabase
+          .from("tower_material_events")
+          .select(`
+            id,
+            docket_id,
+            occurred_at,
+            items:tower_material_event_items(
+              source_issue_key,
+              quantity
+            )
+          `)
+          .eq("tower_id", towerId)
+          .eq("event_type", "found_received"),
+      ]);
+
+      if (missingEventsRes.error) {
+        console.warn("Outstanding missing material could not be loaded", missingEventsRes.error);
+        setMissingMaterialIssues([]);
+        return;
+      }
+
+      if (receivedEventsRes.error) {
+        console.warn("Material receipt history could not be loaded", receivedEventsRes.error);
+      }
+
+      const receivedByIssue = new Map<string, number>();
+
+      for (const event of (receivedEventsRes.data || []) as any[]) {
+        for (const item of event.items || []) {
+          const sourceIssueKey = toStringValue(item.source_issue_key);
+          if (!sourceIssueKey) continue;
+          receivedByIssue.set(
+            sourceIssueKey,
+            (receivedByIssue.get(sourceIssueKey) || 0) + Math.max(toNumber(item.quantity), 0)
+          );
+        }
+      }
+
+      const issues: MissingMaterialIssue[] = [];
+
+      for (const event of (missingEventsRes.data || []) as any[]) {
+        for (const item of event.items || []) {
+          const issueKey = toStringValue(item.issue_key);
+          if (!issueKey) continue;
+
+          const originalQuantity = Math.max(toNumber(item.quantity), 0);
+          const receivedQuantity = Math.max(receivedByIssue.get(issueKey) || 0, 0);
+
+          issues.push({
+            issue_key: issueKey,
+            source_table: toStringValue(item.source_table),
+            source_record_id: toStringValue(item.source_record_id),
+            bundle_id: toStringValue(item.bundle_id),
+            bundle_no: toStringValue(item.bundle_no),
+            bundle_section: toStringValue(item.bundle_section),
+            item_reference:
+              toStringValue(item.item_reference) ||
+              toStringValue(item.bolt_size) ||
+              "Material item",
+            item_description: toStringValue(item.item_description),
+            original_quantity: originalQuantity,
+            received_quantity: receivedQuantity,
+            remaining_quantity: Math.max(originalQuantity - receivedQuantity, 0),
+            unit: toStringValue(item.unit) || "ea",
+            first_reported_at: toStringValue(event.occurred_at),
+            source_docket_id: toStringValue(event.docket_id),
+          });
+        }
+      }
+
+      setMissingMaterialIssues(issues);
+    }
+
+    const timer = window.setTimeout(() => void loadMissingMaterialIssues(), 0);
+    return () => window.clearTimeout(timer);
+  }, [supabase, towerId]);
 
   useEffect(() => {
     async function loadV2ProgressConfig() {
@@ -1200,6 +1386,11 @@ export default function DailyDocketForm({
         setMissingItemsBolts(toStringValue(initialDocket.missing_items_bolts));
         const initialDelayComments = toStringValue(initialDocket.delays_comments);
         setDelaysComments(stripMobilisationMetadata(initialDelayComments));
+        setDailySiteSummary(
+          toStringValue(initialDocket.daily_site_summary) ||
+            stripMobilisationMetadata(initialDelayComments)
+        );
+        setRfiReferencesText(rfiReferencesToText(initialDocket.rfi_references));
 
         const mobilisationLine = initialDelayComments
           .split("\n")
@@ -1229,10 +1420,10 @@ export default function DailyDocketForm({
             worker_names: values.workers ? values.workers.split(",").map((name) => name.trim()).filter(Boolean) : [],
           });
 
-          if (values.minutes) {
-            setMobilisationHours(values.minutes);
-          } else if (values.hours) {
-            setMobilisationHours(hoursToMinutes(values.hours));
+          if (values.hours) {
+            setMobilisationHours(values.hours);
+          } else if (values.minutes) {
+            setMobilisationHours(String(minutesToHours(values.minutes)));
           }
           if (values.notes) setMobilisationNotes(values.notes);
         }
@@ -1240,7 +1431,7 @@ export default function DailyDocketForm({
         setLunchBreakMinutes(toStringValue(initialDocket.lunch_break_minutes));
         setTravelInMinutes(toStringValue(initialDocket.travel_in_minutes));
         setTravelOutMinutes(toStringValue(initialDocket.travel_out_minutes));
-        setMobilisationHours(hoursToMinutes(initialDocket.mobilisation_hours));
+        setMobilisationHours(toStringValue(initialDocket.mobilisation_hours));
         setMobilisationNotes(toStringValue(initialDocket.mobilisation_notes));
         if (!mobilisationLine && (toNumber(initialDocket.mobilisation_hours) > 0 || toStringValue(initialDocket.mobilisation_notes).trim())) {
           setMobilisation((prev) => ({
@@ -1355,6 +1546,11 @@ export default function DailyDocketForm({
                 ui_id: makeUiId(),
                 source_table: toStringValue(item.source_table),
                 source_record_id: toStringValue(item.source_record_id),
+                issue_key: toStringValue(item.issue_key),
+                source_issue_key: toStringValue(item.source_issue_key),
+                bundle_id: toStringValue(item.bundle_id),
+                bundle_no: toStringValue(item.bundle_no),
+                bundle_section: toStringValue(item.bundle_section),
                 material_kind:
                   item.material_type === "bolt" &&
                   !item.source_table &&
@@ -1431,11 +1627,16 @@ export default function DailyDocketForm({
       setOtherDelayReason(toStringValue(data.other_delay_reason));
       setMissingItemsBolts(toStringValue(data.missing_items_bolts));
       setDelaysComments(stripMobilisationMetadata(data.delays_comments));
+      setDailySiteSummary(
+        toStringValue(data.daily_site_summary) ||
+          stripMobilisationMetadata(data.delays_comments)
+      );
+      setRfiReferencesText(rfiReferencesToText(data.rfi_references));
 
       setLunchBreakMinutes(toStringValue(data.lunch_break_minutes));
       setTravelInMinutes(toStringValue(data.travel_in_minutes));
       setTravelOutMinutes(toStringValue(data.travel_out_minutes));
-      setMobilisationHours(hoursToMinutes(data.mobilisation_hours));
+      setMobilisationHours(toStringValue(data.mobilisation_hours));
       setMobilisationNotes(toStringValue(data.mobilisation_notes));
       if (toNumber(data.mobilisation_hours) > 0 || toStringValue(data.mobilisation_notes).trim()) {
         setMobilisation((prev) => ({
@@ -1570,6 +1771,11 @@ export default function DailyDocketForm({
             ui_id: makeUiId(),
             source_table: toStringValue(item.source_table),
             source_record_id: toStringValue(item.source_record_id),
+            issue_key: toStringValue(item.issue_key),
+            source_issue_key: toStringValue(item.source_issue_key),
+            bundle_id: toStringValue(item.bundle_id),
+            bundle_no: toStringValue(item.bundle_no),
+            bundle_section: toStringValue(item.bundle_section),
             material_kind:
               item.material_type === "bolt" &&
               !item.source_table &&
@@ -1687,7 +1893,7 @@ export default function DailyDocketForm({
     () =>
       calculateLabourRows(labourRows, delayRows, {
         enabled: mobilisation.enabled,
-        durationMinutes: mobilisationHours,
+        durationMinutes: hoursToMinutes(mobilisationHours),
         workerNames: mobilisation.worker_names,
       }) as LabourRow[],
     [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
@@ -1697,7 +1903,7 @@ export default function DailyDocketForm({
     () =>
       calculateLabourTotals(labourRows, delayRows, {
         enabled: mobilisation.enabled,
-        durationMinutes: mobilisationHours,
+        durationMinutes: hoursToMinutes(mobilisationHours),
         workerNames: mobilisation.worker_names,
       }),
     [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
@@ -1749,13 +1955,13 @@ export default function DailyDocketForm({
 
   const totalMobilisationHours = labourTotals.mobilisationManhours;
 
-  const mobilisationDurationHours = mobilisation.enabled ? minutesToHours(mobilisationHours) : 0;
+  const mobilisationDurationHours = mobilisation.enabled ? toNumber(mobilisationHours) : 0;
 
   const mobilisationWorkerCount = calculateMobilisationWorkerCount({
     labourRows,
     mobilisation: {
       enabled: mobilisation.enabled,
-      durationMinutes: mobilisationHours,
+      durationMinutes: hoursToMinutes(mobilisationHours),
       workerNames: mobilisation.worker_names,
     },
   });
@@ -1764,7 +1970,7 @@ export default function DailyDocketForm({
     labourRows,
     mobilisation: {
       enabled: mobilisation.enabled,
-      durationMinutes: mobilisationHours,
+      durationMinutes: hoursToMinutes(mobilisationHours),
       workerNames: mobilisation.worker_names,
     },
   });
@@ -1787,6 +1993,28 @@ export default function DailyDocketForm({
       {} as Record<DelayType, number>
     );
   }, [delayRows]);
+
+  const outstandingMissingIssues = useMemo(
+    () => missingMaterialIssues.filter((issue) => issue.remaining_quantity > 0),
+    [missingMaterialIssues]
+  );
+
+  const missingIssueByKey = useMemo(
+    () => new Map(missingMaterialIssues.map((issue) => [issue.issue_key, issue])),
+    [missingMaterialIssues]
+  );
+
+  const linkedReceiptKeysInDraft = useMemo(() => {
+    const keys = new Set<string>();
+    materialEvents
+      .filter((event) => event.event_type === "found_received")
+      .forEach((event) =>
+        event.items.forEach((item) => {
+          if (item.source_issue_key) keys.add(item.source_issue_key);
+        })
+      );
+    return keys;
+  }, [materialEvents]);
 
   const crewOptions = useMemo(
     () =>
@@ -1961,7 +2189,7 @@ export default function DailyDocketForm({
             lunchBreakMinutes,
             travelInMinutes,
             travelOutMinutes,
-            mobilisationHours,
+            mobilisationHours: "",
           }),
         ];
       }
@@ -2224,10 +2452,12 @@ export default function DailyDocketForm({
       toolbox_delay_hours: Number(toolboxDelayHours || delaySummaryByType.toolbox || 0),
       other_delay_hours: Number(otherDelayHours || delaySummaryByType.other || 0),
       other_delay_reason: otherDelayReason,
+      daily_site_summary: dailySiteSummary.trim() || null,
+      rfi_references: parseRfiReferences(rfiReferencesText),
       delays_comments: [
         delaysComments.trim(),
         mobilisation.enabled
-          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|minutes=${mobilisationHours || "0"}|hours=${minutesToHours(mobilisationHours)}|workers=${mobilisation.worker_names.map((name) => name.replace(/[|,]/g, " ")).join(",")}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
+          ? `MOBILISATION|from=${mobilisation.from_tower_id || ""}|to=${mobilisation.to_tower_id || ""}|status=${mobilisation.status}|progress=${mobilisation.percent_complete || "0"}|started=${mobilisation.started_date || ""}|target=${mobilisation.target_move_date || ""}|completed=${mobilisation.completed_date || ""}|minutes=${hoursToMinutes(mobilisationHours)}|hours=${mobilisationHours || "0"}|workers=${mobilisation.worker_names.map((name) => name.replace(/[|,]/g, " ")).join(",")}|notes=${mobilisation.notes.replace(/\|/g, "/")}`
           : "",
       ]
         .filter(Boolean)
@@ -2255,7 +2485,7 @@ export default function DailyDocketForm({
       lunch_break_minutes: Number(lunchBreakMinutes || 0),
       travel_in_minutes: Number(travelInMinutes || 0),
       travel_out_minutes: Number(travelOutMinutes || 0),
-      mobilisation_hours: mobilisation.enabled ? minutesToHours(mobilisationHours) : 0,
+      mobilisation_hours: mobilisation.enabled ? toNumber(mobilisationHours) : 0,
       mobilisation_notes: mobilisation.enabled ? mobilisation.notes || mobilisationNotes || null : null,
       incident_occurred: incidentOccurred,
       incident_type: incidentOccurred ? incidentType || null : null,
@@ -2488,7 +2718,7 @@ export default function DailyDocketForm({
       supabase
         .from("tower_material_members")
         .select(
-          "id, tower_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section"
+          "id, tower_id, bundle_id, bundle_reference, drawing_number, mark_no, pn_final, qty_per_tower, section, tower_segment"
         )
         .eq("tower_id", searchTowerId)
         .or(
@@ -2498,6 +2728,7 @@ export default function DailyDocketForm({
             `bundle_reference.ilike.${pattern}`,
             `drawing_number.ilike.${pattern}`,
             `section.ilike.${pattern}`,
+            `tower_segment.ilike.${pattern}`,
           ].join(",")
         )
         .limit(20),
@@ -2516,15 +2747,18 @@ export default function DailyDocketForm({
         results.push({
           source_table: "tower_material_members",
           source_record_id: String(row.id),
+          bundle_id: toStringValue(row.bundle_id),
+          bundle_no: toStringValue(row.bundle_reference),
+          bundle_section: toStringValue(row.tower_segment),
           tower_id: String(row.tower_id),
           item_reference: String(
             row.mark_no || row.pn_final || row.bundle_reference || "Member"
           ),
           item_description: [
-            row.drawing_number ? `Drawing ${row.drawing_number}` : "",
             row.bundle_reference ? `Bundle ${row.bundle_reference}` : "",
-            row.section ? `Section ${row.section}` : "",
-            row.pn_final ? `Profile ${row.pn_final}` : "",
+            row.tower_segment ? `Bundle section ${row.tower_segment}` : "",
+            row.drawing_number ? `Drawing ${row.drawing_number}` : "",
+            row.section ? `Profile ${row.section}` : "",
             row.qty_per_tower != null ? `Qty/Tower ${row.qty_per_tower}` : "",
           ]
             .filter(Boolean)
@@ -2540,10 +2774,13 @@ export default function DailyDocketForm({
         results.push({
           source_table: "tower_required_bundles",
           source_record_id: String(row.id),
+          bundle_id: String(row.id),
+          bundle_no: toStringValue(row.bundle_no),
+          bundle_section: toStringValue(row.section),
           tower_id: String(row.tower_id),
           item_reference: `Bundle ${String(row.bundle_no || "")}`.trim(),
           item_description: [
-            row.section ? `Section ${row.section}` : "",
+            row.section ? `Bundle section ${row.section}` : "",
             row.qty_required != null ? `Required ${row.qty_required}` : "",
           ]
             .filter(Boolean)
@@ -2585,6 +2822,10 @@ export default function DailyDocketForm({
       updateMaterialItem(eventIndex, itemIndex, {
         source_table: "",
         source_record_id: "",
+        bundle_id: "",
+        bundle_no: "",
+        bundle_section: "",
+        source_issue_key: "",
         material_kind: "manual",
         manual_category: "",
         bolt_size: "",
@@ -2598,6 +2839,10 @@ export default function DailyDocketForm({
     updateMaterialItem(eventIndex, itemIndex, {
       source_table: catalogItem.source_table,
       source_record_id: catalogItem.source_record_id,
+      bundle_id: catalogItem.bundle_id,
+      bundle_no: catalogItem.bundle_no,
+      bundle_section: catalogItem.bundle_section,
+      source_issue_key: "",
       material_kind: "registered",
       manual_category: "",
       bolt_size: "",
@@ -2617,6 +2862,10 @@ export default function DailyDocketForm({
       material_kind: "manual_bolt",
       source_table: "",
       source_record_id: "",
+      bundle_id: "",
+      bundle_no: "",
+      bundle_section: "",
+      source_issue_key: "",
       manual_category: "",
       bolt_size: "",
       search_query: "",
@@ -2635,6 +2884,10 @@ export default function DailyDocketForm({
       material_kind: "manual",
       source_table: "",
       source_record_id: "",
+      bundle_id: "",
+      bundle_no: "",
+      bundle_section: "",
+      source_issue_key: "",
       manual_category: "",
       bolt_size: "",
       search_query: "",
@@ -2650,7 +2903,16 @@ export default function DailyDocketForm({
     setMaterialEvents((prev) =>
       prev.map((event, index) =>
         index === eventIndex
-          ? { ...event, items: [...event.items, blankMaterialItem()] }
+          ? {
+              ...event,
+              items: [
+                ...event.items,
+                {
+                  ...blankMaterialItem(),
+                  issue_key: event.event_type === "missing" ? makeUuid() : "",
+                },
+              ],
+            }
           : event
       )
     );
@@ -2664,6 +2926,39 @@ export default function DailyDocketForm({
         return { ...event, items: nextItems.length ? nextItems : [blankMaterialItem()] };
       })
     );
+  }
+
+  function recordMissingDelivery(issue: MissingMaterialIssue) {
+    if (isView || locked || issue.remaining_quantity <= 0) return;
+
+    const receiptEvent = {
+      ...blankMaterialEvent(),
+      event_type: "found_received" as MaterialEventType,
+      occurred_time: "",
+      affected_work: false,
+      notes: `Delivery against missing material first reported ${
+        issue.first_reported_at ? new Date(issue.first_reported_at).toLocaleDateString() : ""
+      }`.trim(),
+      items: [
+        {
+          ...blankMaterialItem(),
+          source_table: issue.source_table,
+          source_record_id: issue.source_record_id,
+          source_issue_key: issue.issue_key,
+          bundle_id: issue.bundle_id,
+          bundle_no: issue.bundle_no,
+          bundle_section: issue.bundle_section,
+          material_kind: issue.source_record_id ? "registered" as const : "manual" as const,
+          search_query: issue.item_reference,
+          item_reference: issue.item_reference,
+          item_description: issue.item_description,
+          quantity: String(issue.remaining_quantity),
+          unit: issue.unit,
+        },
+      ],
+    };
+
+    setMaterialEvents((prev) => [...prev, receiptEvent]);
   }
 
   function addMaterialPerson(eventIndex: number, employeeName: string) {
@@ -2867,6 +3162,17 @@ export default function DailyDocketForm({
 
           return {
             event_id: eventId,
+            issue_key:
+              event.event_type === "missing"
+                ? item.issue_key || makeUuid()
+                : null,
+            source_issue_key:
+              event.event_type === "found_received"
+                ? item.source_issue_key || null
+                : null,
+            bundle_id: item.bundle_id || null,
+            bundle_no: item.bundle_no || null,
+            bundle_section: item.bundle_section || null,
             source_table: isManualBolt ? null : item.source_table || null,
             source_record_id: isManualBolt ? null : item.source_record_id || null,
             material_type: isManualBolt
@@ -3537,12 +3843,14 @@ export default function DailyDocketForm({
       setOtherDelayHours(toStringValue(lastDocket.other_delay_hours));
       setOtherDelayReason(toStringValue(lastDocket.other_delay_reason));
       setMissingItemsBolts(toStringValue(lastDocket.missing_items_bolts));
-      setDelaysComments(stripMobilisationMetadata(lastDocket.delays_comments));
+      setDelaysComments("");
+      setDailySiteSummary("");
+      setRfiReferencesText("");
 
       setLunchBreakMinutes(toStringValue(lastDocket.lunch_break_minutes));
       setTravelInMinutes(toStringValue(lastDocket.travel_in_minutes));
       setTravelOutMinutes(toStringValue(lastDocket.travel_out_minutes));
-      setMobilisationHours(hoursToMinutes(lastDocket.mobilisation_hours));
+      setMobilisationHours(toStringValue(lastDocket.mobilisation_hours));
       setMobilisationNotes(toStringValue(lastDocket.mobilisation_notes));
       setIncidentOccurred(false);
       setIncidentType("");
@@ -4660,7 +4968,7 @@ export default function DailyDocketForm({
               </div>
 
               <Input
-                label="Time spent (minutes)"
+                label="Time spent (hours)"
                 type="number"
                 value={mobilisationHours}
                 onChange={setMobilisationHours}
@@ -4784,7 +5092,7 @@ export default function DailyDocketForm({
             </div>
 
             <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-              The entered mobilisation duration is applied to every worker currently on this docket. For {labourWorkerCount} worker{labourWorkerCount === 1 ? "" : "s"}, {mobilisationDurationHours.toFixed(2)} hours produces a {mobilisationManhours.toFixed(2)} manhour production deduction.
+              The entered mobilisation duration is applied only to the workers selected above. For {mobilisationWorkerCount} worker{mobilisationWorkerCount === 1 ? "" : "s"}, {mobilisationDurationHours.toFixed(2)} hours produces a {mobilisationManhours.toFixed(2)} manhour production deduction.
             </div>
           </div>
         ) : (
@@ -4797,7 +5105,7 @@ export default function DailyDocketForm({
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-5 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Delays, Missing Steel & Material Movements</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Delays & Materials</h2>
             <p className="text-sm text-slate-500 mt-1">
               Record what happened on site. TTTracker calculates the affected labour/plant time and keeps the formal commercial wording out of the site form.
             </p>
@@ -4806,8 +5114,8 @@ export default function DailyDocketForm({
             <MiniSummary label="General Delay Hrs" value={totalDelayEvents.toFixed(2)} />
             <MiniSummary label="Delay MH" value={totalDelayManhours.toFixed(2)} />
             <MiniSummary
-              label="Material Issues"
-              value={String(materialEvents.filter((event) => event.event_type !== "excess").length)}
+              label="Open Missing"
+              value={String(outstandingMissingIssues.length)}
             />
             <MiniSummary label="Plant Delay Hrs" value={totalPlantDelayHours.toFixed(2)} />
           </div>
@@ -4960,6 +5268,13 @@ export default function DailyDocketForm({
               ))}
             </div>
           )}
+
+          <Input
+            label="Delay notes (optional)"
+            value={delaysComments}
+            onChange={setDelaysComments}
+            disabled={locked || isView}
+          />
         </div>
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-4">
@@ -4979,6 +5294,77 @@ export default function DailyDocketForm({
               >
                 + Record Issue / Movement
               </button>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-amber-300 bg-amber-100/60 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-sm font-black text-amber-950">Outstanding Missing Material</div>
+                <div className="text-xs text-amber-800">
+                  Missing items remain open across dockets until the delivered quantity brings the remaining quantity to zero.
+                </div>
+              </div>
+              <span className="rounded-full border border-amber-300 bg-white px-3 py-1 text-xs font-black text-amber-900">
+                {outstandingMissingIssues.length} open
+              </span>
+            </div>
+
+            {outstandingMissingIssues.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-amber-300 bg-white/80 px-3 py-3 text-sm text-slate-600">
+                No outstanding missing material for this tower.
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {outstandingMissingIssues.map((issue) => {
+                  const alreadyAdded = linkedReceiptKeysInDraft.has(issue.issue_key);
+                  return (
+                    <div
+                      key={issue.issue_key}
+                      className="rounded-xl border border-amber-200 bg-white p-3"
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-black text-slate-900">{issue.item_reference}</span>
+                            {issue.bundle_no && (
+                              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-800">
+                                Bundle {issue.bundle_no}
+                                {issue.bundle_section ? ` · ${issue.bundle_section}` : ""}
+                              </span>
+                            )}
+                          </div>
+                          {issue.item_description && (
+                            <div className="mt-1 text-xs text-slate-500">{issue.item_description}</div>
+                          )}
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-lg bg-slate-100 px-2 py-1">
+                              Missing <strong>{issue.original_quantity}</strong>
+                            </span>
+                            <span className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">
+                              Delivered <strong>{issue.received_quantity}</strong>
+                            </span>
+                            <span className="rounded-lg bg-rose-50 px-2 py-1 text-rose-800">
+                              Remaining <strong>{issue.remaining_quantity}</strong>
+                            </span>
+                          </div>
+                        </div>
+
+                        {!locked && !isView && (
+                          <button
+                            type="button"
+                            disabled={alreadyAdded}
+                            onClick={() => recordMissingDelivery(issue)}
+                            className="shrink-0 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {alreadyAdded ? "Added to this docket" : "Record Delivery"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
@@ -5007,7 +5393,11 @@ export default function DailyDocketForm({
                             <select
                               className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                               value={event.event_type}
-                              disabled={locked || isView}
+                              disabled={
+                                locked ||
+                                isView ||
+                                event.items.some((item) => Boolean(item.source_issue_key))
+                              }
                               onChange={(e) =>
                                 updateMaterialEvent(
                                   eventIndex,
@@ -5017,7 +5407,7 @@ export default function DailyDocketForm({
                               }
                             >
                               <option value="missing">Missing material</option>
-                              <option value="found_received">Found / Received</option>
+                              <option value="found_received">Found / Received / Delivered</option>
                               <option value="taken_from_another_tower">Taken from another tower</option>
                               <option value="sent_to_another_tower">Sent to another tower</option>
                               <option value="damaged_incorrect">Damaged / Incorrect</option>
@@ -5105,23 +5495,38 @@ export default function DailyDocketForm({
                             <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                               <div className="relative">
                                 <label className="block text-sm font-semibold mb-1">
-                                  Search member / bundle
+                                  {item.source_issue_key ? "Missing item being delivered" : "Search member / bundle no / drawing"}
                                 </label>
-                                <input
-                                  className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
-                                  value={item.search_query}
-                                  disabled={locked || isView}
-                                  placeholder="Type 2+ characters: M1278, 23-04..."
-                                  onChange={(e) =>
-                                    void searchProjectMaterial(
-                                      eventIndex,
-                                      itemIndex,
-                                      e.target.value
-                                    )
-                                  }
-                                />
 
-                                {!locked &&
+                                {item.source_issue_key ? (
+                                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                                    <div className="text-sm font-black text-emerald-950">
+                                      {item.item_reference || "Missing material"}
+                                    </div>
+                                    <div className="mt-0.5 text-xs text-emerald-800">
+                                      {item.bundle_no
+                                        ? `Bundle ${item.bundle_no}${item.bundle_section ? ` · ${item.bundle_section}` : ""}`
+                                        : "Linked to original missing-material record"}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <input
+                                    className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
+                                    value={item.search_query}
+                                    disabled={locked || isView}
+                                    placeholder="Member no, bundle no, drawing no, section..."
+                                    onChange={(e) =>
+                                      void searchProjectMaterial(
+                                        eventIndex,
+                                        itemIndex,
+                                        e.target.value
+                                      )
+                                    }
+                                  />
+                                )}
+
+                                {!item.source_issue_key &&
+                                  !locked &&
                                   !isView &&
                                   item.search_query.trim().length > 0 &&
                                   item.material_kind !== "manual" && (
@@ -5146,8 +5551,16 @@ export default function DailyDocketForm({
                                             }
                                             className="block w-full border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-blue-50"
                                           >
-                                            <div className="text-sm font-semibold text-slate-900">
-                                              {catalogItem.item_reference}
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                              <div className="text-sm font-semibold text-slate-900">
+                                                {catalogItem.item_reference}
+                                              </div>
+                                              {catalogItem.bundle_no && (
+                                                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-800">
+                                                  Bundle {catalogItem.bundle_no}
+                                                  {catalogItem.bundle_section ? ` · ${catalogItem.bundle_section}` : ""}
+                                                </span>
+                                              )}
                                             </div>
                                             {catalogItem.item_description && (
                                               <div className="text-xs text-slate-500 mt-0.5">
@@ -5225,7 +5638,7 @@ export default function DailyDocketForm({
                               )}
 
                               <Input
-                                label="Qty"
+                                label={item.source_issue_key ? "Delivered Qty" : "Qty"}
                                 type="number"
                                 value={item.quantity}
                                 onChange={(v) =>
@@ -5254,7 +5667,31 @@ export default function DailyDocketForm({
                               )}
                             </div>
 
-                            {!locked && !isView && (
+                            {item.bundle_no && !item.source_issue_key && (
+                              <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+                                Bundle {item.bundle_no}
+                                {item.bundle_section ? ` · ${item.bundle_section}` : ""}
+                              </div>
+                            )}
+
+                            {item.source_issue_key && (() => {
+                              const sourceIssue = missingIssueByKey.get(item.source_issue_key);
+                              if (!sourceIssue) return null;
+                              const receiptQty = Math.max(toNumber(item.quantity), 0);
+                              const remainingAfter = Math.max(
+                                sourceIssue.remaining_quantity - receiptQty,
+                                0
+                              );
+                              return (
+                                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                                  <strong>Delivery Qty:</strong> {receiptQty} {item.unit || "ea"} ·{" "}
+                                  <strong>Remaining after this docket:</strong> {remainingAfter} {item.unit || "ea"}
+                                  {remainingAfter === 0 ? " · Resolved" : " · Partially received"}
+                                </div>
+                              );
+                            })()}
+
+                            {!locked && !isView && !item.source_issue_key && (
                               <div className="flex items-center gap-3 flex-wrap">
                                 <button
                                   type="button"
@@ -5681,13 +6118,13 @@ export default function DailyDocketForm({
                           <div className="grid lg:grid-cols-[minmax(320px,1.4fr)_minmax(220px,1fr)_100px_100px_auto] gap-3 items-end">
                             <div className="relative">
                               <label className="block text-sm font-semibold mb-1">
-                                Search member / bundle
+                                Search member / bundle no / drawing
                               </label>
                               <input
                                 className="border rounded-xl p-2.5 w-full bg-white disabled:bg-slate-100"
                                 value={item.search_query}
                                 disabled={locked || isView}
-                                placeholder="Type 2+ characters: M1278, 23-04..."
+                                placeholder="Member no, bundle no, drawing no, section..."
                                 onChange={(e) =>
                                   void searchProjectMaterial(
                                     eventIndex,
@@ -5722,8 +6159,16 @@ export default function DailyDocketForm({
                                           }
                                           className="block w-full border-b border-slate-100 px-3 py-2.5 text-left last:border-b-0 hover:bg-emerald-50"
                                         >
-                                          <div className="text-sm font-semibold text-slate-900">
-                                            {catalogItem.item_reference}
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <div className="text-sm font-semibold text-slate-900">
+                                              {catalogItem.item_reference}
+                                            </div>
+                                            {catalogItem.bundle_no && (
+                                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                                                Bundle {catalogItem.bundle_no}
+                                                {catalogItem.bundle_section ? ` · ${catalogItem.bundle_section}` : ""}
+                                              </span>
+                                            )}
                                           </div>
                                           {catalogItem.item_description && (
                                             <div className="text-xs text-slate-500 mt-0.5">
@@ -5834,6 +6279,13 @@ export default function DailyDocketForm({
                             )}
                           </div>
 
+                          {item.bundle_no && (
+                            <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                              Bundle {item.bundle_no}
+                              {item.bundle_section ? ` · ${item.bundle_section}` : ""}
+                            </div>
+                          )}
+
                           {!locked && !isView && (
                             <div className="flex items-center gap-3 flex-wrap">
                               <button
@@ -5937,12 +6389,48 @@ export default function DailyDocketForm({
           )}
         </div>
 
-        <Input
-          label="General Site Comment"
-          value={delaysComments}
-          onChange={setDelaysComments}
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Daily Site Summary</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Summarise the work completed, site conditions, key coordination points and anything the next shift should know. Keep delay details in the delay section above.
+          </p>
+        </div>
+
+        <TextArea
+          label="Daily Site Summary"
+          value={dailySiteSummary}
+          onChange={setDailySiteSummary}
           disabled={locked || isView}
+          rows={5}
+          placeholder="Example: Completed lower body assembly, commenced crossarm pre-assembly, coordinated access with client..."
         />
+
+        <div className="grid md:grid-cols-[1fr_auto] gap-3 items-end">
+          <Input
+            label="RFI References"
+            value={rfiReferencesText}
+            onChange={setRfiReferencesText}
+            disabled={locked || isView}
+          />
+
+          <div className="flex flex-wrap gap-1.5 pb-0.5">
+            {parseRfiReferences(rfiReferencesText).map((reference) => (
+              <span
+                key={reference}
+                className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-800"
+              >
+                {reference}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500">
+          Enter multiple RFIs separated by commas, semicolons or new lines. These references can be linked to the project RFI Register when that module is enabled.
+        </p>
       </section>
 
       <section className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 space-y-4 shadow-sm">
@@ -6433,6 +6921,36 @@ function Input({
         type={type}
         value={value}
         disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+function TextArea({
+  label,
+  value,
+  onChange,
+  disabled = false,
+  rows = 4,
+  placeholder = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  rows?: number;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1">{label}</label>
+      <textarea
+        className="border rounded-lg p-3 w-full disabled:bg-slate-100"
+        rows={rows}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
