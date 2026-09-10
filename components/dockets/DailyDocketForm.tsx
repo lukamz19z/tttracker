@@ -195,8 +195,8 @@ type AdditionalTowerWork = {
   id?: string;
   ui_id: string;
   target_tower_id: string;
-  hours: string;
-  worker_names: string[];
+  allocation_percent: string;
+  saved_allocated_mh: number;
   activity: ProductionActivity;
   notes: string;
   has_body_extension: boolean;
@@ -1059,8 +1059,6 @@ export default function DailyDocketForm({
   const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [towerRevisionAllocations, setTowerRevisionAllocations] = useState<TowerRevisionAllocation[]>([]);
-  const [primaryWorkHours, setPrimaryWorkHours] = useState("");
-  const [primaryWorkWorkerNames, setPrimaryWorkWorkerNames] = useState<string[]>([]);
   const [primaryWorkActivity, setPrimaryWorkActivity] = useState<ProductionActivity>("mixed");
   const [primaryWorkNotes, setPrimaryWorkNotes] = useState("");
   const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
@@ -1127,6 +1125,7 @@ export default function DailyDocketForm({
         "revision",
         "mobilisation",
         "delays",
+        "outstanding-missing",
         "summary",
         "defaults",
         "submission",
@@ -1968,17 +1967,11 @@ export default function DailyDocketForm({
       );
 
       if (primary) {
-        setPrimaryWorkHours(toStringValue(primary.hours));
-        setPrimaryWorkWorkerNames(
-          Array.isArray(primary.worker_names) ? primary.worker_names.map(String) : []
-        );
         setPrimaryWorkActivity(
           (toStringValue(primary.activity) || "mixed") as ProductionActivity
         );
         setPrimaryWorkNotes(toStringValue(primary.reason));
       } else {
-        setPrimaryWorkHours("");
-        setPrimaryWorkWorkerNames([]);
         setPrimaryWorkActivity("mixed");
         setPrimaryWorkNotes("");
       }
@@ -2032,10 +2025,10 @@ export default function DailyDocketForm({
             id: row.id,
             ui_id: row.id || makeUiId(),
             target_tower_id: targetTowerId,
-            hours: toStringValue(row.hours),
-            worker_names: Array.isArray(row.worker_names)
-              ? row.worker_names.map(String)
-              : [],
+            allocation_percent: "",
+            saved_allocated_mh:
+              toNumber(row.hours) *
+              (Array.isArray(row.worker_names) ? row.worker_names.length : 0),
             activity:
               (toStringValue(row.activity) || "mixed") as ProductionActivity,
             notes: toStringValue(row.reason),
@@ -2124,18 +2117,53 @@ export default function DailyDocketForm({
   const totalLabourHours = labourTotals.rawManhours;
   const totalProductionHours = labourTotals.productionManhours;
 
-  const primaryProductionAllocationMH =
-    toNumber(primaryWorkHours) * primaryWorkWorkerNames.length;
-
-  const additionalProductionAllocationMH = additionalTowerWork.reduce(
+  const revisionAllocatedMH = towerRevisionAllocations.reduce(
     (sum, allocation) =>
       sum + toNumber(allocation.hours) * allocation.worker_names.length,
     0
   );
 
-  const revisionAllocatedMH = towerRevisionAllocations.reduce(
-    (sum, allocation) =>
-      sum + toNumber(allocation.hours) * allocation.worker_names.length,
+  // Labour remains the source of truth for productive hours. Normal tower work
+  // only splits the production MH already calculated by the labour table.
+  // Revision / rectification MH is removed first because it has its own explicit
+  // worker-hour allocation below.
+  const towerWorkProductionPoolMH = Math.max(
+    totalProductionHours - revisionAllocatedMH,
+    0
+  );
+
+  function additionalTowerAllocationPercent(work: AdditionalTowerWork) {
+    if (work.allocation_percent.trim() !== "") {
+      return Math.max(toNumber(work.allocation_percent), 0);
+    }
+
+    // Backward compatibility for multi-tower dockets saved by the previous
+    // Hours / Worker UI. Convert their saved MH into an equivalent share.
+    if (work.saved_allocated_mh > 0 && towerWorkProductionPoolMH > 0) {
+      return (work.saved_allocated_mh / towerWorkProductionPoolMH) * 100;
+    }
+
+    return 0;
+  }
+
+  const additionalProductionAllocationPercent = additionalTowerWork.reduce(
+    (sum, work) => sum + additionalTowerAllocationPercent(work),
+    0
+  );
+
+  const primaryProductionAllocationPercent = Math.max(
+    100 - additionalProductionAllocationPercent,
+    0
+  );
+
+  const primaryProductionAllocationMH =
+    towerWorkProductionPoolMH * (primaryProductionAllocationPercent / 100);
+
+  const additionalProductionAllocationMH = additionalTowerWork.reduce(
+    (sum, work) =>
+      sum +
+      towerWorkProductionPoolMH *
+        (additionalTowerAllocationPercent(work) / 100),
     0
   );
 
@@ -2145,11 +2173,10 @@ export default function DailyDocketForm({
   const totalAttributedProductionMH =
     productionAllocatedToTowersMH + revisionAllocatedMH;
 
-  const unallocatedProductionMH =
-    totalProductionHours - totalAttributedProductionMH;
-
-  const productionAllocationOverByMH =
-    unallocatedProductionMH < 0 ? Math.abs(unallocatedProductionMH) : 0;
+  const productionAllocationOverByMH = Math.max(
+    totalAttributedProductionMH - totalProductionHours,
+    0
+  );
 
 
   const plantRowsWithTotals = useMemo(() => {
@@ -2383,19 +2410,6 @@ export default function DailyDocketForm({
   }
 
 
-  function togglePrimaryWorkWorker(workerName: string) {
-    if (isView || locked) return;
-    setPrimaryWorkWorkerNames((prev) => {
-      const exists = prev.some(
-        (name) => normalizeWorkerName(name) === normalizeWorkerName(workerName)
-      );
-      return exists
-        ? prev.filter(
-            (name) => normalizeWorkerName(name) !== normalizeWorkerName(workerName)
-          )
-        : [...prev, workerName];
-    });
-  }
 
   function addAdditionalTowerWork() {
     if (isView || locked) return;
@@ -2405,8 +2419,8 @@ export default function DailyDocketForm({
       {
         ui_id: makeUiId(),
         target_tower_id: "",
-        hours: "",
-        worker_names: [...availableWorkerNames],
+        allocation_percent: "",
+        saved_allocated_mh: 0,
         activity: "mixed",
         notes: "",
         has_body_extension: true,
@@ -2450,29 +2464,6 @@ export default function DailyDocketForm({
     setAdditionalTowerWork((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function toggleAdditionalTowerWorker(index: number, workerName: string) {
-    if (isView || locked) return;
-
-    setAdditionalTowerWork((prev) =>
-      prev.map((row, i) => {
-        if (i !== index) return row;
-
-        const exists = row.worker_names.some(
-          (name) => normalizeWorkerName(name) === normalizeWorkerName(workerName)
-        );
-
-        return {
-          ...row,
-          worker_names: exists
-            ? row.worker_names.filter(
-                (name) =>
-                  normalizeWorkerName(name) !== normalizeWorkerName(workerName)
-              )
-            : [...row.worker_names, workerName],
-        };
-      })
-    );
-  }
 
   function updateAdditionalTowerProgress(
     workIndex: number,
@@ -2910,11 +2901,12 @@ export default function DailyDocketForm({
 
   function buildProductionAllocationPayload(docketIdValue: string) {
     const rows: Array<Record<string, unknown>> = [];
+    const workers = [...availableWorkerNames];
 
-    if (
-      toNumber(primaryWorkHours) > 0 &&
-      primaryWorkWorkerNames.length > 0
-    ) {
+    // Persist an average hours/worker value only because the existing database
+    // table stores hours + worker_names. The UI no longer asks users to repeat
+    // labour hours here; MH is derived from the production total and the tower split.
+    if (primaryProductionAllocationMH > 0 && workers.length > 0) {
       rows.push({
         docket_id: docketIdValue,
         project_id: projectId,
@@ -2922,8 +2914,8 @@ export default function DailyDocketForm({
         target_tower_id: towerId,
         allocation_type: "production",
         activity: primaryWorkActivity,
-        hours: toNumber(primaryWorkHours),
-        worker_names: primaryWorkWorkerNames,
+        hours: primaryProductionAllocationMH / workers.length,
+        worker_names: workers,
         reason: primaryWorkNotes.trim() || null,
       });
     }
@@ -2933,10 +2925,13 @@ export default function DailyDocketForm({
         (allocation) =>
           allocation.target_tower_id &&
           allocation.target_tower_id !== towerId &&
-          toNumber(allocation.hours) > 0 &&
-          allocation.worker_names.length > 0
+          additionalTowerAllocationPercent(allocation) > 0
       )
       .forEach((allocation) => {
+        const allocatedMh =
+          towerWorkProductionPoolMH *
+          (additionalTowerAllocationPercent(allocation) / 100);
+
         rows.push({
           docket_id: docketIdValue,
           project_id: projectId,
@@ -2944,8 +2939,8 @@ export default function DailyDocketForm({
           target_tower_id: allocation.target_tower_id,
           allocation_type: "production",
           activity: allocation.activity,
-          hours: toNumber(allocation.hours),
-          worker_names: allocation.worker_names,
+          hours: workers.length > 0 ? allocatedMh / workers.length : 0,
+          worker_names: workers,
           reason: allocation.notes.trim() || null,
         });
       });
@@ -3389,7 +3384,7 @@ export default function DailyDocketForm({
       material_kind: "registered",
       manual_category: "",
       bolt_size: "",
-      search_query: catalogItem.item_reference,
+      search_query: "",
       search_loading: false,
       search_results: [],
       item_reference: catalogItem.item_reference,
@@ -4184,10 +4179,10 @@ export default function DailyDocketForm({
     const usedTowerIds = new Set<string>();
 
     for (const work of additionalTowerWork) {
+      const share = additionalTowerAllocationPercent(work);
       const hasAnyEntry =
         Boolean(work.target_tower_id) ||
-        toNumber(work.hours) > 0 ||
-        work.worker_names.length > 0 ||
+        share > 0 ||
         work.progress_rows.some(
           (row) =>
             row.assembly_today.trim() !== "" ||
@@ -4209,28 +4204,25 @@ export default function DailyDocketForm({
       }
       usedTowerIds.add(work.target_tower_id);
 
-      if (toNumber(work.hours) <= 0 || work.worker_names.length === 0) {
-        return "Each additional tower worked needs hours per worker and the workers who performed that work.";
+      if (share <= 0) {
+        return "Each additional tower worked needs a Production Share greater than 0%.";
       }
     }
 
-    const hasSplitTowerDay = additionalTowerWork.some(
-      (work) => Boolean(work.target_tower_id)
-    );
-
-    if (productionAllocationOverByMH > 0.01) {
-      return `Allocated production exceeds the available production time by ${productionAllocationOverByMH.toFixed(
-        2
-      )} MH. Reduce the tower/revision allocations before saving.`;
+    if (additionalProductionAllocationPercent > 100.01) {
+      return `Additional tower production shares total ${additionalProductionAllocationPercent.toFixed(
+        1
+      )}%. Reduce them to 100% or less. The primary tower automatically receives the balance.`;
     }
 
-    if (hasSplitTowerDay && Math.abs(unallocatedProductionMH) > 0.25) {
-      return `This is a multi-tower docket, so productive hours must be fully attributed. ${Math.max(
-        unallocatedProductionMH,
-        0
-      ).toFixed(
-        2
-      )} MH are still unallocated. Adjust the primary/additional tower hours so the allocation matches Production MH.`;
+    if (revisionAllocatedMH > totalProductionHours + 0.01) {
+      return `Revision / rectification allocations exceed available Production MH by ${(
+        revisionAllocatedMH - totalProductionHours
+      ).toFixed(2)} MH.`;
+    }
+
+    if (productionAllocationOverByMH > 0.01) {
+      return `Tower/revision allocation exceeds available Production MH by ${productionAllocationOverByMH.toFixed(2)} MH.`;
     }
 
     return "";
@@ -4514,8 +4506,6 @@ export default function DailyDocketForm({
       setDelayRows([]);
       setMaterialEvents([]);
       setTowerRevisionAllocations([]);
-      setPrimaryWorkHours("");
-      setPrimaryWorkWorkerNames([]);
       setPrimaryWorkActivity("mixed");
       setPrimaryWorkNotes("");
       setAdditionalTowerWork([]);
@@ -4882,39 +4872,31 @@ export default function DailyDocketForm({
             tone="emerald"
           />
           <AllocationMetric
-            label="Tower Work MH"
-            value={productionAllocatedToTowersMH.toFixed(2)}
+            label="Tower Work Pool"
+            value={towerWorkProductionPoolMH.toFixed(2)}
             tone="blue"
+          />
+          <AllocationMetric
+            label="Primary Tower"
+            value={`${primaryProductionAllocationPercent.toFixed(1)}%`}
+            tone="emerald"
           />
           <AllocationMetric
             label="Revision MH"
             value={revisionAllocatedMH.toFixed(2)}
             tone="amber"
           />
-          <AllocationMetric
-            label={unallocatedProductionMH < 0 ? "Over Allocated" : "Unallocated"}
-            value={`${Math.abs(unallocatedProductionMH).toFixed(2)} MH`}
-            tone={
-              productionAllocationOverByMH > 0.01
-                ? "red"
-                : Math.abs(unallocatedProductionMH) <= 0.25
-                ? "emerald"
-                : "slate"
-            }
-          />
         </div>
 
-        {additionalTowerWork.length > 0 && Math.abs(unallocatedProductionMH) > 0.25 && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm font-semibold ${
-              productionAllocationOverByMH > 0
-                ? "border-red-200 bg-red-50 text-red-800"
-                : "border-amber-200 bg-amber-50 text-amber-800"
-            }`}
-          >
-            {productionAllocationOverByMH > 0
-              ? `Tower/revision allocations exceed available Production MH by ${productionAllocationOverByMH.toFixed(2)} MH.`
-              : `${unallocatedProductionMH.toFixed(2)} Production MH still need to be attributed across the towers worked today.`}
+        {additionalProductionAllocationPercent > 100 && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+            Additional towers currently total {additionalProductionAllocationPercent.toFixed(1)}%. Reduce them to 100% or less.
+          </div>
+        )}
+
+        {additionalTowerWork.length > 0 && additionalProductionAllocationPercent <= 100 && (
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Labour calculates {totalProductionHours.toFixed(2)} Production MH once. After {revisionAllocatedMH.toFixed(2)} MH of revision work, the remaining {towerWorkProductionPoolMH.toFixed(2)} MH is split by production share. The primary tower automatically receives the {primaryProductionAllocationPercent.toFixed(1)}% balance.
           </div>
         )}
 
@@ -4930,7 +4912,7 @@ export default function DailyDocketForm({
                 </h3>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Enter the productive time actually spent on this tower. Raw crew MH remains recorded once for the whole docket.
+                Labour is the source of truth for hours. This tower automatically receives the production-share balance after any additional towers and revision work.
               </p>
             </div>
             <div className="rounded-xl border border-blue-200 bg-white px-3 py-2 text-right">
@@ -4943,7 +4925,7 @@ export default function DailyDocketForm({
             </div>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[180px_150px_1fr]">
+          <div className="grid gap-3 lg:grid-cols-[200px_1fr]">
             <div>
               <label className="block text-xs font-black uppercase tracking-wide text-slate-500 mb-1">
                 Work Type
@@ -4963,14 +4945,6 @@ export default function DailyDocketForm({
             </div>
 
             <Input
-              label="Hours / Worker"
-              type="number"
-              value={primaryWorkHours}
-              onChange={setPrimaryWorkHours}
-              disabled={locked || isView}
-            />
-
-            <Input
               label="Work Notes (optional)"
               value={primaryWorkNotes}
               onChange={setPrimaryWorkNotes}
@@ -4978,14 +4952,23 @@ export default function DailyDocketForm({
             />
           </div>
 
-          <WorkerAllocationPicker
-            workers={availableWorkerNames}
-            selected={primaryWorkWorkerNames}
-            disabled={locked || isView}
-            onToggle={togglePrimaryWorkWorker}
-            onSelectAll={() => setPrimaryWorkWorkerNames([...availableWorkerNames])}
-            onClear={() => setPrimaryWorkWorkerNames([])}
-          />
+          <div className="grid gap-2 sm:grid-cols-3">
+            <AllocationMetric
+              label="Production Share"
+              value={`${primaryProductionAllocationPercent.toFixed(1)}%`}
+              tone="blue"
+            />
+            <AllocationMetric
+              label="Allocated MH"
+              value={primaryProductionAllocationMH.toFixed(2)}
+              tone="emerald"
+            />
+            <AllocationMetric
+              label="Workers"
+              value={String(availableWorkerNames.length)}
+              tone="slate"
+            />
+          </div>
 
           <div className="border-t border-blue-100 pt-4">
             {progressModel === "section_v2" ? (
@@ -5101,7 +5084,8 @@ export default function DailyDocketForm({
             (tower) => tower.id === work.target_tower_id
           );
           const workTotals = additionalTowerProgressTotals(work);
-          const workMh = toNumber(work.hours) * work.worker_names.length;
+          const workPercent = additionalTowerAllocationPercent(work);
+          const workMh = towerWorkProductionPoolMH * (workPercent / 100);
 
           return (
             <div
@@ -5119,7 +5103,7 @@ export default function DailyDocketForm({
                     </h3>
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    Productive time and progress for the second workfront remain on this same crew/day docket.
+                    Enter only this tower’s share of productive crew time. Labour hours are not entered again here.
                   </p>
                 </div>
 
@@ -5201,15 +5185,33 @@ export default function DailyDocketForm({
                   </select>
                 </div>
 
-                <Input
-                  label="Hours / Worker"
-                  type="number"
-                  value={work.hours}
-                  onChange={(value) =>
-                    updateAdditionalTowerWork(workIndex, { hours: value })
-                  }
-                  disabled={locked || isView}
-                />
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-wide text-slate-500 mb-1">
+                    Production Share %
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={
+                      work.allocation_percent.trim() !== ""
+                        ? work.allocation_percent
+                        : work.saved_allocated_mh > 0 && towerWorkProductionPoolMH > 0
+                        ? workPercent.toFixed(1)
+                        : ""
+                    }
+                    disabled={locked || isView}
+                    placeholder="e.g. 65"
+                    onChange={(e) =>
+                      updateAdditionalTowerWork(workIndex, {
+                        allocation_percent: e.target.value,
+                        saved_allocated_mh: 0,
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                  />
+                </div>
 
                 <Input
                   label="Work Notes (optional)"
@@ -5221,22 +5223,6 @@ export default function DailyDocketForm({
                 />
               </div>
 
-              <WorkerAllocationPicker
-                workers={availableWorkerNames}
-                selected={work.worker_names}
-                disabled={locked || isView}
-                onToggle={(workerName) =>
-                  toggleAdditionalTowerWorker(workIndex, workerName)
-                }
-                onSelectAll={() =>
-                  updateAdditionalTowerWork(workIndex, {
-                    worker_names: [...availableWorkerNames],
-                  })
-                }
-                onClear={() =>
-                  updateAdditionalTowerWork(workIndex, { worker_names: [] })
-                }
-              />
 
               <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
                 <div>
@@ -6334,73 +6320,95 @@ export default function DailyDocketForm({
             )}
           </div>
 
-          <div className="rounded-xl border border-amber-300 bg-amber-100/60 p-3 space-y-3">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div>
+          <div className="overflow-hidden rounded-xl border border-amber-300 bg-amber-100/60">
+            <button
+              type="button"
+              onClick={() => toggleSection("outstanding-missing")}
+              aria-expanded={openSections.has("outstanding-missing")}
+              className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-amber-100"
+            >
+              <div className="min-w-0">
                 <div className="text-sm font-black text-amber-950">Outstanding Missing Material</div>
-                <div className="text-xs text-amber-800">
-                  Missing items remain open across dockets until the delivered quantity brings the remaining quantity to zero.
+                <div className="mt-0.5 hidden text-xs text-amber-800 sm:block">
+                  Missing items remain open across dockets until delivered quantities bring the remaining quantity to zero.
                 </div>
               </div>
-              <span className="rounded-full border border-amber-300 bg-white px-3 py-1 text-xs font-black text-amber-900">
-                {outstandingMissingIssues.length} open
-              </span>
-            </div>
 
-            {outstandingMissingIssues.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-amber-300 bg-white/80 px-3 py-3 text-sm text-slate-600">
-                No outstanding missing material for this tower.
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[10px] font-black text-amber-900 md:text-xs">
+                  {outstandingMissingIssues.length} open · {outstandingMissingIssues
+                    .reduce((sum, issue) => sum + issue.remaining_quantity, 0)
+                    .toFixed(0)} qty left
+                </span>
+                <span
+                  className={`flex h-8 w-8 items-center justify-center rounded-full border border-amber-300 bg-white text-base font-black text-amber-800 transition-transform ${
+                    openSections.has("outstanding-missing") ? "rotate-180" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  ↓
+                </span>
               </div>
-            ) : (
-              <div className="grid gap-2">
-                {outstandingMissingIssues.map((issue) => {
-                  const alreadyAdded = linkedReceiptKeysInDraft.has(issue.issue_key);
-                  return (
-                    <div
-                      key={issue.issue_key}
-                      className="rounded-xl border border-amber-200 bg-white p-3"
-                    >
-                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-black text-slate-900">{issue.item_reference}</span>
-                            {issue.bundle_no && (
-                              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-800">
-                                Bundle {issue.bundle_no}
-                                {issue.bundle_section ? ` · ${issue.bundle_section}` : ""}
-                              </span>
+            </button>
+
+            {openSections.has("outstanding-missing") && (
+              <div className="border-t border-amber-300 p-3">
+                {outstandingMissingIssues.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-amber-300 bg-white/80 px-3 py-3 text-sm text-slate-600">
+                    No outstanding missing material for this tower.
+                  </div>
+                ) : (
+                  <div className="grid gap-2">
+                    {outstandingMissingIssues.map((issue) => {
+                      const alreadyAdded = linkedReceiptKeysInDraft.has(issue.issue_key);
+                      return (
+                        <div
+                          key={issue.issue_key}
+                          className="rounded-xl border border-amber-200 bg-white p-3"
+                        >
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-black text-slate-900">{issue.item_reference}</span>
+                                {issue.bundle_no && (
+                                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-800">
+                                    Bundle {issue.bundle_no}
+                                    {issue.bundle_section ? ` · ${issue.bundle_section}` : ""}
+                                  </span>
+                                )}
+                              </div>
+                              {issue.item_description && (
+                                <div className="mt-1 text-xs text-slate-500">{issue.item_description}</div>
+                              )}
+                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                <span className="rounded-lg bg-slate-100 px-2 py-1">
+                                  Missing <strong>{issue.original_quantity}</strong>
+                                </span>
+                                <span className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">
+                                  Delivered <strong>{issue.received_quantity}</strong>
+                                </span>
+                                <span className="rounded-lg bg-rose-50 px-2 py-1 text-rose-800">
+                                  Remaining <strong>{issue.remaining_quantity}</strong>
+                                </span>
+                              </div>
+                            </div>
+
+                            {!locked && !isView && (
+                              <button
+                                type="button"
+                                disabled={alreadyAdded}
+                                onClick={() => recordMissingDelivery(issue)}
+                                className="shrink-0 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {alreadyAdded ? "Added to this docket" : "Record Delivery"}
+                              </button>
                             )}
                           </div>
-                          {issue.item_description && (
-                            <div className="mt-1 text-xs text-slate-500">{issue.item_description}</div>
-                          )}
-                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                            <span className="rounded-lg bg-slate-100 px-2 py-1">
-                              Missing <strong>{issue.original_quantity}</strong>
-                            </span>
-                            <span className="rounded-lg bg-emerald-50 px-2 py-1 text-emerald-800">
-                              Delivered <strong>{issue.received_quantity}</strong>
-                            </span>
-                            <span className="rounded-lg bg-rose-50 px-2 py-1 text-rose-800">
-                              Remaining <strong>{issue.remaining_quantity}</strong>
-                            </span>
-                          </div>
                         </div>
-
-                        {!locked && !isView && (
-                          <button
-                            type="button"
-                            disabled={alreadyAdded}
-                            onClick={() => recordMissingDelivery(issue)}
-                            className="shrink-0 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {alreadyAdded ? "Added to this docket" : "Record Delivery"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -6616,6 +6624,7 @@ export default function DailyDocketForm({
                                   !locked &&
                                   !isView &&
                                   item.search_query.trim().length > 0 &&
+                                  !item.source_record_id &&
                                   item.material_kind !== "manual" && (
                                     <div className="absolute z-20 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
                                       {item.search_loading && (
@@ -7971,7 +7980,7 @@ function WorkerAllocationPicker({
             Workers on this tower
           </div>
           <div className="mt-0.5 text-xs text-slate-400">
-            Hours / Worker × selected workers = allocated production MH.
+            Production MH is calculated once from Labour. Additional towers only split that productive total by percentage; the primary tower receives the balance automatically.
           </div>
         </div>
 
