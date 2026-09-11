@@ -323,6 +323,82 @@ function createServiceClient() {
   });
 }
 
+
+type SupabaseLikeError = {
+  message?: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+};
+
+function isTransientApprovalLinkError(error: SupabaseLikeError | null | undefined) {
+  if (!error) return false;
+
+  const combined = [
+    error.message,
+    error.code,
+    error.details,
+    error.hint,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    combined.includes("gateway timeout") ||
+    combined.includes("timeout") ||
+    combined.includes("57014") ||
+    combined.includes("55p03") ||
+    combined.includes("lock")
+  );
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function supersedePendingClientApprovalLinks({
+  client,
+  docketId,
+  supersededAt,
+  attempts = 3,
+}: {
+  client: ReturnType<typeof createServiceClient>;
+  docketId: string;
+  supersededAt: string;
+  attempts?: number;
+}) {
+  let lastError: SupabaseLikeError | null = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const { error } = await client
+      .from("tower_docket_approvals")
+      .update({
+        token_superseded_at: supersededAt,
+        status: "superseded",
+      })
+      .eq("docket_id", docketId)
+      .eq("stage", "client")
+      .eq("status", "pending");
+
+    if (!error) return;
+
+    lastError = error;
+
+    if (!isTransientApprovalLinkError(error) || attempt === attempts) {
+      break;
+    }
+
+    await wait(250 * attempt);
+  }
+
+  throw new Error(
+    `Previous client approval links could not be closed after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${
+      lastError?.message || "Unknown database error"
+    }`,
+  );
+}
+
 function formatDate(value: string | null) {
   if (!value) return "No date";
 
@@ -570,25 +646,30 @@ export async function POST(
     );
     const revision = previousRevision + 1;
 
-    // Any unused client links belong to an older draft and must never become
-    // valid again after the docket is resubmitted to BC.
-    const { error: supersedeClientError } = await service
-      .from("tower_docket_approvals")
-      .update({
-        token_superseded_at: submittedAt,
-        status: "superseded",
-      })
-      .eq("docket_id", docket.id)
-      .eq("stage", "client")
-      .eq("status", "pending");
-
-    if (supersedeClientError) {
-      return NextResponse.json(
-        {
-          error: `Previous client approval links could not be closed: ${supersedeClientError.message}`,
-        },
-        { status: 500 },
-      );
+    // A never-submitted docket cannot have an earlier client approval link.
+    // Avoid touching the approvals table on its first BC submission.
+    //
+    // On resubmission, old client links MUST be invalidated before this docket
+    // is allowed back into BC review. Retry transient Supabase/Postgres
+    // timeouts rather than failing immediately on a short lock.
+    if (previousRevision > 0) {
+      try {
+        await supersedePendingClientApprovalLinks({
+          client: service,
+          docketId: docket.id,
+          supersededAt: submittedAt,
+        });
+      } catch (supersedeError) {
+        return NextResponse.json(
+          {
+            error:
+              supersedeError instanceof Error
+                ? supersedeError.message
+                : "Previous client approval links could not be closed.",
+          },
+          { status: 503 },
+        );
+      }
     }
 
     const { data: updatedDocket, error: updateError } = await service

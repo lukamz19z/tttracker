@@ -110,6 +110,82 @@ type ClientContactRow = {
   active: boolean;
 };
 
+
+type SupabaseLikeError = {
+  message?: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+};
+
+function isTransientApprovalLinkError(error: SupabaseLikeError | null | undefined) {
+  if (!error) return false;
+
+  const combined = [
+    error.message,
+    error.code,
+    error.details,
+    error.hint,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    combined.includes("gateway timeout") ||
+    combined.includes("timeout") ||
+    combined.includes("57014") ||
+    combined.includes("55p03") ||
+    combined.includes("lock")
+  );
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function supersedePendingClientApprovalLinks({
+  admin,
+  docketId,
+  supersededAt,
+  attempts = 3,
+}: {
+  admin: ReturnType<typeof createDocketAdminSupabase>;
+  docketId: string;
+  supersededAt: string;
+  attempts?: number;
+}) {
+  let lastError: SupabaseLikeError | null = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const { error } = await admin
+      .from("tower_docket_approvals")
+      .update({
+        token_superseded_at: supersededAt,
+        status: "superseded",
+      })
+      .eq("docket_id", docketId)
+      .eq("stage", "client")
+      .eq("status", "pending");
+
+    if (!error) return;
+
+    lastError = error;
+
+    if (!isTransientApprovalLinkError(error) || attempt === attempts) {
+      break;
+    }
+
+    await wait(250 * attempt);
+  }
+
+  throw new Error(
+    `Previous client approval links could not be superseded after ${attempts} attempt${attempts === 1 ? "" : "s"}: ${
+      lastError?.message || "Unknown database error"
+    }`,
+  );
+}
+
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -1291,21 +1367,14 @@ export async function POST(request: Request, context: RouteContext) {
       pdf,
     });
 
-    const { error: supersedeClientTokensError } = await admin
-      .from("tower_docket_approvals")
-      .update({
-        token_superseded_at: reviewedAt,
-        status: "superseded",
-      })
-      .eq("docket_id", docketId)
-      .eq("stage", "client")
-      .eq("status", "pending");
-
-    if (supersedeClientTokensError) {
-      throw new Error(
-        `Previous client approval links could not be superseded: ${supersedeClientTokensError.message}`,
-      );
-    }
+    // Invalidate any older client links before issuing the new approval
+    // request. Retry transient database/gateway timeouts because this is a
+    // safety-critical state transition and should not be silently skipped.
+    await supersedePendingClientApprovalLinks({
+      admin,
+      docketId,
+      supersededAt: reviewedAt,
+    });
 
     const tokenExpiry = addDaysIso(14);
     const approvalLinks: Array<{
