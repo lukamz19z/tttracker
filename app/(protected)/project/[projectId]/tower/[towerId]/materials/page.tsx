@@ -6,6 +6,7 @@ import Papa, { ParseResult } from "papaparse";
 import { useParams } from "next/navigation";
 import {
   AlertCircle,
+  ArrowRightLeft,
   Boxes,
   CheckCircle2,
   ChevronDown,
@@ -36,7 +37,7 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 
 
-type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue";
+type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue" | "transferred";
 type MemberCheckStatus = "not_checked" | "arrived" | "not_here" | "missing" | "issue";
 type MaterialEventType =
   | "missing"
@@ -124,6 +125,48 @@ type Delivery = {
   tower_bundle_delivery_items: DeliveryItem[];
 };
 
+type ProjectTowerOption = {
+  id: string;
+  name: string;
+  line?: string | null;
+};
+
+type TransferStatus = "in_transit" | "received" | "cancelled";
+
+type MaterialTransfer = {
+  id: string;
+  transfer_no: number | null;
+  project_id: string;
+  source_tower_id: string;
+  destination_tower_id: string;
+  source_bundle_id: string;
+  destination_bundle_id: string;
+  bundle_no: string;
+  bundle_section: string;
+  quantity: number;
+  status: TransferStatus;
+  transferred_by: string | null;
+  transferred_by_name: string | null;
+  transferred_at: string | null;
+  received_by: string | null;
+  received_by_name: string | null;
+  received_at: string | null;
+  cancelled_by: string | null;
+  cancelled_by_name: string | null;
+  cancelled_at: string | null;
+  source_docket_id: string | null;
+  destination_docket_id: string | null;
+  notes: string | null;
+};
+
+type CreateTransferInput = {
+  sourceBundle: Bundle;
+  destinationTowerId: string;
+  destinationBundleId: string;
+  quantity: number;
+  notes: string;
+};
+
 type MaterialEventItem = {
   id: string;
   event_id: string;
@@ -205,6 +248,7 @@ type ImportSourceRow = Record<string, unknown>;
 
 type MaterialsData = {
   tower: TowerRecord | null;
+  projectTowers: ProjectTowerOption[];
   latestDate: string | null;
   bundles: Bundle[];
   members: Member[];
@@ -212,6 +256,7 @@ type MaterialsData = {
   bundleChecks: BundleCheck[];
   memberChecks: MemberCheck[];
   materialEvents: MaterialEvent[];
+  transfers: MaterialTransfer[];
   dockets: DocketSummary[];
   deliveries: Delivery[];
   docketMap: Map<string, DocketSummary>;
@@ -223,6 +268,10 @@ type MaterialsData = {
   resolveBundleForMember: (member: Member) => Bundle | undefined;
   deliveredQty: (bundle: Bundle) => number;
   receivedQty: (bundle: Bundle) => number;
+  transferInQty: (bundle: Bundle) => number;
+  transferOutQty: (bundle: Bundle) => number;
+  pendingTransferInQty: (bundle: Bundle) => number;
+  currentQty: (bundle: Bundle) => number;
   getMemberCheck: (member: Member) => MemberCheck | undefined;
   membersForBundle: (bundle: Bundle) => Member[];
   deriveBundleStatus: (bundle: Bundle) => BundleCheckStatus;
@@ -230,6 +279,9 @@ type MaterialsData = {
   clearBundleCheck: (bundle: Bundle) => Promise<void>;
   updateMemberStatus: (member: Member, status: MemberCheckStatus) => Promise<void>;
   clearMemberStatus: (member: Member) => Promise<void>;
+  createTransfer: (input: CreateTransferInput) => Promise<boolean>;
+  confirmTransferReceived: (transfer: MaterialTransfer) => Promise<boolean>;
+  cancelTransfer: (transfer: MaterialTransfer) => Promise<boolean>;
   refresh: () => Promise<void>;
 };
 
@@ -666,6 +718,7 @@ function statusLabel(status: BundleCheckStatus | MemberCheckStatus): string {
     case "missing": return "Missing";
     case "not_here": return "Not Here";
     case "issue": return "Issue";
+    case "transferred": return "Transferred Out";
     default: return "Not Checked";
   }
 }
@@ -677,6 +730,7 @@ function statusClasses(status: BundleCheckStatus | MemberCheckStatus): string {
     case "missing": return "border-rose-200 bg-rose-50 text-rose-700";
     case "not_here": return "border-orange-200 bg-orange-50 text-orange-700";
     case "issue": return "border-violet-200 bg-violet-50 text-violet-700";
+    case "transferred": return "border-blue-200 bg-blue-50 text-blue-700";
     default: return "border-slate-200 bg-slate-50 text-slate-600";
   }
 }
@@ -695,9 +749,10 @@ function workOutcomeLabel(value: string | null | undefined): string {
   return value ? labels[value] || value : "—";
 }
 
-function useMaterialsData(towerId: string) {
+function useMaterialsData(projectId: string, towerId: string) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const [tower, setTower] = useState<TowerRecord | null>(null);
+  const [projectTowers, setProjectTowers] = useState<ProjectTowerOption[]>([]);
   const [latestDate, setLatestDate] = useState<string | null>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -706,6 +761,7 @@ function useMaterialsData(towerId: string) {
   const [memberChecks, setMemberChecks] = useState<MemberCheck[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [materialEvents, setMaterialEvents] = useState<MaterialEvent[]>([]);
+  const [transfers, setTransfers] = useState<MaterialTransfer[]>([]);
   const [dockets, setDockets] = useState<DocketSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -756,8 +812,21 @@ function useMaterialsData(towerId: string) {
     if (!towerId) return;
     setLoading(true);
     try {
-      const [towerRes, bundleRes, memberRows, boltRes, deliveryRes, docketRes, bundleCheckRes, memberCheckRows, eventRes] = await Promise.all([
+      const [
+        towerRes,
+        projectTowersRes,
+        bundleRes,
+        memberRows,
+        boltRes,
+        deliveryRes,
+        docketRes,
+        bundleCheckRes,
+        memberCheckRows,
+        eventRes,
+        transferRes,
+      ] = await Promise.all([
         supabase.from("towers").select("*").eq("id", towerId).single(),
+        supabase.from("towers").select("id,name,line").eq("project_id", projectId).order("name"),
         supabase.from("tower_required_bundles").select("*").eq("tower_id", towerId).order("section").order("bundle_no"),
         fetchAllMembers(),
         supabase.from("tower_material_bolts").select("*").eq("tower_id", towerId).order("tower_segment").order("bolt_diameter").order("length"),
@@ -810,12 +879,35 @@ function useMaterialsData(towerId: string) {
           `)
           .eq("tower_id", towerId)
           .order("occurred_at", { ascending: false }),
+        supabase
+          .from("tower_material_transfers")
+          .select("*")
+          .eq("project_id", projectId)
+          .or(`source_tower_id.eq.${towerId},destination_tower_id.eq.${towerId}`)
+          .order("transferred_at", { ascending: false }),
       ]);
 
-      const errors = [towerRes.error, bundleRes.error, boltRes.error, deliveryRes.error, docketRes.error, bundleCheckRes.error, eventRes.error].filter(Boolean);
+      const errors = [
+        towerRes.error,
+        projectTowersRes.error,
+        bundleRes.error,
+        boltRes.error,
+        deliveryRes.error,
+        docketRes.error,
+        bundleCheckRes.error,
+        eventRes.error,
+        transferRes.error,
+      ].filter(Boolean);
       if (errors.length) throw errors[0];
 
       setTower((towerRes.data as TowerRecord | null) || null);
+      setProjectTowers(
+        ((projectTowersRes.data || []) as Array<Record<string, unknown>>).map((row) => ({
+          id: safeString(row.id),
+          name: safeString(row.name, "Unnamed tower"),
+          line: safeString(row.line) || null,
+        })),
+      );
       const loadedDockets = (docketRes.data || []) as DocketSummary[];
       setDockets(loadedDockets);
       setLatestDate(loadedDockets[0]?.docket_date || null);
@@ -878,12 +970,39 @@ function useMaterialsData(towerId: string) {
 
       setDeliveries((deliveryRes.data || []) as Delivery[]);
       setMaterialEvents(((eventRes.data || []) as unknown as MaterialEvent[]).map((event) => ({ ...event, items: event.items || [] })));
+      setTransfers(
+        ((transferRes.data || []) as Array<Record<string, unknown>>).map((row) => ({
+          id: safeString(row.id),
+          transfer_no: row.transfer_no == null ? null : safeNumber(row.transfer_no),
+          project_id: safeString(row.project_id, projectId),
+          source_tower_id: safeString(row.source_tower_id),
+          destination_tower_id: safeString(row.destination_tower_id),
+          source_bundle_id: safeString(row.source_bundle_id),
+          destination_bundle_id: safeString(row.destination_bundle_id),
+          bundle_no: safeString(row.bundle_no),
+          bundle_section: normaliseSegment(safeString(row.bundle_section, "General")),
+          quantity: Math.max(safeNumber(row.quantity), 0),
+          status: (safeString(row.status, "in_transit") || "in_transit") as TransferStatus,
+          transferred_by: safeString(row.transferred_by) || null,
+          transferred_by_name: safeString(row.transferred_by_name) || null,
+          transferred_at: safeString(row.transferred_at) || null,
+          received_by: safeString(row.received_by) || null,
+          received_by_name: safeString(row.received_by_name) || null,
+          received_at: safeString(row.received_at) || null,
+          cancelled_by: safeString(row.cancelled_by) || null,
+          cancelled_by_name: safeString(row.cancelled_by_name) || null,
+          cancelled_at: safeString(row.cancelled_at) || null,
+          source_docket_id: safeString(row.source_docket_id) || null,
+          destination_docket_id: safeString(row.destination_docket_id) || null,
+          notes: safeString(row.notes) || null,
+        })),
+      );
     } catch (error) {
       console.error("materials load error", error);
     } finally {
       setLoading(false);
     }
-  }, [fetchAllMemberChecks, fetchAllMembers, supabase, towerId]);
+  }, [fetchAllMemberChecks, fetchAllMembers, projectId, supabase, towerId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -1029,6 +1148,43 @@ function useMaterialsData(towerId: string) {
     return Math.max(getBundleCheck(bundle)?.qty_received || 0, 0);
   }, [getBundleCheck]);
 
+  const transferOutQty = useCallback((bundle: Bundle) => {
+    if (!bundle.id) return 0;
+    return transfers
+      .filter(
+        (transfer) =>
+          transfer.source_bundle_id === bundle.id &&
+          (transfer.status === "in_transit" || transfer.status === "received"),
+      )
+      .reduce((sum, transfer) => sum + Math.max(transfer.quantity, 0), 0);
+  }, [transfers]);
+
+  const transferInQty = useCallback((bundle: Bundle) => {
+    if (!bundle.id) return 0;
+    return transfers
+      .filter(
+        (transfer) =>
+          transfer.destination_bundle_id === bundle.id &&
+          transfer.status === "received",
+      )
+      .reduce((sum, transfer) => sum + Math.max(transfer.quantity, 0), 0);
+  }, [transfers]);
+
+  const pendingTransferInQty = useCallback((bundle: Bundle) => {
+    if (!bundle.id) return 0;
+    return transfers
+      .filter(
+        (transfer) =>
+          transfer.destination_bundle_id === bundle.id &&
+          transfer.status === "in_transit",
+      )
+      .reduce((sum, transfer) => sum + Math.max(transfer.quantity, 0), 0);
+  }, [transfers]);
+
+  const currentQty = useCallback((bundle: Bundle) => {
+    return Math.max(receivedQty(bundle) - transferOutQty(bundle), 0);
+  }, [receivedQty, transferOutQty]);
+
   const getMemberCheck = useCallback((member: Member) => {
     const bundle = resolveBundleForMember(member);
     if (!bundle?.id) return undefined;
@@ -1042,23 +1198,26 @@ function useMaterialsData(towerId: string) {
   const deriveBundleStatus = useCallback((bundle: Bundle): BundleCheckStatus => {
     const manual = getBundleCheck(bundle);
     const received = Math.max(manual?.qty_received || 0, 0);
+    const current = currentQty(bundle);
+    const transferredOut = transferOutQty(bundle);
 
     if (manual?.status === "issue") return "issue";
+    if (received > 0 && current <= 0 && transferredOut > 0) return "transferred";
     if (manual?.status === "missing" && received <= 0) return "missing";
-    if (received >= Math.max(bundle.qty_required, 1)) return "arrived";
-    if (received > 0) return "partial";
+    if (current >= Math.max(bundle.qty_required, 1)) return "arrived";
+    if (current > 0) return "partial";
 
     const related = membersForBundle(bundle);
     if (!related.length) return manual?.status || "not_checked";
 
     const statuses = related.map((member) => getMemberCheck(member)?.status || "not_checked");
     if (statuses.some((status) => status === "issue")) return "issue";
-    if (statuses.every((status) => status === "arrived")) return "arrived";
+    if (statuses.every((status) => status === "arrived")) return transferredOut > 0 ? "transferred" : "arrived";
     if (statuses.every((status) => status === "missing")) return "missing";
     if (statuses.some((status) => status !== "not_checked")) return "partial";
 
     return manual?.status || "not_checked";
-  }, [getBundleCheck, getMemberCheck, membersForBundle]);
+  }, [currentQty, getBundleCheck, getMemberCheck, membersForBundle, transferOutQty]);
 
   const saveBundleCheck = useCallback(async (
     bundle: Bundle,
@@ -1201,8 +1360,261 @@ function useMaterialsData(towerId: string) {
     );
   }, [resolveBundleForMember, supabase]);
 
+  const createTransfer = useCallback(async (input: CreateTransferInput) => {
+    const sourceBundle = input.sourceBundle;
+
+    if (!sourceBundle.id) {
+      alert("This bundle must have a UUID before it can be transferred.");
+      return false;
+    }
+
+    if (!input.destinationTowerId || input.destinationTowerId === towerId) {
+      alert("Select a different destination tower.");
+      return false;
+    }
+
+    if (!input.destinationBundleId) {
+      alert("Select the matching destination bundle.");
+      return false;
+    }
+
+    const cleanQty = Math.max(Math.floor(input.quantity), 0);
+    const available = currentQty(sourceBundle);
+
+    if (cleanQty <= 0) {
+      alert("Enter a transfer quantity greater than zero.");
+      return false;
+    }
+
+    if (cleanQty > available) {
+      alert(`Only ${available} bundle(s) are currently confirmed at this tower.`);
+      return false;
+    }
+
+    setSaving(true);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const actorName = safeString(
+        user?.user_metadata?.full_name ||
+          user?.user_metadata?.name ||
+          user?.email ||
+          "TTTracker User",
+      );
+
+      const { error } = await supabase.from("tower_material_transfers").insert({
+        project_id: projectId,
+        source_tower_id: towerId,
+        destination_tower_id: input.destinationTowerId,
+        source_bundle_id: sourceBundle.id,
+        destination_bundle_id: input.destinationBundleId,
+        bundle_no: sourceBundle.bundle_no.trim(),
+        bundle_section: normaliseSegment(sourceBundle.section),
+        quantity: cleanQty,
+        status: "in_transit",
+        transferred_by: user?.id || null,
+        transferred_by_name: actorName,
+        transferred_at: new Date().toISOString(),
+        notes: input.notes.trim() || null,
+      });
+
+      if (error) throw error;
+
+      await load();
+      return true;
+    } catch (error) {
+      console.error("create material transfer error", error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "The bundle transfer could not be created.",
+      );
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [currentQty, load, projectId, supabase, towerId]);
+
+  const confirmTransferReceived = useCallback(async (transfer: MaterialTransfer) => {
+    if (transfer.destination_tower_id !== towerId) {
+      alert("This transfer must be received from the destination tower.");
+      return false;
+    }
+
+    if (transfer.status !== "in_transit") {
+      return transfer.status === "received";
+    }
+
+    const destinationBundle = bundles.find(
+      (bundle) => bundle.id === transfer.destination_bundle_id,
+    );
+
+    if (!destinationBundle?.id) {
+      alert(
+        "The destination bundle could not be found in this tower's bundle register.",
+      );
+      return false;
+    }
+
+    setSaving(true);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const actorName = safeString(
+        user?.user_metadata?.full_name ||
+          user?.user_metadata?.name ||
+          user?.email ||
+          "TTTracker User",
+      );
+      const receivedAt = new Date().toISOString();
+
+      const { data: claimed, error: transferError } = await supabase
+        .from("tower_material_transfers")
+        .update({
+          status: "received",
+          received_by: user?.id || null,
+          received_by_name: actorName,
+          received_at: receivedAt,
+        })
+        .eq("id", transfer.id)
+        .eq("status", "in_transit")
+        .select("id")
+        .maybeSingle();
+
+      if (transferError) throw transferError;
+
+      if (!claimed) {
+        throw new Error(
+          "This transfer has already been received, cancelled or changed by another user.",
+        );
+      }
+
+      const existingCheck = getBundleCheck(destinationBundle);
+      const nextQty =
+        Math.max(existingCheck?.qty_received || 0, 0) +
+        Math.max(transfer.quantity, 0);
+      const required = Math.max(destinationBundle.qty_required, 1);
+      const nextStatus: BundleCheckStatus =
+        nextQty >= required ? "arrived" : nextQty > 0 ? "partial" : "not_checked";
+
+      const checkPayload = {
+        tower_id: towerId,
+        bundle_id: destinationBundle.id,
+        bundle_no: destinationBundle.bundle_no.trim(),
+        status: nextStatus,
+        notes: existingCheck?.notes || "",
+        checked_by: actorName,
+        checked_at: receivedAt,
+        qty_received: nextQty,
+      };
+
+      const { error: checkError } = await supabase
+        .from("tower_material_bundle_checks")
+        .upsert(checkPayload, { onConflict: "bundle_id" });
+
+      if (checkError) {
+        await supabase
+          .from("tower_material_transfers")
+          .update({
+            status: "in_transit",
+            received_by: null,
+            received_by_name: null,
+            received_at: null,
+          })
+          .eq("id", transfer.id)
+          .eq("status", "received");
+
+        throw checkError;
+      }
+
+      await load();
+      return true;
+    } catch (error) {
+      console.error("receive material transfer error", error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "The incoming transfer could not be received.",
+      );
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [bundles, getBundleCheck, load, supabase, towerId]);
+
+  const cancelTransfer = useCallback(async (transfer: MaterialTransfer) => {
+    if (transfer.source_tower_id !== towerId) {
+      alert("Only the source tower can cancel an in-transit transfer.");
+      return false;
+    }
+
+    if (transfer.status !== "in_transit") {
+      alert("Only an in-transit transfer can be cancelled.");
+      return false;
+    }
+
+    if (!window.confirm("Cancel this bundle transfer and return the quantity to the source tower's available stock?")) {
+      return false;
+    }
+
+    setSaving(true);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const actorName = safeString(
+        user?.user_metadata?.full_name ||
+          user?.user_metadata?.name ||
+          user?.email ||
+          "TTTracker User",
+      );
+
+      const { data: cancelled, error } = await supabase
+        .from("tower_material_transfers")
+        .update({
+          status: "cancelled",
+          cancelled_by: user?.id || null,
+          cancelled_by_name: actorName,
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq("id", transfer.id)
+        .eq("status", "in_transit")
+        .select("id")
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!cancelled) {
+        throw new Error(
+          "This transfer has already been received, cancelled or changed by another user.",
+        );
+      }
+
+      await load();
+      return true;
+    } catch (error) {
+      console.error("cancel material transfer error", error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : "The transfer could not be cancelled.",
+      );
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [load, supabase, towerId]);
+
   return {
     tower,
+    projectTowers,
     latestDate,
     bundles,
     members,
@@ -1210,6 +1622,7 @@ function useMaterialsData(towerId: string) {
     bundleChecks,
     memberChecks,
     materialEvents,
+    transfers,
     dockets,
     deliveries,
     docketMap,
@@ -1221,6 +1634,10 @@ function useMaterialsData(towerId: string) {
     resolveBundleForMember,
     deliveredQty,
     receivedQty,
+    transferInQty,
+    transferOutQty,
+    pendingTransferInQty,
+    currentQty,
     getMemberCheck,
     membersForBundle,
     deriveBundleStatus,
@@ -1228,6 +1645,9 @@ function useMaterialsData(towerId: string) {
     clearBundleCheck,
     updateMemberStatus,
     clearMemberStatus,
+    createTransfer,
+    confirmTransferReceived,
+    cancelTransfer,
     refresh: load,
   };
 }
@@ -1340,7 +1760,7 @@ function SearchEmpty({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">{text}</div>;
 }
 
-function BundleControl({ data }: { data: MaterialsData }) {
+function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: (bundle: Bundle) => void }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | BundleCheckStatus>("all");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -1402,6 +1822,7 @@ function BundleControl({ data }: { data: MaterialsData }) {
           <option value="arrived">Arrived</option>
           <option value="missing">Missing</option>
           <option value="issue">Issue</option>
+          <option value="transferred">Transferred out</option>
         </select>
       </div>
 
@@ -1415,8 +1836,12 @@ function BundleControl({ data }: { data: MaterialsData }) {
             const status = data.deriveBundleStatus(bundle);
             const received = data.receivedQty(bundle);
             const delivered = data.deliveredQty(bundle);
-            const remaining = Math.max(bundle.qty_required - received, 0);
-            const excess = Math.max(received - bundle.qty_required, 0);
+            const transferIn = data.transferInQty(bundle);
+            const transferOut = data.transferOutQty(bundle);
+            const pendingIn = data.pendingTransferInQty(bundle);
+            const current = data.currentQty(bundle);
+            const remaining = Math.max(bundle.qty_required - current, 0);
+            const excess = Math.max(current - bundle.qty_required, 0);
             const duplicate = data.duplicateBundleRefs.has(normaliseBundleKey(bundle.bundle_no));
             const contents = data.membersForBundle(bundle);
 
@@ -1432,8 +1857,15 @@ function BundleControl({ data }: { data: MaterialsData }) {
                         {excess > 0 && <Pill className="border-blue-200 bg-blue-50 text-blue-700">+{excess} excess</Pill>}
                       </div>
                       <div className="mt-1 text-sm text-slate-500">
-                        {bundle.section} · Required {bundle.qty_required} · Delivered {delivered} · Site received {received} · Remaining {remaining}
+                        {bundle.section} · Required {bundle.qty_required} · Supplier delivered {delivered} · Site confirmed {received} · Current at tower {current} · Remaining {remaining}
                       </div>
+                      {(transferIn > 0 || transferOut > 0 || pendingIn > 0) && (
+                        <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] font-bold">
+                          {transferIn > 0 && <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{transferIn} transfer in</span>}
+                          {pendingIn > 0 && <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">{pendingIn} incoming</span>}
+                          {transferOut > 0 && <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">-{transferOut} transfer out</span>}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -1450,7 +1882,7 @@ function BundleControl({ data }: { data: MaterialsData }) {
 
                         <div className="min-w-21 text-center">
                           <div className="text-base font-black text-slate-950">{received}/{bundle.qty_required}</div>
-                          <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">received</div>
+                          <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">site checked</div>
                         </div>
 
                         <button
@@ -1467,6 +1899,15 @@ function BundleControl({ data }: { data: MaterialsData }) {
                       <button type="button"  onClick={() => void data.saveBundleCheck(bundle, bundle.qty_required, "arrived")} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700">Full</button>
                       <button type="button"  onClick={() => void data.saveBundleCheck(bundle, 0, "missing")} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">Missing</button>
                       <button type="button"  onClick={() => void data.saveBundleCheck(bundle, received, "issue")} className="rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700">Issue</button>
+                      {bundle.id && current > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onTransfer(bundle)}
+                          className="inline-flex items-center gap-1 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700"
+                        >
+                          <ArrowRightLeft size={13} /> Transfer
+                        </button>
+                      )}
                       <button type="button"  onClick={() => void data.clearBundleCheck(bundle)} className="flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"><RotateCcw size={13} /> Clear</button>
                       <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [key]: !open }))} className="flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white">
                         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -1536,6 +1977,7 @@ function OverviewWorkspace({
   towerId,
   onOpenIssues,
   onOpenBundles,
+  onOpenTransfers,
   onOpenData,
 }: {
   data: MaterialsData;
@@ -1543,6 +1985,7 @@ function OverviewWorkspace({
   towerId: string;
   onOpenIssues: () => void;
   onOpenBundles: () => void;
+  onOpenTransfers: () => void;
   onOpenData: () => void;
 }) {
   const missingIssues = buildMissingIssues(data);
@@ -1664,8 +2107,9 @@ function OverviewWorkspace({
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <QuickAction title="Bundle Control" description="Review delivered, site received, outstanding and over-received packs." icon={PackageCheck} onClick={onOpenBundles} />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <QuickAction title="Bundle Control" description="Review supplier delivery, site-confirmed quantity and current quantity at this tower." icon={PackageCheck} onClick={onOpenBundles} />
+        <QuickAction title="Tower Transfers" description="Move confirmed bundles between towers and confirm incoming transfers." icon={ArrowRightLeft} onClick={onOpenTransfers} />
         <QuickAction title="Issues & Deliveries" description="Track missing, partial deliveries, resolved items, excess and damage." icon={TriangleAlert} onClick={onOpenIssues} />
         <QuickAction title="Data & Imports" description="Upload, replace, merge, correct and delete master material data." icon={Database} onClick={onOpenData} />
       </div>
@@ -1771,6 +2215,519 @@ function QuickAction({
   );
 }
 
+
+function transferStatusLabel(status: TransferStatus): string {
+  if (status === "received") return "Received";
+  if (status === "cancelled") return "Cancelled";
+  return "In Transit";
+}
+
+function transferStatusClasses(status: TransferStatus): string {
+  if (status === "received") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "cancelled") return "border-slate-200 bg-slate-100 text-slate-500";
+  return "border-blue-200 bg-blue-50 text-blue-700";
+}
+
+function transferReference(transfer: MaterialTransfer): string {
+  return transfer.transfer_no
+    ? `MT-${String(transfer.transfer_no).padStart(5, "0")}`
+    : `MT-${transfer.id.slice(0, 8).toUpperCase()}`;
+}
+
+function TransfersWorkspace({
+  data,
+  towerId,
+  onNewTransfer,
+}: {
+  data: MaterialsData;
+  towerId: string;
+  onNewTransfer: (bundle?: Bundle) => void;
+}) {
+  const [direction, setDirection] = useState<"all" | "incoming" | "outgoing">("all");
+  const [status, setStatus] = useState<"all" | TransferStatus>("all");
+  const [query, setQuery] = useState("");
+
+  const towerNameById = useMemo(
+    () => new Map(data.projectTowers.map((tower) => [tower.id, tower.name])),
+    [data.projectTowers],
+  );
+
+  const incoming = data.transfers.filter(
+    (transfer) => transfer.destination_tower_id === towerId,
+  );
+  const outgoing = data.transfers.filter(
+    (transfer) => transfer.source_tower_id === towerId,
+  );
+  const incomingPending = incoming.filter((transfer) => transfer.status === "in_transit");
+  const outgoingPending = outgoing.filter((transfer) => transfer.status === "in_transit");
+  const receivedIn = incoming.filter((transfer) => transfer.status === "received");
+  const sentOut = outgoing.filter((transfer) => transfer.status === "received");
+
+  const q = normaliseSearch(query);
+
+  const filtered = data.transfers.filter((transfer) => {
+    if (direction === "incoming" && transfer.destination_tower_id !== towerId) return false;
+    if (direction === "outgoing" && transfer.source_tower_id !== towerId) return false;
+    if (status !== "all" && transfer.status !== status) return false;
+    if (!q) return true;
+
+    return [
+      transferReference(transfer),
+      transfer.bundle_no,
+      transfer.bundle_section,
+      towerNameById.get(transfer.source_tower_id),
+      towerNameById.get(transfer.destination_tower_id),
+      transfer.transferred_by_name,
+      transfer.received_by_name,
+      transfer.notes,
+      transfer.status,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <IssueMetric label="Incoming" value={incomingPending.length} tone="blue" />
+        <IssueMetric label="Outgoing" value={outgoingPending.length} tone="amber" />
+        <IssueMetric label="Received In" value={receivedIn.reduce((sum, row) => sum + row.quantity, 0)} tone="green" />
+        <IssueMetric label="Transferred Out" value={sentOut.reduce((sum, row) => sum + row.quantity, 0)} />
+      </div>
+
+      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className="font-black text-blue-950">Tower-to-Tower Bundle Transfers</h3>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-blue-800">
+              A transfer moves already site-confirmed bundle quantity between towers. It does not create another supplier delivery. The source quantity is reserved as soon as the transfer is created, and the destination bundle check increases only when the receiving tower confirms it.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNewTransfer()}
+            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-blue-700 px-4 py-2.5 text-xs font-black text-white"
+          >
+            <ArrowRightLeft size={14} /> New Transfer
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-[auto_auto_1fr]">
+        <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+          {([
+            ["all", "All"],
+            ["incoming", "Incoming"],
+            ["outgoing", "Outgoing"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setDirection(id)}
+              className={`rounded-lg px-3 py-2 text-xs font-black ${
+                direction === id ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <select
+          value={status}
+          onChange={(event) => setStatus(event.target.value as "all" | TransferStatus)}
+          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black"
+        >
+          <option value="all">All statuses</option>
+          <option value="in_transit">In transit</option>
+          <option value="received">Received</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search transfer, bundle or tower…"
+            className="w-full rounded-xl border border-slate-300 py-2 pl-8 pr-3 text-xs"
+          />
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <IssueEmpty text="No bundle transfers match the current filters." />
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((transfer) => {
+            const isIncoming = transfer.destination_tower_id === towerId;
+            const sourceName = towerNameById.get(transfer.source_tower_id) || "Source tower";
+            const destinationName = towerNameById.get(transfer.destination_tower_id) || "Destination tower";
+
+            return (
+              <div
+                key={transfer.id}
+                className={`rounded-2xl border bg-white p-4 shadow-sm ${
+                  transfer.status === "in_transit"
+                    ? "border-blue-200"
+                    : transfer.status === "received"
+                      ? "border-emerald-200"
+                      : "border-slate-200"
+                }`}
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-black text-slate-950">{transferReference(transfer)}</div>
+                      <Pill className={transferStatusClasses(transfer.status)}>
+                        {transferStatusLabel(transfer.status)}
+                      </Pill>
+                      <Pill className={isIncoming ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}>
+                        {isIncoming ? "Incoming" : "Outgoing"}
+                      </Pill>
+                    </div>
+
+                    <div className="mt-2 text-lg font-black text-slate-950">
+                      {transfer.bundle_no} · {transfer.bundle_section}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-slate-600">
+                      <span className="font-bold">{sourceName}</span>
+                      <ArrowRightLeft size={14} className="text-slate-400" />
+                      <span className="font-bold">{destinationName}</span>
+                      <span className="text-slate-300">•</span>
+                      <span>Qty {transfer.quantity}</span>
+                    </div>
+
+                    <div className="mt-2 text-xs text-slate-500">
+                      Sent {formatDate(transfer.transferred_at)}
+                      {transfer.transferred_by_name ? ` by ${transfer.transferred_by_name}` : ""}
+                      {transfer.received_at ? ` · Received ${formatDate(transfer.received_at)}` : ""}
+                    </div>
+
+                    {transfer.notes && (
+                      <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                        {transfer.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {isIncoming && transfer.status === "in_transit" && (
+                      <button
+                        type="button"
+                        disabled={data.saving}
+                        onClick={() => void data.confirmTransferReceived(transfer)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-black text-white disabled:opacity-50"
+                      >
+                        <PackageCheck size={14} /> Confirm Received
+                      </button>
+                    )}
+
+                    {!isIncoming && transfer.status === "in_transit" && (
+                      <button
+                        type="button"
+                        disabled={data.saving}
+                        onClick={() => void data.cancelTransfer(transfer)}
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-black text-slate-600 disabled:opacity-50"
+                      >
+                        Cancel Transfer
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TransferBundleModal({
+  data,
+  projectId,
+  towerId,
+  initialBundle,
+  onClose,
+}: {
+  data: MaterialsData;
+  projectId: string;
+  towerId: string;
+  initialBundle: Bundle | null;
+  onClose: () => void;
+}) {
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const availableSourceBundles = data.bundles.filter(
+    (bundle) => bundle.id && data.currentQty(bundle) > 0,
+  );
+
+  const [sourceBundleId, setSourceBundleId] = useState(
+    initialBundle?.id || availableSourceBundles[0]?.id || "",
+  );
+  const [destinationTowerId, setDestinationTowerId] = useState("");
+  const [destinationBundles, setDestinationBundles] = useState<Bundle[]>([]);
+  const [destinationBundleId, setDestinationBundleId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [notes, setNotes] = useState("");
+  const [loadingDestination, setLoadingDestination] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const sourceBundle =
+    data.bundles.find((bundle) => bundle.id === sourceBundleId) || null;
+  const availableQty = sourceBundle ? data.currentQty(sourceBundle) : 0;
+
+  const otherTowers = data.projectTowers.filter((tower) => tower.id !== towerId);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDestinationBundles() {
+      setDestinationBundles([]);
+      setDestinationBundleId("");
+
+      if (!destinationTowerId || !sourceBundle) return;
+
+      setLoadingDestination(true);
+
+      try {
+        const { data: rows, error } = await supabase
+          .from("tower_required_bundles")
+          .select("*")
+          .eq("tower_id", destinationTowerId)
+          .order("section")
+          .order("bundle_no");
+
+        if (error) throw error;
+        if (cancelled) return;
+
+        const mapped = ((rows || []) as Array<Record<string, unknown>>).map((row) => ({
+          id: safeString(row.id) || undefined,
+          tower_id: destinationTowerId,
+          bundle_no: safeString(row.bundle_no),
+          section: normaliseSegment(safeString(row.section, "General")),
+          qty_required: Math.max(safeNumber(row.qty_required), 0),
+          member_qty: Math.max(safeNumber(row.member_qty), 0),
+          total_weight: row.total_weight == null ? null : safeNumber(row.total_weight),
+        }));
+
+        setDestinationBundles(mapped);
+
+        const exact = mapped.find(
+          (bundle) =>
+            normaliseBundleKey(bundle.bundle_no) ===
+              normaliseBundleKey(sourceBundle.bundle_no) &&
+            normaliseSegment(bundle.section) ===
+              normaliseSegment(sourceBundle.section),
+        );
+
+        if (exact?.id) {
+          setDestinationBundleId(exact.id);
+        }
+      } catch (error) {
+        console.error("destination bundles load error", error);
+      } finally {
+        if (!cancelled) setLoadingDestination(false);
+      }
+    }
+
+    void loadDestinationBundles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [destinationTowerId, sourceBundleId, supabase]);
+
+  const destinationBundle = destinationBundles.find(
+    (bundle) => bundle.id === destinationBundleId,
+  );
+
+  const isExactMatch =
+    Boolean(sourceBundle && destinationBundle) &&
+    normaliseBundleKey(sourceBundle?.bundle_no) ===
+      normaliseBundleKey(destinationBundle?.bundle_no) &&
+    normaliseSegment(sourceBundle?.section || "") ===
+      normaliseSegment(destinationBundle?.section || "");
+
+  async function submit() {
+    if (!sourceBundle) {
+      alert("Select a source bundle.");
+      return;
+    }
+
+    if (!destinationTowerId) {
+      alert("Select a destination tower.");
+      return;
+    }
+
+    if (!destinationBundle?.id) {
+      alert("Select the bundle record this transfer should satisfy at the destination tower.");
+      return;
+    }
+
+    const cleanQty = Math.max(Math.floor(safeNumber(quantity)), 0);
+    if (cleanQty <= 0 || cleanQty > availableQty) {
+      alert(`Transfer quantity must be between 1 and ${availableQty}.`);
+      return;
+    }
+
+    if (!isExactMatch) {
+      const confirmed = window.confirm(
+        `The destination bundle is ${destinationBundle.bundle_no} · ${destinationBundle.section}, which does not exactly match ${sourceBundle.bundle_no} · ${sourceBundle.section}. Continue with this mapping?`,
+      );
+      if (!confirmed) return;
+    }
+
+    setSubmitting(true);
+    const created = await data.createTransfer({
+      sourceBundle,
+      destinationTowerId,
+      destinationBundleId: destinationBundle.id,
+      quantity: cleanQty,
+      notes,
+    });
+    setSubmitting(false);
+
+    if (created) onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-2 md:items-center">
+      <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+          <div>
+            <h3 className="text-lg font-black text-slate-950">Transfer Bundle to Another Tower</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Only quantity already confirmed at this tower can be transferred.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-slate-100">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="grid gap-4 p-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Source Bundle</label>
+            <select
+              value={sourceBundleId}
+              onChange={(event) => {
+                setSourceBundleId(event.target.value);
+                setQuantity("1");
+              }}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            >
+              <option value="">Select bundle…</option>
+              {availableSourceBundles.map((bundle) => (
+                <option key={bundleUiKey(bundle)} value={bundle.id}>
+                  {bundle.bundle_no} · {bundle.section} · {data.currentQty(bundle)} available
+                </option>
+              ))}
+            </select>
+            {sourceBundle && (
+              <div className="mt-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+                Site confirmed <strong>{data.receivedQty(sourceBundle)}</strong> · Already transferred out <strong>{data.transferOutQty(sourceBundle)}</strong> · Available now <strong>{availableQty}</strong>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Destination Tower</label>
+            <select
+              value={destinationTowerId}
+              onChange={(event) => setDestinationTowerId(event.target.value)}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            >
+              <option value="">Select tower…</option>
+              {otherTowers.map((tower) => (
+                <option key={tower.id} value={tower.id}>
+                  {tower.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Destination Bundle</label>
+            <select
+              value={destinationBundleId}
+              onChange={(event) => setDestinationBundleId(event.target.value)}
+              disabled={!destinationTowerId || loadingDestination}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+            >
+              <option value="">
+                {loadingDestination ? "Loading destination bundles…" : "Select destination bundle…"}
+              </option>
+              {destinationBundles.map((bundle) => (
+                <option key={bundleUiKey(bundle)} value={bundle.id}>
+                  {bundle.bundle_no} · {bundle.section}
+                </option>
+              ))}
+            </select>
+
+            {destinationBundle && (
+              <div className={`mt-2 rounded-xl border px-3 py-2 text-xs font-bold ${
+                isExactMatch
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
+              }`}>
+                {isExactMatch
+                  ? "Exact bundle + section match"
+                  : "Different destination bundle mapping — check before saving"}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Quantity</label>
+            <input
+              type="number"
+              min={1}
+              max={Math.max(availableQty, 1)}
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-xs font-black text-slate-500">Transfer Notes</label>
+            <textarea
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              rows={3}
+              placeholder="Optional reason, truck / crew reference, or other transfer note…"
+              className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="border-t border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
+            Creating the transfer immediately reserves the quantity from the source tower. The destination does not count it as site-received until someone opens the destination tower and selects <strong>Confirm Received</strong>.
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-black text-slate-700">
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={submitting || data.saving || !sourceBundle || availableQty <= 0}
+              onClick={() => void submit()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
+            >
+              <ArrowRightLeft size={15} />
+              {submitting ? "Creating…" : "Create Transfer"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function IssuesWorkspace({
   data,
   projectId,
@@ -1794,6 +2751,7 @@ function IssuesWorkspace({
   const movementEvents = data.materialEvents.filter((event) =>
     event.event_type === "taken_from_another_tower" || event.event_type === "sent_to_another_tower",
   );
+  const transferMovements = data.transfers.filter((transfer) => transfer.status !== "cancelled");
   const unlinkedReceipts = data.materialEvents
     .filter((event) => event.event_type === "found_received")
     .flatMap((event) => event.items.map((item) => ({ event, item })))
@@ -1840,7 +2798,7 @@ function IssuesWorkspace({
         <IssueMetric label="Qty Remaining" value={outstandingQty} tone="red" />
         <IssueMetric label="Excess" value={excessEvents.reduce((sum, event) => sum + event.items.length, 0) + overReceived.length} tone="blue" />
         <IssueMetric label="Damaged / Incorrect" value={damagedEvents.reduce((sum, event) => sum + event.items.length, 0)} />
-        <IssueMetric label="Movements" value={movementEvents.reduce((sum, event) => sum + event.items.length, 0)} />
+        <IssueMetric label="Movements" value={movementEvents.reduce((sum, event) => sum + event.items.length, 0) + transferMovements.length} />
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-2">
@@ -2034,9 +2992,33 @@ function IssuesWorkspace({
         <section className="border-t border-slate-200 pt-4">
           <h3 className="font-black text-slate-950">Material movements</h3>
           <div className="mt-2 space-y-2">
-            {movementEvents.length === 0 ? <IssueEmpty text="No inter-tower material movements recorded." /> : movementEvents.map((event) => (
-              <MaterialEventCard key={event.id} event={event} data={data} tone="blue" />
-            ))}
+            {movementEvents.length === 0 && transferMovements.length === 0 ? (
+              <IssueEmpty text="No inter-tower material movements recorded." />
+            ) : (
+              <>
+                {transferMovements.map((transfer) => (
+                  <div key={`transfer-${transfer.id}`} className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="font-black text-slate-950">
+                          {transferReference(transfer)} · {transfer.bundle_no} · {transfer.bundle_section}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {data.projectTowers.find((tower) => tower.id === transfer.source_tower_id)?.name || "Source tower"} →{" "}
+                          {data.projectTowers.find((tower) => tower.id === transfer.destination_tower_id)?.name || "Destination tower"} · Qty {transfer.quantity}
+                        </div>
+                      </div>
+                      <Pill className={transferStatusClasses(transfer.status)}>
+                        {transferStatusLabel(transfer.status)}
+                      </Pill>
+                    </div>
+                  </div>
+                ))}
+                {movementEvents.map((event) => (
+                  <MaterialEventCard key={event.id} event={event} data={data} tone="blue" />
+                ))}
+              </>
+            )}
           </div>
         </section>
       )}
@@ -2937,12 +3919,13 @@ function BoltSummary({ label, value }: { label: string; value: number }) {
 }
 
 
-type Tab = "overview" | "search" | "bundles" | "issues" | "bolts" | "data";
+type Tab = "overview" | "search" | "bundles" | "transfers" | "issues" | "bolts" | "data";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
   { id: "overview", label: "Overview", icon: Boxes },
   { id: "search", label: "Search", icon: Search },
   { id: "bundles", label: "Bundles", icon: PackageCheck },
+  { id: "transfers", label: "Transfers", icon: ArrowRightLeft },
   { id: "issues", label: "Issues", icon: TriangleAlert },
   { id: "bolts", label: "Bolts", icon: Wrench },
   { id: "data", label: "Data & Imports", icon: Database },
@@ -2952,8 +3935,10 @@ export default function MaterialsControlPage() {
   const params = useParams();
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
-  const data = useMaterialsData(towerId);
+  const data = useMaterialsData(projectId, towerId);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [transferBundle, setTransferBundle] = useState<Bundle | null>(null);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
 
   const missingIssues = buildMissingIssues(data);
   const openMissing = missingIssues.filter((row) => row.status === "open").length;
@@ -2963,6 +3948,7 @@ export default function MaterialsControlPage() {
     data.excessEvents.reduce((sum, event) => sum + event.items.length, 0) +
     data.bundles.filter((bundle) => data.receivedQty(bundle) > bundle.qty_required).length;
   const completed = data.bundles.filter((bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
+  const inTransitTransfers = data.transfers.filter((transfer) => transfer.status === "in_transit").length;
 
   if (data.loading) {
     return <div className="min-h-screen bg-slate-50 p-6 text-sm text-slate-500">Loading materials control…</div>;
@@ -3017,7 +4003,9 @@ export default function MaterialsControlPage() {
                 const count =
                   tab.id === "issues"
                     ? openMissing + partialMissing
-                    : null;
+                    : tab.id === "transfers"
+                      ? inTransitTransfers
+                      : null;
                 return (
                   <button
                     type="button"
@@ -3048,17 +4036,49 @@ export default function MaterialsControlPage() {
                 towerId={towerId}
                 onOpenIssues={() => setActiveTab("issues")}
                 onOpenBundles={() => setActiveTab("bundles")}
+                onOpenTransfers={() => setActiveTab("transfers")}
                 onOpenData={() => setActiveTab("data")}
               />
             )}
             {activeTab === "search" && <MaterialsSearch data={data} />}
-            {activeTab === "bundles" && <BundleControl data={data} />}
+            {activeTab === "bundles" && (
+              <BundleControl
+                data={data}
+                onTransfer={(bundle) => {
+                  setTransferBundle(bundle);
+                  setTransferModalOpen(true);
+                }}
+              />
+            )}
+            {activeTab === "transfers" && (
+              <TransfersWorkspace
+                data={data}
+                towerId={towerId}
+                onNewTransfer={(bundle) => {
+                  setTransferBundle(bundle || null);
+                  setTransferModalOpen(true);
+                }}
+              />
+            )}
             {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} />}
             {activeTab === "bolts" && <BoltRegister bolts={data.bolts} />}
             {activeTab === "data" && <DataImportsWorkspace data={data} towerId={towerId} />}
           </div>
         </div>
       </div>
+
+      {transferModalOpen && (
+        <TransferBundleModal
+          data={data}
+          projectId={projectId}
+          towerId={towerId}
+          initialBundle={transferBundle}
+          onClose={() => {
+            setTransferModalOpen(false);
+            setTransferBundle(null);
+          }}
+        />
+      )}
     </div>
   );
 }
