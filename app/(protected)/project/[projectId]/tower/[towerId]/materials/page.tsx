@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  CirclePlus,
   ClipboardList,
   Database,
   Download,
@@ -1784,26 +1783,16 @@ function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: 
     return searchable.includes(q);
   });
 
-  const completed = data.bundles.filter(
-    (bundle: Bundle) => data.deriveBundleStatus(bundle) === "arrived",
-  ).length;
-
   return (
     <div>
-      <div className="grid grid-cols-3 gap-2">
-        <BundleSummary label="Bundles" value={data.bundles.length} />
-        <BundleSummary label="Complete" value={completed} />
-        <BundleSummary label="Outstanding" value={Math.max(data.bundles.length - completed, 0)} />
-      </div>
-
       {data.duplicateBundleRefs.size > 0 && (
-        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <strong>Duplicate bundle references detected:</strong>{" "}
-          {Array.from(data.duplicateBundleRefs).join(", ")}. These are now handled as separate bundle UUID records; the section identifies the display pack while checks are saved against the UUID.
+          {Array.from(data.duplicateBundleRefs).join(", ")}. These are handled as separate bundle UUID records; the section identifies the display pack while checks are saved against the UUID.
         </div>
       )}
 
-      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1fr_220px]">
+      <div className={`${data.duplicateBundleRefs.size > 0 ? "mt-3" : ""} grid grid-cols-1 gap-2 md:grid-cols-[1fr_220px]`}>
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -1844,72 +1833,127 @@ function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: 
             const excess = Math.max(current - bundle.qty_required, 0);
             const duplicate = data.duplicateBundleRefs.has(normaliseBundleKey(bundle.bundle_no));
             const contents = data.membersForBundle(bundle);
+            const canTransfer = Boolean(bundle.id && current > 0);
 
             return (
               <div key={key} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="p-3">
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="p-3 md:p-4">
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_640px] xl:items-start">
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex min-h-7 flex-wrap items-center gap-2">
                         <div className="text-lg font-black text-slate-950">{bundle.bundle_no}</div>
                         <Pill className={statusClasses(status)}>{statusLabel(status)}</Pill>
                         {duplicate && <Pill className="border-amber-200 bg-amber-50 text-amber-700">Duplicate ref</Pill>}
                         {excess > 0 && <Pill className="border-blue-200 bg-blue-50 text-blue-700">+{excess} excess</Pill>}
                       </div>
-                      <div className="mt-1 text-sm text-slate-500">
-                        {bundle.section} · Required {bundle.qty_required} · Supplier delivered {delivered} · Site confirmed {received} · Current at tower {current} · Remaining {remaining}
+
+                      <div className="mt-1 truncate text-sm font-semibold text-slate-500" title={bundle.section}>
+                        {bundle.section}
                       </div>
-                      {(transferIn > 0 || transferOut > 0 || pendingIn > 0) && (
-                        <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] font-bold">
-                          {transferIn > 0 && <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{transferIn} transfer in</span>}
-                          {pendingIn > 0 && <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">{pendingIn} incoming</span>}
-                          {transferOut > 0 && <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">-{transferOut} transfer out</span>}
-                        </div>
-                      )}
+
+                      <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+                        <BundleCardMetric label="Required" value={bundle.qty_required} />
+                        <BundleCardMetric label="Supplier" value={delivered} />
+                        <BundleCardMetric label="Site Checked" value={received} />
+                        <BundleCardMetric label="Current" value={current} tone="strong" />
+                        <BundleCardMetric label="Remaining" value={remaining} tone={remaining > 0 ? "warning" : "good"} />
+                      </div>
+
+                      <div className="mt-2 flex min-h-6 flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                        {transferIn > 0 && (
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">
+                            +{transferIn} transfer in
+                          </span>
+                        )}
+                        {pendingIn > 0 && (
+                          <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">
+                            {pendingIn} incoming
+                          </span>
+                        )}
+                        {transferOut > 0 && (
+                          <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">
+                            -{transferOut} transfer out
+                          </span>
+                        )}
+                        {transferIn <= 0 && pendingIn <= 0 && transferOut <= 0 && (
+                          <span className="text-slate-400">No tower transfers</span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 p-1">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-[144px_64px_76px_64px_88px_72px_96px]">
+                      <div className="grid h-10 grid-cols-[34px_1fr_34px] items-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                         <button
                           type="button"
-                          
                           onClick={() => void data.saveBundleCheck(bundle, Math.max(received - 1, 0))}
-                          className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-slate-800 shadow-sm"
-                          title="Reduce received quantity"
+                          className="flex h-full items-center justify-center border-r border-slate-200 bg-white text-slate-800 hover:bg-slate-50"
+                          title="Reduce site-checked quantity"
                         >
-                          <Minus size={16} />
+                          <Minus size={15} />
                         </button>
 
-                        <div className="min-w-21 text-center">
-                          <div className="text-base font-black text-slate-950">{received}/{bundle.qty_required}</div>
-                          <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">site checked</div>
+                        <div className="min-w-0 text-center leading-none">
+                          <div className="text-sm font-black text-slate-950">{received}/{bundle.qty_required}</div>
+                          <div className="mt-0.5 text-[8px] font-black uppercase tracking-wide text-slate-400">checked</div>
                         </div>
 
                         <button
                           type="button"
-                          
                           onClick={() => void data.saveBundleCheck(bundle, received + 1)}
-                          className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-white"
-                          title="Add received quantity"
+                          className="flex h-full items-center justify-center border-l border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700"
+                          title="Add site-checked quantity"
                         >
-                          <Plus size={16} />
+                          <Plus size={15} />
                         </button>
                       </div>
 
-                      <button type="button"  onClick={() => void data.saveBundleCheck(bundle, bundle.qty_required, "arrived")} className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700">Full</button>
-                      <button type="button"  onClick={() => void data.saveBundleCheck(bundle, 0, "missing")} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">Missing</button>
-                      <button type="button"  onClick={() => void data.saveBundleCheck(bundle, received, "issue")} className="rounded-xl bg-violet-50 px-3 py-2 text-xs font-black text-violet-700">Issue</button>
-                      {bundle.id && current > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => onTransfer(bundle)}
-                          className="inline-flex items-center gap-1 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700"
-                        >
-                          <ArrowRightLeft size={13} /> Transfer
-                        </button>
-                      )}
-                      <button type="button"  onClick={() => void data.clearBundleCheck(bundle)} className="flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"><RotateCcw size={13} /> Clear</button>
-                      <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [key]: !open }))} className="flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white">
+                      <button
+                        type="button"
+                        onClick={() => void data.saveBundleCheck(bundle, bundle.qty_required, "arrived")}
+                        className="h-10 w-full whitespace-nowrap rounded-xl bg-emerald-50 px-2 text-xs font-black text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Full
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void data.saveBundleCheck(bundle, 0, "missing")}
+                        className="h-10 w-full whitespace-nowrap rounded-xl bg-rose-50 px-2 text-xs font-black text-rose-700 hover:bg-rose-100"
+                      >
+                        Missing
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void data.saveBundleCheck(bundle, received, "issue")}
+                        className="h-10 w-full whitespace-nowrap rounded-xl bg-violet-50 px-2 text-xs font-black text-violet-700 hover:bg-violet-100"
+                      >
+                        Issue
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={!canTransfer}
+                        onClick={() => canTransfer && onTransfer(bundle)}
+                        className="inline-flex h-10 w-full items-center justify-center gap-1 whitespace-nowrap rounded-xl bg-blue-50 px-2 text-xs font-black text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300"
+                        title={canTransfer ? "Transfer bundle to another tower" : "No current quantity available to transfer"}
+                      >
+                        <ArrowRightLeft size={13} /> Transfer
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void data.clearBundleCheck(bundle)}
+                        className="inline-flex h-10 w-full items-center justify-center gap-1 whitespace-nowrap rounded-xl bg-slate-100 px-2 text-xs font-black text-slate-600 hover:bg-slate-200"
+                      >
+                        <RotateCcw size={13} /> Clear
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setExpanded((prev) => ({ ...prev, [key]: !open }))}
+                        className="inline-flex h-10 w-full items-center justify-center gap-1 whitespace-nowrap rounded-xl bg-slate-950 px-2 text-xs font-black text-white hover:bg-slate-800"
+                      >
                         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                         {open ? "Hide Pack" : "Open Pack"}
                       </button>
@@ -1932,12 +1976,14 @@ function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: 
                           const memberStatus: MemberCheckStatus = data.getMemberCheck(member)?.status || "not_checked";
 
                           return (
-                            <div key={member.id || `${member.mark_no}-${member.bundle_reference}`} className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 md:grid-cols-[1fr_1fr_0.7fr_1fr_auto] md:items-center">
+                            <div key={member.id || `${member.mark_no}-${member.bundle_reference}`} className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 md:grid-cols-[1fr_1fr_0.7fr_1fr_110px] md:items-center">
                               <BundleInfo label="Member" value={member.mark_no} />
                               <BundleInfo label="Profile" value={member.section || "—"} />
                               <BundleInfo label="Qty / Tower" value={member.qty_per_tower ?? "—"} />
                               <BundleInfo label="Segment" value={member.tower_segment || "—"} />
-                              <Pill className={statusClasses(memberStatus)}>{statusLabel(memberStatus)}</Pill>
+                              <div className="flex justify-start md:justify-end">
+                                <Pill className={statusClasses(memberStatus)}>{statusLabel(memberStatus)}</Pill>
+                              </div>
                             </div>
                           );
                         })}
@@ -1954,13 +2000,36 @@ function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: 
   );
 }
 
+function BundleCardMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "strong" | "good" | "warning";
+}) {
+  const style =
+    tone === "strong"
+      ? "border-slate-300 bg-slate-100 text-slate-950"
+      : tone === "good"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+        : tone === "warning"
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-slate-200 bg-slate-50 text-slate-800";
+
+  return (
+    <div className={`min-w-0 rounded-lg border px-2 py-1.5 ${style}`}>
+      <div className="truncate text-[8px] font-black uppercase tracking-wide opacity-55">{label}</div>
+      <div className="mt-0.5 text-sm font-black leading-none">{value}</div>
+    </div>
+  );
+}
+
 function Pill({ className, children }: { className: string; children: React.ReactNode }) {
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold ${className}`}>{children}</span>;
 }
 
-function BundleSummary({ label, value }: { label: string; value: string | number }) {
-  return <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"><div className="text-[9px] font-black uppercase text-slate-400">{label}</div><div className="text-lg font-black text-slate-950">{value}</div></div>;
-}
 
 function BundleInfo({ label, value }: { label: string; value: string | number }) {
   return <div className="min-w-0"><div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div><div className="truncate text-xs font-bold text-slate-800">{value}</div></div>;
@@ -1989,13 +2058,6 @@ function OverviewWorkspace({
   onOpenData: () => void;
 }) {
   const missingIssues = buildMissingIssues(data);
-  const open = missingIssues.filter((row) => row.status === "open");
-  const partial = missingIssues.filter((row) => row.status === "partial");
-  const resolved = missingIssues.filter((row) => row.status === "resolved");
-  const outstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
-  const completedBundles = data.bundles.filter((bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
-  const outstandingBundles = Math.max(data.bundles.length - completedBundles, 0);
-  const overBundles = data.bundles.filter((bundle) => data.receivedQty(bundle) > bundle.qty_required);
   const recentReceipts = data.materialEvents
     .filter((event) => event.event_type === "found_received")
     .flatMap((event) => event.items.map((item) => ({ event, item })))
@@ -2010,17 +2072,6 @@ function OverviewWorkspace({
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
-        <DashboardMetric label="Bundles" value={data.bundles.length} icon={Boxes} />
-        <DashboardMetric label="Bundle Complete" value={completedBundles} tone="green" icon={PackageCheck} />
-        <DashboardMetric label="Bundle Outstanding" value={outstandingBundles} tone="amber" icon={PackageOpen} />
-        <DashboardMetric label="Missing Open" value={open.length} tone="red" icon={TriangleAlert} />
-        <DashboardMetric label="Part Delivered" value={partial.length} tone="amber" icon={Truck} />
-        <DashboardMetric label="Missing Resolved" value={resolved.length} tone="green" icon={CheckCircle2} />
-        <DashboardMetric label="Missing Qty Left" value={outstandingQty} tone="red" icon={AlertCircle} />
-        <DashboardMetric label="Excess Bundles" value={overBundles.length} tone="blue" icon={CirclePlus} />
-      </div>
-
       <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
         <section className="rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
@@ -2113,35 +2164,6 @@ function OverviewWorkspace({
         <QuickAction title="Issues & Deliveries" description="Track missing, partial deliveries, resolved items, excess and damage." icon={TriangleAlert} onClick={onOpenIssues} />
         <QuickAction title="Data & Imports" description="Upload, replace, merge, correct and delete master material data." icon={Database} onClick={onOpenData} />
       </div>
-    </div>
-  );
-}
-
-function DashboardMetric({
-  label,
-  value,
-  icon: Icon,
-  tone = "slate",
-}: {
-  label: string;
-  value: string | number;
-  icon: typeof Boxes;
-  tone?: "slate" | "green" | "amber" | "red" | "blue";
-}) {
-  const styles = {
-    slate: "border-slate-200 bg-white text-slate-950",
-    green: "border-emerald-200 bg-emerald-50 text-emerald-950",
-    amber: "border-amber-200 bg-amber-50 text-amber-950",
-    red: "border-rose-200 bg-rose-50 text-rose-950",
-    blue: "border-blue-200 bg-blue-50 text-blue-950",
-  };
-  return (
-    <div className={`rounded-2xl border p-3 ${styles[tone]}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[9px] font-black uppercase tracking-wide opacity-50">{label}</div>
-        <Icon size={14} className="opacity-40" />
-      </div>
-      <div className="mt-1 text-2xl font-black">{value}</div>
     </div>
   );
 }
@@ -3967,7 +3989,7 @@ export default function MaterialsControlPage() {
                 <div>
                   <h1 className="text-xl font-black tracking-tight text-slate-950 md:text-2xl">Materials Control</h1>
                   <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-                    Website management workspace for material search, bundle control, missing-material delivery close-out, bolts and master data.
+                    Website management workspace for bundle control, tower transfers, missing-material close-out, bolts and master data.
                   </p>
                 </div>
               </div>
