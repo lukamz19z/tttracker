@@ -527,22 +527,6 @@ function parseRfiReferences(value: string) {
   );
 }
 
-function calculateProductionHoursWithPrestart(
-  row: LabourRow,
-  delayHoursOverride?: number
-) {
-  const base = toNumber(
-    calculateProductionHours(
-      row,
-      delayHoursOverride
-    )
-  );
-
-  const prestartHours = Math.max(toNumber(row.prestart_minutes), 0) / 60;
-
-  return Math.max(base - prestartHours, 0).toFixed(2);
-}
-
 function makeLabourRow(
   row?: Partial<LabourRow> | any,
   options?: { mobilisationIsMinutes?: boolean }
@@ -564,7 +548,7 @@ function makeLabourRow(
     production_hours: toStringValue(row?.production_hours),
   };
 
-  mapped.production_hours = calculateProductionHoursWithPrestart(mapped);
+  mapped.production_hours = calculateProductionHours(mapped);
   return mapped;
 }
 
@@ -1432,7 +1416,7 @@ export default function DailyDocketForm({
 
       if (!data?.length) return;
       setSectionV2Rows((prev) => {
-        const previous = new Map(prev.map((r) => [r.section_code, r]));
+        const previous = new Map<string, SectionV2ProgressRow>(prev.map((r) => [r.section_code, r]));
         return data.map((r: any) => {
           const old = previous.get(String(r.section_code));
           return {
@@ -2117,30 +2101,6 @@ export default function DailyDocketForm({
 
   const availableWorkerNames = useMemo(() => uniqueWorkerNames(labourRows), [labourRows]);
 
-  const labourRowsWithProduction = useMemo(() => {
-    const baseRows = calculateLabourRows(labourRows, delayRows, {
-      enabled: mobilisation.enabled,
-      durationMinutes: hoursToMinutes(mobilisationHours),
-      workerNames: mobilisation.worker_names,
-    }) as LabourRow[];
-
-    return baseRows.map((row) => {
-      const prestartHours = Math.max(toNumber(row.prestart_minutes), 0) / 60;
-      const baseProductionHours = Math.max(toNumber(row.production_hours), 0);
-
-      return {
-        ...row,
-        production_hours: Math.max(baseProductionHours - prestartHours, 0).toFixed(2),
-      };
-    });
-  }, [
-    labourRows,
-    delayRows,
-    mobilisation.enabled,
-    mobilisation.worker_names,
-    mobilisationHours,
-  ]);
-
   const labourTotals = useMemo(
     () =>
       calculateLabourTotals(labourRows, delayRows, {
@@ -2151,26 +2111,11 @@ export default function DailyDocketForm({
     [labourRows, delayRows, mobilisation.enabled, mobilisation.worker_names, mobilisationHours]
   );
 
+  const labourRowsWithProduction = labourTotals.rows as LabourRow[];
   const labourWorkerCount = labourTotals.workerCount;
   const totalLabourHours = labourTotals.rawManhours;
-  const totalProductionHours = useMemo(
-    () =>
-      labourRowsWithProduction
-        .filter((row) => row.worker_name.trim())
-        .reduce((sum, row) => sum + Math.max(toNumber(row.production_hours), 0), 0),
-    [labourRowsWithProduction]
-  );
-
-  const totalPrestartHours = useMemo(
-    () =>
-      labourRows
-        .filter((row) => row.worker_name.trim())
-        .reduce(
-          (sum, row) => sum + Math.max(toNumber(row.prestart_minutes), 0) / 60,
-          0
-        ),
-    [labourRows]
-  );
+  const totalProductionHours = labourTotals.productionManhours;
+  const totalPrestartHours = labourTotals.prestartManhours;
 
   const revisionAllocatedMH = towerRevisionAllocations.reduce(
     (sum, allocation) =>
@@ -2458,7 +2403,7 @@ export default function DailyDocketForm({
 
       mappedWorkers.forEach((row, index) => {
         row.worker_name = members[index]?.full_name || "";
-        row.production_hours = calculateProductionHoursWithPrestart(row);
+        row.production_hours = calculateProductionHours(row);
       });
 
       setLabourRows(mappedWorkers);
@@ -2650,7 +2595,7 @@ export default function DailyDocketForm({
         { mobilisationIsMinutes: true }
       );
 
-      next.production_hours = calculateProductionHoursWithPrestart(next);
+      next.production_hours = calculateProductionHours(next);
       return [...prev, next];
     });
   }
@@ -2695,7 +2640,7 @@ export default function DailyDocketForm({
         current.total_hours = autoHours || current.total_hours;
       }
 
-      current.production_hours = calculateProductionHoursWithPrestart(current);
+      current.production_hours = calculateProductionHours(current);
       return updated;
     });
   }
@@ -2744,7 +2689,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHoursWithPrestart(
+          production_hours: calculateProductionHours(
             next,
             delayHoursForWorker(next.worker_name, delayRows)
           ),
@@ -4684,7 +4629,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHoursWithPrestart(
+          production_hours: calculateProductionHours(
             next,
             delayHoursForWorker(next.worker_name, delayRows)
           ),

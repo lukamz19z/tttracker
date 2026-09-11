@@ -30,6 +30,10 @@ type DocketRow = {
   bc_signed_at: string | null;
   approval_revision: number | null;
   raw_manhours?: number | null;
+  production_manhours?: number | null;
+  prestart_minutes?: number | null;
+  daily_site_summary?: string | null;
+  rfi_references?: string[] | null;
   weather?: string | null;
   incident_occurred?: boolean | null;
   incident_type?: string | null;
@@ -70,6 +74,34 @@ function titleCase(value: unknown) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function allocationManhours(row: Record<string, unknown>) {
+  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
+  return num(row.hours) * Math.max(workers, 1);
+}
+
+function workedTowerNames(
+  docket: DocketRow,
+  towers: Array<Record<string, unknown>>,
+  allocations: Array<Record<string, unknown>>,
+) {
+  const byId = new Map(
+    towers.map((row) => [String(row.id ?? ""), String(row.name ?? "Tower")]),
+  );
+  const ids = new Set<string>([docket.tower_id]);
+
+  allocations
+    .filter(
+      (row) =>
+        String(row.allocation_type ?? "").trim().toLowerCase() === "production",
+    )
+    .forEach((row) => {
+      const id = String(row.target_tower_id ?? "").trim();
+      if (id) ids.add(id);
+    });
+
+  return Array.from(ids).map((id) => byId.get(id) || id);
+}
+
 function durationHours(start: unknown, finish: unknown) {
   const a = Date.parse(String(start ?? ""));
   const b = Date.parse(String(finish ?? ""));
@@ -84,14 +116,31 @@ function buildOperationalSummaryHtml({
   plant,
   delays,
   materialEvents,
+  towers,
+  hourAllocations,
 }: {
   docket: DocketRow;
   labour: Array<Record<string, unknown>>;
   plant: Array<Record<string, unknown>>;
   delays: Array<Record<string, unknown>>;
   materialEvents: Array<Record<string, unknown>>;
+  towers: Array<Record<string, unknown>>;
+  hourAllocations: Array<Record<string, unknown>>;
 }) {
   const delayHours = delays.reduce((sum, row) => sum + num(row.delay_hours), 0);
+  const prestartManhours = labour.reduce(
+    (sum, row) => sum + num(row.prestart_minutes) / 60,
+    0,
+  );
+  const workfronts = workedTowerNames(docket, towers, hourAllocations);
+  const productionAllocations = hourAllocations.filter(
+    (row) =>
+      String(row.allocation_type ?? "").trim().toLowerCase() === "production",
+  );
+  const allocatedProductionMh = productionAllocations.reduce(
+    (sum, row) => sum + allocationManhours(row),
+    0,
+  );
   const nestedRows = (
     event: Record<string, unknown>,
     key: string,
@@ -156,7 +205,11 @@ function buildOperationalSummaryHtml({
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">
         <tr>
           <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b;width:180px">Workforce</td>
-          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel · ${num(docket.raw_manhours).toFixed(2)} raw MH</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel · ${num(docket.raw_manhours).toFixed(2)} raw MH · ${num(docket.production_manhours).toFixed(2)} production MH${prestartManhours > 0 ? ` · ${prestartManhours.toFixed(2)} prestart MH` : ""}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Towers worked</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${escapeHtml(workfronts.join(", "))}${allocatedProductionMh > 0 ? ` · ${allocatedProductionMh.toFixed(2)} allocated production MH` : ""}</td>
         </tr>
         <tr>
           <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Plant recorded</td>
@@ -176,6 +229,23 @@ function buildOperationalSummaryHtml({
         </tr>
       </table>
     </div>
+
+    ${
+      String(docket.daily_site_summary ?? "").trim()
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px">
+             <div style="font-weight:700;color:#0f172a;margin-bottom:7px">Daily site summary</div>
+             <div style="color:#334155">${escapeHtml(docket.daily_site_summary)}</div>
+           </div>`
+        : ""
+    }
+
+    ${
+      Array.isArray(docket.rfi_references) && docket.rfi_references.length
+        ? `<div style="margin:18px 0;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a">
+             <strong>RFI references:</strong> ${escapeHtml(docket.rfi_references.join(", "))}
+           </div>`
+        : ""
+    }
 
     ${
       delays.length
@@ -392,6 +462,10 @@ export async function POST(
         bc_signed_at,
         approval_revision,
         raw_manhours,
+        production_manhours,
+        prestart_minutes,
+        daily_site_summary,
+        rfi_references,
         weather,
         incident_occurred,
         incident_type,
@@ -583,10 +657,12 @@ export async function POST(
     const [
       { data: projectData },
       { data: towerData },
+      { data: projectTowersData },
       labourResult,
       plantResult,
       delayResult,
       materialResult,
+      allocationResult,
     ] = await Promise.all([
       service
         .from("projects")
@@ -598,6 +674,11 @@ export async function POST(
         .select("id, name, extra_data")
         .eq("id", docket.tower_id)
         .maybeSingle(),
+      service
+        .from("towers")
+        .select("id,name,extra_data")
+        .eq("project_id", docket.project_id)
+        .order("name"),
       service
         .from("tower_docket_labour")
         .select("*")
@@ -622,6 +703,11 @@ export async function POST(
         `)
         .eq("docket_id", docket.id)
         .order("occurred_at"),
+      service
+        .from("tower_docket_hour_allocations")
+        .select("*")
+        .eq("docket_id", docket.id)
+        .order("created_at"),
     ]);
 
     const project = (projectData as ProjectRow | null) || null;
@@ -654,6 +740,8 @@ export async function POST(
         plant: (plantResult.data ?? []) as Array<Record<string, unknown>>,
         delays: (delayResult.data ?? []) as Array<Record<string, unknown>>,
         materialEvents: (materialResult.data ?? []) as Array<Record<string, unknown>>,
+        towers: (projectTowersData ?? []) as Array<Record<string, unknown>>,
+        hourAllocations: (allocationResult.data ?? []) as Array<Record<string, unknown>>,
       });
 
       const html = docketEmailShell(

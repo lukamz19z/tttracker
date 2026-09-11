@@ -27,6 +27,7 @@ export type LabourCalculationRow = {
   time_in: string;
   time_out: string;
   total_hours: string | number | null | undefined;
+  prestart_minutes?: string | number | null | undefined;
   lunch_minutes: string | number | null | undefined;
   travel_in_minutes: string | number | null | undefined;
   travel_out_minutes: string | number | null | undefined;
@@ -79,6 +80,7 @@ export type LabourTotals = {
   workerCount: number;
   rawManhours: number;
   productionManhours: number;
+  prestartManhours: number;
   lunchManhours: number;
   travelManhours: number;
   mobilisationManhours: number;
@@ -185,6 +187,7 @@ export function calculateProductionHours(
   appliedDelayHours?: number,
 ): string {
   const raw = toNumber(row.total_hours);
+  const prestart = toNumber(row.prestart_minutes) / 60;
   const lunch = toNumber(row.lunch_minutes) / 60;
   const travelIn = toNumber(row.travel_in_minutes) / 60;
   const travelOut = toNumber(row.travel_out_minutes) / 60;
@@ -193,7 +196,7 @@ export function calculateProductionHours(
 
   return Math.max(
     0,
-    raw - lunch - travelIn - travelOut - mobilisation - delay,
+    raw - prestart - lunch - travelIn - travelOut - mobilisation - delay,
   ).toFixed(2);
 }
 
@@ -349,6 +352,11 @@ export function calculateLabourTotals(
     0,
   );
 
+  const prestartManhours = workerRows.reduce(
+    (sum, row) => sum + toNumber(row.prestart_minutes) / 60,
+    0,
+  );
+
   const lunchManhours = workerRows.reduce(
     (sum, row) => sum + toNumber(row.lunch_minutes) / 60,
     0,
@@ -378,6 +386,7 @@ export function calculateLabourTotals(
     workerCount: workerRows.length,
     rawManhours,
     productionManhours,
+    prestartManhours,
     lunchManhours,
     travelManhours,
     mobilisationManhours,

@@ -131,6 +131,32 @@ function titleCase(value: unknown) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function allocationManhours(row: Record<string, unknown>) {
+  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
+  return num(row.hours) * Math.max(workers, 1);
+}
+
+function workedTowerNames(
+  docket: DocketRow,
+  towers: Array<Record<string, unknown>>,
+  hourAllocations: Array<Record<string, unknown>>,
+) {
+  const byId = new Map(
+    towers.map((row) => [String(row.id ?? ""), String(row.name ?? "Tower")]),
+  );
+  const ids = new Set<string>([docket.tower_id]);
+  hourAllocations
+    .filter(
+      (row) =>
+        String(row.allocation_type ?? "").trim().toLowerCase() === "production",
+    )
+    .forEach((row) => {
+      const id = String(row.target_tower_id ?? "").trim();
+      if (id) ids.add(id);
+    });
+  return Array.from(ids).map((id) => byId.get(id) || id);
+}
+
 function durationHours(start: unknown, finish: unknown) {
   const a = Date.parse(String(start ?? ""));
   const b = Date.parse(String(finish ?? ""));
@@ -160,6 +186,8 @@ function buildClientOperationalSummaryHtml({
   plant,
   delays,
   materialEvents,
+  towers,
+  hourAllocations,
   clientContentKeys,
 }: {
   docket: DocketRow;
@@ -167,6 +195,8 @@ function buildClientOperationalSummaryHtml({
   plant: Array<Record<string, unknown>>;
   delays: Array<Record<string, unknown>>;
   materialEvents: Array<Record<string, unknown>>;
+  towers: Array<Record<string, unknown>>;
+  hourAllocations: Array<Record<string, unknown>>;
   clientContentKeys: ClientContentKey[];
 }) {
   const visible = new Set<ClientContentKey>(clientContentKeys);
@@ -225,6 +255,12 @@ function buildClientOperationalSummaryHtml({
     (sum, row) => sum + num(row.delay_hours),
     0,
   );
+
+  const prestartManhours = labour.reduce(
+    (sum, row) => sum + num(row.prestart_minutes) / 60,
+    0,
+  );
+  const workfronts = workedTowerNames(docket, towers, hourAllocations);
 
   const peopleRows = people
     .map((row) => {
@@ -313,11 +349,18 @@ function buildClientOperationalSummaryHtml({
     .join("");
 
   const summaryRows = [
+    visible.has("progress") && workfronts.length > 1
+      ? `
+        <tr>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b;width:180px">Towers worked</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${escapeHtml(workfronts.join(", "))}</td>
+        </tr>`
+      : "",
     visible.has("workforce")
       ? `
         <tr>
           <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b;width:180px">Workforce</td>
-          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel</td>
+          <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${labour.length} personnel${prestartManhours > 0 ? ` · ${prestartManhours.toFixed(2)} prestart MH` : ""}</td>
         </tr>`
       : "",
     visible.has("raw_manhours")
@@ -423,6 +466,23 @@ function buildClientOperationalSummaryHtml({
     </div>
 
     ${
+      String(docket.daily_site_summary ?? "").trim()
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px">
+             <div style="font-weight:700;color:#0f172a;margin-bottom:7px">Daily site summary</div>
+             <div style="color:#334155;line-height:1.55">${escapeHtml(docket.daily_site_summary)}</div>
+           </div>`
+        : ""
+    }
+
+    ${
+      Array.isArray(docket.rfi_references) && docket.rfi_references.length
+        ? `<div style="margin:18px 0;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a">
+             <strong>RFI references:</strong> ${escapeHtml(docket.rfi_references.join(", "))}
+           </div>`
+        : ""
+    }
+
+    ${
       visible.has("delays") && delays.length
         ? `<div style="margin:18px 0;padding:14px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px">
              <div style="font-weight:700;color:#92400e;margin-bottom:7px">Delays / disruptions</div>
@@ -487,11 +547,14 @@ async function loadPdfBundle(
   const [
     projectResult,
     towerResult,
+    projectTowersResult,
     labourResult,
     plantResult,
     delayResult,
     progressResult,
+    allocationResult,
     materialEventResult,
+    materialHistoryResult,
   ] = await Promise.all([
     admin
       .from("projects")
@@ -506,6 +569,12 @@ async function loadPdfBundle(
       .select("*")
       .eq("id", docket.tower_id)
       .single(),
+
+    admin
+      .from("towers")
+      .select("id,name,line,extra_data")
+      .eq("project_id", docket.project_id)
+      .order("name"),
 
     admin
       .from("tower_docket_labour")
@@ -530,6 +599,12 @@ async function loadPdfBundle(
       .eq("docket_id", docket.id),
 
     admin
+      .from("tower_docket_hour_allocations")
+      .select("*")
+      .eq("docket_id", docket.id)
+      .order("created_at"),
+
+    admin
       .from("tower_material_events")
       .select(`
         *,
@@ -538,6 +613,17 @@ async function loadPdfBundle(
         tower_material_event_plant(*)
       `)
       .eq("docket_id", docket.id)
+      .order("occurred_at"),
+
+    admin
+      .from("tower_material_events")
+      .select(`
+        *,
+        tower_material_event_items(*),
+        tower_material_event_people(*),
+        tower_material_event_plant(*)
+      `)
+      .eq("tower_id", docket.tower_id)
       .order("occurred_at"),
   ]);
 
@@ -558,7 +644,9 @@ async function loadPdfBundle(
     plantResult.error ||
     delayResult.error ||
     progressResult.error ||
-    materialEventResult.error;
+    allocationResult.error ||
+    materialEventResult.error ||
+    materialHistoryResult.error;
 
   if (childError) {
     throw new Error(
@@ -569,11 +657,14 @@ async function loadPdfBundle(
   return {
     project: projectResult.data as unknown as ProjectRow,
     tower: towerResult.data,
+    towers: projectTowersResult.data ?? [],
     labour: labourResult.data ?? [],
     plant: plantResult.data ?? [],
     delays: delayResult.data ?? [],
     progress: progressResult.data ?? [],
+    hourAllocations: allocationResult.data ?? [],
     materialEvents: materialEventResult.data ?? [],
+    materialHistory: materialHistoryResult.data ?? [],
   };
 }
 
@@ -1173,7 +1264,10 @@ export async function POST(request: Request, context: RouteContext) {
       plant: bundle.plant,
       delays: bundle.delays,
       progress: bundle.progress,
+      towers: bundle.towers,
+      hourAllocations: bundle.hourAllocations,
       materialEvents: bundle.materialEvents,
+      materialHistory: bundle.materialHistory,
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,
@@ -1398,6 +1492,8 @@ export async function POST(request: Request, context: RouteContext) {
       plant: bundle.plant as Array<Record<string, unknown>>,
       delays: bundle.delays as Array<Record<string, unknown>>,
       materialEvents: bundle.materialEvents as Array<Record<string, unknown>>,
+      towers: bundle.towers as Array<Record<string, unknown>>,
+      hourAllocations: bundle.hourAllocations as Array<Record<string, unknown>>,
       clientContentKeys,
     });
 

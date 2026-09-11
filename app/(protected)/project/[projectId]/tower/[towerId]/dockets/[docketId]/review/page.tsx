@@ -17,6 +17,15 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import {
+  calculateHours,
+  calculateLabourRows,
+  calculateProgressTotals,
+  type DelayCalculationRow,
+  type LabourCalculationRow,
+  type LegacyProgressCalculationRow,
+  type SectionV2CalculationRow,
+} from "@/lib/dockets/calculations";
 
 type DocketRow = {
   id: string;
@@ -34,12 +43,15 @@ type DocketRow = {
   erection_percent: number | null;
   raw_manhours: number | null;
   production_manhours: number | null;
+  prestart_minutes: number | null;
   lunch_break_minutes: number | null;
   travel_in_minutes: number | null;
   travel_out_minutes: number | null;
   mobilisation_hours: number | null;
   mobilisation_notes: string | null;
   delays_comments: string | null;
+  daily_site_summary: string | null;
+  rfi_references: string[] | null;
   weather_delay_hours: number | null;
   lightning_delay_hours: number | null;
   toolbox_delay_hours: number | null;
@@ -81,6 +93,7 @@ type LabourRow = {
   time_in: string | null;
   time_out: string | null;
   total_hours: number | null;
+  prestart_minutes: number | null;
   lunch_minutes: number | null;
   travel_in_minutes: number | null;
   travel_out_minutes: number | null;
@@ -114,6 +127,7 @@ type DelayRow = {
 
 type ProgressRow = {
   id?: string;
+  tower_id?: string | null;
   progress_model?: string | null;
   section_code?: string | null;
   section_label?: string | null;
@@ -133,6 +147,11 @@ type MaterialItemRow = {
   item_description: string | null;
   quantity: number | string | null;
   unit: string | null;
+  issue_key?: string | null;
+  source_issue_key?: string | null;
+  bundle_id?: string | null;
+  bundle_no?: string | null;
+  bundle_section?: string | null;
 };
 
 type MaterialPersonRow = {
@@ -171,6 +190,8 @@ type RevisionAllocationRow = {
   hours: number | null;
   worker_names: string[] | null;
   reason: string | null;
+  allocation_type?: string | null;
+  activity?: string | null;
 };
 
 
@@ -239,7 +260,7 @@ const CLIENT_CONTENT_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { key: "progress", label: "Progress", description: "Assembly and erection progress by tower section." },
+  { key: "progress", label: "Progress", description: "Assembly and erection progress for every tower worked on the crew-day docket." },
   { key: "workforce", label: "Workforce", description: "Personnel names and recorded site hours." },
   { key: "raw_manhours", label: "Raw Manhours", description: "Client-facing total raw manhours." },
   { key: "plant", label: "Plant & Equipment", description: "Plant and equipment recorded against the docket." },
@@ -496,6 +517,123 @@ function workOutcomeLabel(value: string | null) {
   }
 }
 
+function allocationManhours(row: RevisionAllocationRow) {
+  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
+  return Number(row.hours || 0) * Math.max(workers, 1);
+}
+
+function calculateProgressForRows(rows: ProgressRow[]) {
+  if (!rows.length) {
+    return {
+      assemblyPercent: 0,
+      erectionPercent: 0,
+      totalProgressPercent: 0,
+      applicableWeight: 0,
+    };
+  }
+
+  const model =
+    rows.some((row) => row.progress_model === "section_v2") ||
+    rows.some(
+      (row) =>
+        Boolean(row.section_code) &&
+        (row.assembly_today !== undefined || row.erection_today !== undefined),
+    )
+      ? "section_v2"
+      : "legacy";
+
+  const hasBodyExtension =
+    model !== "section_v2" ||
+    rows.some((row) => String(row.section_code || "").toUpperCase() === "BE");
+
+  return calculateProgressTotals({
+    progressModel: model,
+    sectionV2Rows: rows.map((row) => ({
+      section_code: row.section_code || "",
+      section_label: row.section_label || row.section_code || "Section",
+      assembly_today:
+        row.assembly_today !== undefined
+          ? row.assembly_today
+          : row.assembled_qty,
+      erection_today:
+        row.erection_today !== undefined
+          ? row.erection_today
+          : row.erected_qty,
+      assembly_weight: row.assembly_weight,
+      erection_weight: row.erection_weight,
+    })) as SectionV2CalculationRow[],
+    legacyRows: rows.map((row) => ({
+      section_label: row.section_label || row.section_code || "Section",
+      assembled_qty: row.assembled_qty,
+      erected_qty: row.erected_qty,
+    })) as LegacyProgressCalculationRow[],
+    hasBodyExtension,
+  });
+}
+
+type MissingStatus = {
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: "Open" | "Partially Delivered" | "Resolved";
+};
+
+function buildMissingStatusMap(events: MaterialEventRow[]) {
+  const receipts = new Map<string, number>();
+
+  events
+    .filter((event) => event.event_type === "found_received")
+    .forEach((event) => {
+      (event.items || []).forEach((item) => {
+        const key = String(item.source_issue_key || "").trim();
+        if (!key) return;
+        receipts.set(
+          key,
+          (receipts.get(key) || 0) + Number(item.quantity || 0),
+        );
+      });
+    });
+
+  const statuses = new Map<string, MissingStatus>();
+
+  events
+    .filter((event) => event.event_type === "missing")
+    .forEach((event) => {
+      (event.items || []).forEach((item) => {
+        const key = String(item.issue_key || "").trim();
+        if (!key) return;
+
+        const originalQty = Math.max(Number(item.quantity || 0), 0);
+        const deliveredQty = Math.max(receipts.get(key) || 0, 0);
+        const remainingQty = Math.max(originalQty - deliveredQty, 0);
+
+        statuses.set(key, {
+          originalQty,
+          deliveredQty,
+          remainingQty,
+          status:
+            remainingQty <= 0
+              ? "Resolved"
+              : deliveredQty > 0
+                ? "Partially Delivered"
+                : "Open",
+        });
+      });
+    });
+
+  return statuses;
+}
+
+function missingStatusClasses(status: MissingStatus["status"]) {
+  if (status === "Resolved") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  if (status === "Partially Delivered") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
 function signatureApproxBytes(dataUrl: string) {
   const base64 = dataUrl.split(",")[1] || "";
   return Math.ceil((base64.length * 3) / 4);
@@ -527,9 +665,10 @@ export default function DailyDocketBcReviewPage() {
   const [delays, setDelays] = useState<DelayRow[]>([]);
   const [progress, setProgress] = useState<ProgressRow[]>([]);
   const [materialEvents, setMaterialEvents] = useState<MaterialEventRow[]>([]);
-  const [revisionAllocations, setRevisionAllocations] = useState<
+  const [hourAllocations, setHourAllocations] = useState<
     RevisionAllocationRow[]
   >([]);
+  const [materialHistory, setMaterialHistory] = useState<MaterialEventRow[]>([]);
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEventRow[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [savingChanges, setSavingChanges] = useState(false);
@@ -588,6 +727,7 @@ export default function DailyDocketBcReviewPage() {
           delayRes,
           progressRes,
           materialRes,
+          materialHistoryRes,
           revisionRes,
           workflowRes,
           roleRes,
@@ -629,12 +769,15 @@ export default function DailyDocketBcReviewPage() {
               erection_percent,
               raw_manhours,
               production_manhours,
+              prestart_minutes,
               lunch_break_minutes,
               travel_in_minutes,
               travel_out_minutes,
               mobilisation_hours,
               mobilisation_notes,
               delays_comments,
+              daily_site_summary,
+              rfi_references,
               weather_delay_hours,
               lightning_delay_hours,
               toolbox_delay_hours,
@@ -669,6 +812,7 @@ export default function DailyDocketBcReviewPage() {
               time_in,
               time_out,
               total_hours,
+              prestart_minutes,
               lunch_minutes,
               travel_in_minutes,
               travel_out_minutes,
@@ -709,6 +853,7 @@ export default function DailyDocketBcReviewPage() {
             .from("tower_docket_progress")
             .select(`
               id,
+              tower_id,
               progress_model,
               section_code,
               section_label,
@@ -738,12 +883,45 @@ export default function DailyDocketBcReviewPage() {
                 item_reference,
                 item_description,
                 quantity,
-                unit
+                unit,
+                issue_key,
+                source_issue_key,
+                bundle_id,
+                bundle_no,
+                bundle_section
               ),
               people:tower_material_event_people(*),
               plant:tower_material_event_plant(*)
             `)
             .eq("docket_id", docketId)
+            .order("occurred_at", { ascending: true }),
+          supabase
+            .from("tower_material_events")
+            .select(`
+              id,
+              event_type,
+              occurred_at,
+              source_tower_id,
+              destination_tower_id,
+              destination_location,
+              work_outcome,
+              notes,
+              items:tower_material_event_items(
+                id,
+                item_reference,
+                item_description,
+                quantity,
+                unit,
+                issue_key,
+                source_issue_key,
+                bundle_id,
+                bundle_no,
+                bundle_section
+              ),
+              people:tower_material_event_people(*),
+              plant:tower_material_event_plant(*)
+            `)
+            .eq("tower_id", towerId)
             .order("occurred_at", { ascending: true }),
           supabase
             .from("tower_docket_hour_allocations")
@@ -753,7 +931,9 @@ export default function DailyDocketBcReviewPage() {
               target_tower_id,
               hours,
               worker_names,
-              reason
+              reason,
+              allocation_type,
+              activity
             `)
             .eq("docket_id", docketId)
             .order("created_at", { ascending: true }),
@@ -801,6 +981,12 @@ export default function DailyDocketBcReviewPage() {
 
         if (docketRes.error || !docketRes.data) {
           throw new Error("Daily Docket could not be loaded.");
+        }
+
+        if (materialHistoryRes.error) {
+          throw new Error(
+            "Material receipt history could not be loaded for this tower.",
+          );
         }
 
         if (revisionRes.error) {
@@ -871,7 +1057,10 @@ export default function DailyDocketBcReviewPage() {
           setDelays((delayRes.data || []) as DelayRow[]);
           setProgress((progressRes.data || []) as ProgressRow[]);
           setMaterialEvents((materialRes.data || []) as MaterialEventRow[]);
-          setRevisionAllocations(
+          setMaterialHistory(
+            (materialHistoryRes.data || []) as MaterialEventRow[],
+          );
+          setHourAllocations(
             (revisionRes.data || []) as RevisionAllocationRow[],
           );
           setWorkflowEvents(
@@ -919,9 +1108,77 @@ export default function DailyDocketBcReviewPage() {
     );
   }, [projectTowers]);
 
+  const revisionAllocations = useMemo(
+    () =>
+      hourAllocations.filter((row) => {
+        const type = String(row.allocation_type || "").trim().toLowerCase();
+        return !type || type === "revision";
+      }),
+    [hourAllocations],
+  );
+
+  const productionAllocations = useMemo(
+    () =>
+      hourAllocations.filter(
+        (row) =>
+          String(row.allocation_type || "").trim().toLowerCase() ===
+          "production",
+      ),
+    [hourAllocations],
+  );
+
+  const progressByTower = useMemo(() => {
+    const groups = new Map<
+      string,
+      Array<{ row: ProgressRow; index: number }>
+    >();
+
+    progress.forEach((row, index) => {
+      const rowTowerId = row.tower_id || docket?.tower_id || towerId;
+      const current = groups.get(rowTowerId) || [];
+      current.push({ row, index });
+      groups.set(rowTowerId, current);
+    });
+
+    if (docket?.tower_id && !groups.has(docket.tower_id)) {
+      groups.set(docket.tower_id, []);
+    }
+
+    return groups;
+  }, [docket?.tower_id, progress, towerId]);
+
+  const workedTowerIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (docket?.tower_id) ids.add(docket.tower_id);
+
+    productionAllocations.forEach((row) => {
+      if (row.target_tower_id) ids.add(row.target_tower_id);
+    });
+
+    progress.forEach((row) => {
+      if (row.tower_id) ids.add(row.tower_id);
+    });
+
+    return Array.from(ids);
+  }, [docket?.tower_id, productionAllocations, progress]);
+
   const totalProgress = Math.round(
     Number(docket?.assembly_percent || 0) * 0.5 +
       Number(docket?.erection_percent || 0) * 0.5,
+  );
+
+  const totalPrestartManhours = useMemo(
+    () =>
+      labour.reduce(
+        (sum, row) => sum + Number(row.prestart_minutes || 0) / 60,
+        0,
+      ),
+    [labour],
+  );
+
+  const missingStatusMap = useMemo(
+    () => buildMissingStatusMap(materialHistory),
+    [materialHistory],
   );
 
   const totalDelayHours = delays.reduce(
@@ -942,13 +1199,24 @@ export default function DailyDocketBcReviewPage() {
   const revisionManhours = useMemo(
     () =>
       revisionAllocations.reduce(
-        (sum, row) =>
-          sum +
-          Number(row.hours || 0) *
-            Math.max(1, Array.isArray(row.worker_names) ? row.worker_names.length : 0),
+        (sum, row) => sum + allocationManhours(row),
         0,
       ),
     [revisionAllocations],
+  );
+
+  const productionAllocatedManhours = useMemo(
+    () =>
+      productionAllocations.reduce(
+        (sum, row) => sum + allocationManhours(row),
+        0,
+      ),
+    [productionAllocations],
+  );
+
+  const productionAllocationVariance = Math.abs(
+    productionAllocatedManhours -
+      Math.max(Number(docket?.production_manhours || 0) - revisionManhours, 0),
   );
 
   const currentRevision = Math.max(
@@ -1016,15 +1284,45 @@ export default function DailyDocketBcReviewPage() {
     setSubmitError(null);
 
     try {
+      const labourWithRawHours = labour.map((row) => ({
+        ...row,
+        total_hours:
+          calculateHours(row.time_in, row.time_out) ||
+          String(row.total_hours || 0),
+      }));
+
+      const recalculatedLabour = calculateLabourRows(
+        labourWithRawHours as unknown as LabourCalculationRow[],
+        delays as unknown as DelayCalculationRow[],
+        {
+          enabled: Boolean(mobilisation?.included),
+          durationMinutes: Number(mobilisation?.hours || 0) * 60,
+          workerNames: mobilisation?.workerNames || [],
+        },
+      );
+
+      const recalculatedRawManhours = recalculatedLabour.reduce(
+        (sum, row) => sum + Number(row.total_hours || 0),
+        0,
+      );
+      const recalculatedProductionManhours = recalculatedLabour.reduce(
+        (sum, row) => sum + Number(row.production_hours || 0),
+        0,
+      );
+
       const docketUpdate = {
         crew: docket.crew,
         leading_hand: docket.leading_hand,
         weather: docket.weather,
         rate_type: docket.rate_type,
+        raw_manhours: recalculatedRawManhours,
+        production_manhours: recalculatedProductionManhours,
         incident_occurred: docket.incident_occurred,
         incident_type: docket.incident_type,
         incident_notes: docket.incident_notes,
         delays_comments: docket.delays_comments,
+        daily_site_summary: docket.daily_site_summary,
+        rfi_references: docket.rfi_references,
         missing_items_bolts: docket.missing_items_bolts,
       };
 
@@ -1052,26 +1350,52 @@ export default function DailyDocketBcReviewPage() {
         if (error) throw error;
       }
 
-      for (const row of labour) {
+      for (const [index, row] of labour.entries()) {
         if (!row.id) continue;
+        const recalculated = recalculatedLabour[index];
         const { error } = await supabase
           .from("tower_docket_labour")
           .update({
             time_in: row.time_in,
             time_out: row.time_out,
-            total_hours: row.total_hours,
+            total_hours: Number(recalculated?.total_hours || 0),
+            prestart_minutes: row.prestart_minutes,
             lunch_minutes: row.lunch_minutes,
             travel_in_minutes: row.travel_in_minutes,
             travel_out_minutes: row.travel_out_minutes,
-            mobilisation_hours: row.mobilisation_hours,
-            delay_hours: row.delay_hours,
-            delay_reason: row.delay_reason,
-            production_hours: row.production_hours,
+            mobilisation_hours: Number(recalculated?.mobilisation_hours || 0) / 60,
+            delay_hours: Number(recalculated?.delay_hours || 0),
+            delay_reason: recalculated?.delay_reason || null,
+            production_hours: Number(recalculated?.production_hours || 0),
           })
           .eq("id", row.id)
           .eq("docket_id", docket.id);
         if (error) throw error;
       }
+
+      setLabour(
+        labour.map((row, index) => ({
+          ...row,
+          total_hours: Number(recalculatedLabour[index]?.total_hours || 0),
+          mobilisation_hours:
+            Number(recalculatedLabour[index]?.mobilisation_hours || 0) / 60,
+          delay_hours: Number(recalculatedLabour[index]?.delay_hours || 0),
+          delay_reason: recalculatedLabour[index]?.delay_reason || null,
+          production_hours: Number(
+            recalculatedLabour[index]?.production_hours || 0,
+          ),
+        })),
+      );
+
+      setDocket((current) =>
+        current
+          ? {
+              ...current,
+              raw_manhours: recalculatedRawManhours,
+              production_manhours: recalculatedProductionManhours,
+            }
+          : current,
+      );
 
       for (const row of delays) {
         if (!row.id) continue;
@@ -1462,28 +1786,23 @@ export default function DailyDocketBcReviewPage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold text-slate-900">
-                    Progress & Hours
+                    Progress & Production Allocation
                   </h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Production manhours are internal BC calculations and are not
-                    shown on the client docket.
+                    One crew-day docket can cover multiple towers. Production MH is
+                    calculated once from labour and then attributed to the workfronts below.
                   </p>
                 </div>
                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                  Internal review
+                  Internal BC review
                 </span>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
                 <MetricCard
-                  label="Assembly"
-                  value={formatPercent(docket.assembly_percent)}
+                  label="Primary Progress"
+                  value={`${totalProgress}%`}
                 />
-                <MetricCard
-                  label="Erection"
-                  value={formatPercent(docket.erection_percent)}
-                />
-                <MetricCard label="Total Progress" value={`${totalProgress}%`} />
                 <MetricCard
                   label="Raw MH"
                   value={formatHours(docket.raw_manhours)}
@@ -1493,132 +1812,302 @@ export default function DailyDocketBcReviewPage() {
                   value={formatHours(docket.production_manhours)}
                   internal
                 />
+                <MetricCard
+                  label="Prestart MH"
+                  value={formatHours(totalPrestartManhours)}
+                  internal
+                />
+                <MetricCard
+                  label="Revision MH"
+                  value={formatHours(revisionManhours)}
+                  internal
+                />
+                <MetricCard
+                  label="Towers Worked"
+                  value={String(workedTowerIds.length)}
+                />
+                <MetricCard
+                  label="Allocation"
+                  value={
+                    productionAllocationVariance <= 0.25
+                      ? "Balanced"
+                      : `${productionAllocationVariance.toFixed(2)} MH variance`
+                  }
+                  internal
+                />
               </div>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <SummaryBlockCompact
-                  label="Lunch"
+                  label="Prestart Default"
+                  value={formatMinutes(docket.prestart_minutes)}
+                />
+                <SummaryBlockCompact
+                  label="Lunch Default"
                   value={formatMinutes(docket.lunch_break_minutes)}
                 />
                 <SummaryBlockCompact
-                  label="Travel In"
+                  label="Travel In Default"
                   value={formatMinutes(docket.travel_in_minutes)}
                 />
                 <SummaryBlockCompact
-                  label="Travel Out"
+                  label="Travel Out Default"
                   value={formatMinutes(docket.travel_out_minutes)}
                 />
+              </div>
+
+              <div className="mt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Tower Work Split
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Production allocations exclude revision / rectification MH.
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                      productionAllocationVariance <= 0.25
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-amber-200 bg-amber-50 text-amber-800"
+                    }`}
+                  >
+                    {productionAllocatedManhours.toFixed(2)} MH allocated
+                  </span>
+                </div>
+
+                {productionAllocations.length ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {productionAllocations.map((row) => {
+                      const manhours = allocationManhours(row);
+                      const workPool = Math.max(
+                        Number(docket.production_manhours || 0) - revisionManhours,
+                        0,
+                      );
+                      const share =
+                        workPool > 0 ? (manhours / workPool) * 100 : 0;
+
+                      return (
+                        <div
+                          key={row.id}
+                          className="rounded-xl border border-blue-100 bg-blue-50/40 p-4"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-slate-900">
+                                {towerNameById.get(row.target_tower_id) ||
+                                  row.target_tower_id}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                {titleCase(row.activity || "mixed")}
+                                {row.target_tower_id === docket.tower_id
+                                  ? " · Primary tower"
+                                  : " · Additional tower"}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-lg font-bold text-blue-900">
+                                {manhours.toFixed(2)} MH
+                              </p>
+                              <p className="text-xs font-medium text-blue-700">
+                                {share.toFixed(1)}%
+                              </p>
+                            </div>
+                          </div>
+                          {row.reason ? (
+                            <p className="mt-3 text-sm text-slate-600">
+                              {row.reason}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    No production allocation rows were saved. This is expected only
+                    for legacy single-tower dockets created before the work-split update.
+                  </div>
+                )}
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">
-                Section Progress
-              </h2>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Progress by Tower Worked
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Progress is grouped by the actual tower stored on each progress row.
+                </p>
+              </div>
 
-              <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full min-w-170 text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="px-4 py-3 text-left font-semibold">
-                        Section
-                      </th>
-                      <th className="px-4 py-3 text-right font-semibold">
-                        Assembly Today
-                      </th>
-                      <th className="px-4 py-3 text-right font-semibold">
-                        Assembly Overall
-                      </th>
-                      <th className="px-4 py-3 text-right font-semibold">
-                        Erection Today
-                      </th>
-                      <th className="px-4 py-3 text-right font-semibold">
-                        Erection Overall
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {progress.length ? (
-                      progress.map((row, index) => {
-                        const isV2 = row.progress_model === "section_v2";
-                        const assemblyToday = isV2
-                          ? Number(row.assembly_today || 0)
-                          : Number(row.assembled_qty || 0);
-                        const erectionToday = isV2
-                          ? Number(row.erection_today || 0)
-                          : Number(row.erected_qty || 0);
+              <div className="mt-5 space-y-4">
+                {workedTowerIds.map((workedTowerId) => {
+                  const entries = progressByTower.get(workedTowerId) || [];
+                  const rows = entries.map((entry) => entry.row);
+                  const calculated = calculateProgressForRows(rows);
+                  const allocation = productionAllocations.find(
+                    (row) => row.target_tower_id === workedTowerId,
+                  );
+                  const allocatedMh = allocation
+                    ? allocationManhours(allocation)
+                    : 0;
 
-                        return (
-                          <tr
-                            key={row.id || `${row.section_code}-${index}`}
-                            className="border-t border-slate-200"
-                          >
-                            <td className="px-4 py-3 font-medium text-slate-900">
-                              {row.section_label ||
-                                row.section_code ||
-                                `Section ${index + 1}`}
-                            </td>
-                            <td className="px-4 py-3 text-right text-slate-700">
-                              {editMode && isV2 ? (
-                                <PercentInput
-                                  value={assemblyToday}
-                                  onChange={(value) =>
-                                    setProgress((current) =>
-                                      current.map((item, itemIndex) =>
-                                        itemIndex === index
-                                          ? { ...item, assembly_today: value }
-                                          : item,
-                                      ),
-                                    )
-                                  }
-                                />
-                              ) : (
-                                formatPercent(assemblyToday)
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-right text-slate-700">
-                              {isV2
-                                ? formatPercent(row.assembly_overall)
-                                : "Legacy"}
-                            </td>
-                            <td className="px-4 py-3 text-right text-slate-700">
-                              {editMode && isV2 ? (
-                                <PercentInput
-                                  value={erectionToday}
-                                  onChange={(value) =>
-                                    setProgress((current) =>
-                                      current.map((item, itemIndex) =>
-                                        itemIndex === index
-                                          ? { ...item, erection_today: value }
-                                          : item,
-                                      ),
-                                    )
-                                  }
-                                />
-                              ) : (
-                                formatPercent(erectionToday)
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-right text-slate-700">
-                              {isV2
-                                ? formatPercent(row.erection_overall)
-                                : "Legacy"}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={5}
-                          className="px-4 py-5 text-center text-slate-500"
-                        >
-                          No progress rows recorded.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                  return (
+                    <div
+                      key={workedTowerId}
+                      className="overflow-hidden rounded-xl border border-slate-200"
+                    >
+                      <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-slate-900">
+                              {towerNameById.get(workedTowerId) || workedTowerId}
+                            </p>
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                              {workedTowerId === docket.tower_id
+                                ? "Primary"
+                                : "Additional"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {allocation
+                              ? `${titleCase(allocation.activity || "mixed")} · ${allocatedMh.toFixed(2)} production MH`
+                              : "No production MH allocation stored"}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <SummaryBlockCompact
+                            label="Assembly"
+                            value={formatPercent(calculated.assemblyPercent)}
+                          />
+                          <SummaryBlockCompact
+                            label="Erection"
+                            value={formatPercent(calculated.erectionPercent)}
+                          />
+                          <SummaryBlockCompact
+                            label="Total"
+                            value={formatPercent(calculated.totalProgressPercent)}
+                          />
+                        </div>
+                      </div>
+
+                      {entries.length ? (
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-170 text-sm">
+                            <thead className="bg-white text-slate-600">
+                              <tr>
+                                <th className="px-4 py-3 text-left font-semibold">
+                                  Section
+                                </th>
+                                <th className="px-4 py-3 text-right font-semibold">
+                                  Assembly Today
+                                </th>
+                                <th className="px-4 py-3 text-right font-semibold">
+                                  Assembly Overall
+                                </th>
+                                <th className="px-4 py-3 text-right font-semibold">
+                                  Erection Today
+                                </th>
+                                <th className="px-4 py-3 text-right font-semibold">
+                                  Erection Overall
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {entries.map(({ row, index }) => {
+                                const isV2 =
+                                  row.progress_model === "section_v2" ||
+                                  Boolean(row.section_code);
+                                const assemblyToday = isV2
+                                  ? Number(row.assembly_today || 0)
+                                  : Number(row.assembled_qty || 0);
+                                const erectionToday = isV2
+                                  ? Number(row.erection_today || 0)
+                                  : Number(row.erected_qty || 0);
+
+                                return (
+                                  <tr
+                                    key={
+                                      row.id ||
+                                      `${workedTowerId}-${row.section_code}-${index}`
+                                    }
+                                    className="border-t border-slate-200"
+                                  >
+                                    <td className="px-4 py-3 font-medium text-slate-900">
+                                      {row.section_label ||
+                                        row.section_code ||
+                                        `Section ${index + 1}`}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-slate-700">
+                                      {editMode && isV2 ? (
+                                        <PercentInput
+                                          value={assemblyToday}
+                                          onChange={(value) =>
+                                            setProgress((current) =>
+                                              current.map((item, itemIndex) =>
+                                                itemIndex === index
+                                                  ? {
+                                                      ...item,
+                                                      assembly_today: value,
+                                                    }
+                                                  : item,
+                                              ),
+                                            )
+                                          }
+                                        />
+                                      ) : (
+                                        formatPercent(assemblyToday)
+                                      )}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-slate-700">
+                                      {isV2
+                                        ? formatPercent(row.assembly_overall)
+                                        : "Legacy"}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-slate-700">
+                                      {editMode && isV2 ? (
+                                        <PercentInput
+                                          value={erectionToday}
+                                          onChange={(value) =>
+                                            setProgress((current) =>
+                                              current.map((item, itemIndex) =>
+                                                itemIndex === index
+                                                  ? {
+                                                      ...item,
+                                                      erection_today: value,
+                                                    }
+                                                  : item,
+                                              ),
+                                            )
+                                          }
+                                        />
+                                      ) : (
+                                        formatPercent(erectionToday)
+                                      )}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-slate-700">
+                                      {isV2
+                                        ? formatPercent(row.erection_overall)
+                                        : "Legacy"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="px-4 py-5 text-sm text-slate-500">
+                          No progress rows were recorded for this workfront.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </section>
 
@@ -1649,6 +2138,9 @@ export default function DailyDocketBcReviewPage() {
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
                         Raw Hrs
+                      </th>
+                      <th className="px-4 py-3 text-right font-semibold">
+                        Prestart
                       </th>
                       <th className="px-4 py-3 text-right font-semibold">
                         Lunch
@@ -1714,6 +2206,25 @@ export default function DailyDocketBcReviewPage() {
                             {formatHours(row.total_hours)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
+                            {editMode ? (
+                              <NumberInput
+                                value={Number(row.prestart_minutes || 0)}
+                                step={1}
+                                onChange={(value) =>
+                                  setLabour((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index
+                                        ? { ...item, prestart_minutes: value }
+                                        : item,
+                                    ),
+                                  )
+                                }
+                              />
+                            ) : (
+                              formatMinutes(row.prestart_minutes)
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
                             {formatMinutes(row.lunch_minutes)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">
@@ -1736,7 +2247,7 @@ export default function DailyDocketBcReviewPage() {
                     ) : (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className="px-4 py-5 text-center text-slate-500"
                         >
                           No labour rows recorded.
@@ -2147,26 +2658,73 @@ export default function DailyDocketBcReviewPage() {
 
                       {event.items?.length ? (
                         <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                          {event.items.map((item, index) => (
-                            <div
-                              key={item.id || index}
-                              className="flex items-start justify-between gap-4 border-t border-slate-100 px-3 py-2 first:border-t-0"
-                            >
-                              <div>
-                                <p className="text-sm font-semibold text-slate-800">
-                                  {item.item_reference || "Material item"}
-                                </p>
-                                {item.item_description ? (
-                                  <p className="text-xs text-slate-500">
-                                    {item.item_description}
-                                  </p>
+                          {event.items.map((item, index) => {
+                            const issueKey =
+                              item.issue_key || item.source_issue_key || "";
+                            const status = issueKey
+                              ? missingStatusMap.get(issueKey)
+                              : undefined;
+
+                            return (
+                              <div
+                                key={item.id || index}
+                                className="border-t border-slate-100 px-3 py-3 first:border-t-0"
+                              >
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-sm font-semibold text-slate-800">
+                                        {item.item_reference || item.bundle_no || "Material item"}
+                                      </p>
+                                      {status ? (
+                                        <span
+                                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${missingStatusClasses(
+                                            status.status,
+                                          )}`}
+                                        >
+                                          {status.status}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {[
+                                        item.bundle_no
+                                          ? `Bundle ${item.bundle_no}${
+                                              item.bundle_section
+                                                ? ` · ${item.bundle_section}`
+                                                : ""
+                                            }`
+                                          : "",
+                                        item.item_description || "",
+                                      ]
+                                        .filter(Boolean)
+                                        .join(" · ") || "No additional item details"}
+                                    </p>
+                                  </div>
+                                  <span className="shrink-0 text-sm font-medium text-slate-700">
+                                    {item.quantity || "—"} {item.unit || ""}
+                                  </span>
+                                </div>
+
+                                {status ? (
+                                  <div className="mt-2 grid grid-cols-3 gap-2">
+                                    <SummaryBlockCompact
+                                      label="Missing"
+                                      value={`${status.originalQty}`}
+                                    />
+                                    <SummaryBlockCompact
+                                      label="Delivered"
+                                      value={`${status.deliveredQty}`}
+                                    />
+                                    <SummaryBlockCompact
+                                      label="Remaining"
+                                      value={`${status.remainingQty}`}
+                                    />
+                                  </div>
                                 ) : null}
                               </div>
-                              <span className="text-sm font-medium text-slate-700">
-                                {item.quantity || "—"} {item.unit || ""}
-                              </span>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : null}
 
@@ -2304,17 +2862,103 @@ export default function DailyDocketBcReviewPage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-900">
-                General Site Comments
-              </h2>
-              <div className="mt-4">
-                {siteComments ? (
-                  <TextPanel label="Comments" value={siteComments} />
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Daily Site Summary & References
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Standalone daily narrative and RFI references, separate from delay comments.
+                  </p>
+                </div>
+                {editMode ? (
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    Editable
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {editMode ? (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Daily Site Summary
+                      </label>
+                      <textarea
+                        rows={5}
+                        value={docket.daily_site_summary || ""}
+                        onChange={(event) =>
+                          setDocket((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  daily_site_summary: event.target.value,
+                                }
+                              : current,
+                          )
+                        }
+                        className="mt-1.5 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Summarise the day's work, key outcomes and anything the next shift needs to know."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        RFI References
+                      </label>
+                      <input
+                        value={(docket.rfi_references || []).join(", ")}
+                        onChange={(event) =>
+                          setDocket((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  rfi_references: event.target.value
+                                    .split(",")
+                                    .map((value) => value.trim())
+                                    .filter(Boolean),
+                                }
+                              : current,
+                          )
+                        }
+                        className="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        placeholder="RFI-001, RFI-014"
+                      />
+                    </div>
+                  </>
                 ) : (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
-                    No general site comments recorded.
-                  </div>
+                  <>
+                    {docket.daily_site_summary ? (
+                      <TextPanel
+                        label="Daily Site Summary"
+                        value={docket.daily_site_summary}
+                      />
+                    ) : (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                        No Daily Site Summary recorded.
+                      </div>
+                    )}
+
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                        RFI References
+                      </p>
+                      <p className="mt-2 text-sm font-medium text-slate-800">
+                        {docket.rfi_references?.length
+                          ? docket.rfi_references.join(", ")
+                          : "No RFI references recorded."}
+                      </p>
+                    </div>
+                  </>
                 )}
+
+                {siteComments ? (
+                  <TextPanel
+                    label="Legacy / Delay Comments"
+                    value={siteComments}
+                  />
+                ) : null}
               </div>
             </section>
 
@@ -2699,6 +3343,18 @@ export default function DailyDocketBcReviewPage() {
                   label="Docket date recorded"
                 />
                 <CheckItem ok={labour.length > 0} label="Labour recorded" />
+                <CheckItem
+                  ok={workedTowerIds.length <= 1 || productionAllocationVariance <= 0.25}
+                  label={
+                    workedTowerIds.length <= 1
+                      ? "Single-tower docket / allocation not required"
+                      : "Multi-tower production MH balanced"
+                  }
+                />
+                <CheckItem
+                  ok={progressByTower.size >= 1}
+                  label="Tower progress rows linked to a workfront"
+                />
                 <CheckItem
                   ok={Boolean(reviewerSignature)}
                   label="Reviewer signature captured"

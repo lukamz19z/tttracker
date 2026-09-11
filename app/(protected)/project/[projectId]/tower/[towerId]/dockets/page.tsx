@@ -5,6 +5,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
+import {
+  calculateProgressTotals,
+  type LegacyProgressCalculationRow,
+  type SectionV2CalculationRow,
+} from "@/lib/dockets/calculations";
 
 type TowerRecord = {
   id: string;
@@ -55,6 +60,7 @@ type LabourRow = {
   worker_name?: string | null;
   total_hours: number | null;
   production_hours?: number | null;
+  prestart_minutes?: number | null;
   lunch_minutes?: number | null;
   travel_in_minutes?: number | null;
   travel_out_minutes?: number | null;
@@ -104,9 +110,35 @@ type MaterialEvent = {
   items?: MaterialEventItem[] | null;
 };
 
+type ProgressRecord = {
+  docket_id: string;
+  tower_id?: string | null;
+  progress_model?: string | null;
+  section_code?: string | null;
+  section_label?: string | null;
+  assembled_qty?: number | null;
+  erected_qty?: number | null;
+  assembly_today?: number | null;
+  assembly_overall?: number | null;
+  erection_today?: number | null;
+  erection_overall?: number | null;
+  assembly_weight?: number | null;
+  erection_weight?: number | null;
+};
+
+type HourAllocationRecord = {
+  docket_id: string;
+  target_tower_id: string;
+  allocation_type?: string | null;
+  activity?: string | null;
+  hours: number | null;
+  worker_names: string[] | null;
+};
+
 type DocketTotals = {
   raw: number;
   production: number;
+  towerProduction: number;
   lunch: number;
   travel: number;
   prestartHours: number;
@@ -144,6 +176,53 @@ function safeNumber(value: unknown, fallback = 0): number {
 
 function formatNumber(value: number): string {
   return value.toFixed(2);
+}
+
+function allocationManhours(row: HourAllocationRecord): number {
+  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
+  return safeNumber(row.hours, 0) * Math.max(workers, 1);
+}
+
+function progressForRows(rows: ProgressRecord[]) {
+  if (!rows.length) return null;
+
+  const model =
+    rows.some((row) => row.progress_model === "section_v2") ||
+    rows.some(
+      (row) =>
+        Boolean(row.section_code) &&
+        (row.assembly_today !== undefined || row.erection_today !== undefined),
+    )
+      ? "section_v2"
+      : "legacy";
+
+  const hasBodyExtension =
+    model !== "section_v2" ||
+    rows.some((row) => String(row.section_code || "").toUpperCase() === "BE");
+
+  return calculateProgressTotals({
+    progressModel: model,
+    sectionV2Rows: rows.map((row) => ({
+      section_code: row.section_code || "",
+      section_label: row.section_label || row.section_code || "Section",
+      assembly_today:
+        row.assembly_today !== undefined
+          ? row.assembly_today
+          : row.assembled_qty,
+      erection_today:
+        row.erection_today !== undefined
+          ? row.erection_today
+          : row.erected_qty,
+      assembly_weight: row.assembly_weight,
+      erection_weight: row.erection_weight,
+    })) as SectionV2CalculationRow[],
+    legacyRows: rows.map((row) => ({
+      section_label: row.section_label || row.section_code || "Section",
+      assembled_qty: row.assembled_qty,
+      erected_qty: row.erected_qty,
+    })) as LegacyProgressCalculationRow[],
+    hasBodyExtension,
+  });
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -354,6 +433,8 @@ export default function TowerDocketsPage() {
   const [delayRows, setDelayRows] = useState<DelayRow[]>([]);
   const [plantRows, setPlantRows] = useState<PlantRow[]>([]);
   const [materialEvents, setMaterialEvents] = useState<MaterialEvent[]>([]);
+  const [progressRows, setProgressRows] = useState<ProgressRecord[]>([]);
+  const [hourAllocations, setHourAllocations] = useState<HourAllocationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [openDocketId, setOpenDocketId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -366,22 +447,34 @@ export default function TowerDocketsPage() {
     setLoading(true);
 
     try {
-      const [{ data: towerData }, { data: projectTowerData }, { data: docketData }] =
-        await Promise.all([
-          supabase.from("towers").select("*").eq("id", towerId).single(),
-          supabase
-            .from("towers")
-            .select("id,name,extra_data")
-            .eq("project_id", projectId)
-            .order("name"),
-          supabase
-            .from("tower_daily_dockets")
-            .select("*")
-            .eq("tower_id", towerId)
-            .order("docket_date", { ascending: false }),
-        ]);
+      const [
+        { data: towerData },
+        { data: projectTowerData },
+        primaryDocketResult,
+        progressReferenceResult,
+        allocationReferenceResult,
+      ] = await Promise.all([
+        supabase.from("towers").select("*").eq("id", towerId).single(),
+        supabase
+          .from("towers")
+          .select("id,name,extra_data")
+          .eq("project_id", projectId)
+          .order("name"),
+        supabase
+          .from("tower_daily_dockets")
+          .select("id")
+          .eq("tower_id", towerId),
+        supabase
+          .from("tower_docket_progress")
+          .select("docket_id")
+          .eq("tower_id", towerId),
+        supabase
+          .from("tower_docket_hour_allocations")
+          .select("docket_id")
+          .eq("target_tower_id", towerId)
+          .eq("allocation_type", "production"),
+      ]);
 
-      const loadedDockets = (docketData || []) as DocketRecord[];
       setTower((towerData as TowerRecord | null) || null);
       setProjectTowers(
         ((projectTowerData || []) as Array<{
@@ -399,28 +492,55 @@ export default function TowerDocketsPage() {
           ),
         })),
       );
-      setDockets(loadedDockets);
 
-      const docketIds = loadedDockets.map((docket) => docket.id);
+      const docketIds = Array.from(
+        new Set([
+          ...((primaryDocketResult.data || []) as Array<{ id: string }>).map(
+            (row) => row.id,
+          ),
+          ...((progressReferenceResult.data || []) as Array<{ docket_id: string }>).map(
+            (row) => row.docket_id,
+          ),
+          ...((allocationReferenceResult.data || []) as Array<{ docket_id: string }>).map(
+            (row) => row.docket_id,
+          ),
+        ]),
+      );
 
       if (docketIds.length === 0) {
+        setDockets([]);
         setLabourRows([]);
         setDelayRows([]);
         setPlantRows([]);
         setMaterialEvents([]);
+        setProgressRows([]);
+        setHourAllocations([]);
         return;
       }
+
+      const { data: docketData, error: docketError } = await supabase
+        .from("tower_daily_dockets")
+        .select("*")
+        .in("id", docketIds)
+        .order("docket_date", { ascending: false });
+
+      if (docketError) throw docketError;
+
+      const loadedDockets = (docketData || []) as DocketRecord[];
+      setDockets(loadedDockets);
 
       const [
         { data: labourData },
         { data: delayData },
         { data: plantData },
         { data: materialData },
+        { data: progressData },
+        { data: allocationData },
       ] = await Promise.all([
         supabase
           .from("tower_docket_labour")
           .select(
-            "docket_id,worker_name,total_hours,production_hours,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
+            "docket_id,worker_name,total_hours,production_hours,prestart_minutes,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
           )
           .in("docket_id", docketIds),
         supabase
@@ -460,12 +580,26 @@ export default function TowerDocketsPage() {
           )
           .in("docket_id", docketIds)
           .order("created_at", { ascending: true }),
+        supabase
+          .from("tower_docket_progress")
+          .select(
+            "docket_id,tower_id,progress_model,section_code,section_label,assembled_qty,erected_qty,assembly_today,assembly_overall,erection_today,erection_overall,assembly_weight,erection_weight",
+          )
+          .in("docket_id", docketIds),
+        supabase
+          .from("tower_docket_hour_allocations")
+          .select(
+            "docket_id,target_tower_id,allocation_type,activity,hours,worker_names",
+          )
+          .in("docket_id", docketIds),
       ]);
 
       setLabourRows((labourData || []) as LabourRow[]);
       setDelayRows((delayData || []) as DelayRow[]);
       setPlantRows((plantData || []) as PlantRow[]);
       setMaterialEvents((materialData || []) as MaterialEvent[]);
+      setProgressRows((progressData || []) as ProgressRecord[]);
+      setHourAllocations((allocationData || []) as HourAllocationRecord[]);
     } finally {
       setLoading(false);
     }
@@ -537,22 +671,29 @@ export default function TowerDocketsPage() {
   }, [fetchData]);
 
   async function recalcTowerProgressAndStatus() {
-    const { data, error } = await supabase
-      .from("tower_daily_dockets")
-      .select("assembly_percent, erection_percent")
+    const { data: rows, error } = await supabase
+      .from("tower_docket_progress")
+      .select(
+        "docket_id,tower_id,progress_model,section_code,section_label,assembled_qty,erected_qty,assembly_today,assembly_overall,erection_today,erection_overall,assembly_weight,erection_weight",
+      )
       .eq("tower_id", towerId);
 
     if (error) {
       throw new Error("Docket deleted, but tower progress failed to recalculate.");
     }
 
-    const maxProgress =
-      data?.reduce((max, docket) => {
-        const assembly = safeNumber(docket.assembly_percent, 0);
-        const erection = safeNumber(docket.erection_percent, 0);
-        const progress = Math.round(assembly * 0.5 + erection * 0.5);
-        return Math.max(max, progress);
-      }, 0) ?? 0;
+    const grouped = new Map<string, ProgressRecord[]>();
+    ((rows || []) as ProgressRecord[]).forEach((row) => {
+      const current = grouped.get(row.docket_id) || [];
+      current.push(row);
+      grouped.set(row.docket_id, current);
+    });
+
+    let maxProgress = 0;
+    grouped.forEach((groupRows) => {
+      const totals = progressForRows(groupRows);
+      maxProgress = Math.max(maxProgress, totals?.totalProgressPercent || 0);
+    });
 
     const { error: updateError } = await supabase
       .from("towers")
@@ -614,6 +755,66 @@ export default function TowerDocketsPage() {
     [dockets],
   );
 
+  const towerProgressByDocket = useMemo(() => {
+    const map: Record<
+      string,
+      { assembly: number; erection: number; progress: number }
+    > = {};
+
+    dockets.forEach((docket) => {
+      const rows = progressRows.filter(
+        (row) =>
+          row.docket_id === docket.id &&
+          (row.tower_id
+            ? row.tower_id === towerId
+            : docket.tower_id === towerId),
+      );
+
+      const totals = progressForRows(rows);
+
+      map[docket.id] = totals
+        ? {
+            assembly: Math.round(totals.assemblyPercent),
+            erection: Math.round(totals.erectionPercent),
+            progress: Math.round(totals.totalProgressPercent),
+          }
+        : {
+            assembly:
+              docket.tower_id === towerId ? getAssembly(docket) : 0,
+            erection:
+              docket.tower_id === towerId ? getErection(docket) : 0,
+            progress:
+              docket.tower_id === towerId ? getProgress(docket) : 0,
+          };
+    });
+
+    return map;
+  }, [dockets, progressRows, towerId]);
+
+  const towerProductionByDocket = useMemo(() => {
+    const map: Record<string, number> = {};
+
+    dockets.forEach((docket) => {
+      const productionRows = hourAllocations.filter(
+        (row) =>
+          row.docket_id === docket.id &&
+          row.target_tower_id === towerId &&
+          String(row.allocation_type || "").toLowerCase() === "production",
+      );
+
+      map[docket.id] = productionRows.length
+        ? productionRows.reduce(
+            (sum, row) => sum + allocationManhours(row),
+            0,
+          )
+        : docket.tower_id === towerId
+          ? safeNumber(docket.production_manhours, 0)
+          : 0;
+    });
+
+    return map;
+  }, [dockets, hourAllocations, towerId]);
+
   const docketTotals = useMemo(() => {
     const totals: Record<string, DocketTotals> = {};
 
@@ -621,6 +822,7 @@ export default function TowerDocketsPage() {
       totals[docket.id] = {
         raw: safeNumber(docket.raw_manhours, 0),
         production: safeNumber(docket.production_manhours, 0),
+        towerProduction: towerProductionByDocket[docket.id] || 0,
         lunch: 0,
         travel: 0,
         prestartHours: 0,
@@ -641,7 +843,7 @@ export default function TowerDocketsPage() {
       totals[row.docket_id].lunch += safeNumber(row.lunch_minutes, 0) / 60;
       totals[row.docket_id].travel +=
         (safeNumber(row.travel_in_minutes, 0) + safeNumber(row.travel_out_minutes, 0)) / 60;
-      totals[row.docket_id].prestartHours += safeNumber(row.mobilisation_hours, 0);
+      totals[row.docket_id].prestartHours += safeNumber(row.prestart_minutes, 0) / 60;
       totals[row.docket_id].delay += safeNumber(row.delay_hours, 0);
       if (row.worker_name?.trim()) totals[row.docket_id].workers += 1;
     });
@@ -666,7 +868,7 @@ export default function TowerDocketsPage() {
     });
 
     return totals;
-  }, [dockets, labourRows, delayRows, plantRows]);
+  }, [dockets, labourRows, delayRows, plantRows, towerProductionByDocket]);
 
   const summary = useMemo(
     () =>
@@ -676,7 +878,7 @@ export default function TowerDocketsPage() {
           const material = materialSummaryByDocket[docket.id];
 
           acc.raw += totals?.raw || 0;
-          acc.production += totals?.production || 0;
+          acc.production += totals?.towerProduction || 0;
           acc.delay += totals?.delay || 0;
           acc.materialIssues += material?.issues || 0;
           acc.excessRecords += material?.excess || 0;
@@ -833,7 +1035,7 @@ export default function TowerDocketsPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 md:gap-3 mt-5">
             <KpiCard label="Dockets" value={dockets.length} />
             <KpiCard label="Raw Hrs" value={formatNumber(summary.raw)} />
-            <KpiCard label="Prod Hrs" value={formatNumber(summary.production)} tone="green" />
+            <KpiCard label="Tower Prod Hrs" value={formatNumber(summary.production)} tone="green" />
             <KpiCard label="Delay MH" value={formatNumber(summary.delay)} tone="amber" />
             <KpiCard
               label="Material Issues"
@@ -865,13 +1067,19 @@ export default function TowerDocketsPage() {
           ) : (
             <div className="space-y-3">
               {filteredDockets.map((docket) => {
-                const progress = getProgress(docket);
-                const assembly = getAssembly(docket);
-                const erection = getErection(docket);
+                const towerProgress = towerProgressByDocket[docket.id] || {
+                  assembly: docket.tower_id === towerId ? getAssembly(docket) : 0,
+                  erection: docket.tower_id === towerId ? getErection(docket) : 0,
+                  progress: docket.tower_id === towerId ? getProgress(docket) : 0,
+                };
+                const progress = towerProgress.progress;
+                const assembly = towerProgress.assembly;
+                const erection = towerProgress.erection;
                 const status = getStatus(docket);
                 const totals = docketTotals[docket.id] || {
                   raw: 0,
                   production: 0,
+                  towerProduction: 0,
                   lunch: 0,
                   travel: 0,
                   prestartHours: 0,
@@ -914,6 +1122,12 @@ export default function TowerDocketsPage() {
                             >
                               {getStatusLabel(status)}
                             </span>
+
+                            {docket.tower_id !== towerId && (
+                              <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                                Worked here · Primary {towerNameById[docket.tower_id] || "other tower"}
+                              </span>
+                            )}
 
                             {material.issues > 0 && (
                               <span className="inline-flex rounded-full border border-amber-200 bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
@@ -999,7 +1213,7 @@ export default function TowerDocketsPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mt-3">
                         <MiniMetric label="Workers" value={totals.workers} />
                         <MiniMetric label="Raw" value={formatNumber(totals.raw)} />
-                        <MiniMetric label="Prod" value={formatNumber(totals.production)} />
+                        <MiniMetric label="Tower Prod" value={formatNumber(totals.towerProduction)} />
                         <MiniMetric
                           label="Delay MH"
                           value={formatNumber(totals.delay)}
@@ -1036,6 +1250,8 @@ export default function TowerDocketsPage() {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           <DetailCard label="General Delay Events" value={formatNumber(totals.delayEvents)} />
                           <DetailCard label="Workers" value={totals.workers} />
+                          <DetailCard label="Prestart MH" value={formatNumber(totals.prestartHours)} />
+                          <DetailCard label="Tower Prod MH" value={formatNumber(totals.towerProduction)} />
                           <DetailCard label="Material Issues" value={material.issues} />
                           <DetailCard label="Excess Records" value={material.excess} />
                         </div>
@@ -1224,10 +1440,10 @@ export default function TowerDocketsPage() {
                         )}
 
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-                          <Link href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}?mode=view`} className="text-center bg-slate-800 text-white px-4 py-3 rounded-xl text-sm font-semibold">View</Link>
+                          <Link href={`/project/${projectId}/tower/${docket.tower_id}/dockets/${docket.id}?mode=view`} className="text-center bg-slate-800 text-white px-4 py-3 rounded-xl text-sm font-semibold">View</Link>
 
                           {["legacy","draft","bc_changes_requested","client_changes_requested"].includes(status) && (
-                            <Link href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}/edit`} className="text-center bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-semibold">Edit</Link>
+                            <Link href={`/project/${projectId}/tower/${docket.tower_id}/dockets/${docket.id}/edit`} className="text-center bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-semibold">Edit</Link>
                           )}
 
                           {["draft","bc_changes_requested","client_changes_requested"].includes(status) && (
@@ -1238,7 +1454,7 @@ export default function TowerDocketsPage() {
 
                           {status === "submitted_bc" && canReviewBc && (
                             <Link
-                              href={`/project/${projectId}/tower/${towerId}/dockets/${docket.id}/review`}
+                              href={`/project/${projectId}/tower/${docket.tower_id}/dockets/${docket.id}/review`}
                               className="text-center bg-emerald-700 text-white px-4 py-3 rounded-xl text-sm font-semibold hover:bg-emerald-800"
                             >
                               Review Daily Docket

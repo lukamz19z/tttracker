@@ -212,17 +212,87 @@ function validSignatureDataUrl(value: string) {
   return estimatedBytes > 0 && estimatedBytes <= 400 * 1024;
 }
 
+function towerDisplayName(
+  towerId: string,
+  primaryTower: Record<string, unknown>,
+  towers: Array<Record<string, unknown>>,
+) {
+  if (!towerId) return "Tower";
+
+  if (String(primaryTower.id ?? "") === towerId) {
+    return String(primaryTower.name || "Tower");
+  }
+
+  const match = towers.find((row) => String(row.id ?? "") === towerId);
+
+  return String(match?.name || towerId);
+}
+
+function workedTowerNames({
+  docket,
+  primaryTower,
+  towers,
+  progress,
+  hourAllocations,
+}: {
+  docket: DocketRow;
+  primaryTower: Record<string, unknown>;
+  towers: Array<Record<string, unknown>>;
+  progress: Array<Record<string, unknown>>;
+  hourAllocations: Array<Record<string, unknown>>;
+}) {
+  const ids = new Set<string>();
+
+  if (docket.tower_id) {
+    ids.add(docket.tower_id);
+  }
+
+  for (const row of progress) {
+    const towerId = String(row.tower_id ?? "").trim();
+    if (towerId) ids.add(towerId);
+  }
+
+  for (const row of hourAllocations) {
+    const allocationType = String(row.allocation_type ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (allocationType !== "production") continue;
+
+    const towerId = String(row.target_tower_id ?? "").trim();
+    if (towerId) ids.add(towerId);
+  }
+
+  return Array.from(ids).map((towerId) =>
+    towerDisplayName(towerId, primaryTower, towers),
+  );
+}
+
 function publicDocketPayload({
   approval,
   docket,
   project,
   tower,
+  towers,
+  progress,
+  hourAllocations,
 }: {
   approval: ApprovalRow;
   docket: DocketRow;
   project: ProjectRow;
   tower: Record<string, unknown>;
+  towers: Array<Record<string, unknown>>;
+  progress: Array<Record<string, unknown>>;
+  hourAllocations: Array<Record<string, unknown>>;
 }) {
+  const towersWorked = workedTowerNames({
+    docket,
+    primaryTower: tower,
+    towers,
+    progress,
+    hourAllocations,
+  });
+
   return {
     docketId: docket.id,
     status: docket.approval_status,
@@ -239,7 +309,13 @@ function publicDocketPayload({
     },
     tower: {
       name: tower.name || "Tower",
+      towersWorked,
     },
+    towersWorked,
+    dailySiteSummary: docket.daily_site_summary ?? null,
+    rfiReferences: Array.isArray(docket.rfi_references)
+      ? docket.rfi_references
+      : [],
     recipient: {
       name: approval.recipient_name,
       email: approval.recipient_email,
@@ -379,11 +455,14 @@ async function loadBundle(
   const [
     projectResult,
     towerResult,
+    projectTowersResult,
     labourResult,
     plantResult,
     delayResult,
     progressResult,
+    allocationResult,
     materialEventResult,
+    materialHistoryResult,
   ] = await Promise.all([
     admin
       .from("projects")
@@ -393,7 +472,17 @@ async function loadBundle(
       .eq("id", docket.project_id)
       .single(),
 
-    admin.from("towers").select("*").eq("id", docket.tower_id).single(),
+    admin
+      .from("towers")
+      .select("*")
+      .eq("id", docket.tower_id)
+      .single(),
+
+    admin
+      .from("towers")
+      .select("id,name,line,extra_data")
+      .eq("project_id", docket.project_id)
+      .order("name"),
 
     admin
       .from("tower_docket_labour")
@@ -418,6 +507,12 @@ async function loadBundle(
       .eq("docket_id", docketId),
 
     admin
+      .from("tower_docket_hour_allocations")
+      .select("*")
+      .eq("docket_id", docketId)
+      .order("created_at"),
+
+    admin
       .from("tower_material_events")
       .select(`
         *,
@@ -426,6 +521,19 @@ async function loadBundle(
         tower_material_event_plant(*)
       `)
       .eq("docket_id", docketId)
+      .order("occurred_at"),
+
+    // The PDF uses the broader tower material history to resolve:
+    // missing -> received -> remaining -> resolved.
+    admin
+      .from("tower_material_events")
+      .select(`
+        *,
+        tower_material_event_items(*),
+        tower_material_event_people(*),
+        tower_material_event_plant(*)
+      `)
+      .eq("tower_id", docket.tower_id)
       .order("occurred_at"),
   ]);
 
@@ -442,11 +550,14 @@ async function loadBundle(
   }
 
   const childError =
+    projectTowersResult.error ||
     labourResult.error ||
     plantResult.error ||
     delayResult.error ||
     progressResult.error ||
-    materialEventResult.error;
+    allocationResult.error ||
+    materialEventResult.error ||
+    materialHistoryResult.error;
 
   if (childError) {
     throw new Error(
@@ -458,11 +569,14 @@ async function loadBundle(
     docket,
     project: projectResult.data as unknown as ProjectRow,
     tower: towerResult.data as Record<string, unknown>,
+    towers: (projectTowersResult.data ?? []) as Array<Record<string, unknown>>,
     labour: labourResult.data ?? [],
     plant: plantResult.data ?? [],
     delays: delayResult.data ?? [],
     progress: progressResult.data ?? [],
+    hourAllocations: allocationResult.data ?? [],
     materialEvents: materialEventResult.data ?? [],
+    materialHistory: materialHistoryResult.data ?? [],
   };
 }
 
@@ -591,6 +705,9 @@ export async function GET(_request: Request, context: RouteContext) {
         docket: bundle.docket,
         project: bundle.project,
         tower: bundle.tower,
+        towers: bundle.towers,
+        progress: bundle.progress as Array<Record<string, unknown>>,
+        hourAllocations: bundle.hourAllocations as Array<Record<string, unknown>>,
       }),
     });
   } catch (error) {
@@ -673,6 +790,19 @@ export async function POST(request: Request, context: RouteContext) {
 
     const bundle = await loadBundle(admin, approval.docket_id);
     const { docket, project, tower } = bundle;
+
+    const towersWorked = workedTowerNames({
+      docket,
+      primaryTower: tower,
+      towers: bundle.towers,
+      progress: bundle.progress as Array<Record<string, unknown>>,
+      hourAllocations: bundle.hourAllocations as Array<Record<string, unknown>>,
+    });
+
+    const towersWorkedLabel =
+      towersWorked.length > 0
+        ? towersWorked.join(", ")
+        : String(tower.name || "Tower");
 
     const approvalRevision = Math.max(
       1,
@@ -840,8 +970,8 @@ export async function POST(request: Request, context: RouteContext) {
                     </td>
                   </tr>
                   <tr>
-                    <td style="padding:7px 0;color:#64748b">Tower</td>
-                    <td style="padding:7px 0;font-weight:600">${escapeHtml(towerName)}</td>
+                    <td style="padding:7px 0;color:#64748b">Towers Worked</td>
+                    <td style="padding:7px 0;font-weight:600">${escapeHtml(towersWorkedLabel)}</td>
                   </tr>
                   <tr>
                     <td style="padding:7px 0;color:#64748b">Revision</td>
@@ -966,7 +1096,10 @@ export async function POST(request: Request, context: RouteContext) {
       plant: bundle.plant,
       delays: bundle.delays,
       progress: bundle.progress,
+      towers: bundle.towers,
+      hourAllocations: bundle.hourAllocations,
       materialEvents: bundle.materialEvents,
+      materialHistory: bundle.materialHistory,
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,
@@ -1237,8 +1370,8 @@ export async function POST(request: Request, context: RouteContext) {
                   </td>
                 </tr>
                 <tr>
-                  <td style="padding:7px 0;color:#64748b">Tower</td>
-                  <td style="padding:7px 0;font-weight:600">${escapeHtml(published.towerName)}</td>
+                  <td style="padding:7px 0;color:#64748b">Towers Worked</td>
+                  <td style="padding:7px 0;font-weight:600">${escapeHtml(towersWorkedLabel)}</td>
                 </tr>
                 <tr>
                   <td style="padding:7px 0;color:#64748b">Date</td>

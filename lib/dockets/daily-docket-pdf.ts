@@ -1,6 +1,9 @@
 import { jsPDF } from "jspdf";
 import {
+  calculateLabourTotals,
   calculateProgressTotals,
+  type DelayCalculationRow,
+  type LabourCalculationRow,
   type LegacyProgressCalculationRow,
   type SectionV2CalculationRow,
 } from "@/lib/dockets/calculations";
@@ -21,7 +24,10 @@ export type DailyDocketPdfData = {
   plant: Row[];
   delays: Row[];
   progress: Row[];
+  towers?: Row[];
+  hourAllocations?: Row[];
   materialEvents: MaterialEvent[];
+  materialHistory?: MaterialEvent[];
   branding?: {
     logoDataUrl?: string | null;
     companyName?: string | null;
@@ -104,18 +110,43 @@ function sectionCode(row: Row) {
 function sectionLabel(row: Row) {
   return text(row.section_label).trim() || sectionCode(row).replaceAll("_", " ") || "Section";
 }
-function progressModel(data: DailyDocketPdfData) {
-  if (text(data.docket.progress_model).trim().toLowerCase() === "section_v2") return "section_v2";
-  return data.progress.some(row => Boolean(sectionCode(row)) && (row.assembly_today !== undefined || row.erection_today !== undefined))
-    ? "section_v2" : "legacy";
+function progressRowsForTower(data: DailyDocketPdfData, towerId: string) {
+  const primaryTowerId = text(data.docket.tower_id);
+  return data.progress.filter((row) => {
+    const rowTowerId = text(row.tower_id);
+    return rowTowerId ? rowTowerId === towerId : towerId === primaryTowerId;
+  });
 }
-function hasBodyExtension(data: DailyDocketPdfData) {
-  return progressModel(data) !== "section_v2" || data.progress.some(row => sectionCode(row) === "BE");
+function progressModelForRows(data: DailyDocketPdfData, rows: Row[]) {
+  if (rows.some(row => text(row.progress_model).trim().toLowerCase() === "section_v2")) {
+    return "section_v2" as const;
+  }
+  if (
+    towerIdIsPrimary(data, rows) &&
+    text(data.docket.progress_model).trim().toLowerCase() === "section_v2"
+  ) {
+    return "section_v2" as const;
+  }
+  return rows.some(
+    row => Boolean(sectionCode(row)) &&
+      (row.assembly_today !== undefined || row.erection_today !== undefined),
+  )
+    ? ("section_v2" as const)
+    : ("legacy" as const);
 }
-function applicableV2Rows(data: DailyDocketPdfData) {
-  const includeBe = hasBodyExtension(data);
+function towerIdIsPrimary(data: DailyDocketPdfData, rows: Row[]) {
+  const primaryTowerId = text(data.docket.tower_id);
+  return rows.some(row => !text(row.tower_id) || text(row.tower_id) === primaryTowerId);
+}
+function hasBodyExtensionForRows(model: "legacy" | "section_v2", rows: Row[]) {
+  return model !== "section_v2" || rows.some(row => sectionCode(row) === "BE");
+}
+function applicableV2RowsForTower(data: DailyDocketPdfData, towerId: string) {
+  const rows = progressRowsForTower(data, towerId);
+  const model = progressModelForRows(data, rows);
+  const includeBe = hasBodyExtensionForRows(model, rows);
   const byCode = new Map<string, Row>();
-  for (const row of data.progress) {
+  for (const row of rows) {
     const code = sectionCode(row);
     if (code) byCode.set(code, row);
   }
@@ -130,10 +161,12 @@ function applicableV2Rows(data: DailyDocketPdfData) {
     };
   });
 }
-function overallProgress(data: DailyDocketPdfData) {
+function overallProgressForTower(data: DailyDocketPdfData, towerId: string) {
+  const rows = progressRowsForTower(data, towerId);
+  const model = progressModelForRows(data, rows);
   return calculateProgressTotals({
-    progressModel: progressModel(data),
-    sectionV2Rows: data.progress.map(row => ({
+    progressModel: model,
+    sectionV2Rows: rows.map(row => ({
       section_code: sectionCode(row),
       section_label: sectionLabel(row),
       assembly_today: row.assembly_today !== undefined ? row.assembly_today : row.assembled_qty,
@@ -141,13 +174,108 @@ function overallProgress(data: DailyDocketPdfData) {
       assembly_weight: row.assembly_weight,
       erection_weight: row.erection_weight,
     })) as SectionV2CalculationRow[],
-    legacyRows: data.progress.map(row => ({
+    legacyRows: rows.map(row => ({
       section_label: sectionLabel(row),
       assembled_qty: row.assembled_qty,
       erected_qty: row.erected_qty,
     })) as LegacyProgressCalculationRow[],
-    hasBodyExtension: hasBodyExtension(data),
+    hasBodyExtension: hasBodyExtensionForRows(model, rows),
   });
+}
+function allocationManhours(row: Row) {
+  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
+  return number(row.hours) * Math.max(workers, 1);
+}
+function productionAllocations(data: DailyDocketPdfData) {
+  return (data.hourAllocations || []).filter(
+    row => text(row.allocation_type).trim().toLowerCase() === "production",
+  );
+}
+function revisionAllocations(data: DailyDocketPdfData) {
+  return (data.hourAllocations || []).filter(row => {
+    const type = text(row.allocation_type).trim().toLowerCase();
+    return !type || type === "revision";
+  });
+}
+function towerDisplayName(data: DailyDocketPdfData, towerId: string) {
+  if (!towerId) return "Tower";
+  if (towerId === text(data.tower.id)) return towerName(data);
+  const row = (data.towers || []).find(item => text(item.id) === towerId);
+  return text(row?.name).trim() || towerId;
+}
+function workedTowerIds(data: DailyDocketPdfData) {
+  const primary = text(data.docket.tower_id);
+  const ids = new Set<string>();
+  if (primary) ids.add(primary);
+  productionAllocations(data).forEach(row => {
+    const id = text(row.target_tower_id);
+    if (id) ids.add(id);
+  });
+  data.progress.forEach(row => {
+    const id = text(row.tower_id);
+    if (id) ids.add(id);
+  });
+  return Array.from(ids);
+}
+type MissingIssueSnapshot = {
+  issueKey: string;
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: "Open" | "Partially Delivered" | "Resolved";
+};
+function missingIssueSnapshots(data: DailyDocketPdfData) {
+  const history = data.materialHistory?.length ? data.materialHistory : data.materialEvents;
+  const receipts = new Map<string, number>();
+  history
+    .filter(event => text(event.event_type).trim().toLowerCase() === "found_received")
+    .forEach(event => {
+      (event.tower_material_event_items || []).forEach(item => {
+        const key = text(item.source_issue_key).trim();
+        if (!key) return;
+        receipts.set(key, (receipts.get(key) || 0) + number(item.quantity));
+      });
+    });
+
+  const map = new Map<string, MissingIssueSnapshot>();
+  history
+    .filter(event => text(event.event_type).trim().toLowerCase() === "missing")
+    .forEach(event => {
+      (event.tower_material_event_items || []).forEach(item => {
+        const key = text(item.issue_key).trim();
+        if (!key) return;
+        const originalQty = Math.max(number(item.quantity), 0);
+        const deliveredQty = Math.max(receipts.get(key) || 0, 0);
+        const remainingQty = Math.max(originalQty - deliveredQty, 0);
+        map.set(key, {
+          issueKey: key,
+          originalQty,
+          deliveredQty,
+          remainingQty,
+          status:
+            remainingQty <= 0
+              ? "Resolved"
+              : deliveredQty > 0
+                ? "Partially Delivered"
+                : "Open",
+        });
+      });
+    });
+  return map;
+}
+function materialReference(item: Row) {
+  const reference =
+    text(item.item_reference) ||
+    text(item.part_number) ||
+    text(item.bolt_size) ||
+    text(item.bundle_reference) ||
+    text(item.bundle_no) ||
+    "—";
+  const bundleNo = text(item.bundle_no).trim();
+  const bundleSection = text(item.bundle_section).trim();
+  if (!bundleNo) return reference;
+  const bundle = `Bundle ${bundleNo}${bundleSection ? ` · ${bundleSection}` : ""}`;
+  return reference === bundleNo || reference === "—" ? bundle : `${reference} · ${bundle}`;
 }
 const CLIENT_CONTENT_KEYS = [
   "progress",
@@ -286,8 +414,24 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   const footerTop = 283;
   const state = documentState(data);
   const rev = revisionLabel(data);
-  const calculated = overallProgress(data);
   const visible = clientContentSet(data);
+  const primaryTowerId = text(data.docket.tower_id);
+  const workedTowers = workedTowerIds(data);
+  const missingSnapshots = missingIssueSnapshots(data);
+  const mobilisationForCalc = parseMobilisation(data);
+  const labourTotals = calculateLabourTotals(
+    data.labour as LabourCalculationRow[],
+    data.delays as DelayCalculationRow[],
+    {
+      enabled: mobilisationForCalc.included,
+      durationMinutes: mobilisationForCalc.hours * 60,
+      workerNames: mobilisationForCalc.workers,
+    },
+  );
+  const revisionMh = revisionAllocations(data).reduce(
+    (sum, row) => sum + allocationManhours(row),
+    0,
+  );
   const materialEvents = selectedMaterialEvents(data, visible);
   const projectName = [text(data.project.project_number), text(data.project.name)].filter(Boolean).join(" - ");
   const tower = towerName(data);
@@ -487,53 +631,92 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
     ["Crew", text(data.docket.crew) || "—"],
     ["Leading Hand", text(data.docket.leading_hand) || "—"],
     ["Weather", text(data.docket.weather) || "—"],
+    ["Primary Tower", towerDisplayName(data, primaryTowerId)],
+    ["Towers Worked", workedTowers.map(id => towerDisplayName(data, id)).join(", ") || tower],
     ["BC Representative", text(data.docket.bc_rep_name) || "—"],
     ["Document Status", `${state} · ${rev}`],
     ["Client Representative", text(data.docket.client_rep_name) || (state === "DRAFT" ? "Pending approval" : "—")],
   ]);
 
+  const dailySummary = text(data.docket.daily_site_summary).trim();
+  const rfiReferences = Array.isArray(data.docket.rfi_references)
+    ? data.docket.rfi_references.map(value => text(value).trim()).filter(Boolean)
+    : [];
+
+  if (dailySummary || rfiReferences.length) {
+    section("Daily Site Summary");
+    if (dailySummary) paragraph(dailySummary);
+    if (rfiReferences.length) {
+      callout("RFI References", rfiReferences.join(", "), "blue");
+    }
+  }
+
   if (visible.has("progress")) {
     section("Progress");
-    if (progressModel(data) === "section_v2") {
-      const rows = applicableV2Rows(data).map(row => [
-        sectionLabel(row),
-        `${clampPercent(row.assembly_today).toFixed(0)}%`,
-        `${clampPercent(row.erection_today).toFixed(0)}%`,
-      ]);
-      table(
-        ["Section", "Assembly Today", "Erection Today"],
-        rows,
-        [82, 51, 51],
-        { compact: true },
+
+    for (const workedTowerId of workedTowers) {
+      const rows = progressRowsForTower(data, workedTowerId);
+      const allocation = productionAllocations(data).find(
+        row => text(row.target_tower_id) === workedTowerId,
       );
-      paragraph(
-        hasBodyExtension(data)
-          ? "Body Extension included."
-          : "Body Extension excluded.",
+      const activity = titleCase(allocation?.activity);
+      const note = text(allocation?.reason).trim();
+      const heading = [
+        towerDisplayName(data, workedTowerId),
+        activity && activity !== "—" ? activity : "",
+      ].filter(Boolean).join(" · ");
+
+      callout(
+        workedTowerId === primaryTowerId ? "Primary Workfront" : "Additional Workfront",
+        heading || towerDisplayName(data, workedTowerId),
+        "blue",
       );
-    } else {
-      table(
-        ["Section", "Assembled", "Erected"],
-        data.progress.map(row => [
+
+      if (note) paragraph(`Work notes: ${note}`);
+
+      if (!rows.length) {
+        paragraph("No progress change rows were recorded for this workfront.");
+        continue;
+      }
+
+      const model = progressModelForRows(data, rows);
+      if (model === "section_v2") {
+        const displayRows = applicableV2RowsForTower(data, workedTowerId).map(row => [
           sectionLabel(row),
-          text(row.assembled_qty) || "0",
-          text(row.erected_qty) || "0",
-        ]),
-        [92, 46, 46],
-        { compact: true },
+          `${clampPercent(row.assembly_today).toFixed(0)}%`,
+          `${clampPercent(row.erection_today).toFixed(0)}%`,
+        ]);
+        table(
+          ["Section", "Assembly Today", "Erection Today"],
+          displayRows,
+          [82, 51, 51],
+          { compact: true },
+        );
+      } else {
+        table(
+          ["Section", "Assembled", "Erected"],
+          rows.map(row => [
+            sectionLabel(row),
+            text(row.assembled_qty) || "0",
+            text(row.erected_qty) || "0",
+          ]),
+          [92, 46, 46],
+          { compact: true },
+        );
+      }
+
+      const calculated = overallProgressForTower(data, workedTowerId);
+      table(
+        ["Overall Assembly", "Overall Erection", "Total Progress"],
+        [[
+          `${calculated.assemblyPercent.toFixed(1)}%`,
+          `${calculated.erectionPercent.toFixed(1)}%`,
+          `${calculated.totalProgressPercent.toFixed(1)}%`,
+        ]],
+        [61.3, 61.3, 61.4],
+        { headerFill: C.bluePale },
       );
     }
-
-    table(
-      ["Overall Assembly", "Overall Erection", "Total Progress"],
-      [[
-        `${calculated.assemblyPercent.toFixed(1)}%`,
-        `${calculated.erectionPercent.toFixed(1)}%`,
-        `${calculated.totalProgressPercent.toFixed(1)}%`,
-      ]],
-      [61.3, 61.3, 61.4],
-      { headerFill: C.bluePale },
-    );
   }
 
   if (visible.has("workforce") || visible.has("raw_manhours")) {
@@ -541,16 +724,17 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
 
     if (visible.has("workforce")) {
       table(
-        ["Personnel", "Time In", "Time Out", "Raw Hours"],
+        ["Personnel", "Time In", "Time Out", "Raw", "Prestart"],
         data.labour.length
           ? data.labour.map(row => [
               text(row.worker_name) || "Worker",
               text(row.time_in) || "—",
               text(row.time_out) || "—",
               formatHours(row.total_hours),
+              `${number(row.prestart_minutes).toFixed(0)} min`,
             ])
-          : [["No labour recorded", "—", "—", "—"]],
-        [88, 32, 32, 32],
+          : [["No labour recorded", "—", "—", "—", "—"]],
+        [76, 28, 28, 27, 25],
         { compact: true },
       );
     }
@@ -561,6 +745,15 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
         formatHours(data.docket.raw_manhours),
         "blue",
       );
+    }
+
+    if (visible.has("workforce") && labourTotals.prestartManhours > 0) {
+      infoGrid([
+        ["Prestart MH", formatHours(labourTotals.prestartManhours)],
+        ["Lunch MH", formatHours(labourTotals.lunchManhours)],
+        ["Travel MH", formatHours(labourTotals.travelManhours)],
+        ["Mobilisation MH", formatHours(labourTotals.mobilisationManhours)],
+      ]);
     }
   }
 
@@ -705,20 +898,29 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
             ["Qty", "Reference / Part", "Description"],
             items.map(item => [
               `${number(item.quantity)} ${text(item.unit) || "x"}`,
-              text(item.item_reference) ||
-                text(item.part_number) ||
-                text(item.bolt_size) ||
-                text(item.bundle_reference) ||
-                "—",
-              [
-                titleCase(item.material_type),
-                text(item.item_description),
-                text(item.drawing_number)
-                  ? `Drawing ${text(item.drawing_number)}`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" · ") || "—",
+              materialReference(item),
+              (() => {
+                const issueKey = text(item.issue_key).trim();
+                const sourceIssueKey = text(item.source_issue_key).trim();
+                const snapshot = issueKey
+                  ? missingSnapshots.get(issueKey)
+                  : sourceIssueKey
+                    ? missingSnapshots.get(sourceIssueKey)
+                    : undefined;
+                const closeout = snapshot
+                  ? `Missing ${snapshot.originalQty} · Delivered ${snapshot.deliveredQty} · Remaining ${snapshot.remainingQty} · ${snapshot.status}`
+                  : "";
+                return [
+                  titleCase(item.material_type),
+                  text(item.item_description),
+                  text(item.drawing_number)
+                    ? `Drawing ${text(item.drawing_number)}`
+                    : "",
+                  closeout,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "—";
+              })(),
             ]),
             [30, 55, 99],
             { compact: true },
