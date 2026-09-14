@@ -126,7 +126,47 @@ export default function InvoicesPage(){
  async function handleSubmit(){try{await persistInvoice({submitForApproval:true,closeAfterSave:true})}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Failed to submit Invoice."})}}
  async function handleSupportingUpload(file:File){if(!editingInvoice){setMessage({tone:"error",text:"Save the Invoice draft before uploading supporting documents."});return}setSupportUploading(true);try{await uploadDocument(editingInvoice.id,file,"supporting_document");await loadAll();setMessage({tone:"success",text:"Supporting document uploaded."})}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Upload failed."})}finally{setSupportUploading(false)}}
  async function removeDocument(a:Attachment){if(!window.confirm(`Remove ${a.file_name}?`))return;try{const response=await apiFetch(`/api/expenses/invoices/attachments/${encodeURIComponent(a.id)}`,{method:"DELETE"});const result=await readApiJson<{error?:string}>(response);if(!response.ok)throw new Error(result.error??"Document could not be removed.");await loadAll();setMessage({tone:"success",text:"Invoice document removed."})}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Document could not be removed."})}}
- async function viewAttachment(a:Attachment){setViewingAttachmentId(a.id);try{const response=await apiFetch(`/api/expenses/attachments/${encodeURIComponent(a.id)}/content`);if(!response.ok){let text="Could not open the Invoice document.";try{const p=await response.json() as {error?:string};if(p.error)text=p.error}catch{}throw new Error(text)}const blob=await response.blob(),url=URL.createObjectURL(blob);window.open(url,"_blank","noopener,noreferrer");window.setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Could not open Invoice document."})}finally{setViewingAttachmentId(null)}}
+ async function viewAttachment(a:Attachment){
+  setViewingAttachmentId(a.id);
+  setMessage(null);
+
+  // Open the tab immediately while this click is still a direct user action.
+  // Opening it after awaiting the SharePoint fetch can be blocked by the browser.
+  const previewWindow=window.open("","_blank");
+
+  try{
+    const response=await apiFetch(`/api/expenses/attachments/${encodeURIComponent(a.id)}/content`);
+
+    if(!response.ok){
+      let errorMessage="Could not open the Invoice document.";
+      try{
+        const payload=await response.json() as {error?:string};
+        errorMessage=payload.error??errorMessage;
+      }catch{}
+      throw new Error(errorMessage);
+    }
+
+    const blob=await response.blob();
+    const objectUrl=URL.createObjectURL(blob);
+
+    if(previewWindow){
+      previewWindow.location.href=objectUrl;
+    }else{
+      // Fallback for browsers that block the new tab entirely.
+      window.location.href=objectUrl;
+    }
+
+    window.setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+  }catch(error){
+    previewWindow?.close();
+    setMessage({
+      tone:"error",
+      text:error instanceof Error?error.message:"Could not open Invoice document.",
+    });
+  }finally{
+    setViewingAttachmentId(null);
+  }
+ }
  async function runReviewAction(action:"request_changes"|"deny"|"approve"|"mark_paid"){if(!reviewingInvoice)return;if((action==="request_changes"||action==="deny")&&!reviewComments.trim()){setReviewError(action==="deny"?"Enter the reason for denying this Invoice.":"Enter what needs to be changed.");return}const confirmed=window.confirm(action==="approve"?`Approve ${reviewingInvoice.submission_number} and archive the controlled approval record to SharePoint?`:action==="deny"?`Deny ${reviewingInvoice.submission_number}?`:action==="request_changes"?`Return ${reviewingInvoice.submission_number} for changes?`:`Mark ${reviewingInvoice.submission_number} as paid?`);if(!confirmed)return;setReviewSaving(true);setReviewError(null);try{const response=await apiFetch("/api/expenses/invoices/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({submissionId:reviewingInvoice.id,action,comments:reviewComments.trim(),paymentReference:paymentReference.trim()})});const result=await readApiJson<{error?:string;warning?:string|null}>(response);if(!response.ok)throw new Error(result.error??"Invoice review failed.");await loadAll();closeReview();setMessage({tone:result.warning?"error":"success",text:result.warning||(action==="request_changes"?"Changes requested.":action==="deny"?"Invoice denied.":action==="approve"?"Invoice approved and archived to SharePoint.":"Invoice marked as paid.")})}catch(error){const text=error instanceof Error?error.message:"Invoice review failed.";setReviewError(text);setMessage({tone:"error",text})}finally{setReviewSaving(false)}}
  async function quickMarkPaid(invoice:Invoice){const ref=window.prompt(`Payment reference for ${invoice.submission_number} (optional):`,invoice.payment_reference??"");if(ref===null)return;if(!window.confirm(`Mark ${invoice.submission_number} (${currency(asNumber(invoice.total_amount))}) as paid?`))return;setQuickPayingId(invoice.id);try{const response=await apiFetch("/api/expenses/invoices/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({submissionId:invoice.id,action:"mark_paid",paymentReference:ref.trim()})});const result=await readApiJson<{error?:string}>(response);if(!response.ok)throw new Error(result.error??"Invoice could not be marked as paid.");await loadAll();setMessage({tone:"success",text:`${invoice.submission_number} marked as paid.`})}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Invoice could not be marked as paid."})}finally{setQuickPayingId(null)}}
  async function deleteInvoice(invoice:Invoice){const confirmation=window.prompt(`Permanently delete ${invoice.submission_number}?\n\nType the Invoice number exactly to continue:`);if(confirmation===null)return;try{const response=await apiFetch("/api/expenses/invoices/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({submissionId:invoice.id,confirmation:confirmation.trim()})});const result=await readApiJson<{error?:string;deleted?:boolean}>(response);if(!response.ok||!result.deleted)throw new Error(result.error??"Invoice could not be deleted.");if(reviewingInvoice?.id===invoice.id)closeReview();await loadAll();setMessage({tone:"success",text:`${invoice.submission_number} deleted.`})}catch(error){setMessage({tone:"error",text:error instanceof Error?error.message:"Invoice could not be deleted."})}}
