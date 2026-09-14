@@ -10,6 +10,13 @@ function serviceClient(){return createClient(env("NEXT_PUBLIC_SUPABASE_URL"),env
 async function requireUser(request:Request){const a=request.headers.get("authorization")??"";const t=a.startsWith("Bearer ")?a.slice(7).trim():"";if(!t)throw new Error("UNAUTHENTICATED");const service=serviceClient();const {data:{user},error}=await service.auth.getUser(t);if(error||!user)throw new Error("UNAUTHENTICATED");return{service,user};}
 async function deleteGraphItem(driveId:string,itemId:string){const token=await getGraphAccessToken();const r=await fetch(`https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`,{method:"DELETE",headers:{Authorization:`Bearer ${token}`},cache:"no-store"});if(!r.ok&&r.status!==404)throw new Error(`Could not replace the previous SharePoint document (${r.status}).`);}
 
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "/api/expenses/invoices/attachments/upload",
+  });
+}
+
 export async function POST(request:Request){try{
  const {service,user}=await requireUser(request);const form=await request.formData();const file=form.get("file"),submissionId=String(form.get("submissionId")??"").trim(),documentType=String(form.get("documentType")??"invoice").trim();if(!(file instanceof File))return NextResponse.json({error:"Choose an Invoice document."},{status:400});if(!submissionId)return NextResponse.json({error:"Save the Invoice before uploading documents."},{status:400});if(!["invoice","supporting_document"].includes(documentType))return NextResponse.json({error:"Invalid Invoice document type."},{status:400});if(file.size<=0||file.size>MAX_FILE_BYTES)return NextResponse.json({error:"Invoice documents must be 25 MB or smaller."},{status:400});const contentType=file.type||"application/octet-stream";if(!ALLOWED_TYPES.has(contentType))return NextResponse.json({error:"Upload a PDF, JPG, PNG, WEBP, HEIC or HEIF file."},{status:400});
  const inv=await service.from("financial_submissions").select("id,submission_number,submission_type,status,created_by,submitted_by,invoice_date,created_at").eq("id",submissionId).eq("submission_type","invoice").single();if(inv.error||!inv.data)return NextResponse.json({error:"Invoice not found."},{status:404});const invoice=inv.data;

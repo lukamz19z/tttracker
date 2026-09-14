@@ -60,7 +60,20 @@ function dueInfo(dueDate?:string|null,status?:FinancialStatus){if(!dueDate||stat
 function addDays(value:string,days:number){if(!value)return"";const d=new Date(`${value}T00:00:00`);if(Number.isNaN(d.getTime()))return"";d.setDate(d.getDate()+days);return d.toISOString().slice(0,10);}
 function vehicleLabel(a:VehicleAsset){return[a.vehicle_id,a.vehicle_rego,[a.make,a.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ")||"Vehicle";}
 function plantLabel(a:PlantAsset){return[a.asset_id,a.rego,a.plant_type,[a.make,a.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ")||"Plant";}
-async function readApiJson<T>(response:Response):Promise<T>{const ct=response.headers.get("content-type")??"";if(!ct.includes("application/json")){const text=await response.text();throw new Error(response.status===404?"The Invoice API route was not found. Confirm the supplied app/api Invoice routes are installed and restart Next.js.":`Invoice API returned ${response.status} ${response.statusText}. ${text.slice(0,180)}`);}return await response.json() as T;}
+async function readApiJson<T>(response:Response):Promise<T>{
+  const ct=response.headers.get("content-type")??"";
+  if(!ct.includes("application/json")){
+    const text=await response.text();
+    let path=response.url;
+    try{path=new URL(response.url).pathname}catch{}
+    throw new Error(
+      response.status===404
+        ? `Invoice API returned 404 for ${path}. Check that exact app/api route is installed.`
+        : `Invoice API returned ${response.status} ${response.statusText} for ${path}. ${text.slice(0,180)}`,
+    );
+  }
+  return await response.json() as T;
+}
 
 export default function InvoicesPage(){
  const supabase=useMemo(()=>createSupabaseBrowser(),[]);
