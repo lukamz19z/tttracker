@@ -5,7 +5,17 @@ import {
   requireWebsiteAdmin,
 } from "@/lib/server/admin-api";
 
-type CanonicalRole =
+type WebsiteRole =
+  | "admin"
+  | "finance"
+  | "hseq"
+  | "asset_manager"
+  | "commercial"
+  | "editor"
+  | "crew"
+  | "viewer";
+
+type MobileRole =
   | "admin"
   | "hseq"
   | "asset_manager"
@@ -24,7 +34,18 @@ type UpdateUserBody = {
   project_ids?: string[];
 };
 
-const CANONICAL_ROLES = new Set<CanonicalRole>([
+const WEBSITE_ROLES = new Set<WebsiteRole>([
+  "admin",
+  "finance",
+  "hseq",
+  "asset_manager",
+  "commercial",
+  "editor",
+  "crew",
+  "viewer",
+]);
+
+const MOBILE_ROLES = new Set<MobileRole>([
   "admin",
   "hseq",
   "asset_manager",
@@ -34,10 +55,65 @@ const CANONICAL_ROLES = new Set<CanonicalRole>([
   "viewer",
 ]);
 
-function normalizeRole(value: unknown): CanonicalRole | null {
+function normalizeWebsiteRole(
+  value: unknown,
+): WebsiteRole | null {
   const role = String(value ?? "")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replaceAll(" ", "_");
+
+  if (!role) return null;
+
+  switch (role) {
+    case "admin":
+    case "administrator":
+    case "site_admin":
+      return "admin";
+
+    case "finance":
+    case "financial":
+    case "finance_manager":
+    case "accounts":
+      return "finance";
+
+    case "hseq":
+    case "safety":
+    case "safety_manager":
+      return "hseq";
+
+    case "asset_manager":
+    case "assets":
+    case "mechanic":
+      return "asset_manager";
+
+    case "commercial":
+    case "commercial_manager":
+      return "commercial";
+
+    case "editor":
+      return "editor";
+
+    case "crew":
+    case "field":
+    case "leading_hand":
+      return "crew";
+
+    case "viewer":
+      return "viewer";
+
+    default:
+      return null;
+  }
+}
+
+function normalizeMobileRole(
+  value: unknown,
+): MobileRole | null {
+  const role = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(" ", "_");
 
   if (!role) return null;
 
@@ -87,12 +163,12 @@ export async function POST(request: NextRequest) {
     const userId = String(body.user_id ?? "").trim();
 
     const websiteRole =
-      normalizeRole(body.website_role ?? body.role) ?? null;
+      normalizeWebsiteRole(body.website_role ?? body.role) ?? null;
 
     const mobileRole =
-      normalizeRole(body.mobile_role) ?? null;
+      normalizeMobileRole(body.mobile_role) ?? null;
 
-    const projectIds = Array.isArray(body.project_ids)
+    const requestedProjectIds = Array.isArray(body.project_ids)
       ? [
           ...new Set(
             body.project_ids
@@ -102,6 +178,17 @@ export async function POST(request: NextRequest) {
         ]
       : [];
 
+    /*
+     * Finance is a website-only module role.
+     *
+     * Finance users do not receive project access from the Admin user editor.
+     * Approval rights are handled separately by exact-user finance settings.
+     */
+    const projectIds =
+      websiteRole === "finance"
+        ? []
+        : requestedProjectIds;
+
     if (!userId) {
       return NextResponse.json(
         { error: "User ID is required." },
@@ -109,16 +196,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!websiteRole || !CANONICAL_ROLES.has(websiteRole)) {
+    if (!websiteRole || !WEBSITE_ROLES.has(websiteRole)) {
       return NextResponse.json(
-        { error: "Invalid website role." },
+        {
+          error: `Invalid website role: "${String(
+            body.website_role ?? body.role ?? "",
+          )}".`,
+        },
         { status: 400 },
       );
     }
 
-    if (!mobileRole || !CANONICAL_ROLES.has(mobileRole)) {
+    if (!mobileRole || !MOBILE_ROLES.has(mobileRole)) {
       return NextResponse.json(
-        { error: "Invalid mobile role." },
+        {
+          error: `Invalid mobile role: "${String(
+            body.mobile_role ?? "",
+          )}".`,
+        },
         { status: 400 },
       );
     }
@@ -157,9 +252,8 @@ export async function POST(request: NextRequest) {
     /*
      * MOBILE ROLE
      *
-     * Mobile now uses the same canonical organisational role set as the
-     * website. Feature access should be resolved from permissions rather
-     * than maintaining a second legacy mechanic/leading_hand role model.
+     * Mobile remains on the existing mobile role set.
+     * Finance is intentionally NOT a mobile role.
      */
     const { error: deleteMobileRoleError } = await supabaseAdmin
       .from("user_mobile_roles")
@@ -244,9 +338,8 @@ export async function POST(request: NextRequest) {
     /*
      * PROJECT ACCESS
      *
-     * Project access uses the same canonical website role so downstream
-     * project-level permission checks and Daily Docket reviewer resolution
-     * see the user's current role consistently.
+     * Finance users receive no project rows here.
+     * All other website roles retain the existing project-access behaviour.
      */
     const { error: deleteProjectAccessError } = await supabaseAdmin
       .from("project_access")
@@ -323,11 +416,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const savedWebsiteRole = normalizeRole(
+    const savedWebsiteRole = normalizeWebsiteRole(
       websiteRoleResult.data?.role,
     );
 
-    const savedMobileRole = normalizeRole(
+    const savedMobileRole = normalizeMobileRole(
       mobileRoleResult.data?.role,
     );
 
