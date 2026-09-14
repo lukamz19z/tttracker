@@ -10,10 +10,6 @@ import { publishApprovedExpenseClaim } from "@/lib/finance/archive-expense-claim
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type RouteContext = {
-  params: Promise<{ submissionId: string }>;
-};
-
 type ReviewAction = "request_changes" | "deny" | "approve" | "mark_paid";
 
 function requiredEnv(name: string) {
@@ -265,20 +261,35 @@ async function sendSubmitterEmail({
   });
 }
 
-export async function POST(request: Request, context: RouteContext) {
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "/api/expenses/claims/review",
+  });
+}
+
+export async function POST(request: Request) {
   try {
-    const { submissionId } = await context.params;
     const { service, user } = await requireUser(request);
 
     const body = (await request.json()) as {
+      submissionId?: string;
       action?: ReviewAction;
       comments?: string;
       paymentReference?: string;
     };
 
+    const submissionId = String(body.submissionId ?? "").trim();
     const action = body.action;
     const comments = String(body.comments ?? "").trim();
     const paymentReference = String(body.paymentReference ?? "").trim();
+
+    if (!submissionId) {
+      return NextResponse.json(
+        { error: "Expense Claim ID is required." },
+        { status: 400 },
+      );
+    }
 
     if (
       !action ||

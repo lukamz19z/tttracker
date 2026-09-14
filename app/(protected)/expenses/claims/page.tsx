@@ -351,7 +351,7 @@ export default function ExpenseClaimsPage() {
       const status = `${response.status} ${response.statusText}`.trim();
       const routeHint =
         response.status === 404
-          ? " The API route was not found. Check that the supplied app/api route is installed at the exact path."
+          ? " The API route was not found. Confirm app/api/expenses/claims/review/route.ts exists, then restart the Next.js dev server."
           : " The server returned an HTML error page instead of JSON; check the Next.js server/build log for the underlying route error.";
 
       throw new Error(
@@ -737,15 +737,14 @@ export default function ExpenseClaimsPage() {
 
     try {
       const response = await apiFetch(
-        `/api/expenses/claims/${encodeURIComponent(
-          reviewingClaim.id,
-        )}/review`,
+        "/api/expenses/claims/review",
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            submissionId: reviewingClaim.id,
             action,
             comments: reviewComments.trim(),
             paymentReference: paymentReference.trim(),
