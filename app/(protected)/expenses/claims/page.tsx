@@ -83,6 +83,8 @@ type ExpenseClaim = {
   updated_at: string;
 };
 
+type AllocationType = "general" | "project" | "vehicle" | "plant" | "fleet_job";
+
 type ExpenseItem = {
   id: string;
   submission_id: string;
@@ -97,6 +99,43 @@ type ExpenseItem = {
   amount_inc_gst: number | string;
   notes: string | null;
   sort_order: number;
+  project_id: string | null;
+  gst_applicable: boolean;
+  asset_type: "Vehicle" | "Plant" | null;
+  vehicle_asset_id: string | null;
+  plant_asset_id: string | null;
+  fleet_job_id: string | null;
+};
+
+type VehicleAsset = {
+  id: string;
+  vehicle_id: string | null;
+  vehicle_rego: string | null;
+  make: string | null;
+  model: string | null;
+  category: string | null;
+  status: string | null;
+};
+
+type PlantAsset = {
+  id: string;
+  asset_id: string | null;
+  make: string | null;
+  model: string | null;
+  plant_type: string | null;
+  serial_number: string | null;
+  rego: string | null;
+  asset_status: string | null;
+};
+
+type FleetJob = {
+  id: string;
+  job_number: string | null;
+  asset_type: string | null;
+  vehicle_asset_id: string | null;
+  plant_asset_id: string | null;
+  asset_label: string | null;
+  status: string | null;
 };
 
 type ExpenseAttachment = {
@@ -140,6 +179,10 @@ type DraftItem = {
   amountIncGst: string;
   gstAmount: string;
   notes: string;
+  allocationType: AllocationType;
+  vehicleAssetId: string;
+  plantAssetId: string;
+  fleetJobId: string;
 };
 
 type ClaimDraft = {
@@ -156,6 +199,10 @@ const EMPTY_ITEM: DraftItem = {
   amountIncGst: "",
   gstAmount: "",
   notes: "",
+  allocationType: "project",
+  vehicleAssetId: "",
+  plantAssetId: "",
+  fleetJobId: "",
 };
 
 const EMPTY_CLAIM: ClaimDraft = {
@@ -207,6 +254,31 @@ function statusLabel(status: FinancialStatus) {
   }
 }
 
+function vehicleLabel(asset: VehicleAsset) {
+  return [
+    asset.vehicle_id,
+    asset.vehicle_rego,
+    [asset.make, asset.model].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .join(" · ") || "Vehicle";
+}
+
+function plantLabel(asset: PlantAsset) {
+  return [
+    asset.asset_id,
+    asset.rego,
+    [asset.make, asset.model].filter(Boolean).join(" "),
+    asset.plant_type,
+  ]
+    .filter(Boolean)
+    .join(" · ") || "Plant";
+}
+
+function fleetJobLabel(job: FleetJob) {
+  return [job.job_number, job.asset_label, job.status].filter(Boolean).join(" · ") || "Fleet Job";
+}
+
 function statusClass(status: FinancialStatus) {
   switch (status) {
     case "submitted":
@@ -235,6 +307,9 @@ export default function ExpenseClaimsPage() {
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [vehicleAssets, setVehicleAssets] = useState<VehicleAsset[]>([]);
+  const [plantAssets, setPlantAssets] = useState<PlantAsset[]>([]);
+  const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState("");
@@ -249,6 +324,7 @@ export default function ExpenseClaimsPage() {
   const [draft, setDraft] = useState<ClaimDraft>(EMPTY_CLAIM);
   const [saving, setSaving] = useState(false);
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<string | null>(null);
   const [viewingAttachmentId, setViewingAttachmentId] = useState<string | null>(
     null,
   );
@@ -266,28 +342,27 @@ export default function ExpenseClaimsPage() {
 
   async function readApiJson<T extends { error?: string }>(
     response: Response,
+    context = "Finance API",
   ): Promise<T> {
     const contentType = response.headers.get("content-type") ?? "";
     const text = await response.text();
 
     if (!contentType.toLowerCase().includes("application/json")) {
       const status = `${response.status} ${response.statusText}`.trim();
+      const routeHint =
+        response.status === 404
+          ? " The API route was not found. Check that the supplied app/api route is installed at the exact path."
+          : " The server returned an HTML error page instead of JSON; check the Next.js server/build log for the underlying route error.";
 
       throw new Error(
-        `TTTracker API returned ${status || "an invalid response"}. ${
-          response.status === 404
-            ? "The Expense Claim submit API route was not found."
-            : "The server returned an HTML page instead of JSON."
-        }`,
+        `${context} returned ${status || "an invalid response"}.${routeHint}`,
       );
     }
 
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(
-        `TTTracker API returned invalid JSON (${response.status}).`,
-      );
+      throw new Error(`${context} returned invalid JSON (${response.status}).`);
     }
   }
 
@@ -334,6 +409,9 @@ export default function ExpenseClaimsPage() {
       categoryResult,
       projectResult,
       employeeResult,
+      vehicleResult,
+      plantResult,
+      fleetJobResult,
       roleResult,
       accessRuleResult,
     ] = await Promise.all([
@@ -347,7 +425,7 @@ export default function ExpenseClaimsPage() {
       supabase
         .from("financial_submission_items")
         .select(
-          "id, submission_id, category_id, expense_date, supplier, description, quantity, unit_amount_ex_gst, amount_ex_gst, gst_amount, amount_inc_gst, notes, sort_order",
+          "id, submission_id, category_id, expense_date, supplier, description, quantity, unit_amount_ex_gst, amount_ex_gst, gst_amount, amount_inc_gst, notes, sort_order, project_id, gst_applicable, asset_type, vehicle_asset_id, plant_asset_id, fleet_job_id",
         )
         .order("sort_order"),
       supabase
@@ -370,6 +448,18 @@ export default function ExpenseClaimsPage() {
         .select("id, full_name, user_id")
         .order("full_name"),
       supabase
+        .from("vehicle_assets")
+        .select("id, vehicle_id, vehicle_rego, make, model, category, status")
+        .order("vehicle_id"),
+      supabase
+        .from("plant_assets")
+        .select("id, asset_id, make, model, plant_type, serial_number, rego, asset_status")
+        .order("asset_id"),
+      supabase
+        .from("fleet_jobs")
+        .select("id, job_number, asset_type, vehicle_asset_id, plant_asset_id, asset_label, status")
+        .order("created_at", { ascending: false }),
+      supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", user.id)
@@ -389,6 +479,9 @@ export default function ExpenseClaimsPage() {
     if (categoryResult.error) throw categoryResult.error;
     if (projectResult.error) throw projectResult.error;
     if (employeeResult.error) throw employeeResult.error;
+    if (vehicleResult.error) throw vehicleResult.error;
+    if (plantResult.error) throw plantResult.error;
+    if (fleetJobResult.error) throw fleetJobResult.error;
     if (roleResult.error) throw roleResult.error;
     if (accessRuleResult.error) throw accessRuleResult.error;
 
@@ -398,6 +491,9 @@ export default function ExpenseClaimsPage() {
     setCategories((categoryResult.data ?? []) as FinancialCategory[]);
     setProjects((projectResult.data ?? []) as Project[]);
     setEmployees((employeeResult.data ?? []) as Employee[]);
+    setVehicleAssets((vehicleResult.data ?? []) as VehicleAsset[]);
+    setPlantAssets((plantResult.data ?? []) as PlantAsset[]);
+    setFleetJobs((fleetJobResult.data ?? []) as FleetJob[]);
     setCurrentRole(String(roleResult.data?.role ?? "").trim().toLowerCase());
     setAccessRules(
       (accessRuleResult.data ?? []) as FinancialAccessRule[],
@@ -657,10 +753,10 @@ export default function ExpenseClaimsPage() {
         },
       );
 
-      const payload = (await response.json()) as {
+      const payload = await readApiJson<{
         error?: string;
         status?: FinancialStatus;
-      };
+      }>(response, "Expense Claim review API");
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Expense Claim review failed.");
@@ -724,10 +820,48 @@ export default function ExpenseClaimsPage() {
               amountIncGst: String(item.amount_inc_gst ?? ""),
               gstAmount: String(item.gst_amount ?? ""),
               notes: item.notes ?? "",
+              allocationType: item.fleet_job_id
+                ? "fleet_job"
+                : item.vehicle_asset_id
+                  ? "vehicle"
+                  : item.plant_asset_id
+                    ? "plant"
+                    : item.project_id
+                      ? "project"
+                      : "general",
+              vehicleAssetId: item.vehicle_asset_id ?? "",
+              plantAssetId: item.plant_asset_id ?? "",
+              fleetJobId: item.fleet_job_id ?? "",
             }))
           : [{ ...EMPTY_ITEM }],
     });
     setEditorOpen(true);
+  }
+
+  function allocationLabel(item: ExpenseItem) {
+    if (item.fleet_job_id) {
+      const job = fleetJobs.find((row) => row.id === item.fleet_job_id);
+      return job ? `Fleet Job · ${fleetJobLabel(job)}` : "Fleet Job";
+    }
+
+    if (item.vehicle_asset_id) {
+      const asset = vehicleAssets.find((row) => row.id === item.vehicle_asset_id);
+      return asset ? `Vehicle · ${vehicleLabel(asset)}` : "Vehicle";
+    }
+
+    if (item.plant_asset_id) {
+      const asset = plantAssets.find((row) => row.id === item.plant_asset_id);
+      return asset ? `Plant · ${plantLabel(asset)}` : "Plant";
+    }
+
+    if (item.project_id) {
+      const project = projects.find((row) => row.id === item.project_id);
+      return project
+        ? `Project · ${project.project_number || project.name}`
+        : "Project";
+    }
+
+    return "Company / General";
   }
 
   function updateDraftItem(index: number, patch: Partial<DraftItem>) {
@@ -777,6 +911,40 @@ export default function ExpenseClaimsPage() {
       throw new Error("Enter a date for each expense item.");
     }
 
+    if (
+      validItems.some(
+        (item) => item.allocationType === "project" && !draft.projectId,
+      )
+    ) {
+      throw new Error(
+        "Select a project for expense items allocated to Project.",
+      );
+    }
+
+    if (
+      validItems.some(
+        (item) => item.allocationType === "vehicle" && !item.vehicleAssetId,
+      )
+    ) {
+      throw new Error("Select a vehicle for each Vehicle allocation.");
+    }
+
+    if (
+      validItems.some(
+        (item) => item.allocationType === "plant" && !item.plantAssetId,
+      )
+    ) {
+      throw new Error("Select a plant asset for each Plant allocation.");
+    }
+
+    if (
+      validItems.some(
+        (item) => item.allocationType === "fleet_job" && !item.fleetJobId,
+      )
+    ) {
+      throw new Error("Select a Fleet Job for each Fleet Job allocation.");
+    }
+
     return validItems;
   }
 
@@ -791,6 +959,15 @@ export default function ExpenseClaimsPage() {
   }) {
     const validItems = validateDraftItems();
 
+    if (
+      editingClaim &&
+      !["draft", "changes_required"].includes(editingClaim.status)
+    ) {
+      throw new Error(
+        "This Expense Claim is locked while it is pending approval or after approval.",
+      );
+    }
+
     setSaving(true);
     setMessage(null);
 
@@ -804,7 +981,6 @@ export default function ExpenseClaimsPage() {
       }
 
       let submissionId = editingClaim?.id ?? null;
-      const wasChangesRequired = editingClaim?.status === "changes_required";
       const nextRevision = Math.max(
         0,
         Number(editingClaim?.revision ?? 0),
@@ -876,6 +1052,31 @@ export default function ExpenseClaimsPage() {
         const item = validItems[index];
         const totalInc = asNumber(item.amountIncGst);
 
+        const selectedFleetJob =
+          item.allocationType === "fleet_job"
+            ? fleetJobs.find((job) => job.id === item.fleetJobId) ?? null
+            : null;
+
+        const vehicleAssetId =
+          item.allocationType === "vehicle"
+            ? item.vehicleAssetId || null
+            : item.allocationType === "fleet_job"
+              ? selectedFleetJob?.vehicle_asset_id ?? null
+              : null;
+
+        const plantAssetId =
+          item.allocationType === "plant"
+            ? item.plantAssetId || null
+            : item.allocationType === "fleet_job"
+              ? selectedFleetJob?.plant_asset_id ?? null
+              : null;
+
+        const assetType: "Vehicle" | "Plant" | null = vehicleAssetId
+          ? "Vehicle"
+          : plantAssetId
+            ? "Plant"
+            : null;
+
         const payload = {
           submission_id: submissionId,
           category_id: item.categoryId || null,
@@ -889,6 +1090,16 @@ export default function ExpenseClaimsPage() {
           amount_inc_gst: totalInc,
           notes: item.notes.trim() || null,
           sort_order: index,
+          project_id:
+            item.allocationType === "general"
+              ? null
+              : draft.projectId || null,
+          gst_applicable: false,
+          asset_type: assetType,
+          vehicle_asset_id: vehicleAssetId,
+          plant_asset_id: plantAssetId,
+          fleet_job_id:
+            item.allocationType === "fleet_job" ? item.fleetJobId || null : null,
         };
 
         if (item.id) {
@@ -957,7 +1168,7 @@ export default function ExpenseClaimsPage() {
           error?: string;
           warning?: string | null;
           revision?: number;
-        }>(response);
+        }>(response, "Expense Claim submit API");
 
         if (!response.ok) {
           throw new Error(
@@ -1056,7 +1267,10 @@ export default function ExpenseClaimsPage() {
     }
   }
 
-  async function chooseAndUploadReceipt(itemIndex: number) {
+  async function chooseAndUploadReceipt(
+    itemIndex: number,
+    replaceAttachmentId?: string,
+  ) {
     const input = document.createElement("input");
     input.type = "file";
     input.accept =
@@ -1067,13 +1281,17 @@ export default function ExpenseClaimsPage() {
       const file = input.files?.[0];
       if (!file) return;
 
-      void uploadReceipt(itemIndex, file);
+      void uploadReceipt(itemIndex, file, replaceAttachmentId);
     };
 
     input.click();
   }
 
-  async function uploadReceipt(itemIndex: number, file: File) {
+  async function uploadReceipt(
+    itemIndex: number,
+    file: File,
+    replaceAttachmentId?: string,
+  ) {
     setMessage(null);
 
     try {
@@ -1103,6 +1321,9 @@ export default function ExpenseClaimsPage() {
       formData.set("file", file);
       formData.set("submissionId", submissionId);
       formData.set("itemId", itemId);
+      if (replaceAttachmentId) {
+        formData.set("replaceAttachmentId", replaceAttachmentId);
+      }
 
       const response = await apiFetch(
         "/api/expenses/attachments/upload",
@@ -1112,8 +1333,9 @@ export default function ExpenseClaimsPage() {
         },
       );
 
-      const payload =
-        (await response.json()) as AttachmentUploadResponse;
+      const payload = await readApiJson<
+        AttachmentUploadResponse & { warning?: string | null }
+      >(response, "Receipt upload API");
 
       if (!response.ok || !payload.attachment) {
         throw new Error(payload.error ?? "Receipt upload failed.");
@@ -1121,19 +1343,9 @@ export default function ExpenseClaimsPage() {
 
       await loadAll();
 
-      setAttachments((current) => {
-        const withoutDuplicate = current.filter(
-          (attachment) => attachment.id !== payload.attachment?.id,
-        );
-
-        return payload.attachment
-          ? [payload.attachment, ...withoutDuplicate]
-          : current;
-      });
-
       setMessage({
-        tone: "success",
-        text: `${file.name} uploaded.`,
+        tone: payload.warning ? "error" : "success",
+        text: payload.warning ?? `${file.name} uploaded.`,
       });
     } catch (error) {
       setMessage({
@@ -1145,6 +1357,48 @@ export default function ExpenseClaimsPage() {
       });
     } finally {
       setUploadingItemId(null);
+    }
+  }
+
+  async function removeReceipt(attachment: ExpenseAttachment) {
+    if (attachment.attachment_type !== "receipt") return;
+
+    if (
+      !window.confirm(
+        `Remove receipt ${attachment.file_name}? You can upload a replacement before submitting.`,
+      )
+    ) {
+      return;
+    }
+
+    setDeletingAttachmentId(attachment.id);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/expenses/attachments/${encodeURIComponent(attachment.id)}`,
+        { method: "DELETE" },
+      );
+
+      const payload = await readApiJson<{ error?: string; success?: boolean }>(
+        response,
+        "Receipt delete API",
+      );
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Receipt could not be removed.");
+      }
+
+      await loadAll();
+      setMessage({ tone: "success", text: "Receipt removed." });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Receipt could not be removed.",
+      });
+    } finally {
+      setDeletingAttachmentId(null);
     }
   }
 
@@ -1256,8 +1510,8 @@ export default function ExpenseClaimsPage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Create, submit and review company expense claims with project
-                allocation and itemised categories.
+                Create, submit and review company expense claims with project, asset
+                and Fleet Job allocation, receipts and itemised categories.
               </p>
             </div>
 
@@ -1420,11 +1674,16 @@ export default function ExpenseClaimsPage() {
                 const owner = employees.find(
                   (employee) => employee.id === claim.submitted_for_employee_id,
                 );
-                const canEdit = ["draft", "submitted", "changes_required"].includes(
-                  claim.status,
-                );
+                const canEdit =
+                  ["draft", "changes_required"].includes(claim.status) &&
+                  (claim.created_by === currentUserId ||
+                    claim.submitted_by === currentUserId ||
+                    claim.submitted_for_employee_id === currentEmployeeId ||
+                    financePermissions.isAdmin);
                 const claimReceiptCount = attachments.filter(
-                  (attachment) => attachment.submission_id === claim.id,
+                  (attachment) =>
+                    attachment.submission_id === claim.id &&
+                    attachment.attachment_type === "receipt",
                 ).length;
 
                 return (
@@ -1507,7 +1766,9 @@ export default function ExpenseClaimsPage() {
                           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                         >
                           <Pencil size={15} />
-                          Edit
+                          {claim.status === "draft"
+                            ? "Edit Draft"
+                            : "Edit & Resubmit"}
                         </button>
                       ) : null}
 
@@ -1742,8 +2003,11 @@ export default function ExpenseClaimsPage() {
                           <div className="mt-1 text-base font-bold text-slate-950">
                             {item.description}
                           </div>
+                          <div className="mt-2 inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            {allocationLabel(item)}
+                          </div>
                           {item.notes ? (
-                            <div className="mt-1 text-sm text-slate-500">
+                            <div className="mt-2 text-sm text-slate-500">
                               {item.notes}
                             </div>
                           ) : null}
@@ -2145,6 +2409,105 @@ export default function ExpenseClaimsPage() {
                     </div>
 
                     <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <Field label="Cost Allocation">
+                        <SelectField
+                          value={item.allocationType}
+                          onChange={(value) =>
+                            updateDraftItem(index, {
+                              allocationType: value as AllocationType,
+                              vehicleAssetId:
+                                value === "vehicle" ? item.vehicleAssetId : "",
+                              plantAssetId:
+                                value === "plant" ? item.plantAssetId : "",
+                              fleetJobId:
+                                value === "fleet_job" ? item.fleetJobId : "",
+                            })
+                          }
+                          options={[
+                            { value: "general", label: "Company / General" },
+                            { value: "project", label: "Project" },
+                            { value: "vehicle", label: "Vehicle" },
+                            { value: "plant", label: "Plant" },
+                            { value: "fleet_job", label: "Fleet Job" },
+                          ]}
+                        />
+                      </Field>
+
+                      {item.allocationType === "project" ? (
+                        <Field label="Allocated Project">
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-700">
+                            {projects.find((project) => project.id === draft.projectId)
+                              ? (() => {
+                                  const project = projects.find(
+                                    (row) => row.id === draft.projectId,
+                                  );
+                                  return (
+                                    project?.project_number ||
+                                    project?.name ||
+                                    "Selected project"
+                                  );
+                                })()
+                              : "Select the claim project above"}
+                          </div>
+                        </Field>
+                      ) : null}
+
+                      {item.allocationType === "vehicle" ? (
+                        <Field label="Vehicle">
+                          <SelectField
+                            value={item.vehicleAssetId}
+                            onChange={(value) =>
+                              updateDraftItem(index, { vehicleAssetId: value })
+                            }
+                            options={[
+                              { value: "", label: "Select vehicle..." },
+                              ...vehicleAssets.map((asset) => ({
+                                value: asset.id,
+                                label: vehicleLabel(asset),
+                              })),
+                            ]}
+                          />
+                        </Field>
+                      ) : null}
+
+                      {item.allocationType === "plant" ? (
+                        <Field label="Plant Asset">
+                          <SelectField
+                            value={item.plantAssetId}
+                            onChange={(value) =>
+                              updateDraftItem(index, { plantAssetId: value })
+                            }
+                            options={[
+                              { value: "", label: "Select plant..." },
+                              ...plantAssets.map((asset) => ({
+                                value: asset.id,
+                                label: plantLabel(asset),
+                              })),
+                            ]}
+                          />
+                        </Field>
+                      ) : null}
+
+                      {item.allocationType === "fleet_job" ? (
+                        <Field label="Fleet Job">
+                          <SelectField
+                            value={item.fleetJobId}
+                            onChange={(value) =>
+                              updateDraftItem(index, { fleetJobId: value })
+                            }
+                            options={[
+                              { value: "", label: "Select Fleet Job..." },
+                              ...fleetJobs.map((job) => ({
+                                value: job.id,
+                                label: fleetJobLabel(job),
+                              })),
+                            ]}
+                          />
+                        </Field>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
                       <Field label="Total Amount">
                         <input
                           inputMode="decimal"
@@ -2161,55 +2524,108 @@ export default function ExpenseClaimsPage() {
 
                       <Field label="Receipt">
                         <div className="space-y-2">
+                          {item.id &&
+                          attachments.some(
+                            (attachment) =>
+                              attachment.item_id === item.id &&
+                              attachment.attachment_type === "receipt",
+                          )
+                            ? attachments
+                                .filter(
+                                  (attachment) =>
+                                    attachment.item_id === item.id &&
+                                    attachment.attachment_type === "receipt",
+                                )
+                                .map((attachment) => (
+                                  <div
+                                    key={attachment.id}
+                                    className="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => void viewAttachment(attachment)}
+                                      disabled={
+                                        viewingAttachmentId === attachment.id ||
+                                        deletingAttachmentId === attachment.id
+                                      }
+                                      className="flex w-full items-center justify-between gap-3 text-left text-xs font-semibold text-emerald-800 disabled:opacity-60"
+                                    >
+                                      <span className="min-w-0 truncate">
+                                        {attachment.file_name}
+                                      </span>
+                                      {viewingAttachmentId === attachment.id ? (
+                                        <Loader2 size={14} className="shrink-0 animate-spin" />
+                                      ) : (
+                                        <Eye size={14} className="shrink-0" />
+                                      )}
+                                    </button>
+
+                                    <div className="mt-2 flex flex-wrap gap-2 border-t border-emerald-200 pt-2">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void chooseAndUploadReceipt(
+                                            index,
+                                            attachment.id,
+                                          )
+                                        }
+                                        disabled={
+                                          saving ||
+                                          Boolean(uploadingItemId) ||
+                                          Boolean(deletingAttachmentId)
+                                        }
+                                        className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-60"
+                                      >
+                                        <Upload size={13} />
+                                        Replace
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void removeReceipt(attachment)}
+                                        disabled={
+                                          saving ||
+                                          Boolean(uploadingItemId) ||
+                                          Boolean(deletingAttachmentId)
+                                        }
+                                        className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50 disabled:opacity-60"
+                                      >
+                                        {deletingAttachmentId === attachment.id ? (
+                                          <Loader2 size={13} className="animate-spin" />
+                                        ) : (
+                                          <Trash2 size={13} />
+                                        )}
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))
+                            : null}
+
                           <button
                             type="button"
                             onClick={() => void chooseAndUploadReceipt(index)}
-                            disabled={saving || Boolean(uploadingItemId)}
+                            disabled={
+                              saving ||
+                              Boolean(uploadingItemId) ||
+                              Boolean(deletingAttachmentId)
+                            }
                             className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                           >
-                            {uploadingItemId &&
-                            uploadingItemId === item.id ? (
+                            {uploadingItemId && uploadingItemId === item.id ? (
                               <Loader2 size={15} className="animate-spin" />
                             ) : (
                               <Upload size={15} />
                             )}
                             {item.id
-                              ? "Upload Receipt"
-                              : "Save & Upload Receipt"}
-                          </button>
-
-                          {item.id
-                            ? attachments
-                                .filter(
+                              ? attachments.some(
                                   (attachment) =>
-                                    attachment.item_id === item.id,
+                                    attachment.item_id === item.id &&
+                                    attachment.attachment_type === "receipt",
                                 )
-                                .map((attachment) => (
-                                  <button
-                                    key={attachment.id}
-                                    type="button"
-                                    onClick={() =>
-                                      void viewAttachment(attachment)
-                                    }
-                                    disabled={
-                                      viewingAttachmentId === attachment.id
-                                    }
-                                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
-                                  >
-                                    <span className="min-w-0 truncate">
-                                      {attachment.file_name}
-                                    </span>
-                                    {viewingAttachmentId === attachment.id ? (
-                                      <Loader2
-                                        size={14}
-                                        className="shrink-0 animate-spin"
-                                      />
-                                    ) : (
-                                      <Eye size={14} className="shrink-0" />
-                                    )}
-                                  </button>
-                                ))
-                            : null}
+                                ? "Upload Additional Receipt"
+                                : "Upload Receipt"
+                              : "Save Draft & Upload Receipt"}
+                          </button>
                         </div>
                       </Field>
                     </div>
@@ -2276,6 +2692,10 @@ export default function ExpenseClaimsPage() {
               </div>
             ) : null}
 
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              <strong className="text-slate-800">Save Draft</strong> keeps the claim editable. You can return later, change the expense or asset allocation, replace receipts, then submit it for approval. Once submitted, the claim is locked until a reviewer requests changes.
+            </div>
+
             <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
@@ -2288,17 +2708,19 @@ export default function ExpenseClaimsPage() {
 
               <button
                 type="submit"
-                disabled={saving || Boolean(uploadingItemId)}
+                disabled={saving || Boolean(uploadingItemId) || Boolean(deletingAttachmentId)}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                Save
+                {editingClaim?.status === "changes_required"
+                  ? "Save Changes"
+                  : "Save Draft"}
               </button>
 
               <button
                 type="button"
                 onClick={() => void handleSubmitForApproval()}
-                disabled={saving || Boolean(uploadingItemId)}
+                disabled={saving || Boolean(uploadingItemId) || Boolean(deletingAttachmentId)}
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 {saving ? (

@@ -116,7 +116,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!["draft", "submitted", "changes_required"].includes(claim.status)) {
+    if (!["draft", "changes_required"].includes(claim.status)) {
       return NextResponse.json(
         { error: "This Expense Claim cannot be submitted from its current status." },
         { status: 409 },
@@ -130,20 +130,6 @@ export async function POST(request: Request) {
       .eq("user_id", user.id)
       .maybeSingle();
 
-    const { data: submitterRules, error: submitterRulesError } = await service
-      .from("financial_access_rules")
-      .select("can_review_edit,can_approve")
-      .eq("active", true)
-      .eq("principal_type", "user")
-      .eq("user_id", user.id)
-      .or("applies_to.eq.all,applies_to.eq.expense_claim");
-
-    if (submitterRulesError) throw new Error(submitterRulesError.message);
-
-    const canReview = (submitterRules ?? []).some(
-      (rule) => rule.can_review_edit || rule.can_approve,
-    );
-
     const owns =
       claim.created_by === user.id ||
       claim.submitted_by === user.id ||
@@ -152,16 +138,20 @@ export async function POST(request: Request) {
           claim.submitted_for_employee_id === employee.id,
       );
 
-    if (!owns && !canReview && role !== "admin") {
+    const isAdmin = ["admin", "administrator", "site_admin"].includes(role);
+
+    if (!owns && !isAdmin) {
       return NextResponse.json(
-        { error: "You do not have access to submit this Expense Claim." },
+        { error: "Only the claim owner can submit this Expense Claim." },
         { status: 403 },
       );
     }
 
     const { data: items, error: itemsError } = await service
       .from("financial_submission_items")
-      .select("id,category_id,expense_date,description,amount_inc_gst")
+      .select(
+        "id,category_id,expense_date,description,amount_inc_gst,project_id,asset_type,vehicle_asset_id,plant_asset_id,fleet_job_id",
+      )
       .eq("submission_id", claim.id)
       .order("sort_order");
 
@@ -186,6 +176,25 @@ export async function POST(request: Request) {
         {
           error:
             "Complete the date, category, description and amount for every expense item.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const invalidAllocation = items.find((item) => {
+      if (item.vehicle_asset_id && item.plant_asset_id) return true;
+      if (item.asset_type === "Vehicle" && !item.vehicle_asset_id) return true;
+      if (item.asset_type === "Plant" && !item.plant_asset_id) return true;
+      if (item.vehicle_asset_id && item.asset_type !== "Vehicle") return true;
+      if (item.plant_asset_id && item.asset_type !== "Plant") return true;
+      return false;
+    });
+
+    if (invalidAllocation) {
+      return NextResponse.json(
+        {
+          error:
+            "One or more expense items has an invalid asset allocation. Re-open the draft and select the asset again.",
         },
         { status: 400 },
       );
@@ -269,7 +278,7 @@ export async function POST(request: Request) {
         changes_requested_at: null,
       })
       .eq("id", claim.id)
-      .in("status", ["draft", "submitted", "changes_required"])
+      .in("status", ["draft", "changes_required"])
       .select("id,total_amount")
       .maybeSingle();
 
