@@ -51,6 +51,10 @@ async function ensurePath(driveId: string, names: string[]) {
   return lastFolder;
 }
 
+/* -------------------------------------------------------------------------- */
+/*                               EXPENSE CLAIMS                               */
+/* -------------------------------------------------------------------------- */
+
 export async function ensureExpenseClaimFolder({
   driveId,
   baseFolder,
@@ -99,6 +103,104 @@ export async function ensureExpenseClaimReceiptsFolder({
 }
 
 export async function uploadExpenseClaimFile({
+  driveId,
+  folderId,
+  fileName,
+  content,
+  contentType,
+}: {
+  driveId: string;
+  folderId: string;
+  fileName: string;
+  content: Uint8Array;
+  contentType: string;
+}) {
+  return uploadDriveItemContent({
+    driveId,
+    parentItemId: folderId,
+    fileName: safeFinanceSharePointPart(fileName),
+    content,
+    contentType,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  INVOICES                                  */
+/* -------------------------------------------------------------------------- */
+
+export async function ensureInvoiceFolder({
+  driveId,
+  baseFolder,
+  submissionNumber,
+  anchorDate,
+}: {
+  driveId: string;
+  baseFolder: string;
+  submissionNumber: string;
+  anchorDate?: string | null;
+}) {
+  const { year, month } = financeMonthParts(anchorDate);
+
+  return ensurePath(driveId, [
+    baseFolder || "Expenses & Invoices",
+    "Invoices",
+    year,
+    month,
+    submissionNumber,
+  ]);
+}
+
+export async function ensureInvoiceOriginalFolder({
+  driveId,
+  baseFolder,
+  submissionNumber,
+  anchorDate,
+}: {
+  driveId: string;
+  baseFolder: string;
+  submissionNumber: string;
+  anchorDate?: string | null;
+}) {
+  const invoiceFolder = await ensureInvoiceFolder({
+    driveId,
+    baseFolder,
+    submissionNumber,
+    anchorDate,
+  });
+
+  return ensureDriveFolder({
+    driveId,
+    parentItemId: invoiceFolder.id,
+    name: "Original",
+  });
+}
+
+export async function ensureInvoiceSupportingFolder({
+  driveId,
+  baseFolder,
+  submissionNumber,
+  anchorDate,
+}: {
+  driveId: string;
+  baseFolder: string;
+  submissionNumber: string;
+  anchorDate?: string | null;
+}) {
+  const invoiceFolder = await ensureInvoiceFolder({
+    driveId,
+    baseFolder,
+    submissionNumber,
+    anchorDate,
+  });
+
+  return ensureDriveFolder({
+    driveId,
+    parentItemId: invoiceFolder.id,
+    name: "Supporting",
+  });
+}
+
+export async function uploadInvoiceFile({
   driveId,
   folderId,
   fileName,

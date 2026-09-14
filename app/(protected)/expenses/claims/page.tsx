@@ -335,6 +335,8 @@ export default function ExpenseClaimsPage() {
   const [paymentReference, setPaymentReference] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [quickPayingClaimId, setQuickPayingClaimId] = useState<string | null>(null);
+  const [deletingClaimId, setDeletingClaimId] = useState<string | null>(null);
 
   const [message, setMessage] = useState<{
     tone: "success" | "error";
@@ -815,6 +817,131 @@ export default function ExpenseClaimsPage() {
       });
     } finally {
       setReviewSaving(false);
+    }
+  }
+
+  async function quickMarkPaid(claim: ExpenseClaim) {
+    if (!financePermissions.canMarkPaid || claim.status !== "approved") return;
+
+    const paymentRef = window.prompt(
+      `Payment reference for ${claim.submission_number} (optional):`,
+      claim.payment_reference ?? "",
+    );
+
+    if (paymentRef === null) return;
+
+    const confirmed = window.confirm(
+      `Mark ${claim.submission_number} (${currency(
+        asNumber(claim.total_amount),
+      )}) as paid?`,
+    );
+
+    if (!confirmed) return;
+
+    setQuickPayingClaimId(claim.id);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/expenses/claims/review", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          submissionId: claim.id,
+          action: "mark_paid",
+          comments: "",
+          paymentReference: paymentRef.trim(),
+        }),
+      });
+
+      const payload = await readApiJson<{
+        error?: string;
+        status?: FinancialStatus;
+      }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Expense Claim could not be marked as paid.");
+      }
+
+      await loadAll();
+      setMessage({
+        tone: "success",
+        text: `${claim.submission_number} marked as paid.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Expense Claim could not be marked as paid.",
+      });
+    } finally {
+      setQuickPayingClaimId(null);
+    }
+  }
+
+  async function deleteClaimAsAdmin(claim: ExpenseClaim) {
+    if (currentRole !== "admin") return;
+
+    const confirmation = window.prompt(
+      `Permanently delete ${claim.submission_number}?\n\nThis removes the claim, its items, approvals, events, notifications and SharePoint attachments.\n\nType the claim number exactly to continue:`,
+    );
+
+    if (confirmation === null) return;
+
+    if (confirmation.trim() !== claim.submission_number) {
+      setMessage({
+        tone: "error",
+        text: "Delete cancelled because the claim number did not match.",
+      });
+      return;
+    }
+
+    setDeletingClaimId(claim.id);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/expenses/claims/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          submissionId: claim.id,
+          confirmation: claim.submission_number,
+        }),
+      });
+
+      const payload = await readApiJson<{
+        error?: string;
+        deleted?: boolean;
+      }>(response);
+
+      if (!response.ok || !payload.deleted) {
+        throw new Error(payload.error ?? "Expense Claim could not be deleted.");
+      }
+
+      if (reviewingClaim?.id === claim.id) {
+        closeReviewClaim();
+      }
+
+      await loadAll();
+      setMessage({
+        tone: "success",
+        text: `${claim.submission_number} permanently deleted.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Expense Claim could not be deleted.",
+      });
+    } finally {
+      setDeletingClaimId(null);
     }
   }
 
@@ -1771,6 +1898,23 @@ export default function ExpenseClaimsPage() {
                     </div>
 
                     <div className="flex flex-wrap gap-2 xl:justify-end">
+                      {claim.status === "approved" &&
+                      financePermissions.canMarkPaid ? (
+                        <button
+                          type="button"
+                          onClick={() => void quickMarkPaid(claim)}
+                          disabled={quickPayingClaimId === claim.id}
+                          className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+                        >
+                          {quickPayingClaimId === claim.id ? (
+                            <Loader2 size={15} className="animate-spin" />
+                          ) : (
+                            <CreditCard size={15} />
+                          )}
+                          Mark Paid
+                        </button>
+                      ) : null}
+
                       <button
                         type="button"
                         onClick={() => openReviewClaim(claim)}
@@ -1794,6 +1938,23 @@ export default function ExpenseClaimsPage() {
                           {claim.status === "draft"
                             ? "Edit Draft"
                             : "Edit & Resubmit"}
+                        </button>
+                      ) : null}
+
+                      {currentRole === "admin" && claim.status !== "draft" ? (
+                        <button
+                          type="button"
+                          onClick={() => void deleteClaimAsAdmin(claim)}
+                          disabled={deletingClaimId === claim.id}
+                          className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                          title="Administrator permanent delete"
+                        >
+                          {deletingClaimId === claim.id ? (
+                            <Loader2 size={15} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={15} />
+                          )}
+                          Delete
                         </button>
                       ) : null}
 
@@ -2172,15 +2333,46 @@ export default function ExpenseClaimsPage() {
             ) : null}
 
             {reviewingClaim.status === "approved" ? (
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-sm font-bold text-emerald-800">
-                  Approved
-                </div>
-                <div className="mt-1 text-sm text-emerald-700">
-                  {reviewingClaim.approved_by_name || "TTTracker reviewer"}
-                  {reviewingClaim.approved_at
-                    ? ` · ${shortDate(reviewingClaim.approved_at)}`
-                    : ""}
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-bold text-blue-950">
+                      <CreditCard size={17} />
+                      Approved — awaiting payment
+                    </div>
+                    <div className="mt-1 text-sm text-blue-800">
+                      {reviewingClaim.approved_by_name || "TTTracker reviewer"}
+                      {reviewingClaim.approved_at
+                        ? ` · ${shortDate(reviewingClaim.approved_at)}`
+                        : ""}
+                    </div>
+                  </div>
+
+                  {financePermissions.canMarkPaid ? (
+                    <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto lg:min-w-[440px]">
+                      <input
+                        value={paymentReference}
+                        onChange={(event) =>
+                          setPaymentReference(event.target.value)
+                        }
+                        placeholder="Payment reference (optional)"
+                        className="min-w-0 flex-1 rounded-xl border border-blue-200 bg-white px-3 py-2.5 text-sm outline-none ring-blue-200 focus:ring-2"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void runReviewAction("mark_paid")}
+                        disabled={reviewSaving}
+                        className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+                      >
+                        {reviewSaving ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <CreditCard size={16} />
+                        )}
+                        Mark Paid
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -2199,6 +2391,34 @@ export default function ExpenseClaimsPage() {
               </div>
             ) : null}
 
+            {currentRole === "admin" ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-bold text-rose-900">
+                      Administrator cleanup
+                    </div>
+                    <p className="mt-1 text-sm text-rose-700">
+                      Use permanent delete only for test or incorrectly created records. It also removes linked SharePoint attachments.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void deleteClaimAsAdmin(reviewingClaim)}
+                    disabled={deletingClaimId === reviewingClaim.id}
+                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-rose-300 bg-white px-4 py-2.5 text-sm font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
+                  >
+                    {deletingClaimId === reviewingClaim.id ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={16} />
+                    )}
+                    Permanently Delete
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             {reviewingClaim.status === "submitted" &&
             (financePermissions.canReviewEdit ||
               financePermissions.canApprove) ? (
@@ -2211,20 +2431,6 @@ export default function ExpenseClaimsPage() {
                   rows={4}
                   placeholder="Optional approval note, or enter the required changes / denial reason."
                   className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
-                />
-              </Field>
-            ) : null}
-
-            {reviewingClaim.status === "approved" &&
-            financePermissions.canMarkPaid ? (
-              <Field label="Payment reference">
-                <input
-                  value={paymentReference}
-                  onChange={(event) =>
-                    setPaymentReference(event.target.value)
-                  }
-                  placeholder="Optional payment reference"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
                 />
               </Field>
             ) : null}
@@ -2297,22 +2503,6 @@ export default function ExpenseClaimsPage() {
                 </button>
               ) : null}
 
-              {reviewingClaim.status === "approved" &&
-              financePermissions.canMarkPaid ? (
-                <button
-                  type="button"
-                  onClick={() => void runReviewAction("mark_paid")}
-                  disabled={reviewSaving}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
-                >
-                  {reviewSaving ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <CreditCard size={16} />
-                  )}
-                  Mark Paid
-                </button>
-              ) : null}
             </div>
           </div>
         </ModalShell>
