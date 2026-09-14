@@ -203,13 +203,30 @@ type BundleTransferRecord = {
   notes: string;
 };
 
+type BundleTransferReplacementStatus = {
+  transfer_id: string;
+  issue_key: string;
+  original_quantity: number;
+  delivered_quantity: number;
+  remaining_quantity: number;
+  first_reported_at: string | null;
+  last_delivery_at: string | null;
+};
+
+type BundleTransferReplacementDraft = {
+  quantity: string;
+  occurred_time: string;
+};
+
 type BundleTransferDraft = {
   ui_id: string;
+  source_tower_id: string;
   source_bundle_id: string;
-  destination_tower_id: string;
   destination_bundle_id: string;
   quantity: string;
   occurred_time: string;
+  replacement_quantity: string;
+  replacement_time: string;
   notes: string;
 };
 
@@ -1159,6 +1176,10 @@ export default function DailyDocketForm({
   const [towerTransferHistory, setTowerTransferHistory] = useState<BundleTransferRecord[]>([]);
   const [bundleCheckQtyById, setBundleCheckQtyById] = useState<Record<string, number>>({});
   const [bundleTransferDrafts, setBundleTransferDrafts] = useState<BundleTransferDraft[]>([]);
+  const [bundleTransferReplacementById, setBundleTransferReplacementById] =
+    useState<Record<string, BundleTransferReplacementStatus>>({});
+  const [bundleTransferReplacementDrafts, setBundleTransferReplacementDrafts] =
+    useState<Record<string, BundleTransferReplacementDraft>>({});
   const [transferBusyId, setTransferBusyId] = useState("");
   const [mobilisation, setMobilisation] = useState<MobilisationDraft>({
     enabled:
@@ -1499,23 +1520,35 @@ export default function DailyDocketForm({
     async function loadBundleTransferContext() {
       if (!projectId || !towerId) return;
 
+      const projectBundleIds = materialCatalog
+        .filter((item) => item.source_table === "tower_required_bundles")
+        .map((item) => item.source_record_id)
+        .filter(Boolean);
+
+      const transferPromise = supabase
+        .from("tower_material_transfers")
+        .select("*")
+        .eq("project_id", projectId)
+        .order("transferred_at", { ascending: false });
+
+      const checkPromise =
+        projectBundleIds.length > 0
+          ? supabase
+              .from("tower_material_bundle_checks")
+              .select("bundle_id, qty_received")
+              .in("bundle_id", projectBundleIds)
+          : Promise.resolve({ data: [], error: null } as any);
+
       const [transferRes, checkRes] = await Promise.all([
-        supabase
-          .from("tower_material_transfers")
-          .select("*")
-          .eq("project_id", projectId)
-          .or(`source_tower_id.eq.${towerId},destination_tower_id.eq.${towerId}`)
-          .order("transferred_at", { ascending: false }),
-        supabase
-          .from("tower_material_bundle_checks")
-          .select("bundle_id, qty_received")
-          .eq("tower_id", towerId),
+        transferPromise,
+        checkPromise,
       ]);
 
       if (transferRes.error) {
         console.warn("Bundle transfers could not be loaded", transferRes.error);
         setBundleTransfers([]);
         setTowerTransferHistory([]);
+        setBundleTransferReplacementById({});
       } else {
         const rows = ((transferRes.data || []) as any[]).map((row) => ({
           id: toStringValue(row.id),
@@ -1540,14 +1573,118 @@ export default function DailyDocketForm({
 
         setTowerTransferHistory(rows);
 
+        const transferIds = rows.map((row) => row.id).filter(Boolean);
+        const replacementStatus: Record<string, BundleTransferReplacementStatus> = {};
+
+        if (transferIds.length > 0) {
+          const { data: transferEvents, error: transferEventsError } = await supabase
+            .from("tower_material_events")
+            .select(`
+              id,
+              transfer_id,
+              tower_id,
+              event_type,
+              occurred_at,
+              items:tower_material_event_items(
+                id,
+                issue_key,
+                source_issue_key,
+                quantity
+              )
+            `)
+            .in("transfer_id", transferIds)
+            .in("event_type", ["missing", "found_received"])
+            .order("occurred_at", { ascending: true });
+
+          if (transferEventsError) {
+            console.warn(
+              "Bundle transfer replacement status could not be loaded",
+              transferEventsError
+            );
+          } else {
+            const missingByTransfer = new Map<
+              string,
+              { issueKey: string; quantity: number; occurredAt: string | null }
+            >();
+            const receiptsByIssue = new Map<
+              string,
+              { quantity: number; occurredAt: string | null }[]
+            >();
+
+            for (const event of (transferEvents || []) as any[]) {
+              const transferId = toStringValue(event.transfer_id);
+              if (!transferId) continue;
+
+              if (event.event_type === "missing") {
+                for (const item of event.items || []) {
+                  const issueKey = toStringValue(item.issue_key);
+                  if (!issueKey) continue;
+                  missingByTransfer.set(transferId, {
+                    issueKey,
+                    quantity: Math.max(toNumber(item.quantity), 0),
+                    occurredAt: toStringValue(event.occurred_at) || null,
+                  });
+                }
+              }
+
+              if (event.event_type === "found_received") {
+                for (const item of event.items || []) {
+                  const sourceIssueKey = toStringValue(item.source_issue_key);
+                  if (!sourceIssueKey) continue;
+                  const list = receiptsByIssue.get(sourceIssueKey) || [];
+                  list.push({
+                    quantity: Math.max(toNumber(item.quantity), 0),
+                    occurredAt: toStringValue(event.occurred_at) || null,
+                  });
+                  receiptsByIssue.set(sourceIssueKey, list);
+                }
+              }
+            }
+
+            for (const transfer of rows) {
+              const missing = missingByTransfer.get(transfer.id);
+              if (!missing) continue;
+
+              const receipts = receiptsByIssue.get(missing.issueKey) || [];
+              const delivered = receipts.reduce(
+                (sum, row) => sum + row.quantity,
+                0
+              );
+
+              replacementStatus[transfer.id] = {
+                transfer_id: transfer.id,
+                issue_key: missing.issueKey,
+                original_quantity: missing.quantity,
+                delivered_quantity: delivered,
+                remaining_quantity: Math.max(missing.quantity - delivered, 0),
+                first_reported_at: missing.occurredAt,
+                last_delivery_at:
+                  receipts.length > 0
+                    ? receipts[receipts.length - 1].occurredAt
+                    : null,
+              };
+            }
+          }
+        }
+
+        setBundleTransferReplacementById(replacementStatus);
+
         const relevant = rows.filter((row) => {
-          if (docketId && (row.source_docket_id === docketId || row.destination_docket_id === docketId)) {
+          // Daily Dockets report bundle transfers from the CURRENT tower's
+          // receiving perspective: "Taken from another tower". Outgoing
+          // movements remain visible in Materials Control but are not
+          // automatically presented to the client on this docket.
+          if (row.destination_tower_id !== towerId) return false;
+
+          if (docketId && row.destination_docket_id === docketId) {
             return true;
           }
+
           if (!docketDate) return false;
           return (
-            isoDateOnly(row.transferred_at) === docketDate ||
-            isoDateOnly(row.received_at) === docketDate
+            isoDateOnly(row.received_at) === docketDate ||
+            (row.status === "in_transit" &&
+              isoDateOnly(row.transferred_at) === docketDate)
           );
         });
 
@@ -1570,7 +1707,7 @@ export default function DailyDocketForm({
 
     const timer = window.setTimeout(() => void loadBundleTransferContext(), 0);
     return () => window.clearTimeout(timer);
-  }, [docketDate, docketId, projectId, supabase, towerId]);
+  }, [docketDate, docketId, materialCatalog, projectId, supabase, towerId]);
 
   useEffect(() => {
     async function loadV2ProgressConfig() {
@@ -1757,6 +1894,8 @@ export default function DailyDocketForm({
               plant:tower_material_event_plant(*)
             `)
             .eq("docket_id", docketId)
+            .eq("tower_id", towerId)
+            .is("transfer_id", null)
             .order("occurred_at", { ascending: true });
 
           if (events?.length) {
@@ -1920,6 +2059,8 @@ export default function DailyDocketForm({
             plant:tower_material_event_plant(*)
           `)
           .eq("docket_id", docketId)
+          .eq("tower_id", towerId)
+          .is("transfer_id", null)
           .order("occurred_at", { ascending: true }),
         supabase
           .from("tower_docket_hour_allocations")
@@ -2620,6 +2761,14 @@ export default function DailyDocketForm({
     [materialCatalog, towerId]
   );
 
+  function bundlesForTower(targetTowerId: string) {
+    return materialCatalog.filter(
+      (item) =>
+        item.source_table === "tower_required_bundles" &&
+        item.tower_id === targetTowerId
+    );
+  }
+
   function projectTowerName(id: string) {
     return projectTowers.find((tower) => tower.id === id)?.name || "Tower";
   }
@@ -2641,16 +2790,16 @@ export default function DailyDocketForm({
     );
   }
 
-  function exactDestinationBundle(sourceBundleId: string, destinationTowerId: string) {
-    const source = currentTowerBundleCatalog.find(
-      (bundle) => bundle.source_record_id === sourceBundleId
+  function exactCurrentTowerBundle(sourceBundleId: string) {
+    const source = materialCatalog.find(
+      (bundle) =>
+        bundle.source_table === "tower_required_bundles" &&
+        bundle.source_record_id === sourceBundleId
     );
-    if (!source || !destinationTowerId) return "";
+    if (!source) return "";
 
-    const exact = materialCatalog.find(
+    const exact = currentTowerBundleCatalog.find(
       (item) =>
-        item.source_table === "tower_required_bundles" &&
-        item.tower_id === destinationTowerId &&
         normaliseBundleRef(item.bundle_no) === normaliseBundleRef(source.bundle_no) &&
         normaliseText(item.bundle_section) === normaliseText(source.bundle_section)
     );
@@ -2664,11 +2813,13 @@ export default function DailyDocketForm({
       ...prev,
       {
         ui_id: makeUiId(),
+        source_tower_id: "",
         source_bundle_id: "",
-        destination_tower_id: "",
         destination_bundle_id: "",
         quantity: "1",
         occurred_time: currentLocalTimeValue(),
+        replacement_quantity: "",
+        replacement_time: currentLocalTimeValue(),
         notes: "",
       },
     ]);
@@ -2686,10 +2837,14 @@ export default function DailyDocketForm({
         if (i !== index) return row;
         const next = { ...row, ...patch };
 
-        if (patch.source_bundle_id !== undefined || patch.destination_tower_id !== undefined) {
-          next.destination_bundle_id = exactDestinationBundle(
-            next.source_bundle_id,
-            next.destination_tower_id
+        if (patch.source_tower_id !== undefined) {
+          next.source_bundle_id = "";
+          next.destination_bundle_id = "";
+        }
+
+        if (patch.source_bundle_id !== undefined) {
+          next.destination_bundle_id = exactCurrentTowerBundle(
+            next.source_bundle_id
           );
         }
 
@@ -2703,12 +2858,372 @@ export default function DailyDocketForm({
     setBundleTransferDrafts((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function transferReplacementStatus(
+    transfer: BundleTransferRecord
+  ): BundleTransferReplacementStatus {
+    return (
+      bundleTransferReplacementById[transfer.id] || {
+        transfer_id: transfer.id,
+        issue_key: "",
+        original_quantity: transfer.quantity,
+        delivered_quantity: 0,
+        remaining_quantity: transfer.quantity,
+        first_reported_at: transfer.received_at || transfer.transferred_at,
+        last_delivery_at: null,
+      }
+    );
+  }
+
+  function queueTransferReplacement(transfer: BundleTransferRecord) {
+    if (isView || locked) return;
+    const status = transferReplacementStatus(transfer);
+    if (status.remaining_quantity <= 0) return;
+
+    setBundleTransferReplacementDrafts((prev) => ({
+      ...prev,
+      [transfer.id]: prev[transfer.id] || {
+        quantity: String(status.remaining_quantity),
+        occurred_time: currentLocalTimeValue(),
+      },
+    }));
+  }
+
+  function updateQueuedTransferReplacement(
+    transferId: string,
+    patch: Partial<BundleTransferReplacementDraft>
+  ) {
+    if (isView || locked) return;
+
+    setBundleTransferReplacementDrafts((prev) => ({
+      ...prev,
+      [transferId]: {
+        quantity: prev[transferId]?.quantity || "",
+        occurred_time:
+          prev[transferId]?.occurred_time || currentLocalTimeValue(),
+        ...patch,
+      },
+    }));
+  }
+
+  function cancelQueuedTransferReplacement(transferId: string) {
+    if (isView || locked) return;
+    setBundleTransferReplacementDrafts((prev) => {
+      const next = { ...prev };
+      delete next[transferId];
+      return next;
+    });
+  }
+
+  async function ensureTransferSourceShortage(
+    transfer: BundleTransferRecord,
+    recordedDocketId: string | null
+  ) {
+    const existing = bundleTransferReplacementById[transfer.id];
+    if (existing?.issue_key) return existing;
+
+    const { data: existingEvents, error: existingError } = await supabase
+      .from("tower_material_events")
+      .select(`
+        id,
+        occurred_at,
+        items:tower_material_event_items(
+          issue_key,
+          quantity
+        )
+      `)
+      .eq("transfer_id", transfer.id)
+      .eq("event_type", "missing")
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    const existingEvent = (existingEvents || [])[0] as any;
+    const existingItem = existingEvent?.items?.[0];
+
+    if (existingItem?.issue_key) {
+      const resolved: BundleTransferReplacementStatus = {
+        transfer_id: transfer.id,
+        issue_key: toStringValue(existingItem.issue_key),
+        original_quantity: Math.max(
+          toNumber(existingItem.quantity),
+          transfer.quantity
+        ),
+        delivered_quantity: 0,
+        remaining_quantity: Math.max(
+          toNumber(existingItem.quantity),
+          transfer.quantity
+        ),
+        first_reported_at:
+          toStringValue(existingEvent.occurred_at) || transfer.received_at,
+        last_delivery_at: null,
+      };
+
+      setBundleTransferReplacementById((prev) => ({
+        ...prev,
+        [transfer.id]: resolved,
+      }));
+
+      return resolved;
+    }
+
+    const issueKey = makeUuid();
+    const occurredAt =
+      transfer.received_at ||
+      transfer.transferred_at ||
+      new Date().toISOString();
+
+    const eventInsert = await supabase
+      .from("tower_material_events")
+      .insert({
+        project_id: projectId,
+        docket_id: recordedDocketId,
+        tower_id: transfer.source_tower_id,
+        transfer_id: transfer.id,
+        event_type: "missing",
+        source_tower_id: transfer.source_tower_id,
+        destination_tower_id: transfer.destination_tower_id,
+        occurred_at: occurredAt,
+        affected_work: false,
+        mitigation_actions: [],
+        notes: `Bundle taken by ${projectTowerName(
+          transfer.destination_tower_id
+        )}; replacement required at ${projectTowerName(
+          transfer.source_tower_id
+        )}.`,
+      })
+      .select("id")
+      .single();
+
+    if (eventInsert.error || !eventInsert.data) {
+      throw new Error(
+        `The transfer was saved, but the source-tower replacement requirement could not be created: ${
+          eventInsert.error?.message || "Unknown error"
+        }`
+      );
+    }
+
+    const itemInsert = await supabase
+      .from("tower_material_event_items")
+      .insert({
+        event_id: eventInsert.data.id,
+        issue_key: issueKey,
+        source_issue_key: null,
+        bundle_id: transfer.source_bundle_id,
+        bundle_no: transfer.bundle_no,
+        bundle_section: transfer.bundle_section || null,
+        source_table: "tower_required_bundles",
+        source_record_id: transfer.source_bundle_id,
+        material_type: "other",
+        bolt_size: null,
+        item_reference: `Bundle ${transfer.bundle_no}`.trim(),
+        item_description: [
+          transfer.bundle_section
+            ? `Bundle section ${transfer.bundle_section}`
+            : "",
+          `Taken by ${projectTowerName(transfer.destination_tower_id)}`,
+          `Replacement required at ${projectTowerName(
+            transfer.source_tower_id
+          )}`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        quantity: transfer.quantity,
+        unit: "bundle",
+      });
+
+    if (itemInsert.error) {
+      throw new Error(
+        `The transfer was saved, but the source-tower replacement item could not be created: ${itemInsert.error.message}`
+      );
+    }
+
+    const created: BundleTransferReplacementStatus = {
+      transfer_id: transfer.id,
+      issue_key: issueKey,
+      original_quantity: transfer.quantity,
+      delivered_quantity: 0,
+      remaining_quantity: transfer.quantity,
+      first_reported_at: occurredAt,
+      last_delivery_at: null,
+    };
+
+    setBundleTransferReplacementById((prev) => ({
+      ...prev,
+      [transfer.id]: created,
+    }));
+
+    return created;
+  }
+
+  async function recordTransferReplacementDelivery({
+    transfer,
+    quantity,
+    occurredTime,
+    docketIdValue,
+  }: {
+    transfer: BundleTransferRecord;
+    quantity: number;
+    occurredTime: string;
+    docketIdValue: string | null;
+  }) {
+    const shortage = await ensureTransferSourceShortage(
+      transfer,
+      docketIdValue
+    );
+
+    const currentStatus =
+      bundleTransferReplacementById[transfer.id] || shortage;
+    const remaining = Math.max(
+      currentStatus.original_quantity -
+        currentStatus.delivered_quantity,
+      0
+    );
+    const cleanQty = Math.min(Math.max(quantity, 0), remaining);
+
+    if (cleanQty <= 0) return;
+
+    const occurredAt =
+      combineDocketDateTime(docketDate, occurredTime) ||
+      new Date().toISOString();
+
+    const receiptInsert = await supabase
+      .from("tower_material_events")
+      .insert({
+        project_id: projectId,
+        docket_id: docketIdValue,
+        tower_id: transfer.source_tower_id,
+        transfer_id: transfer.id,
+        event_type: "found_received",
+        source_tower_id: transfer.source_tower_id,
+        destination_tower_id: transfer.destination_tower_id,
+        occurred_at: occurredAt,
+        affected_work: false,
+        mitigation_actions: [],
+        notes: `Replacement delivery for Bundle ${
+          transfer.bundle_no
+        } after it was taken by ${projectTowerName(
+          transfer.destination_tower_id
+        )}.`,
+      })
+      .select("id")
+      .single();
+
+    if (receiptInsert.error || !receiptInsert.data) {
+      throw new Error(
+        `Replacement delivery could not be recorded: ${
+          receiptInsert.error?.message || "Unknown error"
+        }`
+      );
+    }
+
+    const receiptItemInsert = await supabase
+      .from("tower_material_event_items")
+      .insert({
+        event_id: receiptInsert.data.id,
+        issue_key: null,
+        source_issue_key: shortage.issue_key,
+        bundle_id: transfer.source_bundle_id,
+        bundle_no: transfer.bundle_no,
+        bundle_section: transfer.bundle_section || null,
+        source_table: "tower_required_bundles",
+        source_record_id: transfer.source_bundle_id,
+        material_type: "other",
+        bolt_size: null,
+        item_reference: `Bundle ${transfer.bundle_no}`.trim(),
+        item_description: `Replacement delivered to ${projectTowerName(
+          transfer.source_tower_id
+        )}`,
+        quantity: cleanQty,
+        unit: "bundle",
+      });
+
+    if (receiptItemInsert.error) {
+      throw new Error(
+        `Replacement delivery item could not be recorded: ${receiptItemInsert.error.message}`
+      );
+    }
+
+    const sourceBundle = materialCatalog.find(
+      (item) =>
+        item.source_table === "tower_required_bundles" &&
+        item.source_record_id === transfer.source_bundle_id
+    );
+
+    const { data: existingCheck, error: existingCheckError } =
+      await supabase
+        .from("tower_material_bundle_checks")
+        .select("qty_received, notes")
+        .eq("bundle_id", transfer.source_bundle_id)
+        .maybeSingle();
+
+    if (existingCheckError) throw existingCheckError;
+
+    const sourceCurrentQty = Math.max(
+      toNumber((existingCheck as any)?.qty_received),
+      0
+    );
+    const sourceNextQty = sourceCurrentQty + cleanQty;
+    const sourceRequired = Math.max(
+      toNumber(
+        sourceBundle?.item_description.match(
+          /Required\s+([0-9.]+)/i
+        )?.[1]
+      ),
+      1
+    );
+
+    const sourceCheckSave = await supabase
+      .from("tower_material_bundle_checks")
+      .upsert(
+        {
+          tower_id: transfer.source_tower_id,
+          bundle_id: transfer.source_bundle_id,
+          bundle_no: transfer.bundle_no,
+          status:
+            sourceNextQty >= sourceRequired ? "arrived" : "partial",
+          notes:
+            toStringValue((existingCheck as any)?.notes) ||
+            "Replacement delivery recorded from Daily Docket",
+          checked_by: leadingHand.trim() || "Daily Docket",
+          checked_at: occurredAt,
+          qty_received: sourceNextQty,
+        },
+        { onConflict: "bundle_id" }
+      );
+
+    if (sourceCheckSave.error) {
+      throw new Error(
+        `Replacement was recorded, but the source tower bundle check could not be updated: ${sourceCheckSave.error.message}`
+      );
+    }
+
+    const nextStatus: BundleTransferReplacementStatus = {
+      ...shortage,
+      delivered_quantity:
+        currentStatus.delivered_quantity + cleanQty,
+      remaining_quantity: Math.max(remaining - cleanQty, 0),
+      last_delivery_at: occurredAt,
+    };
+
+    setBundleTransferReplacementById((prev) => ({
+      ...prev,
+      [transfer.id]: nextStatus,
+    }));
+
+    setBundleCheckQtyById((prev) => ({
+      ...prev,
+      [transfer.source_bundle_id]:
+        (prev[transfer.source_bundle_id] || sourceCurrentQty) +
+        cleanQty,
+    }));
+  }
+
   async function confirmIncomingBundleTransfer(transfer: BundleTransferRecord) {
     if (isView || locked || transfer.status !== "in_transit") return;
     if (transfer.destination_tower_id !== towerId) return;
 
     const confirmed = window.confirm(
-      `Confirm Bundle ${transfer.bundle_no}${transfer.bundle_section ? ` · ${transfer.bundle_section}` : ""} was received at ${projectTowerName(towerId)}?`
+      `Confirm Bundle ${transfer.bundle_no}${transfer.bundle_section ? ` · ${transfer.bundle_section}` : ""} was taken from ${projectTowerName(transfer.source_tower_id)} and received at ${projectTowerName(towerId)}?`
     );
     if (!confirmed) return;
 
@@ -2789,6 +3304,17 @@ export default function DailyDocketForm({
         ...prev,
         [transfer.destination_bundle_id]: nextQty,
       }));
+
+      await ensureTransferSourceShortage(
+        {
+          ...transfer,
+          status: "received",
+          received_at: receivedAt,
+          destination_docket_id:
+            docketId || transfer.destination_docket_id,
+        },
+        docketId || null
+      );
     } catch (error) {
       console.error("Bundle transfer receipt error", error);
       alert(
@@ -2802,109 +3328,296 @@ export default function DailyDocketForm({
   }
 
   async function syncBundleTransfers(docketIdValue: string) {
-    // Link existing physical movements detected for this tower/date to this docket.
     for (const transfer of bundleTransfers) {
-      const patch: Record<string, unknown> = {};
-
-      if (
-        transfer.source_tower_id === towerId &&
-        !transfer.source_docket_id &&
-        isoDateOnly(transfer.transferred_at) === docketDate
-      ) {
-        patch.source_docket_id = docketIdValue;
-      }
-
       if (
         transfer.destination_tower_id === towerId &&
-        transfer.status === "received" &&
-        !transfer.destination_docket_id &&
-        isoDateOnly(transfer.received_at) === docketDate
+        transfer.status === "received"
       ) {
-        patch.destination_docket_id = docketIdValue;
-      }
+        if (
+          !transfer.destination_docket_id &&
+          isoDateOnly(transfer.received_at) === docketDate
+        ) {
+          const updateRes = await supabase
+            .from("tower_material_transfers")
+            .update({ destination_docket_id: docketIdValue })
+            .eq("id", transfer.id);
 
-      if (Object.keys(patch).length > 0) {
-        const updateRes = await supabase
-          .from("tower_material_transfers")
-          .update(patch)
-          .eq("id", transfer.id);
-
-        if (updateRes.error) {
-          throw new Error(
-            `Daily Docket saved, but bundle transfer ${transfer.bundle_no} could not be linked: ${updateRes.error.message}`
-          );
+          if (updateRes.error) {
+            throw new Error(
+              `Daily Docket saved, but bundle transfer ${transfer.bundle_no} could not be linked: ${updateRes.error.message}`
+            );
+          }
         }
+
+        await ensureTransferSourceShortage(
+          transfer,
+          docketIdValue
+        );
       }
     }
 
-    if (bundleTransferDrafts.length === 0) return;
+    for (const transfer of bundleTransfers) {
+      const replacementDraft =
+        bundleTransferReplacementDrafts[transfer.id];
+      if (!replacementDraft) continue;
 
-    const inserts: Record<string, unknown>[] = [];
+      const qty = Math.max(
+        Math.round(toNumber(replacementDraft.quantity)),
+        0
+      );
+
+      if (qty <= 0) continue;
+
+      await recordTransferReplacementDelivery({
+        transfer,
+        quantity: qty,
+        occurredTime: replacementDraft.occurred_time,
+        docketIdValue,
+      });
+    }
+
+    if (bundleTransferDrafts.length === 0) {
+      setBundleTransferReplacementDrafts({});
+      return;
+    }
+
     const reservedBySourceBundle = new Map<string, number>();
 
     for (const draft of bundleTransferDrafts) {
-      const source = currentTowerBundleCatalog.find(
-        (bundle) => bundle.source_record_id === draft.source_bundle_id
-      );
-      const destination = materialCatalog.find(
+      const source = materialCatalog.find(
         (bundle) =>
           bundle.source_table === "tower_required_bundles" &&
+          bundle.tower_id === draft.source_tower_id &&
+          bundle.source_record_id === draft.source_bundle_id
+      );
+
+      const destination = currentTowerBundleCatalog.find(
+        (bundle) =>
           bundle.source_record_id === draft.destination_bundle_id
       );
-      const quantity = Math.max(Math.round(toNumber(draft.quantity)), 0);
 
-      if (!source || !draft.destination_tower_id || !destination || quantity <= 0) {
-        throw new Error(
-          "Complete each bundle transfer with a source bundle, destination tower, destination bundle and quantity."
-        );
-      }
-
-      const alreadyReserved = reservedBySourceBundle.get(draft.source_bundle_id) || 0;
-      const available = Math.max(
-        availableBundleTransferQuantity(draft.source_bundle_id) - alreadyReserved,
+      const quantity = Math.max(
+        Math.round(toNumber(draft.quantity)),
         0
       );
-      if (quantity > available) {
+
+      if (
+        !draft.source_tower_id ||
+        draft.source_tower_id === towerId ||
+        !source ||
+        !destination ||
+        quantity <= 0
+      ) {
         throw new Error(
-          `Bundle ${source.bundle_no}${source.bundle_section ? ` · ${source.bundle_section}` : ""} only has ${available} available at this tower after the other transfers on this docket, but ${quantity} is being transferred.`
+          "Complete each bundle taken from another tower with a source tower, source bundle, matching current-tower bundle and quantity."
         );
       }
+
+      const alreadyReserved =
+        reservedBySourceBundle.get(draft.source_bundle_id) || 0;
+
+      const available = Math.max(
+        availableBundleTransferQuantity(
+          draft.source_bundle_id
+        ) - alreadyReserved,
+        0
+      );
+
+      if (quantity > available) {
+        throw new Error(
+          `Bundle ${source.bundle_no}${
+            source.bundle_section
+              ? ` · ${source.bundle_section}`
+              : ""
+          } only has ${available} available at ${projectTowerName(
+            draft.source_tower_id
+          )} after earlier transfers, but ${quantity} is being recorded as taken.`
+        );
+      }
+
       reservedBySourceBundle.set(
         draft.source_bundle_id,
         alreadyReserved + quantity
       );
 
-      inserts.push({
-        project_id: projectId,
-        source_tower_id: towerId,
-        destination_tower_id: draft.destination_tower_id,
-        source_bundle_id: draft.source_bundle_id,
-        destination_bundle_id: draft.destination_bundle_id,
-        bundle_no: source.bundle_no,
-        bundle_section: source.bundle_section || "General",
-        quantity,
-        status: "in_transit",
-        transferred_by_name: leadingHand.trim() || null,
+      const occurredAt =
+        combineDocketDateTime(
+          docketDate,
+          draft.occurred_time
+        ) || `${docketDate}T12:00:00`;
+
+      const { data: insertedTransfer, error: insertError } =
+        await supabase
+          .from("tower_material_transfers")
+          .insert({
+            project_id: projectId,
+            source_tower_id: draft.source_tower_id,
+            destination_tower_id: towerId,
+            source_bundle_id: draft.source_bundle_id,
+            destination_bundle_id:
+              draft.destination_bundle_id,
+            bundle_no: source.bundle_no,
+            bundle_section:
+              source.bundle_section || "General",
+            quantity,
+            status: "received",
+            transferred_by_name:
+              leadingHand.trim() || null,
+            transferred_at: occurredAt,
+            received_by_name:
+              leadingHand.trim() || null,
+            received_at: occurredAt,
+            destination_docket_id: docketIdValue,
+            notes: draft.notes.trim() || null,
+          })
+          .select("*")
+          .single();
+
+      if (insertError || !insertedTransfer) {
+        throw new Error(
+          `Daily Docket saved, but Bundle ${
+            source.bundle_no
+          } taken from ${projectTowerName(
+            draft.source_tower_id
+          )} could not be saved: ${
+            insertError?.message || "Unknown error"
+          }`
+        );
+      }
+
+      const transfer: BundleTransferRecord = {
+        id: toStringValue(insertedTransfer.id),
+        transfer_no:
+          insertedTransfer.transfer_no == null
+            ? null
+            : Number(insertedTransfer.transfer_no),
+        project_id: toStringValue(
+          insertedTransfer.project_id
+        ),
+        source_tower_id: toStringValue(
+          insertedTransfer.source_tower_id
+        ),
+        destination_tower_id: toStringValue(
+          insertedTransfer.destination_tower_id
+        ),
+        source_bundle_id: toStringValue(
+          insertedTransfer.source_bundle_id
+        ),
+        destination_bundle_id: toStringValue(
+          insertedTransfer.destination_bundle_id
+        ),
+        bundle_no: toStringValue(
+          insertedTransfer.bundle_no
+        ),
+        bundle_section: toStringValue(
+          insertedTransfer.bundle_section
+        ),
+        quantity: Math.max(
+          toNumber(insertedTransfer.quantity),
+          0
+        ),
+        status: "received",
+        transferred_by_name: toStringValue(
+          insertedTransfer.transferred_by_name
+        ),
         transferred_at:
-          combineDocketDateTime(docketDate, draft.occurred_time) ||
-          `${docketDate}T12:00:00`,
-        source_docket_id: docketIdValue,
-        notes: draft.notes.trim() || null,
-      });
-    }
+          toStringValue(
+            insertedTransfer.transferred_at
+          ) || null,
+        received_by_name: toStringValue(
+          insertedTransfer.received_by_name
+        ),
+        received_at:
+          toStringValue(insertedTransfer.received_at) ||
+          null,
+        source_docket_id: toStringValue(
+          insertedTransfer.source_docket_id
+        ),
+        destination_docket_id: toStringValue(
+          insertedTransfer.destination_docket_id
+        ),
+        notes: toStringValue(insertedTransfer.notes),
+      };
 
-    const insertRes = await supabase
-      .from("tower_material_transfers")
-      .insert(inserts);
-
-    if (insertRes.error) {
-      throw new Error(
-        `Daily Docket saved, but bundle transfers could not be saved: ${insertRes.error.message}`
+      const currentQty = Math.max(
+        bundleCheckQtyById[
+          draft.destination_bundle_id
+        ] || 0,
+        0
       );
+      const nextQty = currentQty + quantity;
+      const required = Math.max(
+        toNumber(
+          destination.item_description.match(
+            /Required\s+([0-9.]+)/i
+          )?.[1]
+        ),
+        1
+      );
+
+      const destinationCheckSave = await supabase
+        .from("tower_material_bundle_checks")
+        .upsert(
+          {
+            tower_id: towerId,
+            bundle_id: draft.destination_bundle_id,
+            bundle_no: destination.bundle_no,
+            status:
+              nextQty >= required
+                ? "arrived"
+                : "partial",
+            notes:
+              "Received from another tower via Daily Docket",
+            checked_by:
+              leadingHand.trim() || "Daily Docket",
+            checked_at: occurredAt,
+            qty_received: nextQty,
+          },
+          { onConflict: "bundle_id" }
+        );
+
+      if (destinationCheckSave.error) {
+        throw new Error(
+          `Bundle transfer was recorded, but the current tower bundle check could not be updated: ${destinationCheckSave.error.message}`
+        );
+      }
+
+      setBundleCheckQtyById((prev) => ({
+        ...prev,
+        [draft.destination_bundle_id]:
+          (prev[draft.destination_bundle_id] ||
+            currentQty) + quantity,
+      }));
+
+      await ensureTransferSourceShortage(
+        transfer,
+        docketIdValue
+      );
+
+      const replacementQty = Math.max(
+        Math.round(
+          toNumber(draft.replacement_quantity)
+        ),
+        0
+      );
+
+      if (replacementQty > 0) {
+        await recordTransferReplacementDelivery({
+          transfer,
+          quantity: replacementQty,
+          occurredTime:
+            draft.replacement_time ||
+            draft.occurred_time ||
+            currentLocalTimeValue(),
+          docketIdValue,
+        });
+      }
     }
 
     setBundleTransferDrafts([]);
+    setBundleTransferReplacementDrafts({});
   }
+
 
   function addAdditionalTowerWork() {
     if (isView || locked) return;
@@ -3474,7 +4187,8 @@ export default function DailyDocketForm({
     const deleteRes = await supabase
       .from("tower_docket_hour_allocations")
       .delete()
-      .eq("docket_id", docketIdValue);
+      .eq("docket_id", docketIdValue)
+      .is("transfer_id", null);
 
     if (deleteRes.error) {
       console.error("Daily Docket allocation delete error", deleteRes.error);
@@ -6769,9 +7483,9 @@ export default function DailyDocketForm({
         <div className="rounded-2xl border border-blue-200 bg-blue-50/40 p-4 space-y-4">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
-              <h3 className="font-semibold text-slate-900">Bundle Transfers</h3>
+              <h3 className="font-semibold text-slate-900">Bundles Taken From Other Towers</h3>
               <p className="text-sm text-slate-600">
-                TTTracker detects tower-to-tower bundle movements for this tower/date. Record a transfer here once; it remains the same physical transfer used by Materials Control and can be linked to this Daily Docket.
+                Record bundles used at this tower that were taken from another tower. This is the client-facing movement record for the current tower and uses the same physical transfer stored in Materials Control.
               </p>
             </div>
 
@@ -6781,14 +7495,14 @@ export default function DailyDocketForm({
                 onClick={addBundleTransferDraft}
                 className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-blue-800"
               >
-                + Transfer Bundle
+                + Record Bundle Taken
               </button>
             )}
           </div>
 
           {bundleTransfers.length === 0 && bundleTransferDrafts.length === 0 ? (
             <div className="rounded-xl border border-dashed border-blue-300 bg-white/80 p-4 text-sm text-slate-600">
-              No bundle transfers have been detected or entered for this docket date.
+              No bundles taken from another tower have been detected or entered for this docket date.
             </div>
           ) : (
             <div className="space-y-3">
@@ -6797,6 +7511,22 @@ export default function DailyDocketForm({
                 const linkedToThisDocket =
                   transfer.source_docket_id === docketId ||
                   transfer.destination_docket_id === docketId;
+                const replacementStatus =
+                  transferReplacementStatus(transfer);
+                const replacementDraft =
+                  bundleTransferReplacementDrafts[transfer.id];
+                const previewReplacementQty = Math.min(
+                  Math.max(
+                    toNumber(replacementDraft?.quantity),
+                    0
+                  ),
+                  replacementStatus.remaining_quantity
+                );
+                const previewRemaining = Math.max(
+                  replacementStatus.remaining_quantity -
+                    previewReplacementQty,
+                  0
+                );
 
                 return (
                   <div key={transfer.id} className="rounded-xl border border-blue-200 bg-white p-3">
@@ -6808,7 +7538,7 @@ export default function DailyDocketForm({
                           </span>
                           <TransferStatusPill status={transfer.status} />
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${incoming ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-blue-200 bg-blue-50 text-blue-700"}`}>
-                            {incoming ? "INCOMING" : "OUTGOING"}
+                            {incoming ? "TAKEN FROM ANOTHER TOWER" : "TRANSFER"}
                           </span>
                           {linkedToThisDocket && (
                             <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-black text-slate-600">
@@ -6817,9 +7547,12 @@ export default function DailyDocketForm({
                           )}
                         </div>
                         <div className="mt-1 text-xs text-slate-500">
-                          {projectTowerName(transfer.source_tower_id)} → {projectTowerName(transfer.destination_tower_id)} · Qty {transfer.quantity}
-                          {transfer.transferred_at ? ` · Sent ${new Date(transfer.transferred_at).toLocaleString("en-AU")}` : ""}
-                          {transfer.received_at ? ` · Received ${new Date(transfer.received_at).toLocaleString("en-AU")}` : ""}
+                          Taken from {projectTowerName(transfer.source_tower_id)} · Qty {transfer.quantity}
+                          {transfer.received_at
+                            ? ` · Received ${new Date(transfer.received_at).toLocaleString("en-AU")}`
+                            : transfer.transferred_at
+                            ? ` · Transfer started ${new Date(transfer.transferred_at).toLocaleString("en-AU")}`
+                            : ""}
                         </div>
                         {transfer.notes && <div className="mt-1 text-xs text-slate-600">{transfer.notes}</div>}
                       </div>
@@ -6831,22 +7564,130 @@ export default function DailyDocketForm({
                           onClick={() => void confirmIncomingBundleTransfer(transfer)}
                           className="shrink-0 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800 disabled:opacity-60"
                         >
-                          {transferBusyId === transfer.id ? "Receiving…" : "Confirm Received"}
+                          {transferBusyId === transfer.id ? "Confirming…" : "Confirm Taken / Received"}
                         </button>
                       )}
                     </div>
+
+                    {transfer.status === "received" && (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="text-xs font-black uppercase tracking-wide text-amber-700">
+                              Source Tower Replacement
+                            </div>
+                            <div className="mt-1 text-sm font-black text-slate-950">
+                              {projectTowerName(transfer.source_tower_id)}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              Taking this bundle leaves a replacement requirement at the source tower until replacement material is confirmed delivered.
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            <TinyTransferQty
+                              label="Taken"
+                              value={replacementStatus.original_quantity}
+                            />
+                            <TinyTransferQty
+                              label="Replaced"
+                              value={
+                                replacementStatus.delivered_quantity +
+                                previewReplacementQty
+                              }
+                              tone="green"
+                            />
+                            <TinyTransferQty
+                              label="Still Missing"
+                              value={previewRemaining}
+                              tone={
+                                previewRemaining > 0 ? "red" : "green"
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        {replacementStatus.remaining_quantity > 0 &&
+                          !replacementDraft &&
+                          !locked &&
+                          !isView && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                queueTransferReplacement(transfer)
+                              }
+                              className="mt-3 rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-800 hover:bg-amber-50"
+                            >
+                              + Record Replacement Delivered
+                            </button>
+                          )}
+
+                        {replacementDraft && (
+                          <div className="mt-3 grid gap-2 md:grid-cols-[150px_160px_1fr_auto] md:items-end">
+                            <Input
+                              label="Replacement Qty"
+                              type="number"
+                              value={replacementDraft.quantity}
+                              onChange={(value) =>
+                                updateQueuedTransferReplacement(
+                                  transfer.id,
+                                  { quantity: value }
+                                )
+                              }
+                              disabled={locked || isView}
+                            />
+                            <Input
+                              label="Delivery Time"
+                              type="time"
+                              value={replacementDraft.occurred_time}
+                              onChange={(value) =>
+                                updateQueuedTransferReplacement(
+                                  transfer.id,
+                                  { occurred_time: value }
+                                )
+                              }
+                              disabled={locked || isView}
+                            />
+                            <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+                              This records the replacement against <strong>{projectTowerName(transfer.source_tower_id)}</strong>. Once the remaining quantity reaches zero, that tower will no longer show this transfer-created bundle as missing.
+                            </div>
+                            {!locked && !isView && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  cancelQueuedTransferReplacement(
+                                    transfer.id
+                                  )
+                                }
+                                className="h-10 rounded-xl border border-slate-300 bg-white px-3 text-xs font-black text-slate-600 hover:bg-slate-50"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {replacementStatus.remaining_quantity <= 0 &&
+                          !replacementDraft && (
+                            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800">
+                              Replacement complete — {projectTowerName(
+                                transfer.source_tower_id
+                              )} will not show this transferred bundle as outstanding.
+                            </div>
+                          )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
 
               {bundleTransferDrafts.map((draft, index) => {
-                const sourceBundle = currentTowerBundleCatalog.find(
+                const sourceBundles = bundlesForTower(draft.source_tower_id);
+                const sourceBundle = sourceBundles.find(
                   (bundle) => bundle.source_record_id === draft.source_bundle_id
                 );
-                const destinationBundles = materialCatalog.filter(
-                  (bundle) =>
-                    bundle.source_table === "tower_required_bundles" &&
-                    bundle.tower_id === draft.destination_tower_id
+                const destinationBundle = currentTowerBundleCatalog.find(
+                  (bundle) => bundle.source_record_id === draft.destination_bundle_id
                 );
                 const available = draft.source_bundle_id
                   ? availableBundleTransferQuantity(draft.source_bundle_id)
@@ -6855,7 +7696,7 @@ export default function DailyDocketForm({
                 return (
                   <div key={draft.ui_id} className="rounded-xl border border-blue-300 bg-white p-4 space-y-3">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-black text-blue-950">New Bundle Transfer</div>
+                      <div className="text-sm font-black text-blue-950">Bundle Taken From Another Tower</div>
                       <button
                         type="button"
                         onClick={() => removeBundleTransferDraft(index)}
@@ -6867,74 +7708,92 @@ export default function DailyDocketForm({
 
                     <div className="grid gap-3 lg:grid-cols-2">
                       <div>
-                        <label className="mb-1 block text-sm font-semibold text-slate-800">Source Bundle</label>
+                        <label className="mb-1 block text-sm font-semibold text-slate-800">Taken From Tower</label>
                         <select
-                          value={draft.source_bundle_id}
+                          value={draft.source_tower_id}
                           disabled={locked || isView}
-                          onChange={(e) => updateBundleTransferDraft(index, { source_bundle_id: e.target.value })}
+                          onChange={(e) =>
+                            updateBundleTransferDraft(index, {
+                              source_tower_id: e.target.value,
+                            })
+                          }
                           className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
                         >
-                          <option value="">Select bundle at this tower…</option>
-                          {currentTowerBundleCatalog.map((bundle) => (
+                          <option value="">Select source tower…</option>
+                          {projectTowers
+                            .filter((tower) => tower.id !== towerId)
+                            .map((tower) => (
+                              <option key={tower.id} value={tower.id}>
+                                {tower.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-slate-800">Bundle Taken</label>
+                        <select
+                          value={draft.source_bundle_id}
+                          disabled={locked || isView || !draft.source_tower_id}
+                          onChange={(e) =>
+                            updateBundleTransferDraft(index, {
+                              source_bundle_id: e.target.value,
+                            })
+                          }
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                        >
+                          <option value="">Select bundle from source tower…</option>
+                          {sourceBundles.map((bundle) => (
                             <option key={bundle.source_record_id} value={bundle.source_record_id}>
-                              {bundle.bundle_no}{bundle.bundle_section ? ` · ${bundle.bundle_section}` : ""} · {availableBundleTransferQuantity(bundle.source_record_id)} available
+                              {bundle.bundle_no}
+                              {bundle.bundle_section ? ` · ${bundle.bundle_section}` : ""}
+                              {` · ${availableBundleTransferQuantity(bundle.source_record_id)} available`}
                             </option>
                           ))}
                         </select>
                         {sourceBundle && (
                           <p className="mt-1 text-xs text-slate-500">
-                            Site-confirmed available after earlier transfers: <strong>{available}</strong>
+                            Available at {projectTowerName(draft.source_tower_id)} after earlier transfers: <strong>{available}</strong>
                           </p>
                         )}
                       </div>
 
                       <div>
-                        <label className="mb-1 block text-sm font-semibold text-slate-800">Destination Tower</label>
-                        <select
-                          value={draft.destination_tower_id}
-                          disabled={locked || isView}
-                          onChange={(e) => updateBundleTransferDraft(index, { destination_tower_id: e.target.value })}
-                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
-                        >
-                          <option value="">Select destination…</option>
-                          {projectTowers.filter((tower) => tower.id !== towerId).map((tower) => (
-                            <option key={tower.id} value={tower.id}>{tower.name}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="mb-1 block text-sm font-semibold text-slate-800">Destination Bundle</label>
+                        <label className="mb-1 block text-sm font-semibold text-slate-800">Bundle at Current Tower</label>
                         <select
                           value={draft.destination_bundle_id}
-                          disabled={locked || isView || !draft.destination_tower_id}
-                          onChange={(e) => updateBundleTransferDraft(index, { destination_bundle_id: e.target.value })}
+                          disabled={locked || isView || !draft.source_bundle_id}
+                          onChange={(e) =>
+                            updateBundleTransferDraft(index, {
+                              destination_bundle_id: e.target.value,
+                            })
+                          }
                           className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
                         >
-                          <option value="">Select matching destination bundle…</option>
-                          {destinationBundles.map((bundle) => (
+                          <option value="">Select matching current-tower bundle…</option>
+                          {currentTowerBundleCatalog.map((bundle) => (
                             <option key={bundle.source_record_id} value={bundle.source_record_id}>
                               {bundle.bundle_no}{bundle.bundle_section ? ` · ${bundle.bundle_section}` : ""}
                             </option>
                           ))}
                         </select>
-                        {draft.destination_bundle_id && sourceBundle && (
+                        {draft.destination_bundle_id && sourceBundle && destinationBundle && (
                           <p className="mt-1 text-xs text-emerald-700">
-                            Destination bundle selected. Exact bundle number + section is auto-matched where available.
+                            Matched to this tower&apos;s {destinationBundle.bundle_no}{destinationBundle.bundle_section ? ` · ${destinationBundle.bundle_section}` : ""} bundle record.
                           </p>
                         )}
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
                         <Input
-                          label="Quantity"
+                          label="Quantity Taken"
                           type="number"
                           value={draft.quantity}
                           onChange={(value) => updateBundleTransferDraft(index, { quantity: value })}
                           disabled={locked || isView}
                         />
                         <Input
-                          label="Time Sent"
+                          label="Time Taken / Received"
                           type="time"
                           value={draft.occurred_time}
                           onChange={(value) => updateBundleTransferDraft(index, { occurred_time: value })}
@@ -6943,8 +7802,44 @@ export default function DailyDocketForm({
                       </div>
                     </div>
 
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+                      <div className="text-xs font-black uppercase tracking-wide text-amber-700">
+                        Replacement for Source Tower
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">
+                        The bundle will automatically become outstanding at {draft.source_tower_id ? projectTowerName(draft.source_tower_id) : "the source tower"}. If its replacement has already arrived, record it here and the source tower will not show it as missing later.
+                      </p>
+                      <div className="mt-2 grid grid-cols-2 gap-2 md:max-w-md">
+                        <Input
+                          label="Replacement Delivered Qty"
+                          type="number"
+                          value={draft.replacement_quantity}
+                          onChange={(value) =>
+                            updateBundleTransferDraft(index, {
+                              replacement_quantity: value,
+                            })
+                          }
+                          disabled={locked || isView}
+                        />
+                        <Input
+                          label="Replacement Delivery Time"
+                          type="time"
+                          value={draft.replacement_time}
+                          onChange={(value) =>
+                            updateBundleTransferDraft(index, {
+                              replacement_time: value,
+                            })
+                          }
+                          disabled={locked || isView}
+                        />
+                      </div>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Leave Replacement Delivered Qty blank / 0 if the source tower is still waiting for replacement material.
+                      </p>
+                    </div>
+
                     <Input
-                      label="Transfer Notes (optional)"
+                      label="Transfer / Usage Notes (optional)"
                       value={draft.notes}
                       onChange={(value) => updateBundleTransferDraft(index, { notes: value })}
                       disabled={locked || isView}
@@ -9289,6 +10184,32 @@ function PlantAutoMetric({
     <div className={`rounded-xl border px-3 py-2 ${classes}`}>
       <div className="text-[10px] font-black uppercase tracking-wide opacity-50">{label}</div>
       <div className="mt-0.5 text-sm font-black">{value}</div>
+    </div>
+  );
+}
+
+function TinyTransferQty({
+  label,
+  value,
+  tone = "slate",
+}: {
+  label: string;
+  value: number;
+  tone?: "slate" | "green" | "red";
+}) {
+  const classes =
+    tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : tone === "red"
+      ? "border-rose-200 bg-rose-50 text-rose-800"
+      : "border-slate-200 bg-white text-slate-800";
+
+  return (
+    <div className={`min-w-20 rounded-xl border px-3 py-2 text-center ${classes}`}>
+      <div className="text-[8px] font-black uppercase tracking-wide opacity-60">
+        {label}
+      </div>
+      <div className="text-lg font-black">{value}</div>
     </div>
   );
 }
