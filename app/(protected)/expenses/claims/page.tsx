@@ -334,6 +334,7 @@ export default function ExpenseClaimsPage() {
   const [reviewComments, setReviewComments] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
 
   const [message, setMessage] = useState<{
     tone: "success" | "error";
@@ -698,6 +699,7 @@ export default function ExpenseClaimsPage() {
     setReviewingClaim(claim);
     setReviewComments("");
     setPaymentReference(claim.payment_reference ?? "");
+    setReviewError(null);
     setReviewOpen(true);
   }
 
@@ -710,12 +712,15 @@ export default function ExpenseClaimsPage() {
       (action === "request_changes" || action === "deny") &&
       !reviewComments.trim()
     ) {
+      const validationMessage =
+        action === "deny"
+          ? "Enter the reason for denying this Expense Claim."
+          : "Enter what needs to be changed.";
+
+      setReviewError(validationMessage);
       setMessage({
         tone: "error",
-        text:
-          action === "deny"
-            ? "Enter the reason for denying this Expense Claim."
-            : "Enter what needs to be changed.",
+        text: validationMessage,
       });
       return;
     }
@@ -733,6 +738,7 @@ export default function ExpenseClaimsPage() {
     if (!confirmed) return;
 
     setReviewSaving(true);
+    setReviewError(null);
     setMessage(null);
 
     try {
@@ -780,12 +786,15 @@ export default function ExpenseClaimsPage() {
                 : "Expense Claim marked as paid.",
       });
     } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Expense Claim review failed.";
+
+      setReviewError(errorMessage);
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Expense Claim review failed.",
+        text: errorMessage,
       });
     } finally {
       setReviewSaving(false);
@@ -1796,14 +1805,41 @@ export default function ExpenseClaimsPage() {
           title={`Expense Claim ${reviewingClaim.submission_number}`}
           description="Review the claim details and receipts before taking action."
           onClose={() => {
-            if (!reviewSaving) {
-              setReviewOpen(false);
-              setReviewingClaim(null);
-            }
+            setReviewOpen(false);
+            setReviewingClaim(null);
+            setReviewError(null);
           }}
           wide
         >
           <div className="space-y-6">
+            {reviewError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle
+                    size={18}
+                    className="mt-0.5 shrink-0 text-rose-700"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-rose-900">
+                      Review action failed
+                    </div>
+                    <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-rose-800">
+                      {reviewError}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {reviewSaving ? (
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <div className="flex items-center gap-3 text-sm font-semibold text-blue-900">
+                  <Loader2 size={17} className="animate-spin" />
+                  Processing review action. You can still close this window if needed.
+                </div>
+              </div>
+            ) : null}
+
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -2186,9 +2222,9 @@ export default function ExpenseClaimsPage() {
                 onClick={() => {
                   setReviewOpen(false);
                   setReviewingClaim(null);
+                  setReviewError(null);
                 }}
-                disabled={reviewSaving}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Close
               </button>
