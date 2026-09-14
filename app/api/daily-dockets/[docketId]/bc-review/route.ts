@@ -45,6 +45,8 @@ type ReviewBody = {
 };
 
 const CLIENT_CONTENT_KEYS = [
+  "daily_site_summary",
+  "rfi_references",
   "progress",
   "workforce",
   "raw_manhours",
@@ -54,6 +56,7 @@ const CLIENT_CONTENT_KEYS = [
   "delays",
   "missing_materials",
   "received_materials",
+  "bundle_transfers",
   "safety",
 ] as const;
 
@@ -110,6 +113,30 @@ type ClientContactRow = {
   active: boolean;
 };
 
+type BundleTransferRow = {
+  id: string;
+  transfer_no: number | null;
+  source_tower_id: string;
+  destination_tower_id: string;
+  source_bundle_id: string;
+  destination_bundle_id: string | null;
+  bundle_no: string;
+  bundle_section: string | null;
+  quantity: number;
+  status: string;
+  transferred_at: string | null;
+  received_at: string | null;
+  source_docket_id: string | null;
+  destination_docket_id: string | null;
+  notes: string | null;
+};
+
+type TransferReplacementStatus = {
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: "Outstanding" | "Partially Replaced" | "Replaced";
+};
 
 type SupabaseLikeError = {
   message?: string;
@@ -207,10 +234,6 @@ function titleCase(value: unknown) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function allocationManhours(row: Record<string, unknown>) {
-  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
-  return num(row.hours) * Math.max(workers, 1);
-}
 
 function workedTowerNames(
   docket: DocketRow,
@@ -256,12 +279,148 @@ function isReceivedMaterialEvent(event: Record<string, unknown>) {
   );
 }
 
+function buildTransferReplacementStatusMap(
+  transferEvents: Array<Record<string, unknown>>,
+) {
+  const missingByTransfer = new Map<
+    string,
+    { issueKey: string; quantity: number }
+  >();
+  const receiptsByIssue = new Map<string, number>();
+
+  for (const event of transferEvents) {
+    const transferId = String(event.transfer_id ?? "").trim();
+    if (!transferId) continue;
+
+    const items = Array.isArray(event.tower_material_event_items)
+      ? (event.tower_material_event_items as Array<Record<string, unknown>>)
+      : [];
+
+    if (String(event.event_type ?? "") === "missing") {
+      for (const item of items) {
+        const issueKey = String(item.issue_key ?? "").trim();
+        if (!issueKey) continue;
+        missingByTransfer.set(transferId, {
+          issueKey,
+          quantity: Math.max(num(item.quantity), 0),
+        });
+      }
+    }
+
+    if (String(event.event_type ?? "") === "found_received") {
+      for (const item of items) {
+        const sourceIssueKey = String(item.source_issue_key ?? "").trim();
+        if (!sourceIssueKey) continue;
+        receiptsByIssue.set(
+          sourceIssueKey,
+          (receiptsByIssue.get(sourceIssueKey) || 0) +
+            Math.max(num(item.quantity), 0),
+        );
+      }
+    }
+  }
+
+  const result = new Map<string, TransferReplacementStatus>();
+
+  for (const [transferId, missing] of missingByTransfer.entries()) {
+    const deliveredQty = Math.max(
+      receiptsByIssue.get(missing.issueKey) || 0,
+      0,
+    );
+    const remainingQty = Math.max(missing.quantity - deliveredQty, 0);
+
+    result.set(transferId, {
+      originalQty: missing.quantity,
+      deliveredQty,
+      remainingQty,
+      status:
+        remainingQty <= 0
+          ? "Replaced"
+          : deliveredQty > 0
+            ? "Partially Replaced"
+            : "Outstanding",
+    });
+  }
+
+  return result;
+}
+
+function buildBundleTransferHtml({
+  bundleTransfers,
+  transferEvents,
+  towers,
+}: {
+  bundleTransfers: BundleTransferRow[];
+  transferEvents: Array<Record<string, unknown>>;
+  towers: Array<Record<string, unknown>>;
+}) {
+  if (bundleTransfers.length === 0) return "";
+
+  const towerById = new Map(
+    towers.map((row) => [
+      String(row.id ?? ""),
+      String(row.name ?? "Tower"),
+    ]),
+  );
+  const replacementByTransfer =
+    buildTransferReplacementStatusMap(transferEvents);
+
+  return bundleTransfers
+    .map((transfer) => {
+      const replacement =
+        replacementByTransfer.get(transfer.id) || {
+          originalQty: transfer.quantity,
+          deliveredQty: 0,
+          remainingQty: transfer.quantity,
+          status: "Outstanding" as const,
+        };
+
+      const sourceTower =
+        towerById.get(transfer.source_tower_id) ||
+        transfer.source_tower_id ||
+        "Another tower";
+
+      const bundleLabel = [
+        transfer.bundle_no ? `Bundle ${transfer.bundle_no}` : "Bundle",
+        transfer.bundle_section || "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      return `
+        <div style="margin-top:12px;padding:12px 14px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff">
+          <div style="font-weight:700;color:#1e3a8a">${escapeHtml(bundleLabel)}</div>
+          <div style="margin-top:5px;color:#334155">
+            Taken from <strong>${escapeHtml(sourceTower)}</strong> · Qty ${escapeHtml(transfer.quantity)}
+          </div>
+          <div style="margin-top:5px;color:#334155">
+            <strong>Source tower replacement:</strong>
+            ${escapeHtml(replacement.status)}
+            ${
+              replacement.originalQty > 0
+                ? ` · ${replacement.deliveredQty}/${replacement.originalQty} replaced`
+                : ""
+            }
+          </div>
+          ${
+            transfer.notes
+              ? `<div style="margin-top:5px;color:#475569">${escapeHtml(transfer.notes)}</div>`
+              : ""
+          }
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function buildClientOperationalSummaryHtml({
   docket,
   labour,
   plant,
   delays,
   materialEvents,
+  bundleTransfers,
+  transferEvents,
   towers,
   hourAllocations,
   clientContentKeys,
@@ -271,6 +430,8 @@ function buildClientOperationalSummaryHtml({
   plant: Array<Record<string, unknown>>;
   delays: Array<Record<string, unknown>>;
   materialEvents: Array<Record<string, unknown>>;
+  bundleTransfers: BundleTransferRow[];
+  transferEvents: Array<Record<string, unknown>>;
   towers: Array<Record<string, unknown>>;
   hourAllocations: Array<Record<string, unknown>>;
   clientContentKeys: ClientContentKey[];
@@ -278,6 +439,8 @@ function buildClientOperationalSummaryHtml({
   const visible = new Set<ClientContentKey>(clientContentKeys);
 
   const visibleMaterialEvents = materialEvents.filter((event) => {
+    if (String(event.transfer_id ?? "").trim()) return false;
+
     const missing = isMissingMaterialEvent(event);
     const received = isReceivedMaterialEvent(event);
 
@@ -488,15 +651,17 @@ function buildClientOperationalSummaryHtml({
           }</td>
         </tr>`
       : "",
-    visible.has("missing_materials") || visible.has("received_materials")
+    visible.has("missing_materials") ||
+    visible.has("received_materials") ||
+    visible.has("bundle_transfers")
       ? `
         <tr>
           <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b">Materials</td>
           <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600">${
-            visibleMaterialEvents.length
+            visibleMaterialEvents.length || bundleTransfers.length
               ? `${visibleMaterialEvents.length} material event${
                   visibleMaterialEvents.length === 1 ? "" : "s"
-                } recorded`
+                }${visible.has("bundle_transfers") ? ` · ${bundleTransfers.length} bundle transfer${bundleTransfers.length === 1 ? "" : "s"}` : ""}`
               : "No selected material events recorded"
           }</td>
         </tr>`
@@ -542,6 +707,7 @@ function buildClientOperationalSummaryHtml({
     </div>
 
     ${
+      visible.has("daily_site_summary") &&
       String(docket.daily_site_summary ?? "").trim()
         ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px">
              <div style="font-weight:700;color:#0f172a;margin-bottom:7px">Daily site summary</div>
@@ -551,7 +717,9 @@ function buildClientOperationalSummaryHtml({
     }
 
     ${
-      Array.isArray(docket.rfi_references) && docket.rfi_references.length
+      visible.has("rfi_references") &&
+      Array.isArray(docket.rfi_references) &&
+      docket.rfi_references.length
         ? `<div style="margin:18px 0;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a">
              <strong>RFI references:</strong> ${escapeHtml(docket.rfi_references.join(", "))}
            </div>`
@@ -601,6 +769,20 @@ function buildClientOperationalSummaryHtml({
            </div>`
         : ""
     }
+
+    ${
+      visible.has("bundle_transfers") && bundleTransfers.length
+        ? `<div style="margin:18px 0;padding:14px 16px;background:#f8fafc;border:1px solid #bfdbfe;border-radius:10px">
+             <div style="font-weight:700;color:#0f172a">Bundles taken from another tower</div>
+             <div style="margin-top:4px;color:#64748b;font-size:12px">Physical tower-to-tower movements recorded against this Daily Docket.</div>
+             ${buildBundleTransferHtml({
+               bundleTransfers,
+               transferEvents,
+               towers,
+             })}
+           </div>`
+        : ""
+    }
   `;
 }
 
@@ -631,6 +813,7 @@ async function loadPdfBundle(
     allocationResult,
     materialEventResult,
     materialHistoryResult,
+    bundleTransferResult,
   ] = await Promise.all([
     admin
       .from("projects")
@@ -701,6 +884,28 @@ async function loadPdfBundle(
       `)
       .eq("tower_id", docket.tower_id)
       .order("occurred_at"),
+
+    admin
+      .from("tower_material_transfers")
+      .select(`
+        id,
+        transfer_no,
+        source_tower_id,
+        destination_tower_id,
+        source_bundle_id,
+        destination_bundle_id,
+        bundle_no,
+        bundle_section,
+        quantity,
+        status,
+        transferred_at,
+        received_at,
+        source_docket_id,
+        destination_docket_id,
+        notes
+      `)
+      .eq("destination_docket_id", docket.id)
+      .order("transferred_at"),
   ]);
 
   if (projectResult.error || !projectResult.data) {
@@ -722,12 +927,41 @@ async function loadPdfBundle(
     progressResult.error ||
     allocationResult.error ||
     materialEventResult.error ||
-    materialHistoryResult.error;
+    materialHistoryResult.error ||
+    bundleTransferResult.error;
 
   if (childError) {
     throw new Error(
       `Daily Docket details could not be loaded: ${childError.message}`,
     );
+  }
+
+  const bundleTransfers =
+    (bundleTransferResult.data ?? []) as unknown as BundleTransferRow[];
+
+  let transferEvents: Array<Record<string, unknown>> = [];
+  const transferIds = bundleTransfers.map((row) => row.id).filter(Boolean);
+
+  if (transferIds.length > 0) {
+    const { data, error } = await admin
+      .from("tower_material_events")
+      .select(`
+        *,
+        tower_material_event_items(*),
+        tower_material_event_people(*),
+        tower_material_event_plant(*)
+      `)
+      .in("transfer_id", transferIds)
+      .in("event_type", ["missing", "found_received"])
+      .order("occurred_at");
+
+    if (error) {
+      throw new Error(
+        `Bundle transfer replacement history could not be loaded: ${error.message}`,
+      );
+    }
+
+    transferEvents = (data ?? []) as Array<Record<string, unknown>>;
   }
 
   return {
@@ -741,6 +975,8 @@ async function loadPdfBundle(
     hourAllocations: allocationResult.data ?? [],
     materialEvents: materialEventResult.data ?? [],
     materialHistory: materialHistoryResult.data ?? [],
+    bundleTransfers,
+    transferEvents,
   };
 }
 
@@ -1344,6 +1580,8 @@ export async function POST(request: Request, context: RouteContext) {
       hourAllocations: bundle.hourAllocations,
       materialEvents: bundle.materialEvents,
       materialHistory: bundle.materialHistory,
+      bundleTransfers: bundle.bundleTransfers,
+      transferEvents: bundle.transferEvents,
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,
@@ -1543,6 +1781,11 @@ export async function POST(request: Request, context: RouteContext) {
           performed_by_email: reviewerEmail,
           metadata: {
             client_recipient_count: approvalLinks.length,
+            client_recipient_names: approvalLinks.map(({ contact }) => contact.name),
+            client_recipient_emails: approvalLinks.map(({ contact }) =>
+              contact.email.trim().toLowerCase(),
+            ),
+            included_client_content: clientContentKeys,
             token_expires_at: tokenExpiry,
           },
         },
@@ -1561,6 +1804,8 @@ export async function POST(request: Request, context: RouteContext) {
       plant: bundle.plant as Array<Record<string, unknown>>,
       delays: bundle.delays as Array<Record<string, unknown>>,
       materialEvents: bundle.materialEvents as Array<Record<string, unknown>>,
+      bundleTransfers: bundle.bundleTransfers as BundleTransferRow[],
+      transferEvents: bundle.transferEvents as Array<Record<string, unknown>>,
       towers: bundle.towers as Array<Record<string, unknown>>,
       hourAllocations: bundle.hourAllocations as Array<Record<string, unknown>>,
       clientContentKeys,

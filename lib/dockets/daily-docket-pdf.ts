@@ -11,9 +11,43 @@ import {
 type Row = Record<string, unknown>;
 
 type MaterialEvent = Row & {
+  transfer_id?: string | null;
   tower_material_event_items?: Row[] | null;
   tower_material_event_people?: Row[] | null;
   tower_material_event_plant?: Row[] | null;
+};
+
+export type DailyDocketClientContentKey =
+  | "daily_site_summary"
+  | "rfi_references"
+  | "progress"
+  | "workforce"
+  | "raw_manhours"
+  | "plant"
+  | "mobilisation"
+  | "travel"
+  | "delays"
+  | "missing_materials"
+  | "received_materials"
+  | "bundle_transfers"
+  | "safety";
+
+export type DailyDocketBundleTransfer = {
+  id: string;
+  transfer_no?: number | null;
+  source_tower_id: string;
+  destination_tower_id: string;
+  source_bundle_id?: string | null;
+  destination_bundle_id?: string | null;
+  bundle_no: string;
+  bundle_section?: string | null;
+  quantity: number;
+  status?: string | null;
+  transferred_at?: string | null;
+  received_at?: string | null;
+  source_docket_id?: string | null;
+  destination_docket_id?: string | null;
+  notes?: string | null;
 };
 
 export type DailyDocketPdfData = {
@@ -28,6 +62,8 @@ export type DailyDocketPdfData = {
   hourAllocations?: Row[];
   materialEvents: MaterialEvent[];
   materialHistory?: MaterialEvent[];
+  bundleTransfers?: DailyDocketBundleTransfer[];
+  transferEvents?: MaterialEvent[];
   branding?: {
     logoDataUrl?: string | null;
     companyName?: string | null;
@@ -41,7 +77,7 @@ export type DailyDocketPdfData = {
     email?: string | null;
     website?: string | null;
   };
-  clientContentKeys?: string[] | null;
+  clientContentKeys?: DailyDocketClientContentKey[] | null;
 };
 
 const SECTION_ORDER = [
@@ -277,7 +313,9 @@ function materialReference(item: Row) {
   const bundle = `Bundle ${bundleNo}${bundleSection ? ` · ${bundleSection}` : ""}`;
   return reference === bundleNo || reference === "—" ? bundle : `${reference} · ${bundle}`;
 }
-const CLIENT_CONTENT_KEYS = [
+const CLIENT_CONTENT_KEYS: readonly DailyDocketClientContentKey[] = [
+  "daily_site_summary",
+  "rfi_references",
   "progress",
   "workforce",
   "raw_manhours",
@@ -287,10 +325,11 @@ const CLIENT_CONTENT_KEYS = [
   "delays",
   "missing_materials",
   "received_materials",
+  "bundle_transfers",
   "safety",
 ] as const;
 
-type ClientContentKey = (typeof CLIENT_CONTENT_KEYS)[number];
+type ClientContentKey = DailyDocketClientContentKey;
 
 function clientContentSet(data: DailyDocketPdfData) {
   const supplied = Array.isArray(data.clientContentKeys)
@@ -327,20 +366,132 @@ function selectedMaterialEvents(
 ) {
   const includeMissing = visible.has("missing_materials");
   const includeReceived = visible.has("received_materials");
+  const nonTransferEvents = data.materialEvents.filter(
+    event => !text(event.transfer_id).trim(),
+  );
 
   if (includeMissing && includeReceived) {
-    return data.materialEvents;
+    return nonTransferEvents;
   }
 
   if (includeMissing) {
-    return data.materialEvents.filter(isMissingMaterialEvent);
+    return nonTransferEvents.filter(isMissingMaterialEvent);
   }
 
   if (includeReceived) {
-    return data.materialEvents.filter(isReceivedMaterialEvent);
+    return nonTransferEvents.filter(isReceivedMaterialEvent);
   }
 
   return [];
+}
+
+type TransferReplacementSnapshot = {
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: "Outstanding" | "Partially Replaced" | "Replaced";
+};
+
+function transferReplacementSnapshots(data: DailyDocketPdfData) {
+  const events = data.transferEvents || [];
+  const missingByTransfer = new Map<
+    string,
+    { issueKey: string; quantity: number }
+  >();
+  const receiptsByIssue = new Map<string, number>();
+
+  events.forEach(event => {
+    const transferId = text(event.transfer_id).trim();
+    if (!transferId) return;
+
+    if (text(event.event_type).trim().toLowerCase() === "missing") {
+      (event.tower_material_event_items || []).forEach(item => {
+        const issueKey = text(item.issue_key).trim();
+        if (!issueKey) return;
+
+        missingByTransfer.set(transferId, {
+          issueKey,
+          quantity: Math.max(number(item.quantity), 0),
+        });
+      });
+    }
+
+    if (
+      text(event.event_type).trim().toLowerCase() === "found_received"
+    ) {
+      (event.tower_material_event_items || []).forEach(item => {
+        const sourceIssueKey = text(item.source_issue_key).trim();
+        if (!sourceIssueKey) return;
+
+        receiptsByIssue.set(
+          sourceIssueKey,
+          (receiptsByIssue.get(sourceIssueKey) || 0) +
+            Math.max(number(item.quantity), 0),
+        );
+      });
+    }
+  });
+
+  const snapshots = new Map<string, TransferReplacementSnapshot>();
+
+  missingByTransfer.forEach((missing, transferId) => {
+    const deliveredQty = Math.max(
+      receiptsByIssue.get(missing.issueKey) || 0,
+      0,
+    );
+    const remainingQty = Math.max(
+      missing.quantity - deliveredQty,
+      0,
+    );
+
+    snapshots.set(transferId, {
+      originalQty: missing.quantity,
+      deliveredQty,
+      remainingQty,
+      status:
+        remainingQty <= 0
+          ? "Replaced"
+          : deliveredQty > 0
+            ? "Partially Replaced"
+            : "Outstanding",
+    });
+  });
+
+  return snapshots;
+}
+
+function plantDelayHours(
+  plantRow: Row,
+  delays: Row[],
+) {
+  const names = new Set(
+    [
+      text(plantRow.plant_name),
+      text(plantRow.asset_number),
+      text(plantRow.asset_id),
+    ]
+      .map(value => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  if (!names.size) return 0;
+
+  return delays.reduce((sum, delay) => {
+    if (
+      text(delay.delay_applies_mode).trim().toLowerCase() !==
+      "labour_and_plant"
+    ) {
+      return sum;
+    }
+
+    const selected = Array.isArray(delay.plant_names)
+      ? delay.plant_names.some(name =>
+          names.has(text(name).trim().toLowerCase()),
+        )
+      : false;
+
+    return selected ? sum + number(delay.delay_hours) : sum;
+  }, 0);
 }
 
 function formatBusinessAddress(data: DailyDocketPdfData) {
@@ -433,6 +584,8 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
     0,
   );
   const materialEvents = selectedMaterialEvents(data, visible);
+  const bundleTransfers = data.bundleTransfers || [];
+  const transferSnapshots = transferReplacementSnapshots(data);
   const projectName = [text(data.project.project_number), text(data.project.name)].filter(Boolean).join(" - ");
   const tower = towerName(data);
   let y = 40;
@@ -643,10 +796,25 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
     ? data.docket.rfi_references.map(value => text(value).trim()).filter(Boolean)
     : [];
 
-  if (dailySummary || rfiReferences.length) {
-    section("Daily Site Summary");
-    if (dailySummary) paragraph(dailySummary);
-    if (rfiReferences.length) {
+  const showDailySummary =
+    visible.has("daily_site_summary") && Boolean(dailySummary);
+  const showRfiReferences =
+    visible.has("rfi_references") && rfiReferences.length > 0;
+
+  if (showDailySummary || showRfiReferences) {
+    section(
+      showDailySummary && showRfiReferences
+        ? "Daily Site Summary & References"
+        : showDailySummary
+          ? "Daily Site Summary"
+          : "RFI References",
+    );
+
+    if (showDailySummary) {
+      paragraph(dailySummary);
+    }
+
+    if (showRfiReferences) {
       callout("RFI References", rfiReferences.join(", "), "blue");
     }
   }
@@ -813,7 +981,7 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   if (visible.has("plant")) {
     section("Plant & Equipment");
     table(
-      ["Asset", "Type", "Time In", "Time Out", "Hours"],
+      ["Asset", "Type", "Time In", "Time Out", "Raw Hrs", "Delay Hrs"],
       data.plant.length
         ? data.plant.map(row => [
             text(row.plant_name) ||
@@ -824,9 +992,10 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
             text(row.time_in) || "—",
             text(row.time_out) || "—",
             formatHours(row.total_hours),
+            formatHours(plantDelayHours(row, data.delays)),
           ])
-        : [["No plant recorded", "—", "—", "—", "—"]],
-      [70, 40, 25, 25, 24],
+        : [["No plant recorded", "—", "—", "—", "—", "—"]],
+      [55, 35, 23, 23, 24, 24],
       { compact: true },
     );
   }
@@ -994,6 +1163,75 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
 
         if (text(event.notes)) {
           paragraph(`Notes: ${text(event.notes)}`);
+        }
+      });
+    }
+  }
+
+  if (visible.has("bundle_transfers")) {
+    section("Bundle Transfers");
+
+    if (!bundleTransfers.length) {
+      callout(
+        "Bundle Transfers",
+        "No bundles taken from another tower on this docket",
+        "green",
+      );
+    } else {
+      bundleTransfers.forEach((transfer, index) => {
+        const replacement =
+          transferSnapshots.get(transfer.id) || {
+            originalQty: number(transfer.quantity),
+            deliveredQty: 0,
+            remainingQty: number(transfer.quantity),
+            status: "Outstanding" as const,
+          };
+
+        const sourceTower = towerDisplayName(
+          data,
+          text(transfer.source_tower_id),
+        );
+
+        const bundleLabel = [
+          text(transfer.bundle_no)
+            ? `Bundle ${text(transfer.bundle_no)}`
+            : "Bundle",
+          text(transfer.bundle_section),
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        callout(
+          `${index + 1}. Taken From Another Tower`,
+          `${bundleLabel} · From ${sourceTower} · Qty ${number(
+            transfer.quantity,
+          )}`,
+          replacement.status === "Replaced"
+            ? "green"
+            : replacement.status === "Partially Replaced"
+              ? "amber"
+              : "red",
+        );
+
+        infoGrid([
+          ["Source Tower", sourceTower],
+          ["Quantity Taken", String(number(transfer.quantity))],
+          ["Replacement Status", replacement.status],
+          [
+            "Replacement Progress",
+            `${replacement.deliveredQty}/${replacement.originalQty} replaced`,
+          ],
+          ["Still Missing", String(replacement.remainingQty)],
+          [
+            "Taken / Received",
+            formatDateTime(
+              transfer.received_at || transfer.transferred_at,
+            ),
+          ],
+        ]);
+
+        if (text(transfer.notes).trim()) {
+          paragraph(`Notes: ${text(transfer.notes).trim()}`);
         }
       });
     }

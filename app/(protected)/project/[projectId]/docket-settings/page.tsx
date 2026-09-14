@@ -8,9 +8,12 @@ import {
   Mail,
   Plus,
   Save,
+  Search,
   ShieldCheck,
   Trash2,
+  UserPlus,
   Users,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -39,13 +42,54 @@ type ProjectRow = {
   project_number: string | null;
 };
 
-type ApprovalRoleRow = {
+type ApprovalUserRow = {
   id: string;
   project_id: string;
-  role: string;
+  user_id: string;
   receives_bc_review: boolean;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+type ApiProjectAccess = {
+  project_id: string;
+  role?: string | null;
+};
+
+type ApiEmployeeSummary = {
+  id?: string;
+  full_name?: string | null;
+  role?: string | null;
+};
+
+type ApiUser = {
+  user_id?: string;
+  id?: string;
+  email?: string | null;
+  website_role?: string | null;
+  role?: string | null;
+  mobile_role?: string | null;
+  active?: boolean | null;
+  is_active?: boolean | null;
+  employee?: ApiEmployeeSummary | null;
+  employee_name?: string | null;
+  project_access?: ApiProjectAccess[] | null;
+  project_ids?: string[] | null;
+};
+
+type AdminUsersResponse = {
+  users?: ApiUser[];
+  error?: string;
+};
+
+type ReviewerUser = {
+  userId: string;
+  name: string;
+  email: string;
+  websiteRole: string;
+  employeeRole: string;
+  projectIds: string[];
+  active: boolean;
 };
 
 type ClientContactRow = {
@@ -77,6 +121,8 @@ type MessageState = {
 } | null;
 
 type ClientContentKey =
+  | "daily_site_summary"
+  | "rfi_references"
   | "progress"
   | "workforce"
   | "raw_manhours"
@@ -86,6 +132,7 @@ type ClientContentKey =
   | "delays"
   | "missing_materials"
   | "received_materials"
+  | "bundle_transfers"
   | "safety";
 
 type ClientContentRow = {
@@ -98,6 +145,8 @@ const CLIENT_CONTENT_OPTIONS: Array<{
   label: string;
   detail: string;
 }> = [
+  { value: "daily_site_summary", label: "Daily Site Summary", detail: "Leading Hand summary of the day’s work and site conditions." },
+  { value: "rfi_references", label: "RFI References", detail: "RFI numbers referenced on the Daily Docket." },
   { value: "progress", label: "Progress", detail: "Assembly and erection progress by tower section." },
   { value: "workforce", label: "Workforce", detail: "Personnel and recorded site hours." },
   { value: "raw_manhours", label: "Raw Manhours", detail: "Total raw manhours recorded for the docket." },
@@ -106,7 +155,8 @@ const CLIENT_CONTENT_OPTIONS: Array<{
   { value: "travel", label: "Travel", detail: "Recorded travel-in and travel-out information." },
   { value: "delays", label: "Delays / Disruptions", detail: "Recorded delay events, impacts and affected work." },
   { value: "missing_materials", label: "Missing Materials", detail: "Recorded missing-material searches and impacts." },
-  { value: "received_materials", label: "Materials Received", detail: "Found, received and transferred material records." },
+  { value: "received_materials", label: "Materials Received", detail: "Found and received material records." },
+  { value: "bundle_transfers", label: "Bundle Transfers", detail: "Bundles taken from another tower and the source-tower replacement status." },
   { value: "safety", label: "Safety / Incidents", detail: "Recorded safety checks and incident information." },
 ];
 
@@ -117,49 +167,6 @@ function isClientContentKey(value: string): value is ClientContentKey {
   return CLIENT_CONTENT_OPTIONS.some((option) => option.value === value);
 }
 
-const ROLE_OPTIONS: Array<{
-  value: RoleCode;
-  label: string;
-  detail: string;
-}> = [
-  {
-    value: "admin",
-    label: "Administrator",
-    detail: "System administrators assigned to this project.",
-  },
-  {
-    value: "commercial",
-    label: "Commercial",
-    detail: "Commercial users assigned to this project.",
-  },
-  {
-    value: "hseq",
-    label: "HSEQ",
-    detail: "HSEQ users assigned to this project.",
-  },
-  {
-    value: "asset_manager",
-    label: "Asset Manager",
-    detail: "Asset managers assigned to this project.",
-  },
-  {
-    value: "editor",
-    label: "Editor",
-    detail: "Editors assigned to this project.",
-  },
-  {
-    value: "crew",
-    label: "Crew / Field",
-    detail: "Crew or field users assigned to this project.",
-  },
-  {
-    value: "viewer",
-    label: "Viewer",
-    detail: "Read-only users assigned to this project.",
-  },
-];
-
-const DEFAULT_APPROVAL_ROLES: RoleCode[] = ["admin", "commercial"];
 
 function normaliseRole(value?: string | null): RoleCode | null {
   const role = String(value ?? "")
@@ -212,12 +219,12 @@ export default function DailyDocketApprovalSettingsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [project, setProject] = useState<ProjectRow | null>(null);
-  const [selectedRoles, setSelectedRoles] = useState<RoleCode[]>(
-    DEFAULT_APPROVAL_ROLES,
-  );
+  const [availableReviewers, setAvailableReviewers] = useState<ReviewerUser[]>([]);
+  const [selectedReviewerIds, setSelectedReviewerIds] = useState<string[]>([]);
+  const [reviewerSearch, setReviewerSearch] = useState("");
   const [contacts, setContacts] = useState<ClientContactDraft[]>([]);
   const [loading, setLoading] = useState(true);
-  const [savingRoles, setSavingRoles] = useState(false);
+  const [savingReviewers, setSavingReviewers] = useState(false);
   const [savingContacts, setSavingContacts] = useState(false);
   const [clientContent, setClientContent] = useState<ClientContentKey[]>(
     DEFAULT_CLIENT_CONTENT,
@@ -278,12 +285,16 @@ export default function DailyDocketApprovalSettingsPage() {
 
     setProject(projectResult.data as ProjectRow);
 
-    const [approvalRolesResult, contactsResult, clientContentResult] =
-      await Promise.all([
+    const [
+      approvalUsersResult,
+      contactsResult,
+      clientContentResult,
+      usersResponse,
+    ] = await Promise.all([
       supabase
-        .from("project_docket_approval_roles")
+        .from("project_docket_approval_users")
         .select(
-          "id, project_id, role, receives_bc_review, created_at, updated_at",
+          "id, project_id, user_id, receives_bc_review, created_at, updated_at",
         )
         .eq("project_id", projectId)
         .eq("receives_bc_review", true),
@@ -298,19 +309,23 @@ export default function DailyDocketApprovalSettingsPage() {
         .from("project_docket_client_content")
         .select("content_key, included_by_default")
         .eq("project_id", projectId),
+      fetch("/api/admin/users", {
+        method: "GET",
+        cache: "no-store",
+      }),
     ]);
 
-    if (approvalRolesResult.error) {
+    if (approvalUsersResult.error) {
       const missingTable =
-        approvalRolesResult.error.message
+        approvalUsersResult.error.message
           .toLowerCase()
-          .includes("project_docket_approval_roles") ||
-        approvalRolesResult.error.code === "42P01";
+          .includes("project_docket_approval_users") ||
+        approvalUsersResult.error.code === "42P01";
 
       throw new Error(
         missingTable
-          ? "Daily Docket approval role settings have not been created in Supabase yet."
-          : approvalRolesResult.error.message,
+          ? "Individual Daily Docket reviewer settings have not been created in Supabase yet. Run the project_docket_approval_users migration."
+          : approvalUsersResult.error.message,
       );
     }
 
@@ -321,6 +336,65 @@ export default function DailyDocketApprovalSettingsPage() {
     if (clientContentResult.error) {
       throw new Error(clientContentResult.error.message);
     }
+
+    const usersPayload = (await usersResponse.json().catch(() => null)) as
+      | AdminUsersResponse
+      | null;
+
+    if (!usersResponse.ok) {
+      throw new Error(
+        usersPayload?.error ?? "Could not load TTTracker users for reviewer selection.",
+      );
+    }
+
+    const reviewerUsers = (usersPayload?.users ?? [])
+      .map((user): ReviewerUser | null => {
+        const userId = String(user.user_id ?? user.id ?? "").trim();
+        if (!userId) return null;
+
+        const email = String(user.email ?? "").trim().toLowerCase();
+        const name =
+          String(
+            user.employee?.full_name ??
+              user.employee_name ??
+              email.split("@")[0] ??
+              "TTTracker user",
+          ).trim() || "TTTracker user";
+
+        const projectIds = Array.from(
+          new Set([
+            ...((user.project_access ?? [])
+              .map((access) => String(access.project_id ?? "").trim())
+              .filter(Boolean)),
+            ...((user.project_ids ?? [])
+              .map((value) => String(value ?? "").trim())
+              .filter(Boolean)),
+          ]),
+        );
+
+        return {
+          userId,
+          name,
+          email,
+          websiteRole: String(user.website_role ?? user.role ?? "").trim(),
+          employeeRole: String(user.employee?.role ?? "").trim(),
+          projectIds,
+          active: user.is_active !== false && user.active !== false,
+        };
+      })
+      .filter((user): user is ReviewerUser => Boolean(user))
+      .filter((user) => user.active)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    setAvailableReviewers(reviewerUsers);
+
+    const savedReviewerIds = (
+      (approvalUsersResult.data ?? []) as ApprovalUserRow[]
+    )
+      .map((row) => String(row.user_id ?? "").trim())
+      .filter(Boolean);
+
+    setSelectedReviewerIds([...new Set(savedReviewerIds)]);
 
     const savedClientContent = (
       (clientContentResult.data ?? []) as ClientContentRow[]
@@ -335,18 +409,6 @@ export default function DailyDocketApprovalSettingsPage() {
       (clientContentResult.data ?? []).length > 0
         ? savedClientContent
         : DEFAULT_CLIENT_CONTENT,
-    );
-
-    const savedRoles = (
-      (approvalRolesResult.data ?? []) as ApprovalRoleRow[]
-    )
-      .map((row) => normaliseRole(row.role))
-      .filter((role): role is RoleCode => Boolean(role));
-
-    setSelectedRoles(
-      savedRoles.length > 0
-        ? [...new Set(savedRoles)]
-        : DEFAULT_APPROVAL_ROLES,
     );
 
     setContacts(
@@ -390,32 +452,91 @@ export default function DailyDocketApprovalSettingsPage() {
     };
   }, [loadSettings]);
 
-  function toggleRole(role: RoleCode) {
-    setMessage(null);
-    setSelectedRoles((current) =>
-      current.includes(role)
-        ? current.filter((item) => item !== role)
-        : [...current, role],
+  const selectedReviewers = useMemo(
+    () =>
+      selectedReviewerIds
+        .map((userId) =>
+          availableReviewers.find((user) => user.userId === userId),
+        )
+        .filter((user): user is ReviewerUser => Boolean(user)),
+    [availableReviewers, selectedReviewerIds],
+  );
+
+  const reviewerSearchResults = useMemo(() => {
+    const query = reviewerSearch.trim().toLowerCase();
+
+    const candidates = availableReviewers
+      .filter((user) => !selectedReviewerIds.includes(user.userId))
+      .sort((a, b) => {
+        const aProject = a.projectIds.includes(projectId) ? 0 : 1;
+        const bProject = b.projectIds.includes(projectId) ? 0 : 1;
+        if (aProject !== bProject) return aProject - bProject;
+        return a.name.localeCompare(b.name);
+      });
+
+    if (!query) {
+      return candidates
+        .filter((user) => user.projectIds.includes(projectId))
+        .slice(0, 8);
+    }
+
+    return candidates
+      .filter((user) =>
+        [
+          user.name,
+          user.email,
+          user.websiteRole,
+          user.employeeRole,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      )
+      .slice(0, 10);
+  }, [
+    availableReviewers,
+    projectId,
+    reviewerSearch,
+    selectedReviewerIds,
+  ]);
+
+  function addReviewer(userId: string) {
+    if (!canManage) return;
+
+    setSelectedReviewerIds((current) =>
+      current.includes(userId) ? current : [...current, userId],
     );
+    setReviewerSearch("");
+    setMessage(null);
   }
 
-  async function saveApprovalRoles() {
+  function removeReviewer(userId: string) {
+    if (!canManage) return;
+
+    setSelectedReviewerIds((current) =>
+      current.filter((id) => id !== userId),
+    );
+    setMessage(null);
+  }
+
+  async function saveApprovalReviewers() {
     if (!canManage || !projectId) return;
 
-    if (selectedRoles.length === 0) {
+    if (selectedReviewerIds.length === 0) {
       setMessage({
         tone: "error",
-        text: "Select at least one BC approval recipient role.",
+        text: "Select at least one BC Daily Docket reviewer.",
       });
       return;
     }
 
-    setSavingRoles(true);
+    setSavingReviewers(true);
     setMessage(null);
 
     try {
       const deleteResult = await supabase
-        .from("project_docket_approval_roles")
+        .from("project_docket_approval_users")
         .delete()
         .eq("project_id", projectId);
 
@@ -424,11 +545,11 @@ export default function DailyDocketApprovalSettingsPage() {
       }
 
       const insertResult = await supabase
-        .from("project_docket_approval_roles")
+        .from("project_docket_approval_users")
         .insert(
-          selectedRoles.map((role) => ({
+          selectedReviewerIds.map((userId) => ({
             project_id: projectId,
-            role,
+            user_id: userId,
             receives_bc_review: true,
           })),
         );
@@ -439,7 +560,7 @@ export default function DailyDocketApprovalSettingsPage() {
 
       setMessage({
         tone: "success",
-        text: "BC approval recipients updated.",
+        text: "BC Daily Docket reviewers updated.",
       });
     } catch (error) {
       setMessage({
@@ -447,10 +568,10 @@ export default function DailyDocketApprovalSettingsPage() {
         text:
           error instanceof Error
             ? error.message
-            : "Could not save BC approval recipients.",
+            : "Could not save BC Daily Docket reviewers.",
       });
     } finally {
-      setSavingRoles(false);
+      setSavingReviewers(false);
     }
   }
 
@@ -778,67 +899,181 @@ export default function DailyDocketApprovalSettingsPage() {
               <div className="flex items-center gap-2">
                 <Users size={19} className="text-slate-500" />
                 <h2 className="text-lg font-bold text-slate-950">
-                  BC Approval Recipients
+                  BC Daily Docket Reviewers
                 </h2>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                Selected roles receive the BC review email when a docket is
-                submitted.
+                Select the exact TTTracker users who should receive and action
+                BC Daily Docket review requests for this project.
               </p>
             </div>
 
             <button
               type="button"
-              onClick={() => void saveApprovalRoles()}
-              disabled={savingRoles || !canManage}
+              onClick={() => void saveApprovalReviewers()}
+              disabled={savingReviewers || !canManage}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
             >
-              {savingRoles ? (
+              {savingReviewers ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
                 <Save size={16} />
               )}
-              Save Recipients
+              Save Reviewers
             </button>
           </div>
 
-          <div className="grid gap-3 p-6 md:grid-cols-2">
-            {ROLE_OPTIONS.map((role) => {
-              const selected = selectedRoles.includes(role.value);
+          <div className="space-y-5 p-6">
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-800">
+                Find a TTTracker user
+              </label>
 
-              return (
-                <button
-                  key={role.value}
-                  type="button"
-                  onClick={() => toggleRole(role.value)}
+              <div className="relative">
+                <Search
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-3 text-slate-400"
+                />
+                <input
+                  value={reviewerSearch}
+                  onChange={(event) => setReviewerSearch(event.target.value)}
                   disabled={!canManage}
-                  className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
-                    selected
-                      ? "border-slate-950 bg-slate-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
-                >
-                  <span
-                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
-                      selected
-                        ? "border-slate-950 bg-slate-950 text-white"
-                        : "border-slate-300 bg-white text-transparent"
-                    }`}
-                  >
-                    <Check size={14} strokeWidth={3} />
-                  </span>
+                  placeholder="Search name, email or role..."
+                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-50"
+                />
+              </div>
 
-                  <span>
-                    <span className="block text-sm font-bold text-slate-900">
-                      {role.label}
-                    </span>
-                    <span className="mt-1 block text-xs leading-5 text-slate-500">
-                      {role.detail}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
+              {(reviewerSearch.trim() || reviewerSearchResults.length > 0) && (
+                <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  {reviewerSearchResults.length === 0 ? (
+                    <div className="px-4 py-5 text-center text-sm text-slate-500">
+                      No matching TTTracker users.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {reviewerSearchResults.map((user) => {
+                        const hasProjectAccess =
+                          user.projectIds.includes(projectId);
+
+                        return (
+                          <button
+                            key={user.userId}
+                            type="button"
+                            disabled={!canManage}
+                            onClick={() => addReviewer(user.userId)}
+                            className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-bold text-slate-900">
+                                {user.name}
+                              </div>
+                              <div className="truncate text-xs text-slate-500">
+                                {user.email || "No email"}
+                                {user.employeeRole
+                                  ? ` · ${user.employeeRole}`
+                                  : user.websiteRole
+                                    ? ` · ${user.websiteRole}`
+                                    : ""}
+                              </div>
+                            </div>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                                  hasProjectAccess
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-amber-50 text-amber-700"
+                                }`}
+                              >
+                                {hasProjectAccess
+                                  ? "Project access"
+                                  : "Reviewer only"}
+                              </span>
+                              <UserPlus size={17} className="text-slate-400" />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                Users already assigned to this project are shown first. You can
+                still select another active TTTracker user as a project-specific
+                reviewer; the approval workflow will recognise their reviewer
+                assignment independently of their normal website role.
+              </p>
+            </div>
+
+            <div className="border-t border-slate-200 pt-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Selected reviewers
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Every selected person will receive the BC review request.
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                  {selectedReviewerIds.length} selected
+                </span>
+              </div>
+
+              {selectedReviewerIds.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-8 text-center">
+                  <Users size={26} className="mx-auto text-slate-300" />
+                  <p className="mt-2 text-sm font-semibold text-slate-700">
+                    No BC reviewers selected
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Search above and add the people who should review Daily
+                    Dockets for this project.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {selectedReviewerIds.map((userId) => {
+                    const user = availableReviewers.find(
+                      (candidate) => candidate.userId === userId,
+                    );
+
+                    return (
+                      <div
+                        key={userId}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-bold text-slate-900">
+                            {user?.name || "Configured TTTracker user"}
+                          </div>
+                          <div className="truncate text-xs text-slate-500">
+                            {user?.email || userId}
+                            {user?.employeeRole
+                              ? ` · ${user.employeeRole}`
+                              : user?.websiteRole
+                                ? ` · ${user.websiteRole}`
+                                : ""}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removeReviewer(userId)}
+                          disabled={!canManage}
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                          aria-label="Remove reviewer"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </section>
 

@@ -633,7 +633,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "No BC reviewers are configured for this project. Update Daily Docket Approval Settings before submitting.",
+            "No individual BC reviewers are configured for this project. Update Daily Docket Approval Settings before submitting.",
         },
         { status: 400 },
       );
@@ -732,6 +732,9 @@ export async function POST(
       metadata: {
         previous_revision: previousRevision,
         source_status: docket.approval_status || "legacy",
+        reviewer_user_ids: reviewers.map((reviewer) => reviewer.userId),
+        reviewer_names: reviewers.map((reviewer) => reviewer.name),
+        reviewer_emails: reviewers.map((reviewer) => reviewer.email),
       },
     });
 
@@ -870,7 +873,7 @@ export async function POST(
           </p>
 
           <p style="font-size:13px;color:#64748b;">
-            This approval request was sent to ${recipientNames.length} configured BC reviewer${recipientNames.length === 1 ? "" : "s"}.
+            This approval request was sent to ${recipientNames.length} individually configured BC reviewer${recipientNames.length === 1 ? "" : "s"}${recipientNames.length ? `: ${escapeHtml(recipientNames.join(", "))}` : ""}.
           </p>
         `,
       );
@@ -896,6 +899,11 @@ export async function POST(
       submittedAt,
       revision,
       reviewers: reviewers.length,
+      reviewerRecipients: reviewers.map((reviewer) => ({
+        userId: reviewer.userId,
+        name: reviewer.name,
+        email: reviewer.email,
+      })),
       warning: emailWarning,
     });
   } catch (error) {

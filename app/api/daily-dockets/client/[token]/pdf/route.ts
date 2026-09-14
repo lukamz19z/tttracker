@@ -43,6 +43,7 @@ function hashToken(token: string) {
 function safeFileName(value: string | null | undefined) {
   const name = String(value || "Daily-Docket.pdf")
     .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/[\r\n]+/g, " ")
     .trim();
 
   return name.toLowerCase().endsWith(".pdf") ? name : `${name}.pdf`;
@@ -71,6 +72,20 @@ function approvalUnavailableReason(approval: ApprovalRow | null) {
   }
 
   return null;
+}
+
+function isPdfBytes(bytes: ArrayBuffer) {
+  if (bytes.byteLength < 5) return false;
+
+  const prefix = new Uint8Array(bytes, 0, Math.min(5, bytes.byteLength));
+
+  return (
+    prefix[0] === 0x25 && // %
+    prefix[1] === 0x50 && // P
+    prefix[2] === 0x44 && // D
+    prefix[3] === 0x46 && // F
+    prefix[4] === 0x2d // -
+  );
 }
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -168,6 +183,7 @@ export async function GET(_request: Request, context: RouteContext) {
       1,
       Number(approval.revision || 0),
     );
+
     const docketRevision = Math.max(
       1,
       Number(docket.approval_revision || 0),
@@ -183,8 +199,13 @@ export async function GET(_request: Request, context: RouteContext) {
       );
     }
 
-    const driveId = String(docket.draft_sharepoint_drive_id || "").trim();
-    const itemId = String(docket.draft_sharepoint_item_id || "").trim();
+    const driveId = String(
+      docket.draft_sharepoint_drive_id || "",
+    ).trim();
+
+    const itemId = String(
+      docket.draft_sharepoint_item_id || "",
+    ).trim();
 
     if (!driveId || !itemId) {
       return NextResponse.json(
@@ -236,26 +257,35 @@ export async function GET(_request: Request, context: RouteContext) {
       );
     }
 
-    const contentType =
-      graphResponse.headers.get("content-type") || "application/pdf";
-
-    if (!contentType.toLowerCase().includes("pdf")) {
-      console.error(
-        "Daily Docket SharePoint item did not return a PDF content type",
-        contentType,
-      );
-
-      return NextResponse.json(
-        { error: "The Daily Docket PDF could not be opened." },
-        { status: 502 },
-      );
-    }
+    const sourceContentType =
+      graphResponse.headers.get("content-type") || "";
 
     const pdfBytes = await graphResponse.arrayBuffer();
 
     if (!pdfBytes.byteLength) {
       return NextResponse.json(
         { error: "The Daily Docket PDF is empty or unavailable." },
+        { status: 502 },
+      );
+    }
+
+    /*
+      Microsoft Graph / SharePoint can occasionally return a valid PDF with a
+      generic content type such as application/octet-stream. Verify the file
+      signature instead of rejecting a genuine controlled PDF purely because
+      of the upstream MIME header.
+    */
+    if (!isPdfBytes(pdfBytes)) {
+      console.error(
+        "Daily Docket SharePoint item was not a valid PDF",
+        {
+          contentType: sourceContentType || null,
+          byteLength: pdfBytes.byteLength,
+        },
+      );
+
+      return NextResponse.json(
+        { error: "The Daily Docket PDF could not be opened." },
         { status: 502 },
       );
     }
@@ -268,16 +298,23 @@ export async function GET(_request: Request, context: RouteContext) {
         `Daily-Docket-${docket.docket_date || docket.id}-${revisionLabel}-DRAFT.pdf`,
     );
 
+    /*
+      This intentionally returns the exact SharePoint draft generated at BC
+      approval. Do not regenerate the PDF here. That guarantees the client
+      reviews the same controlled revision that BC approved.
+    */
     return new NextResponse(pdfBytes, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="${fileName}"`,
         "Content-Length": String(pdfBytes.byteLength),
-        "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+        "Cache-Control":
+          "private, no-store, max-age=0, must-revalidate",
         Pragma: "no-cache",
         Expires: "0",
         "X-Content-Type-Options": "nosniff",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy":
           "default-src 'none'; frame-ancestors 'self'; sandbox",

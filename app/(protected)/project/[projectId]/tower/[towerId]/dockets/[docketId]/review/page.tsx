@@ -171,6 +171,7 @@ type MaterialPlantRow = {
 
 type MaterialEventRow = {
   id: string;
+  transfer_id?: string | null;
   event_type: string | null;
   occurred_at: string | null;
   source_tower_id: string | null;
@@ -181,6 +182,31 @@ type MaterialEventRow = {
   items: MaterialItemRow[] | null;
   people: MaterialPersonRow[] | null;
   plant: MaterialPlantRow[] | null;
+};
+
+type BundleTransferRow = {
+  id: string;
+  transfer_no: number | null;
+  source_tower_id: string;
+  destination_tower_id: string;
+  source_bundle_id: string;
+  destination_bundle_id: string | null;
+  bundle_no: string;
+  bundle_section: string | null;
+  quantity: number;
+  status: string;
+  transferred_at: string | null;
+  received_at: string | null;
+  notes: string | null;
+};
+
+type ClientApprovalContactRow = {
+  id: string;
+  name: string;
+  email: string;
+  company: string | null;
+  receives_approval: boolean;
+  active: boolean;
 };
 
 type RevisionAllocationRow = {
@@ -233,6 +259,8 @@ type ChangeRequest = {
 };
 
 type ClientContentKey =
+  | "daily_site_summary"
+  | "rfi_references"
   | "progress"
   | "workforce"
   | "raw_manhours"
@@ -242,6 +270,7 @@ type ClientContentKey =
   | "delays"
   | "missing_materials"
   | "received_materials"
+  | "bundle_transfers"
   | "safety";
 
 type ClientContentConfigRow = {
@@ -260,6 +289,8 @@ const CLIENT_CONTENT_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
+  { key: "daily_site_summary", label: "Daily Site Summary", description: "Leading Hand summary of the day’s work and site conditions." },
+  { key: "rfi_references", label: "RFI References", description: "RFI numbers referenced on the Daily Docket." },
   { key: "progress", label: "Progress", description: "Assembly and erection progress for every tower worked on the crew-day docket." },
   { key: "workforce", label: "Workforce", description: "Personnel names and recorded site hours." },
   { key: "raw_manhours", label: "Raw Manhours", description: "Client-facing total raw manhours." },
@@ -268,7 +299,8 @@ const CLIENT_CONTENT_OPTIONS: Array<{
   { key: "travel", label: "Travel", description: "Recorded travel-in and travel-out information." },
   { key: "delays", label: "Delays / Disruptions", description: "Recorded delay events and affected work." },
   { key: "missing_materials", label: "Missing Materials", description: "Missing steel, bolts, washers and other recorded material impacts." },
-  { key: "received_materials", label: "Materials Received", description: "Found, received and transferred material records." },
+  { key: "received_materials", label: "Materials Received", description: "Found and received material records." },
+  { key: "bundle_transfers", label: "Bundle Transfers", description: "Bundles taken from another tower and whether the source tower replacement is still outstanding." },
   { key: "safety", label: "Safety / Incidents", description: "Recorded safety and incident information." },
 ];
 
@@ -351,48 +383,6 @@ function titleCase(value: string | null | undefined) {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function normalizeRole(value: string | null | undefined) {
-  switch ((value || "").trim().toLowerCase()) {
-    case "site_admin":
-    case "administrator":
-      return "admin";
-    case "commercial_manager":
-      return "commercial";
-    case "safety":
-    case "safety_manager":
-      return "hseq";
-    case "mechanic":
-    case "assets":
-      return "asset_manager";
-    case "leading_hand":
-    case "field":
-      return "crew";
-    default:
-      return (value || "").trim().toLowerCase();
-  }
-}
-
-function roleLabel(value: string) {
-  switch (value) {
-    case "admin":
-      return "Administrator";
-    case "commercial":
-      return "Commercial";
-    case "hseq":
-      return "HSEQ";
-    case "asset_manager":
-      return "Asset Manager";
-    case "editor":
-      return "Editor";
-    case "crew":
-      return "Crew / Field";
-    case "viewer":
-      return "Viewer";
-    default:
-      return value;
-  }
 }
 
 function statusLabel(value: string | null) {
@@ -634,6 +624,101 @@ function missingStatusClasses(status: MissingStatus["status"]) {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+type TransferReplacementStatus = {
+  originalQty: number;
+  deliveredQty: number;
+  remainingQty: number;
+  status: "Outstanding" | "Partially Replaced" | "Replaced";
+};
+
+function buildTransferReplacementStatusMap(events: MaterialEventRow[]) {
+  const missingByTransfer = new Map<
+    string,
+    { issueKey: string; quantity: number }
+  >();
+  const receiptsByIssue = new Map<string, number>();
+
+  events.forEach((event) => {
+    const transferId = String(event.transfer_id || "").trim();
+    if (!transferId) return;
+
+    if (event.event_type === "missing") {
+      (event.items || []).forEach((item) => {
+        const issueKey = String(item.issue_key || "").trim();
+        if (!issueKey) return;
+
+        missingByTransfer.set(transferId, {
+          issueKey,
+          quantity: Math.max(Number(item.quantity || 0), 0),
+        });
+      });
+    }
+
+    if (event.event_type === "found_received") {
+      (event.items || []).forEach((item) => {
+        const sourceIssueKey = String(item.source_issue_key || "").trim();
+        if (!sourceIssueKey) return;
+
+        receiptsByIssue.set(
+          sourceIssueKey,
+          (receiptsByIssue.get(sourceIssueKey) || 0) +
+            Math.max(Number(item.quantity || 0), 0),
+        );
+      });
+    }
+  });
+
+  const result = new Map<string, TransferReplacementStatus>();
+
+  missingByTransfer.forEach((missing, transferId) => {
+    const deliveredQty = Math.max(
+      receiptsByIssue.get(missing.issueKey) || 0,
+      0,
+    );
+    const remainingQty = Math.max(missing.quantity - deliveredQty, 0);
+
+    result.set(transferId, {
+      originalQty: missing.quantity,
+      deliveredQty,
+      remainingQty,
+      status:
+        remainingQty <= 0
+          ? "Replaced"
+          : deliveredQty > 0
+            ? "Partially Replaced"
+            : "Outstanding",
+    });
+  });
+
+  return result;
+}
+
+function plantDelayHours(
+  plantRow: PlantRow,
+  delays: DelayRow[],
+) {
+  const names = new Set(
+    [
+      plantRow.plant_name,
+      plantRow.asset_number,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).trim().toLowerCase()),
+  );
+
+  if (names.size === 0) return 0;
+
+  return delays.reduce((sum, delay) => {
+    if (delay.delay_applies_mode !== "labour_and_plant") return sum;
+
+    const selected = (delay.plant_names || []).some((name) =>
+      names.has(String(name || "").trim().toLowerCase()),
+    );
+
+    return selected ? sum + Number(delay.delay_hours || 0) : sum;
+  }, 0);
+}
+
 function signatureApproxBytes(dataUrl: string) {
   const base64 = dataUrl.split(",")[1] || "";
   return Math.ceil((base64.length * 3) / 4);
@@ -669,6 +754,10 @@ export default function DailyDocketBcReviewPage() {
     RevisionAllocationRow[]
   >([]);
   const [materialHistory, setMaterialHistory] = useState<MaterialEventRow[]>([]);
+  const [bundleTransfers, setBundleTransfers] = useState<BundleTransferRow[]>([]);
+  const [transferEvents, setTransferEvents] = useState<MaterialEventRow[]>([]);
+  const [clientApprovalContacts, setClientApprovalContacts] =
+    useState<ClientApprovalContactRow[]>([]);
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEventRow[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [savingChanges, setSavingChanges] = useState(false);
@@ -676,7 +765,6 @@ export default function DailyDocketBcReviewPage() {
   const [clientContentKeys, setClientContentKeys] = useState<ClientContentKey[]>([]);
   const [clientContentLoaded, setClientContentLoaded] = useState(false);
 
-  const [currentRole, setCurrentRole] = useState("");
   const [reviewerName, setReviewerName] = useState("");
   const [reviewerEmail, setReviewerEmail] = useState("");
   const [allowedReviewer, setAllowedReviewer] = useState(false);
@@ -730,10 +818,11 @@ export default function DailyDocketBcReviewPage() {
           materialHistoryRes,
           revisionRes,
           workflowRes,
-          roleRes,
-          configRes,
+          reviewerConfigRes,
           clientContentDefaultsRes,
           clientContentSnapshotRes,
+          clientContactsRes,
+          bundleTransfersRes,
         ] = await Promise.all([
           supabase
             .from("projects")
@@ -871,6 +960,7 @@ export default function DailyDocketBcReviewPage() {
             .from("tower_material_events")
             .select(`
               id,
+              transfer_id,
               event_type,
               occurred_at,
               source_tower_id,
@@ -899,6 +989,7 @@ export default function DailyDocketBcReviewPage() {
             .from("tower_material_events")
             .select(`
               id,
+              transfer_id,
               event_type,
               occurred_at,
               source_tower_id,
@@ -952,15 +1043,12 @@ export default function DailyDocketBcReviewPage() {
             .eq("docket_id", docketId)
             .order("created_at", { ascending: false }),
           supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", user.id)
-            .maybeSingle(),
-          supabase
-            .from("project_docket_approval_roles")
-            .select("role, receives_bc_review")
+            .from("project_docket_approval_users")
+            .select("user_id, receives_bc_review")
             .eq("project_id", projectId)
-            .eq("receives_bc_review", true),
+            .eq("user_id", user.id)
+            .eq("receives_bc_review", true)
+            .maybeSingle(),
           supabase
             .from("project_docket_client_content")
             .select("content_key, included_by_default")
@@ -969,6 +1057,32 @@ export default function DailyDocketBcReviewPage() {
             .from("tower_docket_client_content")
             .select("content_key, included, revision")
             .eq("docket_id", docketId),
+          supabase
+            .from("project_docket_contacts")
+            .select("id,name,email,company,receives_approval,active")
+            .eq("project_id", projectId)
+            .eq("active", true)
+            .eq("receives_approval", true)
+            .order("name"),
+          supabase
+            .from("tower_material_transfers")
+            .select(`
+              id,
+              transfer_no,
+              source_tower_id,
+              destination_tower_id,
+              source_bundle_id,
+              destination_bundle_id,
+              bundle_no,
+              bundle_section,
+              quantity,
+              status,
+              transferred_at,
+              received_at,
+              notes
+            `)
+            .eq("destination_docket_id", docketId)
+            .order("transferred_at", { ascending: true }),
         ]);
 
         if (projectRes.error || !projectRes.data) {
@@ -1001,9 +1115,27 @@ export default function DailyDocketBcReviewPage() {
           );
         }
 
+        if (reviewerConfigRes.error) {
+          throw new Error(
+            "Your Daily Docket reviewer assignment could not be checked. Run the individual reviewer migration / self-read policy before reviewing this docket.",
+          );
+        }
+
         if (clientContentDefaultsRes.error || clientContentSnapshotRes.error) {
           throw new Error(
             "Client docket content settings could not be loaded. Run the Daily Docket client-content migration before reviewing this docket.",
+          );
+        }
+
+        if (clientContactsRes.error) {
+          throw new Error(
+            "Client approval recipients could not be loaded for this project.",
+          );
+        }
+
+        if (bundleTransfersRes.error) {
+          throw new Error(
+            "Bundle transfers could not be loaded for this Daily Docket.",
           );
         }
 
@@ -1034,18 +1166,63 @@ export default function DailyDocketBcReviewPage() {
         const resolvedClientKeys =
           snapshotRows.length > 0 ? snapshotClientKeys : defaultClientKeys;
 
-        const role = normalizeRole(
-          (roleRes.data as { role?: string | null } | null)?.role,
+        const reviewerIsConfigured = Boolean(
+          (
+            reviewerConfigRes.data as
+              | { user_id?: string | null; receives_bc_review?: boolean | null }
+              | null
+          )?.user_id,
         );
 
-        const configuredRoles = new Set(
-          ((configRes.data || []) as {
-            role: string;
-            receives_bc_review: boolean;
-          }[])
-            .filter((row) => row.receives_bc_review)
-            .map((row) => normalizeRole(row.role)),
-        );
+        const loadedBundleTransfers =
+          (bundleTransfersRes.data || []) as BundleTransferRow[];
+
+        let loadedTransferEvents: MaterialEventRow[] = [];
+        const transferIds = loadedBundleTransfers
+          .map((row) => row.id)
+          .filter(Boolean);
+
+        if (transferIds.length > 0) {
+          const transferHistoryRes = await supabase
+            .from("tower_material_events")
+            .select(`
+              id,
+              transfer_id,
+              event_type,
+              occurred_at,
+              source_tower_id,
+              destination_tower_id,
+              destination_location,
+              work_outcome,
+              notes,
+              items:tower_material_event_items(
+                id,
+                item_reference,
+                item_description,
+                quantity,
+                unit,
+                issue_key,
+                source_issue_key,
+                bundle_id,
+                bundle_no,
+                bundle_section
+              ),
+              people:tower_material_event_people(*),
+              plant:tower_material_event_plant(*)
+            `)
+            .in("transfer_id", transferIds)
+            .in("event_type", ["missing", "found_received"])
+            .order("occurred_at", { ascending: true });
+
+          if (transferHistoryRes.error) {
+            throw new Error(
+              "Bundle transfer replacement history could not be loaded.",
+            );
+          }
+
+          loadedTransferEvents =
+            (transferHistoryRes.data || []) as MaterialEventRow[];
+        }
 
         if (!cancelled) {
           setProject(projectRes.data as ProjectRow);
@@ -1068,8 +1245,12 @@ export default function DailyDocketBcReviewPage() {
           );
           setClientContentKeys(resolvedClientKeys);
           setClientContentLoaded(true);
-          setCurrentRole(role);
-          setAllowedReviewer(configuredRoles.has(role));
+          setAllowedReviewer(reviewerIsConfigured);
+          setClientApprovalContacts(
+            (clientContactsRes.data || []) as ClientApprovalContactRow[],
+          );
+          setBundleTransfers(loadedBundleTransfers);
+          setTransferEvents(loadedTransferEvents);
           setReviewerName(
             String(
               user.user_metadata?.full_name ||
@@ -1179,6 +1360,11 @@ export default function DailyDocketBcReviewPage() {
   const missingStatusMap = useMemo(
     () => buildMissingStatusMap(materialHistory),
     [materialHistory],
+  );
+
+  const transferReplacementStatusMap = useMemo(
+    () => buildTransferReplacementStatusMap(transferEvents),
+    [transferEvents],
   );
 
   const totalDelayHours = delays.reduce(
@@ -1444,6 +1630,13 @@ export default function DailyDocketBcReviewPage() {
     }
 
     if (action === "approve") {
+      if (clientApprovalContacts.length === 0) {
+        setSubmitError(
+          "No active client approval recipients are configured for this project.",
+        );
+        return;
+      }
+
       if (!clientContentLoaded || clientContentKeys.length === 0) {
         setSubmitError(
           "Select at least one section to include in the client Daily Docket.",
@@ -1678,10 +1871,9 @@ export default function DailyDocketBcReviewPage() {
               <div>
                 <p className="font-semibold">Review access not configured</p>
                 <p className="mt-1">
-                  Your website role is{" "}
-                  <strong>{roleLabel(currentRole || "unknown")}</strong>, but
-                  this role is not configured to approve Daily Dockets for this
-                  project.
+                  Your TTTracker account has not been individually selected as a
+                  BC Daily Docket reviewer for this project. An Administrator can
+                  add you in Daily Docket Approval Settings.
                 </p>
               </div>
             </div>
@@ -2481,7 +2673,10 @@ export default function DailyDocketBcReviewPage() {
                             Time
                           </th>
                           <th className="px-4 py-3 text-right font-semibold">
-                            Hours
+                            Raw Hours
+                          </th>
+                          <th className="px-4 py-3 text-right font-semibold">
+                            Delay Hrs
                           </th>
                           <th className="px-4 py-3 text-left font-semibold">
                             Notes
@@ -2505,6 +2700,9 @@ export default function DailyDocketBcReviewPage() {
                             </td>
                             <td className="px-4 py-3 text-right text-slate-700">
                               {formatHours(row.total_hours)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-amber-700">
+                              {formatHours(plantDelayHours(row, delays))}
                             </td>
                             <td className="px-4 py-3 text-slate-600">
                               {row.notes || "—"}
@@ -2628,14 +2826,16 @@ export default function DailyDocketBcReviewPage() {
                   </p>
                 </div>
                 <span className="text-sm text-slate-500">
-                  {materialEvents.length} event
-                  {materialEvents.length === 1 ? "" : "s"}
+                  {materialEvents.filter((event) => !event.transfer_id).length} event
+                  {materialEvents.filter((event) => !event.transfer_id).length === 1 ? "" : "s"}
                 </span>
               </div>
 
-              {materialEvents.length ? (
+              {materialEvents.filter((event) => !event.transfer_id).length ? (
                 <div className="mt-5 space-y-4">
-                  {materialEvents.map((event) => (
+                  {materialEvents
+                    .filter((event) => !event.transfer_id)
+                    .map((event) => (
                     <div
                       key={event.id}
                       className="rounded-xl border border-slate-200 bg-slate-50 p-4"
@@ -2810,6 +3010,111 @@ export default function DailyDocketBcReviewPage() {
                       No missing or excess material has been recorded.
                     </p>
                   )}
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-blue-200 bg-white p-6 shadow-sm">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Bundle Transfers
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Bundles taken from another tower for this workfront. The
+                    source tower remains outstanding until its replacement is
+                    confirmed delivered.
+                  </p>
+                </div>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  {bundleTransfers.length} transfer
+                  {bundleTransfers.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {bundleTransfers.length ? (
+                <div className="mt-5 space-y-3">
+                  {bundleTransfers.map((transfer) => {
+                    const replacement =
+                      transferReplacementStatusMap.get(transfer.id) || {
+                        originalQty: transfer.quantity,
+                        deliveredQty: 0,
+                        remainingQty: transfer.quantity,
+                        status: "Outstanding" as const,
+                      };
+
+                    return (
+                      <div
+                        key={transfer.id}
+                        className="rounded-xl border border-blue-100 bg-blue-50/40 p-4"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="font-semibold text-slate-900">
+                              Bundle {transfer.bundle_no}
+                              {transfer.bundle_section
+                                ? ` · ${transfer.bundle_section}`
+                                : ""}
+                            </p>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Taken from{" "}
+                              <strong>
+                                {towerNameById.get(transfer.source_tower_id) ||
+                                  transfer.source_tower_id}
+                              </strong>{" "}
+                              · Qty {transfer.quantity}
+                            </p>
+                            {transfer.received_at || transfer.transferred_at ? (
+                              <p className="mt-1 text-xs text-slate-500">
+                                {formatDateTime(
+                                  transfer.received_at ||
+                                    transfer.transferred_at,
+                                )}
+                              </p>
+                            ) : null}
+                          </div>
+
+                          <span
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                              replacement.status === "Replaced"
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : replacement.status === "Partially Replaced"
+                                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                                  : "border-rose-200 bg-rose-50 text-rose-700"
+                            }`}
+                          >
+                            Source replacement: {replacement.status}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <SummaryBlockCompact
+                            label="Taken"
+                            value={String(replacement.originalQty)}
+                          />
+                          <SummaryBlockCompact
+                            label="Replaced"
+                            value={String(replacement.deliveredQty)}
+                          />
+                          <SummaryBlockCompact
+                            label="Still Missing"
+                            value={String(replacement.remainingQty)}
+                          />
+                        </div>
+
+                        {transfer.notes ? (
+                          <p className="mt-3 text-sm text-slate-600">
+                            {transfer.notes}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                  No bundles were recorded as taken from another tower on this
+                  Daily Docket.
                 </div>
               )}
             </section>
@@ -3120,6 +3425,49 @@ export default function DailyDocketBcReviewPage() {
                 </div>
               ) : null}
 
+              <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Client Approval Email Recipients
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      These contacts are configured in Daily Docket Approval
+                      Settings and will each receive their own secure approval
+                      link when you approve this revision.
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                    {clientApprovalContacts.length}
+                  </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {clientApprovalContacts.length ? (
+                    clientApprovalContacts.map((contact) => (
+                      <div
+                        key={contact.id}
+                        className="rounded-lg border border-emerald-100 bg-white px-3 py-2"
+                      >
+                        <p className="text-sm font-semibold text-slate-900">
+                          {contact.name}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {contact.email}
+                          {contact.company ? ` · ${contact.company}` : ""}
+                        </p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                      No active client approval recipients are configured.
+                      Approval cannot be sent until one is added in Approval
+                      Settings.
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -3210,6 +3558,7 @@ export default function DailyDocketBcReviewPage() {
                   disabled={
                     !allowedReviewer ||
                     !reviewActionable ||
+                    clientApprovalContacts.length === 0 ||
                     submitting !== null
                   }
                   onClick={() => void submitReview("approve")}
@@ -3354,6 +3703,14 @@ export default function DailyDocketBcReviewPage() {
                 <CheckItem
                   ok={progressByTower.size >= 1}
                   label="Tower progress rows linked to a workfront"
+                />
+                <CheckItem
+                  ok={allowedReviewer}
+                  label="Signed-in user is an individually configured BC reviewer"
+                />
+                <CheckItem
+                  ok={clientApprovalContacts.length > 0}
+                  label="Client approval email recipients configured"
                 />
                 <CheckItem
                   ok={Boolean(reviewerSignature)}

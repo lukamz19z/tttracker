@@ -7,18 +7,14 @@ export type DailyDocketReviewerRecipient = {
   role: string;
 };
 
+type ApprovalUserRow = {
+  user_id: string | null;
+  receives_bc_review?: boolean | null;
+};
+
 type UserRoleRow = {
   user_id: string;
   role: string | null;
-};
-
-type ProjectAccessRow = {
-  user_id: string;
-};
-
-type ApprovalRoleRow = {
-  role: string | null;
-  receives_bc_review?: boolean | null;
 };
 
 export function normalizeDailyDocketRole(
@@ -55,14 +51,13 @@ function displayNameFromAuthUser(user: {
 }) {
   const metadata = user.user_metadata || {};
 
-  const metadataName =
-    String(
-      metadata.full_name ||
-        metadata.name ||
-        metadata.display_name ||
-        metadata.preferred_name ||
-        "",
-    ).trim();
+  const metadataName = String(
+    metadata.full_name ||
+      metadata.name ||
+      metadata.display_name ||
+      metadata.preferred_name ||
+      "",
+  ).trim();
 
   if (metadataName) return metadataName;
 
@@ -76,127 +71,183 @@ function displayNameFromAuthUser(user: {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-export async function getConfiguredBcReviewerRoles(
+/**
+ * Returns the exact TTTracker user IDs configured to receive/review
+ * Daily Dockets for this project.
+ *
+ * This is the source of truth for BC reviewer selection.
+ *
+ * Reviewer selection is deliberately independent of:
+ * - the user's global website role;
+ * - their project_access role;
+ * - Commercial/Admin/HSEQ role groups.
+ *
+ * If an Administrator explicitly selects a user in Approval Settings,
+ * that user is a configured BC Daily Docket reviewer for the project.
+ */
+export async function getConfiguredBcReviewerUserIds(
   service: SupabaseClient,
   projectId: string,
 ): Promise<string[]> {
   const { data, error } = await service
-    .from("project_docket_approval_roles")
-    .select("role, receives_bc_review")
+    .from("project_docket_approval_users")
+    .select("user_id, receives_bc_review")
     .eq("project_id", projectId)
     .eq("receives_bc_review", true);
 
   if (error) {
     throw new Error(
-      `Daily Docket approval roles could not be loaded: ${error.message}`,
+      `Daily Docket reviewers could not be loaded: ${error.message}`,
     );
   }
 
   return Array.from(
     new Set(
-      ((data || []) as ApprovalRoleRow[])
+      ((data || []) as ApprovalUserRow[])
         .filter((row) => row.receives_bc_review !== false)
+        .map((row) => String(row.user_id || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+/**
+ * Backwards-compatible export.
+ *
+ * The approval workflow is no longer role-driven, however older pages/helpers
+ * may still import getConfiguredBcReviewerRoles(). Rather than breaking those
+ * callers immediately, this returns the actual website roles of the explicitly
+ * configured reviewers.
+ *
+ * IMPORTANT:
+ * Do not use this function to decide who is allowed to review a docket.
+ * Use isConfiguredBcReviewer() for authorisation.
+ */
+export async function getConfiguredBcReviewerRoles(
+  service: SupabaseClient,
+  projectId: string,
+): Promise<string[]> {
+  const reviewerUserIds = await getConfiguredBcReviewerUserIds(
+    service,
+    projectId,
+  );
+
+  if (reviewerUserIds.length === 0) return [];
+
+  const { data, error } = await service
+    .from("user_roles")
+    .select("user_id, role")
+    .in("user_id", reviewerUserIds);
+
+  if (error) {
+    throw new Error(
+      `Configured Daily Docket reviewer roles could not be loaded: ${error.message}`,
+    );
+  }
+
+  return Array.from(
+    new Set(
+      ((data || []) as UserRoleRow[])
         .map((row) => normalizeDailyDocketRole(row.role))
         .filter(Boolean),
     ),
   );
 }
 
+/**
+ * Checks whether a specific signed-in user was explicitly selected as a
+ * Daily Docket reviewer for the project.
+ *
+ * This replaces the old logic:
+ *   configured roles -> user's role -> project_access
+ *
+ * with:
+ *   project_docket_approval_users -> exact user_id
+ */
 export async function isConfiguredBcReviewer(
   service: SupabaseClient,
   projectId: string,
   userId: string,
 ): Promise<boolean> {
-  const reviewerRoles = await getConfiguredBcReviewerRoles(service, projectId);
+  const cleanUserId = String(userId || "").trim();
 
-  if (reviewerRoles.length === 0) return false;
+  if (!projectId || !cleanUserId) return false;
 
   const { data, error } = await service
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId)
+    .from("project_docket_approval_users")
+    .select("user_id")
+    .eq("project_id", projectId)
+    .eq("user_id", cleanUserId)
+    .eq("receives_bc_review", true)
     .maybeSingle();
 
   if (error) {
     throw new Error(
-      `The reviewer role could not be checked: ${error.message}`,
+      `The Daily Docket reviewer assignment could not be checked: ${error.message}`,
     );
   }
 
-  const userRole = normalizeDailyDocketRole(
-    (data as { role?: string | null } | null)?.role,
-  );
-
-  return reviewerRoles.includes(userRole);
+  return Boolean(data?.user_id);
 }
 
+/**
+ * Resolves the exact people configured in Approval Settings into email
+ * recipients for the BC review notification.
+ *
+ * Only users listed in project_docket_approval_users are returned.
+ *
+ * Project access is NOT required here because the Approval Settings page allows
+ * an Administrator to deliberately configure an active TTTracker user as a
+ * project-specific reviewer independently of their normal role.
+ *
+ * The BC Review route itself should also call isConfiguredBcReviewer() before
+ * allowing the reviewer to action the docket.
+ */
 export async function getBcReviewerRecipients(
   service: SupabaseClient,
   projectId: string,
 ): Promise<DailyDocketReviewerRecipient[]> {
-  const reviewerRoles = await getConfiguredBcReviewerRoles(service, projectId);
+  const reviewerUserIds = await getConfiguredBcReviewerUserIds(
+    service,
+    projectId,
+  );
 
-  if (reviewerRoles.length === 0) {
+  if (reviewerUserIds.length === 0) {
     return [];
   }
 
-  const [{ data: accessData, error: accessError }, { data: roleData, error: roleError }] =
-    await Promise.all([
-      service
-        .from("project_access")
-        .select("user_id")
-        .eq("project_id", projectId),
-      service
-        .from("user_roles")
-        .select("user_id, role"),
-    ]);
-
-  if (accessError) {
-    throw new Error(
-      `Project reviewer access could not be loaded: ${accessError.message}`,
-    );
-  }
+  // Role is retained in the returned shape for compatibility with existing
+  // email templates / audit information, but it no longer determines whether
+  // somebody is a reviewer.
+  const { data: roleData, error: roleError } = await service
+    .from("user_roles")
+    .select("user_id, role")
+    .in("user_id", reviewerUserIds);
 
   if (roleError) {
-    throw new Error(
-      `Reviewer roles could not be loaded: ${roleError.message}`,
+    console.warn(
+      "Configured Daily Docket reviewer roles could not be loaded. Reviewers will still be resolved by user ID.",
+      roleError,
     );
   }
 
-  const projectUserIds = new Set(
-    ((accessData || []) as ProjectAccessRow[])
-      .map((row) => String(row.user_id || "").trim())
-      .filter(Boolean),
-  );
-
-  const matchingUsers = ((roleData || []) as UserRoleRow[])
-    .map((row) => ({
-      userId: String(row.user_id || "").trim(),
-      role: normalizeDailyDocketRole(row.role),
-    }))
-    .filter(
-      (row) =>
-        row.userId &&
-        projectUserIds.has(row.userId) &&
-        reviewerRoles.includes(row.role),
-    );
-
-  const uniqueMatchingUsers = Array.from(
-    new Map(
-      matchingUsers.map((row) => [row.userId, row]),
-    ).values(),
+  const roleByUserId = new Map(
+    ((roleData || []) as UserRoleRow[]).map((row) => [
+      String(row.user_id || "").trim(),
+      normalizeDailyDocketRole(row.role),
+    ]),
   );
 
   const recipients: DailyDocketReviewerRecipient[] = [];
 
-  for (const reviewer of uniqueMatchingUsers) {
+  for (const reviewerUserId of reviewerUserIds) {
     const { data, error } = await service.auth.admin.getUserById(
-      reviewer.userId,
+      reviewerUserId,
     );
 
     if (error) {
       console.warn(
-        `Daily Docket reviewer ${reviewer.userId} could not be loaded from Supabase Auth`,
+        `Daily Docket reviewer ${reviewerUserId} could not be loaded from Supabase Auth`,
         error,
       );
       continue;
@@ -205,19 +256,27 @@ export async function getBcReviewerRecipients(
     const user = data.user;
     const email = String(user?.email || "").trim().toLowerCase();
 
-    if (!user || !email) continue;
+    if (!user || !email) {
+      console.warn(
+        `Daily Docket reviewer ${reviewerUserId} does not have an email address and will not receive the review notification.`,
+      );
+      continue;
+    }
 
     recipients.push({
-      userId: reviewer.userId,
+      userId: reviewerUserId,
       email,
       name: displayNameFromAuthUser(user),
-      role: reviewer.role,
+      role: roleByUserId.get(reviewerUserId) || "reviewer",
     });
   }
 
   return Array.from(
     new Map(
-      recipients.map((recipient) => [recipient.email, recipient]),
+      recipients.map((recipient) => [
+        recipient.email.toLowerCase(),
+        recipient,
+      ]),
     ).values(),
   ).sort((a, b) => a.name.localeCompare(b.name));
 }

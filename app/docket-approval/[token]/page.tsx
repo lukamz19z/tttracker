@@ -20,6 +20,42 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+type ClientContentKey =
+  | "daily_site_summary"
+  | "rfi_references"
+  | "progress"
+  | "workforce"
+  | "raw_manhours"
+  | "plant"
+  | "mobilisation"
+  | "travel"
+  | "delays"
+  | "missing_materials"
+  | "received_materials"
+  | "bundle_transfers"
+  | "safety";
+
+type ClientBundleTransfer = {
+  id: string;
+  transferNo: number | null;
+  bundleNo: string;
+  bundleSection: string | null;
+  quantity: number;
+  sourceTowerId: string;
+  sourceTowerName: string;
+  destinationTowerId: string;
+  destinationTowerName: string;
+  transferredAt: string | null;
+  receivedAt: string | null;
+  replacement: {
+    originalQty: number;
+    deliveredQty: number;
+    remainingQty: number;
+    status: "Outstanding" | "Partially Replaced" | "Replaced";
+  };
+  notes: string | null;
+};
+
 type ApprovalResponse = {
   success: boolean;
   docket: {
@@ -39,7 +75,14 @@ type ApprovalResponse = {
     };
     tower: {
       name: string;
+      towersWorked?: string[];
     };
+    towersWorked?: string[];
+    clientContentKeys?: ClientContentKey[];
+    visibleSections?: ClientContentKey[];
+    dailySiteSummary?: string | null;
+    rfiReferences?: string[];
+    bundleTransfers?: ClientBundleTransfer[];
     recipient: {
       name: string | null;
       email: string | null;
@@ -52,11 +95,52 @@ type SubmitResult = {
   success?: boolean;
   status?: string;
   error?: string;
+  warning?: string | null;
   final?: {
     fileName?: string | null;
     webUrl?: string | null;
   };
 };
+
+const CLIENT_CONTENT_OPTIONS: Array<{
+  key: ClientContentKey;
+  label: string;
+}> = [
+  { key: "daily_site_summary", label: "Daily Site Summary" },
+  { key: "rfi_references", label: "RFI References" },
+  { key: "progress", label: "Progress" },
+  { key: "workforce", label: "Workforce" },
+  { key: "raw_manhours", label: "Raw Manhours" },
+  { key: "plant", label: "Plant & Equipment" },
+  { key: "mobilisation", label: "Mobilisation" },
+  { key: "travel", label: "Travel" },
+  { key: "delays", label: "Delays / Disruptions" },
+  { key: "missing_materials", label: "Missing Materials" },
+  { key: "received_materials", label: "Materials Received" },
+  { key: "bundle_transfers", label: "Bundle Transfers" },
+  { key: "safety", label: "Safety / Incidents" },
+];
+
+function clientContentLabel(key: ClientContentKey) {
+  return (
+    CLIENT_CONTENT_OPTIONS.find((option) => option.key === key)?.label ||
+    key.replaceAll("_", " ")
+  );
+}
+
+function transferStatusClasses(
+  status: ClientBundleTransfer["replacement"]["status"],
+) {
+  if (status === "Replaced") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (status === "Partially Replaced") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
 
 function formatDate(value: string | null) {
   if (!value) return "—";
@@ -362,6 +446,24 @@ export default function ClientDailyDocketApprovalPage() {
                 </div>
               </div>
 
+              {completed.warning ? (
+                <div className="mx-auto mt-6 max-w-lg rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-800">
+                  {completed.warning}
+                </div>
+              ) : null}
+
+              {approved && completed.final?.webUrl ? (
+                <a
+                  href={completed.final.webUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Open Final Daily Docket
+                </a>
+              ) : null}
+
               <p className="mt-6 text-xs text-slate-500">
                 You can close this page.
               </p>
@@ -371,6 +473,18 @@ export default function ClientDailyDocketApprovalPage() {
       </main>
     );
   }
+
+  const visibleContentKeys =
+    docket.visibleSections?.length
+      ? docket.visibleSections
+      : docket.clientContentKeys || [];
+
+  const visibleContent = new Set<ClientContentKey>(visibleContentKeys);
+  const towersWorked =
+    docket.towersWorked?.length
+      ? docket.towersWorked
+      : docket.tower.towersWorked || [];
+  const bundleTransfers = docket.bundleTransfers || [];
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -431,14 +545,18 @@ export default function ClientDailyDocketApprovalPage() {
                   label="Docket Date"
                   value={formatDate(docket.docketDate)}
                 />
-                <SummaryBlock
-                  label="Crew"
-                  value={docket.crew || "—"}
-                />
-                <SummaryBlock
-                  label="Leading Hand"
-                  value={docket.leadingHand || "—"}
-                />
+                {visibleContent.has("workforce") ? (
+                  <>
+                    <SummaryBlock
+                      label="Crew"
+                      value={docket.crew || "—"}
+                    />
+                    <SummaryBlock
+                      label="Leading Hand"
+                      value={docket.leadingHand || "—"}
+                    />
+                  </>
+                ) : null}
                 <SummaryBlock
                   label="BC Representative"
                   value={docket.bcRepresentative || "—"}
@@ -453,7 +571,193 @@ export default function ClientDailyDocketApprovalPage() {
                   }
                 />
               </div>
+
+              {visibleContent.has("progress") && towersWorked.length > 1 ? (
+                <div className="border-t border-slate-200 bg-slate-50 px-6 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Towers Worked
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {towersWorked.map((towerWorked) => (
+                      <span
+                        key={towerWorked}
+                        className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
+                      >
+                        {towerWorked}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Information included in this issue
+                  </h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    These are the Daily Docket sections selected by BC for client review on this revision.
+                  </p>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  {visibleContentKeys.length} section
+                  {visibleContentKeys.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {visibleContentKeys.length ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {visibleContentKeys.map((key) => (
+                    <span
+                      key={key}
+                      className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800"
+                    >
+                      {clientContentLabel(key)}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  No client-visible sections were returned for this revision.
+                </div>
+              )}
+
+              <p className="mt-4 text-xs leading-5 text-slate-500">
+                The issued PDF is the controlled review document and contains the selected detailed sections.
+              </p>
+            </div>
+
+            {visibleContent.has("daily_site_summary") ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-base font-semibold text-slate-900">
+                  Daily Site Summary
+                </h2>
+                {docket.dailySiteSummary ? (
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                    {docket.dailySiteSummary}
+                  </p>
+                ) : (
+                  <p className="mt-3 text-sm text-slate-500">
+                    No Daily Site Summary was recorded.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {visibleContent.has("rfi_references") ? (
+              <div className="rounded-2xl border border-blue-200 bg-blue-50/40 p-6 shadow-sm">
+                <h2 className="text-base font-semibold text-slate-900">
+                  RFI References
+                </h2>
+                {docket.rfiReferences?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {docket.rfiReferences.map((reference) => (
+                      <span
+                        key={reference}
+                        className="rounded-full border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-800"
+                      >
+                        {reference}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-slate-500">
+                    No RFI references were recorded.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {visibleContent.has("bundle_transfers") ? (
+              <div className="rounded-2xl border border-blue-200 bg-white p-6 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      Bundle Transfers
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      Bundles used at this workfront that were taken from another tower, including the source-tower replacement status.
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    {bundleTransfers.length} transfer
+                    {bundleTransfers.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                {bundleTransfers.length ? (
+                  <div className="mt-4 space-y-3">
+                    {bundleTransfers.map((transfer) => (
+                      <div
+                        key={transfer.id}
+                        className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="font-semibold text-slate-900">
+                              Bundle {transfer.bundleNo}
+                              {transfer.bundleSection
+                                ? ` · ${transfer.bundleSection}`
+                                : ""}
+                            </p>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Taken from{" "}
+                              <strong>{transfer.sourceTowerName}</strong>
+                              {" · "}
+                              Qty {transfer.quantity}
+                            </p>
+                            {transfer.receivedAt || transfer.transferredAt ? (
+                              <p className="mt-1 text-xs text-slate-500">
+                                {formatDateTime(
+                                  transfer.receivedAt ||
+                                    transfer.transferredAt,
+                                )}
+                              </p>
+                            ) : null}
+                          </div>
+
+                          <span
+                            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${transferStatusClasses(
+                              transfer.replacement.status,
+                            )}`}
+                          >
+                            Source replacement:{" "}
+                            {transfer.replacement.status}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          <TransferMetric
+                            label="Taken"
+                            value={transfer.replacement.originalQty}
+                          />
+                          <TransferMetric
+                            label="Replaced"
+                            value={transfer.replacement.deliveredQty}
+                          />
+                          <TransferMetric
+                            label="Still Missing"
+                            value={transfer.replacement.remainingQty}
+                          />
+                        </div>
+
+                        {transfer.notes ? (
+                          <p className="mt-3 text-sm leading-6 text-slate-600">
+                            {transfer.notes}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                    No bundles were recorded as taken from another tower on this Daily Docket.
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             <div className="rounded-2xl border border-blue-200 bg-blue-50/40 p-6 shadow-sm">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -621,6 +925,23 @@ export default function ClientDailyDocketApprovalPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function TransferMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-center">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-bold text-slate-900">{value}</p>
+    </div>
   );
 }
 

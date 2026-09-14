@@ -4,7 +4,11 @@ import { NextResponse } from "next/server";
 
 import { createDocketAdminSupabase } from "@/lib/dockets/server";
 import { getBcReviewerRecipients } from "@/lib/dockets/reviewers";
-import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
+import {
+  generateDailyDocketPdf,
+  type DailyDocketBundleTransfer,
+  type DailyDocketClientContentKey,
+} from "@/lib/dockets/daily-docket-pdf";
 import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
   docketEmailShell,
@@ -90,7 +94,9 @@ type ClientContactRow = {
   active: boolean;
 };
 
-const CLIENT_CONTENT_KEYS = [
+const CLIENT_CONTENT_KEYS: readonly DailyDocketClientContentKey[] = [
+  "daily_site_summary",
+  "rfi_references",
   "progress",
   "workforce",
   "raw_manhours",
@@ -100,10 +106,11 @@ const CLIENT_CONTENT_KEYS = [
   "delays",
   "missing_materials",
   "received_materials",
+  "bundle_transfers",
   "safety",
 ] as const;
 
-type ClientContentKey = (typeof CLIENT_CONTENT_KEYS)[number];
+type ClientContentKey = DailyDocketClientContentKey;
 
 type ClientContentSnapshotRow = {
   content_key: string;
@@ -113,6 +120,33 @@ type ClientContentSnapshotRow = {
 type ProjectClientContentRow = {
   content_key: string;
   included_by_default: boolean;
+};
+
+type MaterialEventRow = Record<string, unknown> & {
+  transfer_id?: string | null;
+  event_type?: string | null;
+  tower_material_event_items?: Array<Record<string, unknown>> | null;
+};
+
+type ClientBundleTransferPayload = {
+  id: string;
+  transferNo: number | null;
+  bundleNo: string;
+  bundleSection: string | null;
+  quantity: number;
+  sourceTowerId: string;
+  sourceTowerName: string;
+  destinationTowerId: string;
+  destinationTowerName: string;
+  transferredAt: string | null;
+  receivedAt: string | null;
+  replacement: {
+    originalQty: number;
+    deliveredQty: number;
+    remainingQty: number;
+    status: "Outstanding" | "Partially Replaced" | "Replaced";
+  };
+  notes: string | null;
 };
 
 function isClientContentKey(value: string): value is ClientContentKey {
@@ -193,6 +227,11 @@ function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function num(value: unknown) {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -268,6 +307,145 @@ function workedTowerNames({
   );
 }
 
+function transferReplacementStatusMap(
+  events: MaterialEventRow[],
+) {
+  const missingByTransfer = new Map<
+    string,
+    { issueKey: string; quantity: number }
+  >();
+  const receiptsByIssue = new Map<string, number>();
+
+  for (const event of events) {
+    const transferId = String(event.transfer_id ?? "").trim();
+    if (!transferId) continue;
+
+    const items = Array.isArray(event.tower_material_event_items)
+      ? event.tower_material_event_items
+      : [];
+
+    if (String(event.event_type ?? "").trim() === "missing") {
+      for (const item of items) {
+        const issueKey = String(item.issue_key ?? "").trim();
+        if (!issueKey) continue;
+
+        missingByTransfer.set(transferId, {
+          issueKey,
+          quantity: Math.max(num(item.quantity), 0),
+        });
+      }
+    }
+
+    if (String(event.event_type ?? "").trim() === "found_received") {
+      for (const item of items) {
+        const sourceIssueKey = String(item.source_issue_key ?? "").trim();
+        if (!sourceIssueKey) continue;
+
+        receiptsByIssue.set(
+          sourceIssueKey,
+          (receiptsByIssue.get(sourceIssueKey) || 0) +
+            Math.max(num(item.quantity), 0),
+        );
+      }
+    }
+  }
+
+  const result = new Map<
+    string,
+    {
+      originalQty: number;
+      deliveredQty: number;
+      remainingQty: number;
+      status: "Outstanding" | "Partially Replaced" | "Replaced";
+    }
+  >();
+
+  for (const [transferId, missing] of missingByTransfer.entries()) {
+    const deliveredQty = Math.max(
+      receiptsByIssue.get(missing.issueKey) || 0,
+      0,
+    );
+    const remainingQty = Math.max(
+      missing.quantity - deliveredQty,
+      0,
+    );
+
+    result.set(transferId, {
+      originalQty: missing.quantity,
+      deliveredQty,
+      remainingQty,
+      status:
+        remainingQty <= 0
+          ? "Replaced"
+          : deliveredQty > 0
+            ? "Partially Replaced"
+            : "Outstanding",
+    });
+  }
+
+  return result;
+}
+
+function clientBundleTransfers({
+  transfers,
+  transferEvents,
+  primaryTower,
+  towers,
+}: {
+  transfers: DailyDocketBundleTransfer[];
+  transferEvents: MaterialEventRow[];
+  primaryTower: Record<string, unknown>;
+  towers: Array<Record<string, unknown>>;
+}): ClientBundleTransferPayload[] {
+  const replacementByTransfer =
+    transferReplacementStatusMap(transferEvents);
+
+  return transfers.map((transfer) => {
+    const replacement =
+      replacementByTransfer.get(transfer.id) || {
+        originalQty: Math.max(num(transfer.quantity), 0),
+        deliveredQty: 0,
+        remainingQty: Math.max(num(transfer.quantity), 0),
+        status: "Outstanding" as const,
+      };
+
+    const sourceTowerId = String(transfer.source_tower_id || "");
+    const destinationTowerId = String(
+      transfer.destination_tower_id || "",
+    );
+
+    return {
+      id: transfer.id,
+      transferNo:
+        transfer.transfer_no == null
+          ? null
+          : Number(transfer.transfer_no),
+      bundleNo: String(transfer.bundle_no || ""),
+      bundleSection:
+        String(transfer.bundle_section || "").trim() || null,
+      quantity: Math.max(num(transfer.quantity), 0),
+      sourceTowerId,
+      sourceTowerName: towerDisplayName(
+        sourceTowerId,
+        primaryTower,
+        towers,
+      ),
+      destinationTowerId,
+      destinationTowerName: towerDisplayName(
+        destinationTowerId,
+        primaryTower,
+        towers,
+      ),
+      transferredAt:
+        String(transfer.transferred_at || "").trim() || null,
+      receivedAt:
+        String(transfer.received_at || "").trim() || null,
+      replacement,
+      notes: String(transfer.notes || "").trim() || null,
+    };
+  });
+}
+
 function publicDocketPayload({
   approval,
   docket,
@@ -276,6 +454,9 @@ function publicDocketPayload({
   towers,
   progress,
   hourAllocations,
+  clientContentKeys,
+  bundleTransfers,
+  transferEvents,
 }: {
   approval: ApprovalRow;
   docket: DocketRow;
@@ -284,6 +465,9 @@ function publicDocketPayload({
   towers: Array<Record<string, unknown>>;
   progress: Array<Record<string, unknown>>;
   hourAllocations: Array<Record<string, unknown>>;
+  clientContentKeys: ClientContentKey[];
+  bundleTransfers: DailyDocketBundleTransfer[];
+  transferEvents: MaterialEventRow[];
 }) {
   const towersWorked = workedTowerNames({
     docket,
@@ -292,6 +476,17 @@ function publicDocketPayload({
     progress,
     hourAllocations,
   });
+
+  const visible = new Set<ClientContentKey>(clientContentKeys);
+
+  const visibleBundleTransfers = visible.has("bundle_transfers")
+    ? clientBundleTransfers({
+        transfers: bundleTransfers,
+        transferEvents,
+        primaryTower: tower,
+        towers,
+      })
+    : [];
 
   return {
     docketId: docket.id,
@@ -312,10 +507,18 @@ function publicDocketPayload({
       towersWorked,
     },
     towersWorked,
-    dailySiteSummary: docket.daily_site_summary ?? null,
-    rfiReferences: Array.isArray(docket.rfi_references)
-      ? docket.rfi_references
-      : [],
+    clientContentKeys,
+    visibleSections: clientContentKeys,
+    dailySiteSummary:
+      visible.has("daily_site_summary")
+        ? docket.daily_site_summary ?? null
+        : null,
+    rfiReferences:
+      visible.has("rfi_references") &&
+      Array.isArray(docket.rfi_references)
+        ? docket.rfi_references
+        : [],
+    bundleTransfers: visibleBundleTransfers,
     recipient: {
       name: approval.recipient_name,
       email: approval.recipient_email,
@@ -463,6 +666,7 @@ async function loadBundle(
     allocationResult,
     materialEventResult,
     materialHistoryResult,
+    bundleTransferResult,
   ] = await Promise.all([
     admin
       .from("projects")
@@ -535,6 +739,28 @@ async function loadBundle(
       `)
       .eq("tower_id", docket.tower_id)
       .order("occurred_at"),
+
+    admin
+      .from("tower_material_transfers")
+      .select(`
+        id,
+        transfer_no,
+        source_tower_id,
+        destination_tower_id,
+        source_bundle_id,
+        destination_bundle_id,
+        bundle_no,
+        bundle_section,
+        quantity,
+        status,
+        transferred_at,
+        received_at,
+        source_docket_id,
+        destination_docket_id,
+        notes
+      `)
+      .eq("destination_docket_id", docketId)
+      .order("transferred_at"),
   ]);
 
   if (projectResult.error || !projectResult.data) {
@@ -557,12 +783,45 @@ async function loadBundle(
     progressResult.error ||
     allocationResult.error ||
     materialEventResult.error ||
-    materialHistoryResult.error;
+    materialHistoryResult.error ||
+    bundleTransferResult.error;
 
   if (childError) {
     throw new Error(
       `Daily Docket details could not be loaded: ${childError.message}`,
     );
+  }
+
+  const bundleTransfers =
+    (bundleTransferResult.data ?? []) as unknown as DailyDocketBundleTransfer[];
+
+  let transferEvents: MaterialEventRow[] = [];
+  const transferIds = bundleTransfers
+    .map((transfer) => transfer.id)
+    .filter(Boolean);
+
+  if (transferIds.length > 0) {
+    const { data: transferEventData, error: transferEventError } =
+      await admin
+        .from("tower_material_events")
+        .select(`
+          *,
+          tower_material_event_items(*),
+          tower_material_event_people(*),
+          tower_material_event_plant(*)
+        `)
+        .in("transfer_id", transferIds)
+        .in("event_type", ["missing", "found_received"])
+        .order("occurred_at");
+
+    if (transferEventError) {
+      throw new Error(
+        `Bundle transfer replacement history could not be loaded: ${transferEventError.message}`,
+      );
+    }
+
+    transferEvents =
+      (transferEventData ?? []) as unknown as MaterialEventRow[];
   }
 
   return {
@@ -577,6 +836,8 @@ async function loadBundle(
     hourAllocations: allocationResult.data ?? [],
     materialEvents: materialEventResult.data ?? [],
     materialHistory: materialHistoryResult.data ?? [],
+    bundleTransfers,
+    transferEvents,
   };
 }
 
@@ -698,6 +959,21 @@ export async function GET(_request: Request, context: RouteContext) {
       );
     }
 
+    const approvalRevision = Math.max(
+      1,
+      Number(
+        approval.revision ??
+          currentRevision(bundle.docket),
+      ) || 1,
+    );
+
+    const clientContentKeys = await loadClientContentKeys({
+      admin,
+      docketId: bundle.docket.id,
+      projectId: bundle.docket.project_id,
+      revision: approvalRevision,
+    });
+
     return NextResponse.json({
       success: true,
       docket: publicDocketPayload({
@@ -708,6 +984,9 @@ export async function GET(_request: Request, context: RouteContext) {
         towers: bundle.towers,
         progress: bundle.progress as Array<Record<string, unknown>>,
         hourAllocations: bundle.hourAllocations as Array<Record<string, unknown>>,
+        clientContentKeys,
+        bundleTransfers: bundle.bundleTransfers,
+        transferEvents: bundle.transferEvents,
       }),
     });
   } catch (error) {
@@ -925,6 +1204,7 @@ export async function POST(request: Request, context: RouteContext) {
           metadata: {
             action_required_by: "bc_reviewer",
             client_approval_id: approval.id,
+            client_content: clientContentKeys,
           },
         });
 
@@ -1100,6 +1380,8 @@ export async function POST(request: Request, context: RouteContext) {
       hourAllocations: bundle.hourAllocations,
       materialEvents: bundle.materialEvents,
       materialHistory: bundle.materialHistory,
+      bundleTransfers: bundle.bundleTransfers,
+      transferEvents: bundle.transferEvents,
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,
@@ -1310,6 +1592,36 @@ export async function POST(request: Request, context: RouteContext) {
       );
     } else {
       finalContacts = (finalContactsData ?? []) as ClientContactRow[];
+    }
+
+    if (finalContacts.length > 0) {
+      const { error: finalRecipientHistoryError } = await admin
+        .from("tower_docket_workflow_events")
+        .insert({
+          docket_id: docket.id,
+          project_id: docket.project_id,
+          event_type: "final_client_recipients_resolved",
+          revision: approvalRevision,
+          performed_by: null,
+          performed_by_name: name,
+          performed_by_email: recipientEmail,
+          metadata: {
+            client_final_recipient_names: finalContacts.map(
+              (contact) => contact.name,
+            ),
+            client_final_recipient_emails: finalContacts.map(
+              (contact) =>
+                String(contact.email || "").trim().toLowerCase(),
+            ),
+          },
+        });
+
+      if (finalRecipientHistoryError) {
+        console.error(
+          "Daily Docket finalised but client final-recipient history could not be recorded",
+          finalRecipientHistoryError,
+        );
+      }
     }
 
     let reviewers: Awaited<ReturnType<typeof getBcReviewerRecipients>> = [];
