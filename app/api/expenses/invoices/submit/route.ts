@@ -12,6 +12,13 @@ function esc(value:unknown){return String(value??"").replaceAll("&","&amp;").rep
 function dateLabel(value?:string|null){if(!value)return"—";const d=new Date(`${value}T00:00:00Z`);if(Number.isNaN(d.getTime()))return value;return new Intl.DateTimeFormat("en-AU",{day:"2-digit",month:"short",year:"numeric",timeZone:"UTC"}).format(d);}
 async function roleFor(service:ReturnType<typeof serviceClient>,userId:string){const {data}=await service.from("user_roles").select("role").eq("user_id",userId).maybeSingle();return String(data?.role??"").trim().toLowerCase();}
 
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: "/api/expenses/invoices/submit",
+  });
+}
+
 export async function POST(request:Request){try{
   const body=await request.json() as {submissionId?:string};const submissionId=String(body.submissionId??"").trim();if(!submissionId)return NextResponse.json({error:"Invoice ID is required."},{status:400});
   const {service,user}=await requireUser(request);
