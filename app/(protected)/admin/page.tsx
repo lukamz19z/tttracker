@@ -26,6 +26,7 @@ import { AdminPermissionsPanel } from "@/components/admin/admin-permissions-pane
 
 type WebsiteRole =
   | "admin"
+  | "finance"
   | "hseq"
   | "asset_manager"
   | "commercial"
@@ -149,6 +150,7 @@ const EMPTY_CREATE_FORM: CreateForm = {
 
 const WEBSITE_ROLES: Array<{ value: WebsiteRole; label: string }> = [
   { value: "admin", label: "Administrator" },
+  { value: "finance", label: "Finance" },
   { value: "hseq", label: "HSEQ" },
   { value: "asset_manager", label: "Asset Manager" },
   { value: "commercial", label: "Commercial" },
@@ -174,6 +176,9 @@ function normaliseWebsiteRole(value?: string | null): WebsiteRole {
     .replaceAll(" ", "_");
 
   if (role === "administrator" || role === "site_admin") return "admin";
+  if (role === "financial" || role === "finance_manager" || role === "accounts") {
+    return "finance";
+  }
   if (role === "safety" || role === "safety_manager") return "hseq";
   if (role === "assets") return "asset_manager";
   if (role === "commercial_manager") return "commercial";
@@ -182,6 +187,7 @@ function normaliseWebsiteRole(value?: string | null): WebsiteRole {
   if (
     [
       "admin",
+      "finance",
       "hseq",
       "asset_manager",
       "commercial",
@@ -698,7 +704,10 @@ export default function AdminPage() {
     setEditForm({
       websiteRole: user.websiteRole,
       mobileRole: user.mobileRole,
-      projectIds: [...user.projectIds],
+      projectIds:
+        user.websiteRole === "finance"
+          ? []
+          : [...user.projectIds],
     });
   }
 
@@ -742,7 +751,10 @@ export default function AdminPage() {
           mobile_role: createForm.mobileRole,
           employee_id: null,
           crew_id: null,
-          project_ids: createForm.projectIds,
+          project_ids:
+            createForm.websiteRole === "finance"
+              ? []
+              : createForm.projectIds,
         }),
       });
 
@@ -791,7 +803,10 @@ export default function AdminPage() {
           mobile_role: editForm.mobileRole,
           employee_id: editingUser.employee?.id || null,
           crew_id: null,
-          project_ids: editForm.projectIds,
+          project_ids:
+            editForm.websiteRole === "finance"
+              ? []
+              : editForm.projectIds,
         }),
       });
 
@@ -1396,6 +1411,10 @@ export default function AdminPage() {
                     setCreateForm((current) => ({
                       ...current,
                       websiteRole: value as WebsiteRole,
+                      projectIds:
+                        value === "finance"
+                          ? []
+                          : current.projectIds,
                     }))
                   }
                   options={WEBSITE_ROLES}
@@ -1416,16 +1435,20 @@ export default function AdminPage() {
               </Field>
             </div>
 
-            <ProjectSelector
-              projects={projects}
-              selectedIds={createForm.projectIds}
-              onChange={(projectIds) =>
-                setCreateForm((current) => ({
-                  ...current,
-                  projectIds,
-                }))
-              }
-            />
+            {createForm.websiteRole === "finance" ? (
+              <FinanceAccessNotice />
+            ) : (
+              <ProjectSelector
+                projects={projects}
+                selectedIds={createForm.projectIds}
+                onChange={(projectIds) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    projectIds,
+                  }))
+                }
+              />
+            )}
 
             <ModalActions
               onCancel={() => setCreateOpen(false)}
@@ -1467,6 +1490,10 @@ export default function AdminPage() {
                         ? {
                             ...current,
                             websiteRole: value as WebsiteRole,
+                            projectIds:
+                              value === "finance"
+                                ? []
+                                : current.projectIds,
                           }
                         : current,
                     )
@@ -1493,15 +1520,19 @@ export default function AdminPage() {
               </Field>
             </div>
 
-            <ProjectSelector
-              projects={projects}
-              selectedIds={editForm.projectIds}
-              onChange={(projectIds) =>
-                setEditForm((current) =>
-                  current ? { ...current, projectIds } : current,
-                )
-              }
-            />
+            {editForm.websiteRole === "finance" ? (
+              <FinanceAccessNotice />
+            ) : (
+              <ProjectSelector
+                projects={projects}
+                selectedIds={editForm.projectIds}
+                onChange={(projectIds) =>
+                  setEditForm((current) =>
+                    current ? { ...current, projectIds } : current,
+                  )
+                }
+              />
+            )}
 
             <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
               <button
@@ -1648,10 +1679,12 @@ function UserRow({
           Project access
         </div>
         <p className="mt-2 text-sm text-slate-600">
-          {projectNames.length > 0
-            ? projectNames.slice(0, 3).join(", ")
-            : "No projects assigned"}
-          {projectNames.length > 3
+          {user.websiteRole === "finance"
+            ? "Finance module only"
+            : projectNames.length > 0
+              ? projectNames.slice(0, 3).join(", ")
+              : "No projects assigned"}
+          {user.websiteRole !== "finance" && projectNames.length > 3
             ? ` +${projectNames.length - 3} more`
             : ""}
         </p>
@@ -1676,6 +1709,24 @@ function UserRow({
           Access
         </button>
       </div>
+    </div>
+  );
+}
+
+function FinanceAccessNotice() {
+  return (
+    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex items-center gap-2 text-emerald-900">
+        <ShieldCheck size={16} />
+        <div className="text-sm font-bold">Finance website access</div>
+      </div>
+
+      <p className="mt-2 text-sm leading-6 text-emerald-800">
+        Finance users do not require project assignments here. Their website
+        access is limited to the Finance module and Profile. Expense and Invoice
+        approval authority is configured separately in Finance Settings against
+        the individual TTTracker user.
+      </p>
     </div>
   );
 }

@@ -93,10 +93,11 @@ export async function POST(request: Request) {
       .eq("active", true)
       .or("applies_to.eq.all,applies_to.eq.expense_claim");
 
-    const canReview = (permissionRules ?? []).some((r) =>
-      (r.can_review_edit || r.can_approve) &&
-      ((r.principal_type === "user" && r.user_id === user.id) ||
-       (r.principal_type === "role" && String(r.role ?? "").toLowerCase() === role))
+    const canReview = (permissionRules ?? []).some(
+      (rule) =>
+        rule.principal_type === "user" &&
+        rule.user_id === user.id &&
+        (rule.can_review_edit || rule.can_approve),
     );
 
     const owns =
@@ -141,19 +142,21 @@ export async function POST(request: Request) {
       .or("applies_to.eq.all,applies_to.eq.expense_claim");
 
     if (rulesError) throw new Error(rulesError.message);
-    const reviewerRules = (rules ?? []).filter((r) => r.can_review_edit || r.can_approve);
+    const reviewerRules = (rules ?? []).filter(
+      (rule) =>
+        rule.principal_type === "user" &&
+        Boolean(rule.user_id) &&
+        (rule.can_review_edit || rule.can_approve),
+    );
 
-    const reviewerIds = new Set<string>();
-    for (const r of reviewerRules) if (r.principal_type === "user" && r.user_id) reviewerIds.add(String(r.user_id));
-
-    const reviewerRoles = [...new Set(reviewerRules.filter((r) => r.principal_type === "role" && r.role).map((r) => String(r.role).toLowerCase()))];
-    if (reviewerRoles.length) {
-      const { data: usersByRole } = await service.from("user_roles").select("user_id,role").in("role", reviewerRoles);
-      for (const row of usersByRole ?? []) reviewerIds.add(String(row.user_id));
-    }
+    const reviewerIds = new Set<string>(
+      reviewerRules
+        .map((rule) => String(rule.user_id ?? "").trim())
+        .filter(Boolean),
+    );
 
     if (!reviewerIds.size) {
-      return NextResponse.json({ error: "No Expense Claim reviewers are configured in Expenses → Settings." }, { status: 400 });
+      return NextResponse.json({ error: "No individual Expense Claim reviewers are configured in Finance → Settings." }, { status: 400 });
     }
 
     const oldRevision = Math.max(0, Number(claim.revision ?? 0) || 0);
@@ -201,22 +204,18 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     const reviewerIdsArray = [...reviewerIds];
-    const { data: roleRows } = reviewerIdsArray.length
-      ? await service.from("user_roles").select("user_id,role").in("user_id", reviewerIdsArray)
-      : { data: [] };
-    const roleMap = new Map((roleRows ?? []).map((r) => [String(r.user_id), String(r.role ?? "").toLowerCase()]));
 
-    const applies = (rule: (typeof reviewerRules)[number], id: string) =>
-      rule.principal_type === "user"
-        ? rule.user_id === id
-        : String(rule.role ?? "").toLowerCase() === (roleMap.get(id) ?? "");
+    const applies = (
+      rule: (typeof reviewerRules)[number],
+      id: string,
+    ) => rule.principal_type === "user" && rule.user_id === id;
 
     if (settings?.approval_in_app_enabled !== false) {
       const notificationRows = reviewerIdsArray
         .filter((id) => reviewerRules.some((r) => r.receives_in_app && applies(r, id)))
         .map((id) => ({
           user_id: id,
-          event_type: "expense_claim_submitted",
+          event_type: "finance_expense_submitted",
           title: `Expense Claim ${claim.submission_number}`,
           message: `${money(updated.total_amount)} is waiting for review.`,
           severity: "info",
@@ -228,7 +227,11 @@ export async function POST(request: Request) {
           asset_id: null,
           docket_id: null,
           action_route: "/expenses/claims",
-          action_params: { submission_id: claim.id, submission_type: "expense_claim" },
+          action_params: {
+            submission_id: claim.id,
+            submission_type: "expense_claim",
+            open: claim.id,
+          },
           source_table: "financial_submissions",
           source_record_id: claim.id,
           created_at: now,

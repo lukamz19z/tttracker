@@ -13,7 +13,11 @@ type RouteContext = {
   params: Promise<{ submissionId: string }>;
 };
 
-type ReviewAction = "request_changes" | "approve" | "mark_paid";
+type ReviewAction =
+  | "request_changes"
+  | "reject"
+  | "approve"
+  | "mark_paid";
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -116,9 +120,8 @@ async function permissionsFor(
 
   const applies = (rules ?? []).filter(
     (rule) =>
-      (rule.principal_type === "user" && rule.user_id === userId) ||
-      (rule.principal_type === "role" &&
-        String(rule.role ?? "").trim().toLowerCase() === role),
+      rule.principal_type === "user" &&
+      rule.user_id === userId,
   );
 
   const admin = role === "admin";
@@ -224,6 +227,7 @@ async function notifySubmitter({
     action_params: {
       submission_id: submission.id,
       submission_type: "expense_claim",
+      open: submission.id,
     },
     source_table: "financial_submissions",
     source_record_id: submission.id,
@@ -243,12 +247,14 @@ async function notifySubmitter({
 async function sendSubmitterEmail({
   service,
   recipients,
+  submissionId,
   submissionNumber,
   title,
   body,
 }: {
   service: ReturnType<typeof serviceClient>;
   recipients: Array<{ id: string; email: string | null }>;
+  submissionId: string;
   submissionNumber: string;
   title: string;
   body: string;
@@ -265,7 +271,9 @@ async function sendSubmitterEmail({
 
   if (!emails.length) return;
 
-  const url = `${appUrl()}/expenses/claims`;
+  const url = `${appUrl()}/expenses/claims?open=${encodeURIComponent(
+    submissionId,
+  )}`;
 
   await sendDailyDocketEmail({
     to: emails,
@@ -299,7 +307,10 @@ export async function POST(request: Request, context: RouteContext) {
     const comments = String(body.comments ?? "").trim();
     const paymentReference = String(body.paymentReference ?? "").trim();
 
-    if (!action || !["request_changes", "approve", "mark_paid"].includes(action)) {
+    if (
+      !action ||
+      !["request_changes", "reject", "approve", "mark_paid"].includes(action)
+    ) {
       return NextResponse.json(
         { error: "Select a valid review action." },
         { status: 400 },
@@ -402,13 +413,14 @@ export async function POST(request: Request, context: RouteContext) {
         submission,
         title: `Changes required · ${submission.submission_number}`,
         message: comments,
-        eventType: "expense_claim_changes_required",
+        eventType: "finance_expense_changes_required",
       });
 
       try {
         await sendSubmitterEmail({
           service,
           recipients,
+          submissionId: submission.id,
           submissionNumber: submission.submission_number,
           title: "Expense Claim changes required",
           body: `
@@ -427,6 +439,106 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({
         success: true,
         status: "changes_required",
+      });
+    }
+
+    if (action === "reject") {
+      if (!permissions.canApprove) {
+        return NextResponse.json(
+          { error: "You are not configured to deny Expense Claims." },
+          { status: 403 },
+        );
+      }
+
+      if (submission.status !== "submitted") {
+        return NextResponse.json(
+          { error: "Only submitted Expense Claims can be denied." },
+          { status: 409 },
+        );
+      }
+
+      if (!comments) {
+        return NextResponse.json(
+          { error: "Enter the reason this Expense Claim is being denied." },
+          { status: 400 },
+        );
+      }
+
+      const { error } = await service
+        .from("financial_submissions")
+        .update({
+          status: "rejected",
+          rejected_at: now,
+          rejected_by: user.id,
+          rejection_reason: comments,
+        })
+        .eq("id", submission.id)
+        .eq("status", "submitted");
+
+      if (error) throw new Error(error.message);
+
+      await service
+        .from("financial_approvals")
+        .update({
+          status: "rejected",
+          reviewer_user_id: user.id,
+          reviewer_name: reviewer.name,
+          reviewer_email: reviewer.email,
+          comments,
+          responded_at: now,
+        })
+        .eq("submission_id", submission.id)
+        .eq("revision", revision)
+        .eq("status", "pending");
+
+      await service.from("financial_submission_events").insert({
+        submission_id: submission.id,
+        revision,
+        event_type: "rejected",
+        performed_by: user.id,
+        performed_by_name: reviewer.name,
+        performed_by_email: reviewer.email,
+        comments,
+        metadata: {
+          source: "website",
+          previous_status: submission.status,
+        },
+      });
+
+      const recipients = await notifySubmitter({
+        service,
+        submission,
+        title: `Expense Claim denied · ${submission.submission_number}`,
+        message: comments,
+        eventType: "finance_expense_denied",
+      });
+
+      try {
+        await sendSubmitterEmail({
+          service,
+          recipients,
+          submissionId: submission.id,
+          submissionNumber: submission.submission_number,
+          title: "Expense Claim denied",
+          body: `
+            <p>Your Expense Claim was not approved.</p>
+            <p><strong>Claim:</strong> ${escapeHtml(submission.submission_number)}</p>
+            <p><strong>Amount:</strong> ${escapeHtml(money(submission.total_amount))}</p>
+            <p><strong>Reviewed by:</strong> ${escapeHtml(reviewer.name)}</p>
+            <div style="margin:18px 0;padding:14px 16px;background:#fff1f2;border:1px solid #fecdd3;border-radius:10px;">
+              ${escapeHtml(comments)}
+            </div>
+          `,
+        });
+      } catch (emailError) {
+        console.error("Expense Claim denied email failed", emailError);
+      }
+
+      return NextResponse.json({
+        success: true,
+        status: "rejected",
+        rejectedAt: now,
+        rejectedBy: reviewer.name,
       });
     }
 
@@ -494,13 +606,14 @@ export async function POST(request: Request, context: RouteContext) {
         submission,
         title: `Expense Claim approved · ${submission.submission_number}`,
         message: `${money(submission.total_amount)} has been approved.`,
-        eventType: "expense_claim_approved",
+        eventType: "finance_expense_approved",
       });
 
       try {
         await sendSubmitterEmail({
           service,
           recipients,
+          submissionId: submission.id,
           submissionNumber: submission.submission_number,
           title: "Expense Claim approved",
           body: `
@@ -569,13 +682,14 @@ export async function POST(request: Request, context: RouteContext) {
       submission,
       title: `Expense Claim paid · ${submission.submission_number}`,
       message: `${money(submission.total_amount)} has been marked as paid.`,
-      eventType: "expense_claim_paid",
+      eventType: "finance_expense_paid",
     });
 
     try {
       await sendSubmitterEmail({
         service,
         recipients,
+        submissionId: submission.id,
         submissionNumber: submission.submission_number,
         title: "Expense Claim paid",
         body: `

@@ -2,7 +2,10 @@
 
 import {
   ArrowLeft,
+  Ban,
+  Building2,
   CalendarDays,
+  Car,
   CheckCircle2,
   ChevronDown,
   CircleDollarSign,
@@ -20,6 +23,7 @@ import {
   Search,
   Trash2,
   Upload,
+  Wrench,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -83,6 +87,7 @@ type ExpenseItem = {
   id: string;
   submission_id: string;
   category_id: string | null;
+  project_id: string | null;
   expense_date: string;
   supplier: string | null;
   description: string;
@@ -91,6 +96,11 @@ type ExpenseItem = {
   amount_ex_gst: number | string;
   gst_amount: number | string;
   amount_inc_gst: number | string;
+  gst_applicable: boolean | null;
+  asset_type: "Vehicle" | "Plant" | null;
+  vehicle_asset_id: string | null;
+  plant_asset_id: string | null;
+  fleet_job_id: string | null;
   notes: string | null;
   sort_order: number;
 };
@@ -128,14 +138,51 @@ type Employee = {
   user_id?: string | null;
 };
 
+type VehicleAsset = {
+  id: string;
+  vehicle_id: string | null;
+  vehicle_rego: string | null;
+  make: string | null;
+  model: string | null;
+  category: string | null;
+};
+
+type PlantAsset = {
+  id: string;
+  asset_id: string | null;
+  rego: string | null;
+  make: string | null;
+  model: string | null;
+  plant_type: string | null;
+};
+
+type FleetJob = {
+  id: string;
+  job_number: string | null;
+  title: string | null;
+  status: string | null;
+  project: string | null;
+  asset_type: string | null;
+  vehicle_id: string | null;
+  vehicle_asset_id: string | null;
+  plant_id: string | null;
+};
+
+type CostLinkType = "general" | "project" | "asset" | "fleet_job";
+
 type DraftItem = {
   id?: string;
   categoryId: string;
   expenseDate: string;
+  supplier: string;
   description: string;
   amountIncGst: string;
-  gstAmount: string;
+  gstApplicable: boolean;
   notes: string;
+  linkType: CostLinkType;
+  projectId: string;
+  assetKey: string;
+  fleetJobId: string;
 };
 
 type ClaimDraft = {
@@ -148,10 +195,15 @@ type ClaimDraft = {
 const EMPTY_ITEM: DraftItem = {
   categoryId: "",
   expenseDate: new Date().toISOString().slice(0, 10),
+  supplier: "",
   description: "",
   amountIncGst: "",
-  gstAmount: "",
+  gstApplicable: true,
   notes: "",
+  linkType: "general",
+  projectId: "",
+  assetKey: "",
+  fleetJobId: "",
 };
 
 const EMPTY_CLAIM: ClaimDraft = {
@@ -172,6 +224,19 @@ function currency(value: number) {
     currency: "AUD",
     minimumFractionDigits: 2,
   }).format(value);
+}
+
+function gstFromInclusive(total: number, applicable: boolean) {
+  if (!applicable || total <= 0) return 0;
+  return Math.round((total / 11) * 100) / 100;
+}
+
+function clean(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function normalised(value: unknown) {
+  return clean(value).toLowerCase();
 }
 
 function shortDate(value?: string | null) {
@@ -231,7 +296,11 @@ export default function ExpenseClaimsPage() {
   const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [vehicles, setVehicles] = useState<VehicleAsset[]>([]);
+  const [plantAssets, setPlantAssets] = useState<PlantAsset[]>([]);
+  const [fleetJobs, setFleetJobs] = useState<FleetJob[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | null>(null);
   const [currentRole, setCurrentRole] = useState("");
   const [accessRules, setAccessRules] = useState<FinancialAccessRule[]>([]);
@@ -322,6 +391,7 @@ export default function ExpenseClaimsPage() {
     }
 
     setCurrentUserId(user.id);
+    setCurrentUserEmail(user.email ?? "");
 
     const [
       claimResult,
@@ -330,6 +400,9 @@ export default function ExpenseClaimsPage() {
       categoryResult,
       projectResult,
       employeeResult,
+      vehicleResult,
+      plantResult,
+      fleetJobResult,
       roleResult,
       accessRuleResult,
     ] = await Promise.all([
@@ -343,7 +416,7 @@ export default function ExpenseClaimsPage() {
       supabase
         .from("financial_submission_items")
         .select(
-          "id, submission_id, category_id, expense_date, supplier, description, quantity, unit_amount_ex_gst, amount_ex_gst, gst_amount, amount_inc_gst, notes, sort_order",
+          "id, submission_id, category_id, project_id, expense_date, supplier, description, quantity, unit_amount_ex_gst, amount_ex_gst, gst_amount, amount_inc_gst, gst_applicable, asset_type, vehicle_asset_id, plant_asset_id, fleet_job_id, notes, sort_order",
         )
         .order("sort_order"),
       supabase
@@ -367,6 +440,19 @@ export default function ExpenseClaimsPage() {
         .select("id, full_name, user_id")
         .order("full_name"),
       supabase
+        .from("vehicle_assets")
+        .select("id, vehicle_id, vehicle_rego, make, model, category")
+        .order("vehicle_id"),
+      supabase
+        .from("plant_assets")
+        .select("id, asset_id, rego, make, model, plant_type")
+        .order("asset_id"),
+      supabase
+        .from("fleet_jobs")
+        .select("id, job_number, title, status, project, asset_type, vehicle_id, vehicle_asset_id, plant_id")
+        .order("created_at", { ascending: false })
+        .limit(500),
+      supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", user.id)
@@ -386,6 +472,9 @@ export default function ExpenseClaimsPage() {
     if (categoryResult.error) throw categoryResult.error;
     if (projectResult.error) throw projectResult.error;
     if (employeeResult.error) throw employeeResult.error;
+    if (vehicleResult.error) throw vehicleResult.error;
+    if (plantResult.error) throw plantResult.error;
+    if (fleetJobResult.error) throw fleetJobResult.error;
     if (roleResult.error) throw roleResult.error;
     if (accessRuleResult.error) throw accessRuleResult.error;
 
@@ -395,6 +484,9 @@ export default function ExpenseClaimsPage() {
     setCategories((categoryResult.data ?? []) as FinancialCategory[]);
     setProjects((projectResult.data ?? []) as Project[]);
     setEmployees((employeeResult.data ?? []) as Employee[]);
+    setVehicles((vehicleResult.data ?? []) as VehicleAsset[]);
+    setPlantAssets((plantResult.data ?? []) as PlantAsset[]);
+    setFleetJobs((fleetJobResult.data ?? []) as FleetJob[]);
     setCurrentRole(String(roleResult.data?.role ?? "").trim().toLowerCase());
     setAccessRules(
       (accessRuleResult.data ?? []) as FinancialAccessRule[],
@@ -526,10 +618,8 @@ export default function ExpenseClaimsPage() {
     const matching = accessRules.filter(
       (rule) =>
         rule.active &&
-        ((rule.principal_type === "user" &&
-          rule.user_id === currentUserId) ||
-          (rule.principal_type === "role" &&
-            String(rule.role ?? "").trim().toLowerCase() === role)),
+        rule.principal_type === "user" &&
+        rule.user_id === currentUserId,
     );
 
     return {
@@ -566,14 +656,20 @@ export default function ExpenseClaimsPage() {
   }
 
   async function runReviewAction(
-    action: "request_changes" | "approve" | "mark_paid",
+    action: "request_changes" | "reject" | "approve" | "mark_paid",
   ) {
     if (!reviewingClaim) return;
 
-    if (action === "request_changes" && !reviewComments.trim()) {
+    if (
+      (action === "request_changes" || action === "reject") &&
+      !reviewComments.trim()
+    ) {
       setMessage({
         tone: "error",
-        text: "Enter what needs to be changed.",
+        text:
+          action === "reject"
+            ? "Enter the reason this expense claim is being denied."
+            : "Enter what needs to be changed.",
       });
       return;
     }
@@ -620,9 +716,11 @@ export default function ExpenseClaimsPage() {
         text:
           action === "request_changes"
             ? "Changes requested."
-            : action === "approve"
-              ? "Expense Claim approved."
-              : "Expense Claim marked as paid.",
+            : action === "reject"
+              ? "Expense Claim denied."
+              : action === "approve"
+                ? "Expense Claim approved."
+                : "Expense Claim marked as paid.",
       });
     } catch (error) {
       setMessage({
@@ -660,10 +758,27 @@ export default function ExpenseClaimsPage() {
               id: item.id,
               categoryId: item.category_id ?? "",
               expenseDate: item.expense_date,
+              supplier: item.supplier ?? "",
               description: item.description,
               amountIncGst: String(item.amount_inc_gst ?? ""),
-              gstAmount: String(item.gst_amount ?? ""),
+              gstApplicable:
+                item.gst_applicable ??
+                asNumber(item.gst_amount) > 0,
               notes: item.notes ?? "",
+              linkType: item.fleet_job_id
+                ? ("fleet_job" as const)
+                : item.vehicle_asset_id || item.plant_asset_id
+                  ? ("asset" as const)
+                  : item.project_id
+                    ? ("project" as const)
+                    : ("general" as const),
+              projectId: item.project_id ?? claim.project_id ?? "",
+              assetKey: item.vehicle_asset_id
+                ? `vehicle:${item.vehicle_asset_id}`
+                : item.plant_asset_id
+                  ? `plant:${item.plant_asset_id}`
+                  : "",
+              fleetJobId: item.fleet_job_id ?? "",
             }))
           : [{ ...EMPTY_ITEM }],
     });
@@ -679,10 +794,86 @@ export default function ExpenseClaimsPage() {
     }));
   }
 
+  function projectIdForFleetJob(job: FleetJob | undefined) {
+    if (!job?.project) return "";
+
+    const target = normalised(job.project);
+
+    return (
+      projects.find(
+        (project) =>
+          normalised(project.name) === target ||
+          normalised(project.project_number) === target ||
+          normalised(
+            [project.project_number, project.name]
+              .filter(Boolean)
+              .join(" - "),
+          ) === target,
+      )?.id ?? ""
+    );
+  }
+
+  function assetKeyForFleetJob(job: FleetJob | undefined) {
+    if (!job) return "";
+
+    const vehicleId = job.vehicle_asset_id || job.vehicle_id;
+    if (vehicleId) return `vehicle:${vehicleId}`;
+    if (job.plant_id) return `plant:${job.plant_id}`;
+
+    return "";
+  }
+
+  function updateLinkType(index: number, linkType: CostLinkType) {
+    setDraft((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              linkType,
+              projectId:
+                linkType === "project"
+                  ? item.projectId || current.projectId
+                  : linkType === "general"
+                    ? ""
+                    : item.projectId,
+              assetKey:
+                linkType === "asset" || linkType === "fleet_job"
+                  ? item.assetKey
+                  : "",
+              fleetJobId:
+                linkType === "fleet_job" ? item.fleetJobId : "",
+            }
+          : item,
+      ),
+    }));
+  }
+
+  function selectFleetJob(index: number, fleetJobId: string) {
+    const job = fleetJobs.find((item) => item.id === fleetJobId);
+
+    updateDraftItem(index, {
+      fleetJobId,
+      linkType: "fleet_job",
+      assetKey: assetKeyForFleetJob(job),
+      projectId:
+        projectIdForFleetJob(job) ||
+        draft.items[index]?.projectId ||
+        draft.projectId,
+    });
+  }
+
   function addDraftItem() {
     setDraft((current) => ({
       ...current,
-      items: [...current.items, { ...EMPTY_ITEM }],
+      items: [
+        ...current.items,
+        {
+          ...EMPTY_ITEM,
+          projectId: current.projectId,
+          linkType: current.projectId ? "project" : "general",
+        },
+      ],
     }));
   }
 
@@ -715,6 +906,30 @@ export default function ExpenseClaimsPage() {
 
     if (validItems.some((item) => !item.expenseDate)) {
       throw new Error("Enter a date for each expense item.");
+    }
+
+    if (
+      validItems.some(
+        (item) => item.linkType === "project" && !item.projectId,
+      )
+    ) {
+      throw new Error("Select the linked project for each project expense.");
+    }
+
+    if (
+      validItems.some(
+        (item) => item.linkType === "asset" && !item.assetKey,
+      )
+    ) {
+      throw new Error("Select the linked asset for each asset expense.");
+    }
+
+    if (
+      validItems.some(
+        (item) => item.linkType === "fleet_job" && !item.fleetJobId,
+      )
+    ) {
+      throw new Error("Select the linked Fleet Job for each Fleet Job expense.");
     }
 
     return validItems;
@@ -815,18 +1030,50 @@ export default function ExpenseClaimsPage() {
       for (let index = 0; index < validItems.length; index += 1) {
         const item = validItems[index];
         const totalInc = asNumber(item.amountIncGst);
+        const gst = gstFromInclusive(totalInc, item.gstApplicable);
+        const exGst = Math.round((totalInc - gst) * 100) / 100;
+
+        const [assetKind, assetId] = item.assetKey.split(":");
+        const vehicleAssetId =
+          item.linkType === "asset" || item.linkType === "fleet_job"
+            ? assetKind === "vehicle"
+              ? assetId || null
+              : null
+            : null;
+        const plantAssetId =
+          item.linkType === "asset" || item.linkType === "fleet_job"
+            ? assetKind === "plant"
+              ? assetId || null
+              : null
+            : null;
 
         const payload = {
           submission_id: submissionId,
           category_id: item.categoryId || null,
+          project_id:
+            item.linkType === "general"
+              ? null
+              : item.projectId || draft.projectId || null,
           expense_date: item.expenseDate,
-          supplier: null,
+          supplier: item.supplier.trim() || null,
           description: item.description.trim(),
           quantity: 1,
-          unit_amount_ex_gst: totalInc,
-          amount_ex_gst: totalInc,
-          gst_amount: 0,
+          unit_amount_ex_gst: exGst,
+          amount_ex_gst: exGst,
+          gst_amount: gst,
           amount_inc_gst: totalInc,
+          gst_applicable: item.gstApplicable,
+          asset_type: vehicleAssetId
+            ? "Vehicle"
+            : plantAssetId
+              ? "Plant"
+              : null,
+          vehicle_asset_id: vehicleAssetId,
+          plant_asset_id: plantAssetId,
+          fleet_job_id:
+            item.linkType === "fleet_job"
+              ? item.fleetJobId || null
+              : null,
           notes: item.notes.trim() || null,
           sort_order: index,
         };
@@ -858,6 +1105,33 @@ export default function ExpenseClaimsPage() {
           });
         }
       }
+
+      const totalAmount = validItems.reduce(
+        (sum, item) => sum + asNumber(item.amountIncGst),
+        0,
+      );
+      const gstAmount = validItems.reduce(
+        (sum, item) =>
+          sum +
+          gstFromInclusive(
+            asNumber(item.amountIncGst),
+            item.gstApplicable,
+          ),
+        0,
+      );
+      const subtotalExGst =
+        Math.round((totalAmount - gstAmount) * 100) / 100;
+
+      const totalsResult = await supabase
+        .from("financial_submissions")
+        .update({
+          subtotal_ex_gst: subtotalExGst,
+          gst_amount: Math.round(gstAmount * 100) / 100,
+          total_amount: Math.round(totalAmount * 100) / 100,
+        })
+        .eq("id", submissionId);
+
+      if (totalsResult.error) throw totalsResult.error;
 
       if (!submitForApproval) {
         const eventType = editingClaim ? "edited" : "created";
@@ -1356,9 +1630,11 @@ export default function ExpenseClaimsPage() {
                 const owner = employees.find(
                   (employee) => employee.id === claim.submitted_for_employee_id,
                 );
-                const canEdit = ["draft", "submitted", "changes_required"].includes(
-                  claim.status,
-                );
+                const canEdit =
+                  ["draft", "changes_required"].includes(claim.status) &&
+                  (claim.created_by === currentUserId ||
+                    claim.submitted_by === currentUserId ||
+                    claim.submitted_for_employee_id === currentEmployeeId);
                 const claimReceiptCount = attachments.filter(
                   (attachment) => attachment.submission_id === claim.id,
                 ).length;
@@ -1470,7 +1746,7 @@ export default function ExpenseClaimsPage() {
       {reviewOpen && reviewingClaim ? (
         <ModalShell
           title={`Expense Claim ${reviewingClaim.submission_number}`}
-          description="Review the claim details and receipts before taking action."
+          description="Review the claim, linked costs and receipts. Designed to work cleanly on phone or desktop."
           onClose={() => {
             if (!reviewSaving) {
               setReviewOpen(false);
@@ -1575,15 +1851,54 @@ export default function ExpenseClaimsPage() {
                           <div className="mt-1 text-base font-bold text-slate-950">
                             {item.description}
                           </div>
+                          {item.supplier ? (
+                            <div className="mt-1 text-sm font-medium text-slate-600">
+                              {item.supplier}
+                            </div>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                            {item.project_id ? (
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                                {projects.find((project) => project.id === item.project_id)
+                                  ?.project_number ||
+                                  projects.find((project) => project.id === item.project_id)
+                                    ?.name ||
+                                  "Project"}
+                              </span>
+                            ) : null}
+                            {item.vehicle_asset_id ? (
+                              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
+                                {vehicles.find((asset) => asset.id === item.vehicle_asset_id)
+                                  ?.vehicle_id || "Vehicle"}
+                              </span>
+                            ) : null}
+                            {item.plant_asset_id ? (
+                              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
+                                {plantAssets.find((asset) => asset.id === item.plant_asset_id)
+                                  ?.asset_id || "Plant"}
+                              </span>
+                            ) : null}
+                            {item.fleet_job_id ? (
+                              <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-700">
+                                {fleetJobs.find((job) => job.id === item.fleet_job_id)
+                                  ?.job_number || "Fleet Job"}
+                              </span>
+                            ) : null}
+                          </div>
                           {item.notes ? (
-                            <div className="mt-1 text-sm text-slate-500">
+                            <div className="mt-2 text-sm text-slate-500">
                               {item.notes}
                             </div>
                           ) : null}
                         </div>
 
-                        <div className="shrink-0 text-lg font-bold text-slate-950">
-                          {currency(asNumber(item.amount_inc_gst))}
+                        <div className="shrink-0 text-right">
+                          <div className="text-lg font-bold text-slate-950">
+                            {currency(asNumber(item.amount_inc_gst))}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-400">
+                            GST {currency(asNumber(item.gst_amount))}
+                          </div>
                         </div>
                       </div>
 
@@ -1635,6 +1950,20 @@ export default function ExpenseClaimsPage() {
               </div>
             ) : null}
 
+            {reviewingClaim.status === "rejected" ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="text-sm font-bold text-rose-800">
+                  Denied
+                </div>
+                <div className="mt-1 text-sm leading-6 text-rose-700">
+                  {reviewingClaim.rejection_reason || "This claim was not approved."}
+                  {reviewingClaim.rejected_at
+                    ? ` · ${shortDate(reviewingClaim.rejected_at)}`
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+
             {reviewingClaim.status === "approved" ? (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                 <div className="text-sm font-bold text-emerald-800">
@@ -1673,7 +2002,7 @@ export default function ExpenseClaimsPage() {
                     setReviewComments(event.target.value)
                   }
                   rows={4}
-                  placeholder="Add an approval comment, or explain what needs to be changed."
+                  placeholder="Optional for approval. Required when requesting changes or denying the claim."
                   className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
                 />
               </Field>
@@ -1693,7 +2022,7 @@ export default function ExpenseClaimsPage() {
               </Field>
             ) : null}
 
-            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+            <div className="sticky bottom-0 -mx-6 flex flex-col-reverse gap-2 border-t border-slate-200 bg-white/95 px-6 pb-1 pt-4 backdrop-blur sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => {
@@ -1723,6 +2052,23 @@ export default function ExpenseClaimsPage() {
                     <MessageSquareText size={16} />
                   )}
                   Request Changes
+                </button>
+              ) : null}
+
+              {reviewingClaim.status === "submitted" &&
+              financePermissions.canApprove ? (
+                <button
+                  type="button"
+                  onClick={() => void runReviewAction("reject")}
+                  disabled={reviewSaving}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
+                >
+                  {reviewSaving ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Ban size={16} />
+                  )}
+                  Deny
                 </button>
               ) : null}
 
@@ -1772,6 +2118,36 @@ export default function ExpenseClaimsPage() {
           wide
         >
           <form onSubmit={handleSave} className="space-y-6">
+            <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Claim Reference
+                </div>
+                <div className="mt-1 text-sm font-bold text-slate-900">
+                  {editingClaim?.submission_number || "BCC-EXP — assigned on save"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Submitted By
+                </div>
+                <div className="mt-1 text-sm font-bold text-slate-900">
+                  {employees.find((employee) => employee.id === currentEmployeeId)
+                    ?.full_name ||
+                    currentUserEmail ||
+                    "Signed-in TTTracker user"}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Date
+                </div>
+                <div className="mt-1 text-sm font-bold text-slate-900">
+                  {shortDate(new Date().toISOString())}
+                </div>
+              </div>
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Project">
                 <SelectField
@@ -1780,6 +2156,16 @@ export default function ExpenseClaimsPage() {
                     setDraft((current) => ({
                       ...current,
                       projectId: value,
+                      items: current.items.map((item) =>
+                        item.linkType === "general" ||
+                        item.linkType === "project"
+                          ? {
+                              ...item,
+                              linkType: value ? "project" : "general",
+                              projectId: value,
+                            }
+                          : item,
+                      ),
                     }))
                   }
                   options={[
@@ -1850,7 +2236,7 @@ export default function ExpenseClaimsPage() {
                       </button>
                     </div>
 
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                       <Field label="Date">
                         <input
                           type="date"
@@ -1884,6 +2270,19 @@ export default function ExpenseClaimsPage() {
                         />
                       </Field>
 
+                      <Field label="Merchant / Supplier">
+                        <input
+                          value={item.supplier}
+                          onChange={(event) =>
+                            updateDraftItem(index, {
+                              supplier: event.target.value,
+                            })
+                          }
+                          placeholder="e.g. BP, Bunnings, Repco"
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                        />
+                      </Field>
+
                       <Field label="What was it for?">
                         <input
                           value={item.description}
@@ -1898,8 +2297,8 @@ export default function ExpenseClaimsPage() {
                       </Field>
                     </div>
 
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
-                      <Field label="Total Amount">
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                      <Field label="Total Amount (incl. GST)">
                         <input
                           inputMode="decimal"
                           value={item.amountIncGst}
@@ -1910,6 +2309,52 @@ export default function ExpenseClaimsPage() {
                           }
                           placeholder="0.00"
                           className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                        />
+                      </Field>
+
+                      <Field label="GST">
+                        <label className="flex h-[42px] cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-white px-3">
+                          <input
+                            type="checkbox"
+                            checked={item.gstApplicable}
+                            onChange={(event) =>
+                              updateDraftItem(index, {
+                                gstApplicable: event.target.checked,
+                              })
+                            }
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span className="text-sm font-semibold text-slate-700">
+                            GST included
+                          </span>
+                        </label>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {item.gstApplicable
+                            ? `GST ${currency(
+                                gstFromInclusive(
+                                  asNumber(item.amountIncGst),
+                                  true,
+                                ),
+                              )}`
+                            : "No GST claimed"}
+                        </div>
+                      </Field>
+
+                      <Field label="Cost relates to">
+                        <SelectField
+                          value={item.linkType}
+                          onChange={(value) =>
+                            updateLinkType(
+                              index,
+                              value as CostLinkType,
+                            )
+                          }
+                          options={[
+                            { value: "general", label: "Company / General" },
+                            { value: "project", label: "Project" },
+                            { value: "asset", label: "Asset" },
+                            { value: "fleet_job", label: "Fleet Job" },
+                          ]}
                         />
                       </Field>
 
@@ -1967,6 +2412,123 @@ export default function ExpenseClaimsPage() {
                         </div>
                       </Field>
                     </div>
+
+                    {item.linkType !== "general" ? (
+                      <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/40 p-4">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {item.linkType === "project" ? (
+                            <Field label="Linked Project">
+                              <SelectField
+                                value={item.projectId}
+                                onChange={(value) =>
+                                  updateDraftItem(index, {
+                                    projectId: value,
+                                  })
+                                }
+                                options={[
+                                  { value: "", label: "Select project..." },
+                                  ...projects.map((project) => ({
+                                    value: project.id,
+                                    label: project.project_number
+                                      ? `${project.project_number} — ${project.name}`
+                                      : project.name,
+                                  })),
+                                ]}
+                              />
+                            </Field>
+                          ) : null}
+
+                          {item.linkType === "asset" ? (
+                            <Field label="Linked Asset">
+                              <SearchPicker
+                                value={item.assetKey}
+                                placeholder="Search LV0001, rego, plant number..."
+                                options={[
+                                  ...vehicles.map((asset) => ({
+                                    value: `vehicle:${asset.id}`,
+                                    label: [
+                                      asset.vehicle_id,
+                                      asset.vehicle_rego,
+                                      asset.make,
+                                      asset.model,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · "),
+                                    icon: "vehicle" as const,
+                                  })),
+                                  ...plantAssets.map((asset) => ({
+                                    value: `plant:${asset.id}`,
+                                    label: [
+                                      asset.asset_id,
+                                      asset.rego,
+                                      asset.make,
+                                      asset.model,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · "),
+                                    icon: "plant" as const,
+                                  })),
+                                ]}
+                                onChange={(value) =>
+                                  updateDraftItem(index, {
+                                    assetKey: value,
+                                  })
+                                }
+                              />
+                            </Field>
+                          ) : null}
+
+                          {item.linkType === "fleet_job" ? (
+                            <Field label="Linked Fleet Job">
+                              <SearchPicker
+                                value={item.fleetJobId}
+                                placeholder="Search FJ-000001, title or asset..."
+                                options={fleetJobs.map((job) => ({
+                                  value: job.id,
+                                  label: [
+                                    job.job_number,
+                                    job.title,
+                                    job.project,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · "),
+                                  icon: "fleet" as const,
+                                }))}
+                                onChange={(value) =>
+                                  selectFleetJob(index, value)
+                                }
+                              />
+                            </Field>
+                          ) : null}
+
+                          {(item.linkType === "asset" ||
+                            item.linkType === "fleet_job") ? (
+                            <Field label="Project Allocation">
+                              <SelectField
+                                value={item.projectId}
+                                onChange={(value) =>
+                                  updateDraftItem(index, {
+                                    projectId: value,
+                                  })
+                                }
+                                options={[
+                                  {
+                                    value: "",
+                                    label: "No project / Company cost",
+                                  },
+                                  ...projects.map((project) => ({
+                                    value: project.id,
+                                    label: project.project_number
+                                      ? `${project.project_number} — ${project.name}`
+                                      : project.name,
+                                  })),
+                                ]}
+                              />
+                            </Field>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-4">
                       <Field label="Item notes">
@@ -2113,10 +2675,10 @@ function ModalShell({
   wide?: boolean;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 sm:p-8">
       <div
-        className={`my-auto w-full rounded-3xl border border-slate-200 bg-white shadow-2xl ${
-          wide ? "max-w-6xl" : "max-w-2xl"
+        className={`min-h-screen w-full bg-white shadow-2xl sm:my-auto sm:min-h-0 sm:rounded-3xl sm:border sm:border-slate-200 ${
+          wide ? "sm:max-w-6xl" : "sm:max-w-2xl"
         }`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
@@ -2155,6 +2717,89 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+function SearchPicker({
+  value,
+  placeholder,
+  options,
+  onChange,
+}: {
+  value: string;
+  placeholder: string;
+  options: Array<{
+    value: string;
+    label: string;
+    icon: "vehicle" | "plant" | "fleet";
+  }>;
+  onChange: (value: string) => void;
+}) {
+  const selected = options.find((option) => option.value === value) ?? null;
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const inputValue = open ? query : selected?.label ?? query;
+  const searchValue = open ? query.trim().toLowerCase() : "";
+  const filtered = options
+    .filter((option) =>
+      searchValue ? option.label.toLowerCase().includes(searchValue) : true,
+    )
+    .slice(0, 12);
+
+  return (
+    <div className="relative">
+      <input
+        value={inputValue}
+        onFocus={() => {
+          setQuery(selected?.label ?? "");
+          setOpen(true);
+        }}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(false), 120);
+        }}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+          if (value) onChange("");
+        }}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+      />
+
+      {open ? (
+        <div className="absolute z-30 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+          {filtered.length ? (
+            filtered.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option.value);
+                  setQuery(option.label);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+              >
+                {option.icon === "vehicle" ? (
+                  <Car size={15} className="shrink-0 text-slate-400" />
+                ) : option.icon === "plant" ? (
+                  <Wrench size={15} className="shrink-0 text-slate-400" />
+                ) : (
+                  <Building2 size={15} className="shrink-0 text-slate-400" />
+                )}
+                <span className="min-w-0 truncate">{option.label}</span>
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-3 text-sm text-slate-500">
+              No matching records.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
