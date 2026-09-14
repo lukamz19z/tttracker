@@ -703,6 +703,26 @@ export default function ExpenseClaimsPage() {
     setReviewOpen(true);
   }
 
+  function closeReviewClaim() {
+    // Email/dashboard deep links use ?open=<claim-id>. If we leave that
+    // parameter in the URL the auto-open effect immediately reopens the modal.
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+
+      if (url.searchParams.has("open")) {
+        url.searchParams.delete("open");
+        const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+        window.history.replaceState(window.history.state, "", nextUrl);
+      }
+    }
+
+    setReviewOpen(false);
+    setReviewingClaim(null);
+    setReviewComments("");
+    setPaymentReference("");
+    setReviewError(null);
+  }
+
   async function runReviewAction(
     action: "request_changes" | "deny" | "approve" | "mark_paid",
   ) {
@@ -769,10 +789,7 @@ export default function ExpenseClaimsPage() {
 
       await loadAll();
 
-      setReviewOpen(false);
-      setReviewingClaim(null);
-      setReviewComments("");
-      setPaymentReference("");
+      closeReviewClaim();
 
       setMessage({
         tone: "success",
@@ -1804,11 +1821,7 @@ export default function ExpenseClaimsPage() {
         <ModalShell
           title={`Expense Claim ${reviewingClaim.submission_number}`}
           description="Review the claim details and receipts before taking action."
-          onClose={() => {
-            setReviewOpen(false);
-            setReviewingClaim(null);
-            setReviewError(null);
-          }}
+          onClose={closeReviewClaim}
           wide
         >
           <div className="space-y-6">
@@ -2219,11 +2232,7 @@ export default function ExpenseClaimsPage() {
             <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  setReviewOpen(false);
-                  setReviewingClaim(null);
-                  setReviewError(null);
-                }}
+                onClick={closeReviewClaim}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Close
@@ -2815,12 +2824,27 @@ function ModalShell({
   children: React.ReactNode;
   wide?: boolean;
 }) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div
         className={`my-auto w-full rounded-3xl border border-slate-200 bg-white shadow-2xl ${
           wide ? "max-w-6xl" : "max-w-2xl"
         }`}
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
           <div>

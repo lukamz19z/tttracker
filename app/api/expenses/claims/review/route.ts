@@ -549,7 +549,9 @@ export async function POST(request: Request) {
         .select("id")
         .maybeSingle();
 
-      if (error) throw new Error(error.message);
+      if (error) {
+        throw new Error(`Database rejected the approval status update: ${error.message}`);
+      }
       if (!approvedRow) {
         return NextResponse.json(
           {
@@ -650,7 +652,9 @@ export async function POST(request: Request) {
       .eq("id", submission.id)
       .eq("status", "approved");
 
-    if (paidError) throw new Error(paidError.message);
+    if (paidError) {
+      throw new Error(`Database rejected the paid status update: ${paidError.message}`);
+    }
 
     await service.from("financial_submission_events").insert({
       submission_id: submission.id,
