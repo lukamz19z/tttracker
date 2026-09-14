@@ -116,6 +116,8 @@ type FinancialAccessRule = {
 
 type FinancialSettings = {
   id: boolean;
+  accounts_email: string | null;
+  accounts_notification_enabled: boolean;
   sharepoint_site_id: string | null;
   sharepoint_site_name: string | null;
   sharepoint_site_url: string | null;
@@ -203,6 +205,8 @@ type RuleDraft = {
 
 const DEFAULT_FINANCIAL_SETTINGS: FinancialSettings = {
   id: true,
+  accounts_email: null,
+  accounts_notification_enabled: true,
   sharepoint_site_id: null,
   sharepoint_site_name: null,
   sharepoint_site_url: null,
@@ -548,7 +552,7 @@ export default function ExpensesDashboardPage() {
         supabase
           .from("financial_settings")
           .select(
-            "id, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
+            "id, accounts_email, accounts_notification_enabled, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
           )
           .eq("id", true)
           .maybeSingle(),
@@ -920,9 +924,18 @@ export default function ExpensesDashboardPage() {
   async function saveFinanceSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const accountsEmail = financeSettings.accounts_email?.trim() || "";
     const siteId = financeSettings.sharepoint_site_id?.trim() || null;
     const driveId = financeSettings.sharepoint_drive_id?.trim() || null;
     const baseFolder = financeSettings.sharepoint_base_folder.trim();
+
+    if (accountsEmail && !/^\S+@\S+\.\S+$/.test(accountsEmail)) {
+      setMessage({
+        tone: "error",
+        text: "Enter a valid Accounts email address.",
+      });
+      return;
+    }
 
     if (!baseFolder) {
       setMessage({
@@ -959,6 +972,9 @@ export default function ExpensesDashboardPage() {
       const sharePointConfigured = Boolean(siteId && driveId);
 
       const payload = {
+        accounts_email: accountsEmail || null,
+        accounts_notification_enabled:
+          financeSettings.accounts_notification_enabled,
         sharepoint_site_id: siteId,
         sharepoint_site_name:
           financeSettings.sharepoint_site_name?.trim() || null,
@@ -998,7 +1014,7 @@ export default function ExpensesDashboardPage() {
         .update(payload)
         .eq("id", true)
         .select(
-          "id, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
+          "id, accounts_email, accounts_notification_enabled, sharepoint_site_id, sharepoint_site_name, sharepoint_site_url, sharepoint_drive_id, sharepoint_drive_name, sharepoint_base_folder, sharepoint_configured_at, sharepoint_configured_by, approval_email_enabled, approval_in_app_enabled, approval_push_enabled, reminder_email_enabled, reminder_in_app_enabled, reminder_push_enabled, claim_pending_reminder_days, claim_pending_second_reminder_days, approved_unpaid_reminder_days, invoice_due_soon_days, invoice_overdue_reminder_days, reminders_enabled, created_at, updated_at, updated_by",
         )
         .single();
 
@@ -1696,6 +1712,47 @@ export default function ExpensesDashboardPage() {
 
                   <div className="space-y-8 px-6 py-6">
                     <div>
+                      <div className="flex items-center gap-2">
+                        <Mail size={17} className="text-slate-400" />
+                        <h3 className="text-base font-bold text-slate-950">
+                          Accounts Notification
+                        </h3>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        When a supplier invoice is approved and archived to SharePoint,
+                        TTTracker can send the final approval notification to Accounts.
+                      </p>
+
+                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-end">
+                        <Field label="Accounts email">
+                          <input
+                            type="email"
+                            value={financeSettings.accounts_email ?? ""}
+                            onChange={(event) =>
+                              setFinanceSettings((current) => ({
+                                ...current,
+                                accounts_email: event.target.value,
+                              }))
+                            }
+                            placeholder="accounts@bc-contracting.com.au"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+                          />
+                        </Field>
+
+                        <CheckField
+                          label="Notify Accounts after approval"
+                          checked={financeSettings.accounts_notification_enabled}
+                          onChange={(checked) =>
+                            setFinanceSettings((current) => ({
+                              ...current,
+                              accounts_notification_enabled: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-8">
                       <div className="flex items-center gap-2">
                         <FolderOpen size={17} className="text-slate-400" />
                         <h3 className="text-base font-bold text-slate-950">
