@@ -2,9 +2,10 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 import {
-  ensureDriveFolder,
-  uploadDriveItemContent,
-} from "@/lib/sharepoint/graph";
+  ensureExpenseClaimReceiptsFolder,
+  safeFinanceSharePointPart,
+  uploadExpenseClaimFile,
+} from "@/lib/sharepoint/finance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,48 +49,7 @@ async function authenticatedUser(request: Request) {
   } = await admin.auth.getUser(token);
 
   if (error || !user) throw new Error("UNAUTHENTICATED");
-
   return { admin, user };
-}
-
-function safePart(value: string) {
-  return value
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
-    .replace(/\s+/g, " ")
-    .replace(/\.+$/g, "")
-    .slice(0, 120) || "File";
-}
-
-function monthParts(value: string) {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
-    ? new Date(`${value}T00:00:00Z`)
-    : new Date();
-
-  const valid = Number.isNaN(date.getTime()) ? new Date() : date;
-
-  return {
-    year: String(valid.getUTCFullYear()),
-    month: `${String(valid.getUTCMonth() + 1).padStart(2, "0")} - ${valid.toLocaleString("en-AU", {
-      month: "long",
-      timeZone: "UTC",
-    })}`,
-  };
-}
-
-async function ensurePath(driveId: string, names: string[]) {
-  let parentId = "root";
-
-  for (const name of names) {
-    const folder = await ensureDriveFolder({
-      driveId,
-      parentItemId: parentId,
-      name,
-    });
-    parentId = folder.id;
-  }
-
-  return parentId;
 }
 
 export async function POST(request: Request) {
@@ -102,7 +62,10 @@ export async function POST(request: Request) {
     const itemId = String(form.get("itemId") ?? "").trim();
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ error: "Choose a receipt file." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Choose a receipt file." },
+        { status: 400 },
+      );
     }
 
     if (!submissionId || !itemId) {
@@ -130,14 +93,17 @@ export async function POST(request: Request) {
     const { data: submission, error: submissionError } = await admin
       .from("financial_submissions")
       .select(
-        "id,submission_number,submission_type,status,created_by,submitted_by,submitted_for_employee_id",
+        "id,submission_number,submission_type,status,created_at,created_by,submitted_by,submitted_for_employee_id",
       )
       .eq("id", submissionId)
       .eq("submission_type", "expense_claim")
       .single();
 
     if (submissionError || !submission) {
-      return NextResponse.json({ error: "Expense claim not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: "Expense claim not found." },
+        { status: 404 },
+      );
     }
 
     const { data: roleRow } = await admin
@@ -155,47 +121,39 @@ export async function POST(request: Request) {
       .eq("user_id", user.id)
       .maybeSingle();
 
-    const { data: permissionRows, error: permissionError } = await admin
-      .from("financial_access_rules")
-      .select("can_review_edit,can_approve")
-      .eq("active", true)
-      .or(`applies_to.eq.all,applies_to.eq.expense_claim`);
-
-    if (permissionError) throw new Error(permissionError.message);
-
-    const { data: userRules } = await admin
+    const { data: userRules, error: ruleError } = await admin
       .from("financial_access_rules")
       .select("can_review_edit,can_approve")
       .eq("active", true)
       .eq("principal_type", "user")
       .eq("user_id", user.id)
-      .or(`applies_to.eq.all,applies_to.eq.expense_claim`);
+      .or("applies_to.eq.all,applies_to.eq.expense_claim");
 
-    const { data: roleRules } = await admin
-      .from("financial_access_rules")
-      .select("can_review_edit,can_approve")
-      .eq("active", true)
-      .eq("principal_type", "role")
-      .eq("role", role)
-      .or(`applies_to.eq.all,applies_to.eq.expense_claim`);
+    if (ruleError) throw new Error(ruleError.message);
 
-    void permissionRows;
-
-    const canReview = [...(userRules ?? []), ...(roleRules ?? [])].some(
+    const canReview = (userRules ?? []).some(
       (row) => row.can_review_edit || row.can_approve,
     );
 
     const ownsSubmission =
       submission.created_by === user.id ||
       submission.submitted_by === user.id ||
-      (employee?.id &&
-        submission.submitted_for_employee_id === employee.id);
+      Boolean(
+        employee?.id &&
+          submission.submitted_for_employee_id === employee.id,
+      );
 
     if (!isAdmin && !canReview && !ownsSubmission) {
-      return NextResponse.json({ error: "You do not have access to this claim." }, { status: 403 });
+      return NextResponse.json(
+        { error: "You do not have access to this claim." },
+        { status: 403 },
+      );
     }
 
-    if (!["draft", "submitted", "changes_required"].includes(submission.status) && !isAdmin) {
+    if (
+      !["draft", "submitted", "changes_required"].includes(submission.status) &&
+      !isAdmin
+    ) {
       return NextResponse.json(
         { error: "Receipts cannot be changed after the claim is approved." },
         { status: 409 },
@@ -210,7 +168,10 @@ export async function POST(request: Request) {
       .single();
 
     if (itemError || !item) {
-      return NextResponse.json({ error: "Expense item not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: "Expense item not found." },
+        { status: 404 },
+      );
     }
 
     const { data: settings, error: settingsError } = await admin
@@ -225,37 +186,33 @@ export async function POST(request: Request) {
 
     if (!settings.sharepoint_site_id || !settings.sharepoint_drive_id) {
       return NextResponse.json(
-        { error: "Finance SharePoint storage has not been connected in Expenses → Settings." },
+        {
+          error:
+            "Finance SharePoint storage has not been connected in Finance Settings.",
+        },
         { status: 409 },
       );
     }
 
-    const { year, month } = monthParts(item.expense_date);
-    const baseFolder = safePart(settings.sharepoint_base_folder || "Expenses & Invoices");
-    const claimFolder = safePart(submission.submission_number);
+    const receiptsFolder = await ensureExpenseClaimReceiptsFolder({
+      driveId: settings.sharepoint_drive_id,
+      baseFolder: settings.sharepoint_base_folder || "Expenses & Invoices",
+      submissionNumber: submission.submission_number,
+      anchorDate: submission.created_at,
+    });
 
-    const receiptsFolderId = await ensurePath(settings.sharepoint_drive_id, [
-      baseFolder,
-      year,
-      month,
-      "Expense Claims",
-      claimFolder,
-      "Receipts",
-    ]);
-
-    const originalName = safePart(file.name || "receipt");
+    const originalName = safeFinanceSharePointPart(file.name || "receipt");
     const extensionIndex = originalName.lastIndexOf(".");
     const baseName =
       extensionIndex > 0 ? originalName.slice(0, extensionIndex) : originalName;
     const extension =
       extensionIndex > 0 ? originalName.slice(extensionIndex) : "";
-
-    const storedName = `${safePart(baseName)}-${Date.now()}${extension}`;
+    const storedName = `${safeFinanceSharePointPart(baseName)}-${Date.now()}${extension}`;
     const bytes = new Uint8Array(await file.arrayBuffer());
 
-    const uploaded = await uploadDriveItemContent({
+    const uploaded = await uploadExpenseClaimFile({
       driveId: settings.sharepoint_drive_id,
-      parentItemId: receiptsFolderId,
+      folderId: receiptsFolder.id,
       fileName: storedName,
       content: bytes,
       contentType,
@@ -298,6 +255,7 @@ export async function POST(request: Request) {
         item_id: itemId,
         attachment_id: attachment.id,
         file_name: file.name,
+        sharepoint_web_url: uploaded.webUrl ?? null,
       },
     });
 
@@ -307,7 +265,10 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : "Receipt upload failed.";
 
     if (message === "UNAUTHENTICATED") {
-      return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
+      return NextResponse.json(
+        { error: "You must be signed in." },
+        { status: 401 },
+      );
     }
 
     console.error("FINANCE RECEIPT UPLOAD ERROR:", error);

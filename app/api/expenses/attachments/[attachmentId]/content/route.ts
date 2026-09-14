@@ -7,9 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type RouteContext = {
-  params: Promise<{
-    attachmentId: string;
-  }>;
+  params: Promise<{ attachmentId: string }>;
 };
 
 function env(name: string) {
@@ -22,12 +20,7 @@ function adminClient() {
   return createClient(
     env("NEXT_PUBLIC_SUPABASE_URL"),
     env("SUPABASE_SERVICE_ROLE_KEY"),
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    },
+    { auth: { persistSession: false, autoRefreshToken: false } },
   );
 }
 
@@ -40,14 +33,12 @@ async function authenticatedUser(request: Request) {
   if (!token) throw new Error("UNAUTHENTICATED");
 
   const admin = adminClient();
-
   const {
     data: { user },
     error,
   } = await admin.auth.getUser(token);
 
   if (error || !user) throw new Error("UNAUTHENTICATED");
-
   return { admin, user };
 }
 
@@ -80,9 +71,7 @@ async function canAccessSubmission({
 
   const role = String(roleRow?.role ?? "").trim().toLowerCase();
 
-  if (["admin", "administrator", "site_admin"].includes(role)) {
-    return true;
-  }
+  if (["admin", "administrator", "site_admin"].includes(role)) return true;
 
   const ownsSubmission =
     submission.created_by === userId ||
@@ -94,30 +83,20 @@ async function canAccessSubmission({
 
   if (ownsSubmission) return true;
 
-  const appliesTo = submission.submission_type;
+  const { data: userRules, error } = await admin
+    .from("financial_access_rules")
+    .select("can_review_edit,can_approve,can_mark_paid")
+    .eq("active", true)
+    .eq("principal_type", "user")
+    .eq("user_id", userId)
+    .or(
+      `applies_to.eq.all,applies_to.eq.${submission.submission_type}`,
+    );
 
-  const [{ data: userRules }, { data: roleRules }] = await Promise.all([
-    admin
-      .from("financial_access_rules")
-      .select("can_review_edit,can_approve,can_mark_paid")
-      .eq("active", true)
-      .eq("principal_type", "user")
-      .eq("user_id", userId)
-      .or(`applies_to.eq.all,applies_to.eq.${appliesTo}`),
-    admin
-      .from("financial_access_rules")
-      .select("can_review_edit,can_approve,can_mark_paid")
-      .eq("active", true)
-      .eq("principal_type", "role")
-      .eq("role", role)
-      .or(`applies_to.eq.all,applies_to.eq.${appliesTo}`),
-  ]);
+  if (error) throw new Error(error.message);
 
-  return [...(userRules ?? []), ...(roleRules ?? [])].some(
-    (row) =>
-      row.can_review_edit ||
-      row.can_approve ||
-      row.can_mark_paid,
+  return (userRules ?? []).some(
+    (row) => row.can_review_edit || row.can_approve || row.can_mark_paid,
   );
 }
 
@@ -199,13 +178,9 @@ export async function GET(request: Request, context: RouteContext) {
     const graphResponse = await fetch(
       `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(
         attachment.sharepoint_drive_id,
-      )}/items/${encodeURIComponent(
-        attachment.sharepoint_item_id,
-      )}/content`,
+      )}/items/${encodeURIComponent(attachment.sharepoint_item_id)}/content`,
       {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
         redirect: "follow",
       },
@@ -213,7 +188,6 @@ export async function GET(request: Request, context: RouteContext) {
 
     if (!graphResponse.ok) {
       const detail = await graphResponse.text();
-
       throw new Error(
         `SharePoint attachment could not be loaded (${graphResponse.status}): ${detail}`,
       );
@@ -245,7 +219,6 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     console.error("FINANCE ATTACHMENT CONTENT ERROR:", error);
-
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
