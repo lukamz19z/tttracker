@@ -163,6 +163,15 @@ const makeCode = (value: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
 
+// Used while typing in a code field. Unlike makeCode(), this deliberately
+// keeps a trailing hyphen so codes such as HL-WV-VOC can be entered normally.
+// makeCode() still performs the final cleanup when the form is saved.
+const editCode = (value: string) =>
+  value
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "")
+    .slice(0, 40);
+
 export default function TrainingConfigurationPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
@@ -993,7 +1002,7 @@ export default function TrainingConfigurationPage() {
                 onChange={(value) =>
                   setCategoryForm((current) =>
                     current
-                      ? { ...current, code: makeCode(value) }
+                      ? { ...current, code: editCode(value) }
                       : current,
                   )
                 }
@@ -1100,7 +1109,7 @@ export default function TrainingConfigurationPage() {
                 onChange={(value) =>
                   setTypeForm((current) =>
                     current
-                      ? { ...current, code: makeCode(value) }
+                      ? { ...current, code: editCode(value) }
                       : current,
                   )
                 }
@@ -1495,7 +1504,7 @@ export default function TrainingConfigurationPage() {
                 onChange={(value) =>
                   setOptionForm((current) =>
                     current
-                      ? { ...current, code: makeCode(value) }
+                      ? { ...current, code: editCode(value) }
                       : current,
                   )
                 }
