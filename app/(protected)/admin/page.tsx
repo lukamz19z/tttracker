@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import {
   CheckCircle2,
   ChevronDown,
@@ -1277,9 +1278,12 @@ export default function AdminPage() {
                       <div className="flex min-w-0 items-center gap-4">
                         <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2">
                           {brandingLogoUrl ? (
-                            <img
+                            <Image
                               src={brandingLogoUrl}
                               alt="Current company logo"
+                              width={96}
+                              height={64}
+                              unoptimized
                               className="max-h-full max-w-full object-contain"
                             />
                           ) : (

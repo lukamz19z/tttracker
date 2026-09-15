@@ -15,12 +15,15 @@ import {
   Bell,
   Boxes,
   ClipboardCheck,
+  FilePenLine,
   FileText,
   Gauge,
+  GraduationCap,
   HardHat,
   Home,
   LogOut,
   PackageSearch,
+  TriangleAlert,
   Truck,
   UserCircle,
   Wrench,
@@ -51,6 +54,7 @@ type DrawerItemDefinition = {
   screen: string;
   icon: DrawerIcon;
   roles: MobileRole[];
+  leadingHandAccess?: boolean;
   notificationItem?: boolean;
 };
 
@@ -60,11 +64,51 @@ type DrawerSectionDefinition = {
 };
 
 const ALL_ROLES: MobileRole[] = [
-  "crew",
-  "leading_hand",
-  "mechanic",
   "admin",
+  "hseq",
+  "asset_manager",
+  "commercial",
+  "editor",
+  "crew",
+  "viewer",
 ];
+
+const EMPLOYEE_ROLES: MobileRole[] = [
+  "admin",
+  "hseq",
+  "asset_manager",
+  "commercial",
+  "editor",
+  "crew",
+];
+
+const FIELD_ROLES: MobileRole[] = [
+  "admin",
+  "hseq",
+  "editor",
+  "crew",
+];
+
+const ASSET_ROLES: MobileRole[] = [
+  "admin",
+  "asset_manager",
+];
+
+const HSEQ_ADMIN_ROLES: MobileRole[] = [
+  "admin",
+  "hseq",
+];
+
+function normalisePosition(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isLeadingHand(value?: string | null) {
+  return normalisePosition(value) === "leading_hand";
+}
 
 const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
   {
@@ -87,7 +131,18 @@ const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
         label: "Project Progress",
         screen: "project-progress",
         icon: Gauge,
-        roles: ["leading_hand", "admin"],
+        roles: FIELD_ROLES,
+      },
+    ],
+  },
+  {
+    title: "MY RECORDS",
+    items: [
+      {
+        label: "My Training",
+        screen: "training",
+        icon: GraduationCap,
+        roles: EMPLOYEE_ROLES,
       },
     ],
   },
@@ -98,19 +153,44 @@ const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
         label: "Search Materials",
         screen: "materials",
         icon: PackageSearch,
-        roles: ["crew", "leading_hand", "admin"],
+        roles: FIELD_ROLES,
       },
       {
         label: "Vehicle Prestart",
         screen: "vehicle-prestart",
         icon: ClipboardCheck,
-        roles: ALL_ROLES,
+        roles: EMPLOYEE_ROLES,
       },
       {
         label: "Truck Delivery",
         screen: "truck-delivery",
         icon: Truck,
-        roles: ["crew", "leading_hand", "admin"],
+        roles: FIELD_ROLES,
+      },
+      {
+        label: "Site Prestart",
+        screen: "site-prestart",
+        icon: ClipboardCheck,
+        roles: HSEQ_ADMIN_ROLES,
+        leadingHandAccess: true,
+      },
+    ],
+  },
+  {
+    title: "QUALITY",
+    items: [
+      {
+        label: "Revisions / Rectifications",
+        screen: "revisions",
+        icon: FilePenLine,
+        roles: FIELD_ROLES,
+      },
+      {
+        label: "Defects",
+        screen: "defects",
+        icon: TriangleAlert,
+        roles: HSEQ_ADMIN_ROLES,
+        leadingHandAccess: true,
       },
     ],
   },
@@ -121,13 +201,14 @@ const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
         label: "Tower Progress",
         screen: "tower-progress",
         icon: HardHat,
-        roles: ["leading_hand", "admin"],
+        roles: FIELD_ROLES,
       },
       {
         label: "Daily Dockets",
         screen: "daily-dockets",
         icon: FileText,
-        roles: ["leading_hand", "admin"],
+        roles: ["admin"],
+        leadingHandAccess: true,
       },
     ],
   },
@@ -138,13 +219,13 @@ const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
         label: "All Assets",
         screen: "assets",
         icon: Boxes,
-        roles: ["mechanic", "admin"],
+        roles: ASSET_ROLES,
       },
       {
         label: "Fleet Jobs",
         screen: "fleet-jobs",
         icon: Wrench,
-        roles: ["mechanic", "admin"],
+        roles: ASSET_ROLES,
       },
     ],
   },
@@ -165,12 +246,18 @@ function formatRole(role: MobileRole) {
   switch (role) {
     case "admin":
       return "Administrator";
-    case "leading_hand":
-      return "Leading Hand";
-    case "mechanic":
-      return "Mechanic";
+    case "hseq":
+      return "HSEQ";
+    case "asset_manager":
+      return "Asset Manager";
+    case "commercial":
+      return "Commercial";
+    case "editor":
+      return "Editor";
+    case "viewer":
+      return "Viewer";
     default:
-      return "Crew Member";
+      return "Crew / Field";
   }
 }
 
@@ -316,10 +403,14 @@ function CustomDrawerContent(
   const activeRouteName =
     props.state.routes[props.state.index]?.name ?? "index";
 
+  const leadingHand = isLeadingHand(profile?.employeeRole);
+
   const visibleSections = DRAWER_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) =>
-      item.roles.includes(role),
+    items: section.items.filter(
+      (item) =>
+        item.roles.includes(role) ||
+        (item.leadingHandAccess === true && leadingHand),
     ),
   })).filter((section) => section.items.length > 0);
 
@@ -542,6 +633,11 @@ export default function DrawerLayout() {
       />
 
       <Drawer.Screen
+        name="training"
+        options={{ title: "My Training" }}
+      />
+
+      <Drawer.Screen
         name="materials"
         options={{ title: "Search Materials" }}
       />
@@ -552,8 +648,23 @@ export default function DrawerLayout() {
       />
 
       <Drawer.Screen
+        name="site-prestart"
+        options={{ title: "Site Prestart" }}
+      />
+
+      <Drawer.Screen
         name="truck-delivery"
         options={{ title: "Truck Delivery" }}
+      />
+
+      <Drawer.Screen
+        name="revisions"
+        options={{ title: "Revisions / Rectifications" }}
+      />
+
+      <Drawer.Screen
+        name="defects"
+        options={{ title: "Defects" }}
       />
 
       <Drawer.Screen
