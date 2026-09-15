@@ -2,7 +2,8 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
+import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import {
@@ -271,6 +272,56 @@ type TowerRevisionAllocation = {
   hours: string;
   worker_names: string[];
   reason: string;
+};
+
+type DocketDefectSeverity = "Minor" | "Major" | "Critical";
+
+type DocketDefectIssueType = {
+  id: string;
+  name: string;
+  applies_to: "defect" | "revision" | "both";
+  active: boolean;
+  sort_order: number;
+};
+
+type DocketDefectAssignee = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+};
+
+type ExistingTowerDefect = {
+  id: string;
+  defect_number: string | null;
+  issue_type_id: string | null;
+  member_number: string | null;
+  segment: string | null;
+  drawing_number: string | null;
+  description: string | null;
+  severity: DocketDefectSeverity;
+  status: "Open" | "In Progress" | "Fixed" | "Closed";
+  assigned_to_user_id: string | null;
+  assigned_to_label: string | null;
+  created_at: string;
+};
+
+type LinkedDocketDefect = ExistingTowerDefect & {
+  link_id: string;
+  link_type: "raised" | "referenced";
+};
+
+type DocketDefectDraft = {
+  ui_id: string;
+  issue_type_id: string;
+  other_issue_text: string;
+  segment: string;
+  member_number: string;
+  drawing_number: string;
+  description: string;
+  severity: DocketDefectSeverity;
+  assigned_to_user_id: string;
+  photos: File[];
 };
 
 type MobilisationDraft = {
@@ -558,6 +609,52 @@ function makeUuid() {
     const value = char === "x" ? random : (random & 0x3) | 0x8;
     return value.toString(16);
   });
+}
+
+function blankDocketDefectDraft(): DocketDefectDraft {
+  return {
+    ui_id: makeUiId(),
+    issue_type_id: "",
+    other_issue_text: "",
+    segment: "",
+    member_number: "",
+    drawing_number: "",
+    description: "",
+    severity: "Minor",
+    assigned_to_user_id: "",
+    photos: [],
+  };
+}
+
+function isQualityHeicFile(file: File) {
+  const name = file.name.toLowerCase();
+  return (
+    file.type === "image/heic" ||
+    file.type === "image/heif" ||
+    name.endsWith(".heic") ||
+    name.endsWith(".heif")
+  );
+}
+
+async function normaliseQualityPhoto(file: File) {
+  if (!isQualityHeicFile(file)) return file;
+
+  const heic2anyModule = await import("heic2any");
+  const converted = await heic2anyModule.default({
+    blob: file,
+    toType: "image/jpeg",
+    quality: 0.9,
+  });
+  const blob = Array.isArray(converted) ? converted[0] : converted;
+
+  return new File(
+    [blob],
+    file.name.replace(/\.hei[cf]$/i, ".jpg"),
+    {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    },
+  );
 }
 
 function rfiReferencesToText(value: unknown) {
@@ -1167,6 +1264,15 @@ export default function DailyDocketForm({
   const [materialEvents, setMaterialEvents] = useState<MaterialEventDraft[]>([]);
   const [projectTowers, setProjectTowers] = useState<TowerOption[]>([]);
   const [towerRevisionAllocations, setTowerRevisionAllocations] = useState<TowerRevisionAllocation[]>([]);
+  const [docketDefectDrafts, setDocketDefectDrafts] = useState<DocketDefectDraft[]>([]);
+  const [linkedDocketDefects, setLinkedDocketDefects] = useState<LinkedDocketDefect[]>([]);
+  const [pendingExistingDefectIds, setPendingExistingDefectIds] = useState<string[]>([]);
+  const [removedLinkedDefectIds, setRemovedLinkedDefectIds] = useState<string[]>([]);
+  const [defectIssueTypes, setDefectIssueTypes] = useState<DocketDefectIssueType[]>([]);
+  const [defectAssignees, setDefectAssignees] = useState<DocketDefectAssignee[]>([]);
+  const [defectMembers, setDefectMembers] = useState<TowerMaterialMember[]>([]);
+  const [towerDefectOptions, setTowerDefectOptions] = useState<ExistingTowerDefect[]>([]);
+  const [defectLinkSelection, setDefectLinkSelection] = useState("");
   const [primaryWorkActivity, setPrimaryWorkActivity] = useState<ProductionActivity>("mixed");
   const [primaryWorkNotes, setPrimaryWorkNotes] = useState("");
   const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
@@ -1239,6 +1345,7 @@ export default function DailyDocketForm({
         "safety",
         "plant",
         "lafha",
+        "defects",
         "revision",
         "mobilisation",
         "delays",
@@ -1253,6 +1360,31 @@ export default function DailyDocketForm({
   function collapseAllSections() {
     setOpenSections(new Set());
   }
+
+  const qualityApiFetch = useCallback(
+    async (
+      input: RequestInfo | URL,
+      init: RequestInit = {},
+    ) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+
+      return fetch(input, {
+        ...init,
+        headers,
+        cache: "no-store",
+      });
+    },
+    [supabase],
+  );
 
   useEffect(() => {
     async function loadCrewData() {
@@ -1409,6 +1541,137 @@ export default function DailyDocketForm({
     const timer = window.setTimeout(() => void loadMaterialContext(), 0);
     return () => window.clearTimeout(timer);
   }, [projectId, supabase]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDefectContext() {
+      if (!projectId || !towerId) return;
+
+      const [
+        issueResult,
+        memberResult,
+        defectsResult,
+        linksResult,
+      ] = await Promise.all([
+        supabase
+          .from("project_field_issue_types")
+          .select("id,name,applies_to,active,sort_order")
+          .eq("project_id", projectId)
+          .eq("active", true)
+          .in("applies_to", ["defect", "both"])
+          .order("sort_order")
+          .order("name"),
+        supabase
+          .from("tower_material_members")
+          .select(
+            "id,tower_id,bundle_reference,drawing_number,mark_no,qty_per_tower,section,tower_segment",
+          )
+          .eq("tower_id", towerId)
+          .order("tower_segment")
+          .order("mark_no"),
+        supabase
+          .from("tower_defects")
+          .select(
+            "id,defect_number,issue_type_id,member_number,segment,drawing_number,description,severity,status,assigned_to_user_id,assigned_to_label,created_at",
+          )
+          .eq("project_id", projectId)
+          .eq("tower_id", towerId)
+          .order("created_at", { ascending: false }),
+        docketId
+          ? supabase
+              .from("tower_docket_defects")
+              .select(
+                "id,defect_id,link_type,defect:tower_defects(id,defect_number,issue_type_id,member_number,segment,drawing_number,description,severity,status,assigned_to_user_id,assigned_to_label,created_at)",
+              )
+              .eq("docket_id", docketId)
+              .eq("project_id", projectId)
+              .eq("tower_id", towerId)
+              .order("created_at")
+          : Promise.resolve({ data: [], error: null } as any),
+      ]);
+
+      if (cancelled) return;
+
+      if (issueResult.error) {
+        console.warn("Defect issue types could not be loaded", issueResult.error);
+      } else {
+        setDefectIssueTypes(
+          (issueResult.data ?? []) as DocketDefectIssueType[],
+        );
+      }
+
+      if (memberResult.error) {
+        console.warn("Defect member register could not be loaded", memberResult.error);
+      } else {
+        setDefectMembers(
+          (memberResult.data ?? []) as TowerMaterialMember[],
+        );
+      }
+
+      if (defectsResult.error) {
+        console.warn("Tower Defects could not be loaded", defectsResult.error);
+      } else {
+        setTowerDefectOptions(
+          (defectsResult.data ?? []) as ExistingTowerDefect[],
+        );
+      }
+
+      if (linksResult.error) {
+        console.warn("Daily Docket Defect links could not be loaded", linksResult.error);
+      } else {
+        const linkedRows: LinkedDocketDefect[] = [];
+
+        for (const row of linksResult.data ?? []) {
+          const defectValue = (row as any).defect;
+          const defect = Array.isArray(defectValue)
+            ? defectValue[0]
+            : defectValue;
+
+          if (!defect) continue;
+
+          linkedRows.push({
+            ...(defect as ExistingTowerDefect),
+            link_id: String((row as any).id),
+            link_type:
+              (row as any).link_type === "raised"
+                ? "raised"
+                : "referenced",
+          });
+        }
+
+        setLinkedDocketDefects(linkedRows);
+      }
+
+      try {
+        const response = await qualityApiFetch(
+          `/api/quality/defects/notification-settings?projectId=${encodeURIComponent(projectId)}`,
+        );
+        const payload = (await response.json()) as {
+          users?: DocketDefectAssignee[];
+          error?: string;
+        };
+
+        if (!cancelled && response.ok) {
+          setDefectAssignees(payload.users ?? []);
+        } else if (!response.ok) {
+          console.warn(
+            "Defect assignees could not be loaded",
+            payload.error || response.statusText,
+          );
+        }
+      } catch (error) {
+        console.warn("Defect assignees could not be loaded", error);
+      }
+    }
+
+    const timer = window.setTimeout(() => void loadDefectContext(), 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [docketId, projectId, qualityApiFetch, supabase, towerId]);
 
   useEffect(() => {
     async function loadMissingMaterialIssues() {
@@ -4994,6 +5257,277 @@ export default function DailyDocketForm({
     }
   }
 
+  function addDocketDefectDraft() {
+    if (isView || locked) return;
+
+    setDocketDefectDrafts((current) => [
+      ...current,
+      blankDocketDefectDraft(),
+    ]);
+    setOpenSections((current) => new Set([...current, "defects"]));
+  }
+
+  function updateDocketDefectDraft(
+    index: number,
+    patch: Partial<DocketDefectDraft>,
+  ) {
+    if (isView || locked) return;
+
+    setDocketDefectDrafts((current) =>
+      current.map((draft, draftIndex) =>
+        draftIndex === index ? { ...draft, ...patch } : draft,
+      ),
+    );
+  }
+
+  function removeDocketDefectDraft(index: number) {
+    if (isView || locked) return;
+    setDocketDefectDrafts((current) =>
+      current.filter((_, draftIndex) => draftIndex !== index),
+    );
+  }
+
+  function queueExistingDefectLink() {
+    if (isView || locked || !defectLinkSelection) return;
+
+    const alreadyLinked = linkedDocketDefects.some(
+      (row) => row.id === defectLinkSelection,
+    );
+    const alreadyQueued = pendingExistingDefectIds.includes(
+      defectLinkSelection,
+    );
+
+    if (!alreadyLinked && !alreadyQueued) {
+      setPendingExistingDefectIds((current) => [
+        ...current,
+        defectLinkSelection,
+      ]);
+    }
+
+    setDefectLinkSelection("");
+  }
+
+  function removeLinkedDocketDefect(defect: LinkedDocketDefect) {
+    if (isView || locked) return;
+
+    if (!window.confirm(
+      `Remove ${defect.defect_number || "this Defect"} from this Daily Docket?\n\nThe Defect itself will remain in the tower Defect Register.`,
+    )) {
+      return;
+    }
+
+    setLinkedDocketDefects((current) =>
+      current.filter((row) => row.id !== defect.id),
+    );
+    setRemovedLinkedDefectIds((current) =>
+      current.includes(defect.id)
+        ? current
+        : [...current, defect.id],
+    );
+  }
+
+  function removeQueuedExistingDefect(defectId: string) {
+    if (isView || locked) return;
+    setPendingExistingDefectIds((current) =>
+      current.filter((id) => id !== defectId),
+    );
+  }
+
+  async function uploadDocketDefectPhotos(
+    defectId: string,
+    photos: File[],
+  ) {
+    for (const original of photos) {
+      const file = await normaliseQualityPhoto(original);
+
+      const body = new FormData();
+      body.set("projectId", projectId);
+      body.set("towerId", towerId);
+      body.set("defectId", defectId);
+      body.set("fileRole", "defect_photo");
+      body.set("capturedAt", new Date().toISOString());
+      body.set("file", file);
+
+      const response = await qualityApiFetch(
+        "/api/quality/files/upload",
+        {
+          method: "POST",
+          body,
+        },
+      );
+
+      const payload = (await response.json()) as {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error || `Failed to upload ${original.name}.`,
+        );
+      }
+    }
+  }
+
+  async function syncDocketDefects(docketIdValue: string) {
+    // Remove only the Daily Docket association. Never delete the controlled
+    // Defect record from the Defect Register.
+    for (const defectId of removedLinkedDefectIds) {
+      const response = await qualityApiFetch(
+        "/api/quality/defects/docket-links",
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            towerId,
+            docketId: docketIdValue,
+            defectId,
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error || "A Defect could not be unlinked from the Daily Docket.",
+        );
+      }
+    }
+
+    setRemovedLinkedDefectIds([]);
+
+    for (const defectId of pendingExistingDefectIds) {
+      const response = await qualityApiFetch(
+        "/api/quality/defects/docket-links",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            towerId,
+            docketId: docketIdValue,
+            defectId,
+            linkType: "referenced",
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(
+          payload.error || "An existing Defect could not be linked to the Daily Docket.",
+        );
+      }
+    }
+
+    setPendingExistingDefectIds([]);
+
+    // New Defects are created through the central Quality API so the same
+    // numbering, assignment and notification workflow is used by Website,
+    // Daily Docket and the future mobile Defects module.
+    for (const draft of [...docketDefectDrafts]) {
+      const description = draft.description.trim();
+      const otherIssue = draft.other_issue_text.trim();
+
+      if (!draft.issue_type_id) {
+        throw new Error(
+          "Select a Common Issue or choose Other for every new Defect.",
+        );
+      }
+
+      if (
+        draft.issue_type_id === "__other__" &&
+        !otherIssue
+      ) {
+        throw new Error(
+          "Enter the issue details when Common Issue is set to Other.",
+        );
+      }
+
+      if (!description && !otherIssue) {
+        throw new Error(
+          "Enter a description for every Defect raised from this Daily Docket.",
+        );
+      }
+
+      const finalDescription =
+        draft.issue_type_id === "__other__"
+          ? [otherIssue, description]
+              .filter(Boolean)
+              .join(" — ")
+          : description;
+
+      const response = await qualityApiFetch(
+        "/api/quality/defects",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            towerId,
+            issueTypeId:
+              draft.issue_type_id === "__other__"
+                ? null
+                : draft.issue_type_id,
+            memberNumber: draft.member_number.trim() || null,
+            segment: draft.segment.trim() || null,
+            drawingNumber: draft.drawing_number.trim() || null,
+            description: finalDescription,
+            severity: draft.severity,
+            assignedToUserId:
+              draft.assigned_to_user_id || null,
+            source: "daily_docket",
+            sourceDocketId: docketIdValue,
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        defect?: ExistingTowerDefect;
+        error?: string;
+        warning?: string | null;
+      };
+
+      if (!response.ok || !payload.defect) {
+        throw new Error(
+          payload.error || "A Defect could not be created from the Daily Docket.",
+        );
+      }
+
+      if (draft.photos.length > 0) {
+        await uploadDocketDefectPhotos(
+          payload.defect.id,
+          draft.photos,
+        );
+      }
+
+      // Remove each successfully-created draft immediately. If a later item
+      // fails, retrying the docket cannot accidentally create this one twice.
+      setDocketDefectDrafts((current) =>
+        current.filter((row) => row.ui_id !== draft.ui_id),
+      );
+
+      setLinkedDocketDefects((current) => [
+        ...current.filter((row) => row.id !== payload.defect!.id),
+        {
+          ...payload.defect!,
+          link_id: `created-${payload.defect!.id}`,
+          link_type: "raised",
+        },
+      ]);
+      setTowerDefectOptions((current) => [
+        payload.defect!,
+        ...current.filter((row) => row.id !== payload.defect!.id),
+      ]);
+    }
+  }
+
   async function getNextDayworkSequence() {
     const { data, error } = await supabase
       .from("dayworks")
@@ -5283,6 +5817,7 @@ export default function DailyDocketForm({
     await syncBundleTransfers(docket.id);
     await syncDelayDayworks(docket.id);
     await recalcTowerProgressAndStatus();
+    await syncDocketDefects(String(docket.id));
 
     if (options?.navigate !== false) {
       router.push(`/project/${projectId}/tower/${towerId}/dockets`);
@@ -5379,6 +5914,7 @@ export default function DailyDocketForm({
     await syncBundleTransfers(docketId);
     await syncDelayDayworks(docketId);
     await recalcTowerProgressAndStatus();
+    await syncDocketDefects(docketId);
 
     if (options?.navigate !== false) {
       router.push(`/project/${projectId}/tower/${towerId}/dockets`);
@@ -5728,6 +6264,11 @@ export default function DailyDocketForm({
       setBundleTransferDrafts([]);
       setBundleTransfers([]);
       setTowerRevisionAllocations([]);
+      setDocketDefectDrafts([]);
+      setLinkedDocketDefects([]);
+      setPendingExistingDefectIds([]);
+      setRemovedLinkedDefectIds([]);
+      setDefectLinkSelection("");
       setPrimaryWorkActivity("mixed");
       setPrimaryWorkNotes("");
       setAdditionalTowerWork([]);
@@ -6938,6 +7479,405 @@ export default function DailyDocketForm({
           </div>
               </CollapsibleSection>
       )}
+
+      <CollapsibleSection
+        id="defects"
+        title="Defects / Site Issues"
+        subtitle="Raise a controlled Defect or link an existing tower Defect to this Daily Docket."
+        open={openSections.has("defects")}
+        onToggle={() => toggleSection("defects")}
+        badge={`${linkedDocketDefects.length + pendingExistingDefectIds.length + docketDefectDrafts.length} linked / pending`}
+        tone="amber"
+      >
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
+          Defects raised here use the same controlled <strong>DEF</strong> register,
+          SharePoint photo storage, assignment and project notification rules as the
+          tower Defects page. Saving the Daily Docket creates the Defect and links it
+          back to this docket for traceability.
+        </div>
+
+        {(linkedDocketDefects.length > 0 ||
+          pendingExistingDefectIds.length > 0) && (
+          <div className="space-y-2">
+            <div className="text-xs font-black uppercase tracking-wide text-slate-500">
+              Defects linked to this docket
+            </div>
+
+            {linkedDocketDefects.map((defect) => (
+              <div
+                key={defect.id}
+                className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 md:flex-row md:items-center md:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-black text-slate-950">
+                      {defect.defect_number || "Defect"}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
+                        defect.severity === "Critical"
+                          ? "bg-rose-100 text-rose-700"
+                          : defect.severity === "Major"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-yellow-100 text-yellow-800"
+                      }`}
+                    >
+                      {defect.severity}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-black text-slate-600">
+                      {defect.status}
+                    </span>
+                    <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700">
+                      {defect.link_type === "raised"
+                        ? "Raised on docket"
+                        : "Referenced"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-sm text-slate-700">
+                    {defect.description || "No description"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {[
+                      defect.segment,
+                      defect.member_number
+                        ? `Member ${defect.member_number}`
+                        : "",
+                      defect.assigned_to_label
+                        ? `Assigned: ${defect.assigned_to_label}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                </div>
+
+                {!locked && !isView && (
+                  <button
+                    type="button"
+                    onClick={() => removeLinkedDocketDefect(defect)}
+                    className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                  >
+                    Unlink
+                  </button>
+                )}
+              </div>
+            ))}
+
+            {pendingExistingDefectIds.map((defectId) => {
+              const defect = towerDefectOptions.find(
+                (row) => row.id === defectId,
+              );
+              if (!defect) return null;
+
+              return (
+                <div
+                  key={`pending-${defectId}`}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-blue-300 bg-blue-50/40 px-4 py-3"
+                >
+                  <div>
+                    <div className="text-sm font-black text-slate-900">
+                      {defect.defect_number || "Existing Defect"}
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      Will be linked when this Daily Docket is saved.
+                    </div>
+                  </div>
+                  {!locked && !isView && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        removeQueuedExistingDefect(defectId)
+                      }
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {!locked && !isView && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-black text-slate-900">
+              Link an existing Defect
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Use this when the issue already exists in the tower Defect Register
+              but needs to be referenced against this shift.
+            </p>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <label>
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Existing tower Defect
+                </span>
+                <select
+                  value={defectLinkSelection}
+                  onChange={(event) =>
+                    setDefectLinkSelection(event.target.value)
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                >
+                  <option value="">Select Defect...</option>
+                  {towerDefectOptions
+                    .filter(
+                      (defect) =>
+                        !linkedDocketDefects.some(
+                          (linked) => linked.id === defect.id,
+                        ) &&
+                        !pendingExistingDefectIds.includes(defect.id) &&
+                        !removedLinkedDefectIds.includes(defect.id),
+                    )
+                    .map((defect) => (
+                      <option key={defect.id} value={defect.id}>
+                        {defect.defect_number || "Defect"} · {defect.status} ·{" "}
+                        {defect.description || "No description"}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <button
+                type="button"
+                onClick={queueExistingDefectLink}
+                disabled={!defectLinkSelection}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-black text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Link Defect
+              </button>
+            </div>
+          </div>
+        )}
+
+        {docketDefectDrafts.map((draft, defectIndex) => (
+          <div
+            key={draft.ui_id}
+            className="rounded-2xl border border-amber-200 bg-amber-50/30 p-4 space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-black text-slate-950">
+                  New Defect {defectIndex + 1}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  A controlled DEF number is assigned when the Daily Docket is saved.
+                </div>
+              </div>
+
+              {!locked && !isView && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    removeDocketDefectDraft(defectIndex)
+                  }
+                  className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700 hover:bg-red-50"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Common Issue
+                </span>
+                <select
+                  value={draft.issue_type_id}
+                  disabled={locked || isView}
+                  onChange={(event) =>
+                    updateDocketDefectDraft(defectIndex, {
+                      issue_type_id: event.target.value,
+                      other_issue_text:
+                        event.target.value === "__other__"
+                          ? draft.other_issue_text
+                          : "",
+                    })
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                >
+                  <option value="">Select common issue...</option>
+                  {defectIssueTypes.map((issue) => (
+                    <option key={issue.id} value={issue.id}>
+                      {issue.name}
+                    </option>
+                  ))}
+                  <option value="__other__">Other</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Severity
+                </span>
+                <select
+                  value={draft.severity}
+                  disabled={locked || isView}
+                  onChange={(event) =>
+                    updateDocketDefectDraft(defectIndex, {
+                      severity: event.target.value as DocketDefectSeverity,
+                    })
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                >
+                  <option value="Minor">Minor</option>
+                  <option value="Major">Major</option>
+                  <option value="Critical">Critical</option>
+                </select>
+              </label>
+
+              {draft.issue_type_id === "__other__" && (
+                <label className="block md:col-span-2">
+                  <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                    Other issue details
+                  </span>
+                  <input
+                    value={draft.other_issue_text}
+                    disabled={locked || isView}
+                    onChange={(event) =>
+                      updateDocketDefectDraft(defectIndex, {
+                        other_issue_text: event.target.value,
+                      })
+                    }
+                    placeholder="Describe the issue type"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                  />
+                </label>
+              )}
+
+              <TowerMemberFields
+                members={defectMembers}
+                segment={draft.segment}
+                memberNumber={draft.member_number}
+                disabled={locked || isView}
+                onSegmentChange={(segment) =>
+                  updateDocketDefectDraft(defectIndex, {
+                    segment,
+                    member_number:
+                      draft.segment === segment
+                        ? draft.member_number
+                        : "",
+                    drawing_number:
+                      draft.segment === segment
+                        ? draft.drawing_number
+                        : "",
+                  })
+                }
+                onMemberNumberChange={(memberNumber) =>
+                  updateDocketDefectDraft(defectIndex, {
+                    member_number: memberNumber,
+                  })
+                }
+                onSelectMember={(member) =>
+                  updateDocketDefectDraft(defectIndex, {
+                    member_number: member.mark_no,
+                    segment:
+                      member.tower_segment || draft.segment,
+                    drawing_number:
+                      member.drawing_number || "",
+                  })
+                }
+              />
+
+              <Input
+                label="Drawing Number"
+                value={draft.drawing_number}
+                onChange={(value) =>
+                  updateDocketDefectDraft(defectIndex, {
+                    drawing_number: value,
+                  })
+                }
+                disabled={locked || isView}
+              />
+
+              <label className="block md:col-span-2">
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Assigned To (optional)
+                </span>
+                <select
+                  value={draft.assigned_to_user_id}
+                  disabled={locked || isView}
+                  onChange={(event) =>
+                    updateDocketDefectDraft(defectIndex, {
+                      assigned_to_user_id: event.target.value,
+                    })
+                  }
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
+                >
+                  <option value="">Not assigned</option>
+                  {defectAssignees.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                      {user.email ? ` · ${user.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="md:col-span-2">
+                <TextArea
+                  label="Defect Description / Details"
+                  value={draft.description}
+                  onChange={(value) =>
+                    updateDocketDefectDraft(defectIndex, {
+                      description: value,
+                    })
+                  }
+                  disabled={locked || isView}
+                  rows={4}
+                  placeholder="Describe what was found, where it is, and any immediate action taken."
+                />
+              </div>
+
+              <label className="block md:col-span-2">
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Photos (optional)
+                </span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif"
+                  multiple
+                  disabled={locked || isView}
+                  onChange={(event) =>
+                    updateDocketDefectDraft(defectIndex, {
+                      photos: Array.from(event.target.files ?? []),
+                    })
+                  }
+                  className="block w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-bold disabled:bg-slate-100"
+                />
+                {draft.photos.length > 0 && (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {draft.photos.length} photo
+                    {draft.photos.length === 1 ? "" : "s"} ready to upload
+                    to SharePoint when saved.
+                  </div>
+                )}
+              </label>
+            </div>
+          </div>
+        ))}
+
+        {!locked && !isView && (
+          <button
+            type="button"
+            onClick={addDocketDefectDraft}
+            className="w-full rounded-2xl border-2 border-dashed border-amber-300 bg-amber-50/50 px-4 py-4 text-sm font-black text-amber-900 hover:bg-amber-50"
+          >
+            + Raise Defect
+          </button>
+        )}
+
+        {locked &&
+          linkedDocketDefects.length === 0 &&
+          docketDefectDrafts.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center text-sm text-slate-500">
+              No Defects are linked to this Daily Docket.
+            </div>
+          )}
+      </CollapsibleSection>
 
       <CollapsibleSection
         id="revision"

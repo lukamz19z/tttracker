@@ -24,6 +24,7 @@ type Props = {
   segmentLabel?: string;
   memberLabel?: string;
   memberPlaceholder?: string;
+  disabled?: boolean;
 };
 
 function clean(value: string | null | undefined) {
@@ -44,6 +45,9 @@ function memberSearchText(member: TowerMaterialMember) {
     .toLowerCase();
 }
 
+const inputClass =
+  "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-100 disabled:bg-slate-100 disabled:text-slate-500";
+
 export default function TowerMemberFields({
   members,
   segment,
@@ -54,6 +58,7 @@ export default function TowerMemberFields({
   segmentLabel = "Tower segment",
   memberLabel = "Member number",
   memberPlaceholder = "Search tower members...",
+  disabled = false,
 }: Props) {
   const [memberOpen, setMemberOpen] = useState(false);
 
@@ -68,7 +73,10 @@ export default function TowerMemberFields({
     if (clean(segment)) values.add(clean(segment));
 
     return Array.from(values).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
+      a.localeCompare(b, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
     );
   }, [members, segment]);
 
@@ -91,7 +99,7 @@ export default function TowerMemberFields({
           sensitivity: "base",
         }),
       )
-      .slice(0, 15);
+      .slice(0, 20);
   }, [memberNumber, members, segment]);
 
   return (
@@ -102,8 +110,9 @@ export default function TowerMemberFields({
         </span>
         <select
           value={segment}
+          disabled={disabled}
           onChange={(event) => onSegmentChange(event.target.value)}
-          className="input"
+          className={inputClass}
         >
           <option value="">Select tower segment...</option>
           {segmentOptions.map((value) => (
@@ -112,11 +121,6 @@ export default function TowerMemberFields({
             </option>
           ))}
         </select>
-        {members.length > 0 && segmentOptions.length === 0 ? (
-          <span className="mt-1 block text-[11px] text-amber-600">
-            No tower segments are assigned to this tower&apos;s member register.
-          </span>
-        ) : null}
       </label>
 
       <div className="relative">
@@ -132,20 +136,25 @@ export default function TowerMemberFields({
             />
             <input
               value={memberNumber}
-              onFocus={() => setMemberOpen(true)}
-              onBlur={() => window.setTimeout(() => setMemberOpen(false), 150)}
+              disabled={disabled}
+              onFocus={() => {
+                if (!disabled) setMemberOpen(true);
+              }}
+              onBlur={() =>
+                window.setTimeout(() => setMemberOpen(false), 150)
+              }
               onChange={(event) => {
                 onMemberNumberChange(event.target.value);
                 setMemberOpen(true);
               }}
               placeholder={memberPlaceholder}
               autoComplete="off"
-              className="input pl-9"
+              className={`${inputClass} pl-9`}
             />
           </div>
         </label>
 
-        {memberOpen ? (
+        {memberOpen && !disabled ? (
           <div className="absolute z-50 mt-1 max-h-72 w-full min-w-[300px] overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
             {members.length === 0 ? (
               <div className="px-3 py-3 text-xs text-slate-500">

@@ -3,6 +3,7 @@
 
 import {
   AlertTriangle,
+  Bell,
   Camera,
   CheckCircle2,
   Filter,
@@ -18,6 +19,7 @@ import {
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import DefectNotificationManager from "@/components/quality/DefectNotificationManager";
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
 import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
 import TowerHeader from "@/components/towers/TowerHeader";
@@ -63,6 +65,8 @@ type DefectRow = {
   photo_url: string | null;
   uploaded_by: string | null;
   resolution_notes: string | null;
+  assigned_to_user_id: string | null;
+  assigned_to_label: string | null;
   created_at: string;
   updated_at: string | null;
   completed_by: string | null;
@@ -94,6 +98,13 @@ type DefectAction = {
   created_at: string;
 };
 
+type DefectAssignee = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+};
+
 type EditDraft = {
   id: string;
   issue_type_id: string;
@@ -106,6 +117,7 @@ type EditDraft = {
   severity: DefectRow["severity"];
   status: DefectRow["status"];
   resolution_notes: string;
+  assigned_to_user_id: string;
 };
 
 type PhotoView = {
@@ -126,6 +138,7 @@ const BLANK_FORM = {
   responsibility: "",
   client_reference: "",
   severity: "Minor" as DefectRow["severity"],
+  assigned_to_user_id: "",
   files: [] as File[],
 };
 
@@ -165,6 +178,8 @@ export default function TowerDefectsPage() {
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [issueManagerOpen, setIssueManagerOpen] = useState(false);
+  const [notificationManagerOpen, setNotificationManagerOpen] = useState(false);
+  const [assigneeOptions, setAssigneeOptions] = useState<DefectAssignee[]>([]);
   const [form, setForm] = useState(BLANK_FORM);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Open");
@@ -250,8 +265,29 @@ export default function TowerDefectsPage() {
     setIssueTypes((issueRes.data ?? []) as IssueType[]);
     setQualityFiles((fileRes.data ?? []) as QualityFile[]);
     setTowerMembers((memberRes.data ?? []) as TowerMaterialMember[]);
+
+    try {
+      const response = await apiFetch(
+        `/api/quality/defects/notification-settings?projectId=${encodeURIComponent(projectId)}`,
+      );
+      const payload = (await response.json()) as {
+        users?: DefectAssignee[];
+        error?: string;
+      };
+      if (response.ok) {
+        setAssigneeOptions(payload.users ?? []);
+      } else {
+        console.warn(
+          "Defect assignees could not be loaded",
+          payload.error,
+        );
+      }
+    } catch (error) {
+      console.warn("Defect assignees could not be loaded", error);
+    }
+
     setLoading(false);
-  }, [projectId, supabase, towerId]);
+  }, [apiFetch, projectId, supabase, towerId]);
 
   useEffect(() => {
     void load();
@@ -362,50 +398,59 @@ export default function TowerDefectsPage() {
 
     setSaving(true);
     setMessage(null);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const userLabel =
-        user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || "Unknown User";
 
-      const { data, error } = await supabase
-        .from("tower_defects")
-        .insert({
-          project_id: projectId,
-          tower_id: towerId,
-          issue_type_id: form.issue_type_id || null,
-          member_number: form.member_number.trim() || null,
+    try {
+      const response = await apiFetch("/api/quality/defects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          towerId,
+          issueTypeId: form.issue_type_id || null,
+          memberNumber: form.member_number.trim() || null,
           segment: form.segment.trim() || null,
-          drawing_number: form.drawing_number.trim() || null,
+          drawingNumber: form.drawing_number.trim() || null,
           description: form.description.trim(),
           responsibility: form.responsibility.trim() || null,
-          client_reference: form.client_reference.trim() || null,
+          clientReference: form.client_reference.trim() || null,
           severity: form.severity,
-          status: "Open",
+          assignedToUserId: form.assigned_to_user_id || null,
           source: "manual",
-          identified_at: new Date().toISOString(),
-          identified_by: user?.id ?? null,
-          identified_by_label: userLabel,
-          uploaded_by: userLabel,
-          photo_url: null,
-        })
-        .select("*")
-        .single();
+        }),
+      });
 
-      if (error || !data) throw new Error(error?.message || "Defect could not be saved.");
+      const payload = (await response.json()) as {
+        defect?: DefectRow;
+        warning?: string | null;
+        error?: string;
+      };
 
-      if (form.files.length > 0) await uploadDefectPhotos(data.id, form.files);
+      if (!response.ok || !payload.defect) {
+        throw new Error(payload.error || "Defect could not be saved.");
+      }
+
+      if (form.files.length > 0) {
+        await uploadDefectPhotos(payload.defect.id, form.files);
+      }
 
       setForm(BLANK_FORM);
       setShowAdd(false);
       setMessage({
         tone: "success",
-        text: `${data.defect_number || "Defect"} created successfully.`,
+        text: payload.warning
+          ? `${payload.defect.defect_number || "Defect"} created. ${payload.warning}`
+          : `${payload.defect.defect_number || "Defect"} created successfully.`,
       });
+
       await load();
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Defect could not be saved." });
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Defect could not be saved.",
+      });
     } finally {
       setSaving(false);
     }
@@ -424,59 +469,110 @@ export default function TowerDefectsPage() {
       severity: row.severity,
       status: row.status,
       resolution_notes: row.resolution_notes || "",
+      assigned_to_user_id: row.assigned_to_user_id || "",
     });
   }
 
   async function saveEdit() {
     if (!editDraft?.description.trim()) return;
+
     setEditSaving(true);
+    setMessage(null);
+
     try {
-      const { error } = await supabase
-        .from("tower_defects")
-        .update({
-          issue_type_id: editDraft.issue_type_id || null,
-          member_number: editDraft.member_number.trim() || null,
-          segment: editDraft.segment.trim() || null,
-          drawing_number: editDraft.drawing_number.trim() || null,
-          description: editDraft.description.trim(),
-          responsibility: editDraft.responsibility.trim() || null,
-          client_reference: editDraft.client_reference.trim() || null,
-          severity: editDraft.severity,
-          status: editDraft.status,
-          resolution_notes: editDraft.resolution_notes.trim() || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", editDraft.id);
-      if (error) throw error;
+      const response = await apiFetch(
+        `/api/quality/defects/${encodeURIComponent(editDraft.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issueTypeId: editDraft.issue_type_id || null,
+            memberNumber: editDraft.member_number.trim() || null,
+            segment: editDraft.segment.trim() || null,
+            drawingNumber: editDraft.drawing_number.trim() || null,
+            description: editDraft.description.trim(),
+            responsibility: editDraft.responsibility.trim() || null,
+            clientReference: editDraft.client_reference.trim() || null,
+            severity: editDraft.severity,
+            status: editDraft.status,
+            resolutionNotes: editDraft.resolution_notes.trim() || null,
+            assignedToUserId: editDraft.assigned_to_user_id || null,
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        defect?: DefectRow;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.defect) {
+        throw new Error(payload.error || "Defect could not be updated.");
+      }
+
       setEditDraft(null);
+      if (payload.warning) {
+        setMessage({ tone: "success", text: payload.warning });
+      }
       await load();
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Defect could not be updated." });
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Defect could not be updated.",
+      });
     } finally {
       setEditSaving(false);
     }
   }
 
   async function signOff(row: DefectRow) {
-    if (!window.confirm(`Close ${row.defect_number || "this Defect"}?`)) return;
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const label = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || "Unknown User";
-    const { error } = await supabase
-      .from("tower_defects")
-      .update({
-        status: "Closed",
-        completed_by: label,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id);
-    if (error) {
-      setMessage({ tone: "error", text: error.message });
+    if (!window.confirm(`Close ${row.defect_number || "this Defect"}?`)) {
       return;
     }
-    await load();
+
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/quality/defects/${encodeURIComponent(row.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "Closed" }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        defect?: DefectRow;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.defect) {
+        throw new Error(payload.error || "Defect could not be closed.");
+      }
+
+      setMessage({
+        tone: "success",
+        text: payload.warning
+          ? `${row.defect_number || "Defect"} closed. ${payload.warning}`
+          : `${row.defect_number || "Defect"} closed.`,
+      });
+
+      await load();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Defect could not be closed.",
+      });
+    }
   }
 
   async function openActions(row: DefectRow) {
@@ -496,22 +592,47 @@ export default function TowerDefectsPage() {
 
   async function addAction() {
     if (!actionsDefect || !newAction.trim()) return;
+
     setActionSaving(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const label = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || "Unknown User";
-    const { error } = await supabase.from("defect_actions").insert({
-      defect_id: actionsDefect.id,
-      action_note: newAction.trim(),
-      created_by: label,
-    });
-    if (error) {
-      setMessage({ tone: "error", text: error.message });
-    } else {
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/quality/defects/${encodeURIComponent(actionsDefect.id)}/actions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: newAction.trim() }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        action?: DefectAction;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.action) {
+        throw new Error(payload.error || "Defect action could not be saved.");
+      }
+
       await openActions(actionsDefect);
+      setNewAction("");
+
+      if (payload.warning) {
+        setMessage({ tone: "success", text: payload.warning });
+      }
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Defect action could not be saved.",
+      });
+    } finally {
+      setActionSaving(false);
     }
-    setActionSaving(false);
   }
 
   async function fetchQualityFileUrl(fileId: string) {
@@ -657,6 +778,13 @@ export default function TowerDefectsPage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => setNotificationManagerOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                <Bell size={16} /> Notifications
+              </button>
+              <button
+                type="button"
                 onClick={() => setIssueManagerOpen(true)}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
               >
@@ -757,6 +885,25 @@ export default function TowerDefectsPage() {
               />
               <Field label="Drawing"><input value={form.drawing_number} onChange={(event) => setForm((current) => ({ ...current, drawing_number: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Severity"><select value={form.severity} onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as DefectRow["severity"] }))} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
+              <Field label="Assigned to">
+                <select
+                  value={form.assigned_to_user_id}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      assigned_to_user_id: event.target.value,
+                    }))
+                  }
+                  className="input"
+                >
+                  <option value="">Unassigned</option>
+                  {assigneeOptions.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}{user.email ? ` · ${user.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Responsibility"><input value={form.responsibility} onChange={(event) => setForm((current) => ({ ...current, responsibility: event.target.value }))} placeholder="BC / UGL / Supplier / Client" className="input" /></Field>
               <Field label="Client / RFI reference"><input value={form.client_reference} onChange={(event) => setForm((current) => ({ ...current, client_reference: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Photos"><input type="file" multiple accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" onChange={(event) => setForm((current) => ({ ...current, files: Array.from(event.target.files ?? []) }))} className="input" /></Field>
@@ -783,7 +930,7 @@ export default function TowerDefectsPage() {
               {filteredRows.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100 align-top hover:bg-slate-50/70">
                   <td className="px-4 py-4"><div className="font-black text-slate-950">{row.defect_number || "Legacy Defect"}</div><div className="mt-1 text-xs text-slate-500">{row.client_reference || "No client reference"}</div></td>
-                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}</td>
+                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {row.assigned_to_label}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600"><div><b>Segment:</b> {row.segment || "-"}</div><div><b>Member:</b> {row.member_number || "-"}</div><div><b>Drawing:</b> {row.drawing_number || "-"}</div></td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${severityClasses(row.severity)}`}>{row.severity}</span></td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClasses(row.status)}`}>{row.status}</span>{row.status === "Closed" ? <div className="mt-2 text-[11px] text-slate-500">{row.completed_by || "-"}<br />{prettyDateTime(row.completed_at)}</div> : null}</td>
@@ -799,6 +946,15 @@ export default function TowerDefectsPage() {
       </section>
 
       <IssueTypeManager open={issueManagerOpen} onClose={() => setIssueManagerOpen(false)} projectId={projectId} defaultScope="defect" onChanged={load} />
+
+      {notificationManagerOpen ? (
+        <DefectNotificationManager
+          projectId={projectId}
+          apiFetch={apiFetch}
+          onClose={() => setNotificationManagerOpen(false)}
+          onChanged={load}
+        />
+      ) : null}
 
       {editDraft ? (
         <Modal title="Edit Defect" subtitle={rows.find((row) => row.id === editDraft.id)?.defect_number || "Defect"} onClose={() => setEditDraft(null)}>
@@ -855,6 +1011,29 @@ export default function TowerDefectsPage() {
             />
             <Field label="Drawing"><input value={editDraft.drawing_number} onChange={(event) => setEditDraft((current) => current ? { ...current, drawing_number: event.target.value } : current)} className="input" /></Field>
             <Field label="Severity"><select value={editDraft.severity} onChange={(event) => setEditDraft((current) => current ? { ...current, severity: event.target.value as DefectRow["severity"] } : current)} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
+            <Field label="Assigned to">
+              <select
+                value={editDraft.assigned_to_user_id}
+                onChange={(event) =>
+                  setEditDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          assigned_to_user_id: event.target.value,
+                        }
+                      : current,
+                  )
+                }
+                className="input"
+              >
+                <option value="">Unassigned</option>
+                {assigneeOptions.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}{user.email ? ` · ${user.email}` : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Responsibility"><input value={editDraft.responsibility} onChange={(event) => setEditDraft((current) => current ? { ...current, responsibility: event.target.value } : current)} className="input" /></Field>
             <Field label="Client / RFI reference"><input value={editDraft.client_reference} onChange={(event) => setEditDraft((current) => current ? { ...current, client_reference: event.target.value } : current)} className="input" /></Field>
           </div>
