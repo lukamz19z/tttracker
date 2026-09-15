@@ -200,8 +200,14 @@ export async function POST(request: Request, context: RouteContext) {
           });
         } catch (error) {
           console.error("Training approval notification failed", error);
+
+          const notificationError =
+            error instanceof Error
+              ? error.message
+              : String(error ?? "Unknown notification error");
+
           notificationWarning =
-            "The record was approved and published, but the employee notification could not be sent.";
+            `The record was approved and published, but the employee notification could not be sent: ${notificationError}`;
         }
       }
 
@@ -254,7 +260,7 @@ export async function POST(request: Request, context: RouteContext) {
             action === "request_changes"
               ? `${trainingType?.name || record.training_name}: ${comment}`
               : `${trainingType?.name || record.training_name} was rejected: ${comment}`,
-          severity: action === "request_changes" ? "warning" : "critical",
+          severity: "warning",
           actionRoute: "/profile",
           actionParams: {
             training_record_id: recordId,
@@ -264,8 +270,14 @@ export async function POST(request: Request, context: RouteContext) {
         });
       } catch (error) {
         console.error("Training review outcome notification failed", error);
+
+        const notificationError =
+          error instanceof Error
+            ? error.message
+            : String(error ?? "Unknown notification error");
+
         notificationWarning =
-          "The review action was saved, but the employee notification could not be sent.";
+          `The review action was saved, but the employee notification could not be sent: ${notificationError}`;
       }
     }
 
@@ -276,6 +288,8 @@ export async function POST(request: Request, context: RouteContext) {
       notificationWarning,
     });
   } catch (error) {
+    console.error("Training review action route failed", error);
+
     const apiError = trainingApiError(error);
     return NextResponse.json(
       { error: apiError.message },
