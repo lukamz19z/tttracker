@@ -10,6 +10,7 @@ import {
   qualityUserLabel,
   requireQualityUser,
 } from "@/lib/quality/server";
+import { deleteDriveItem } from "@/lib/sharepoint/graph";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,8 +33,35 @@ type PatchBody = {
   assignedToUserId?: string | null;
 };
 
+type DeleteBody = {
+  confirm?: string;
+  projectId?: string;
+  towerId?: string;
+};
+
+type QualityFileDeleteRow = {
+  id: string;
+  file_name?: string | null;
+  sharepoint_drive_id?: string | null;
+  sharepoint_item_id?: string | null;
+  drive_id?: string | null;
+  item_id?: string | null;
+};
+
+type LegacyPhotoRow = {
+  id: string;
+  photo_path: string | null;
+};
+
 function clean(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function qualityFileSharePointIds(file: QualityFileDeleteRow) {
+  return {
+    driveId: clean(file.sharepoint_drive_id || file.drive_id) || null,
+    itemId: clean(file.sharepoint_item_id || file.item_id) || null,
+  };
 }
 
 async function userLabel(
@@ -262,6 +290,233 @@ export async function PATCH(
     }
 
     return NextResponse.json({ defect, warning });
+  } catch (error) {
+    const apiError = qualityApiError(error);
+    return NextResponse.json(
+      { error: apiError.message },
+      { status: apiError.status },
+    );
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  context: RouteContext,
+) {
+  try {
+    const { defectId } = await context.params;
+    const { service, user, role } = await requireQualityUser(request);
+
+    if (!clean(defectId)) {
+      return NextResponse.json(
+        { error: "Defect ID is required." },
+        { status: 400 },
+      );
+    }
+
+    let body: DeleteBody = {};
+
+    try {
+      body = (await request.json()) as DeleteBody;
+    } catch {
+      return NextResponse.json(
+        { error: "A delete confirmation is required." },
+        { status: 400 },
+      );
+    }
+
+    const { data: defect, error: defectError } = await service
+      .from("tower_defects")
+      .select("*")
+      .eq("id", defectId)
+      .maybeSingle();
+
+    if (defectError) throw new Error(defectError.message);
+
+    if (!defect) {
+      return NextResponse.json(
+        { error: "Defect could not be found." },
+        { status: 404 },
+      );
+    }
+
+    await assertQualityProjectAccess({
+      service,
+      userId: user.id,
+      role,
+      projectId: defect.project_id,
+    });
+
+    const requestedProjectId = clean(body.projectId);
+    const requestedTowerId = clean(body.towerId);
+
+    if (
+      requestedProjectId &&
+      requestedProjectId !== clean(defect.project_id)
+    ) {
+      return NextResponse.json(
+        { error: "Defect does not belong to this project." },
+        { status: 409 },
+      );
+    }
+
+    if (
+      requestedTowerId &&
+      requestedTowerId !== clean(defect.tower_id)
+    ) {
+      return NextResponse.json(
+        { error: "Defect does not belong to this tower." },
+        { status: 409 },
+      );
+    }
+
+    const confirmationLabel = clean(defect.defect_number) || defect.id;
+
+    if (clean(body.confirm) !== confirmationLabel) {
+      return NextResponse.json(
+        {
+          error: `Type "${confirmationLabel}" to confirm deletion.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const warningParts: string[] = [];
+
+    /*
+     * 1. Remove SharePoint evidence linked through tower_quality_files.
+     *    Failure to remove a physical SharePoint file does not block the
+     *    TTTracker deletion; a warning is returned instead.
+     */
+    const { data: qualityFiles, error: qualityFileLoadError } = await service
+      .from("tower_quality_files")
+      .select("*")
+      .eq("defect_id", defectId);
+
+    if (qualityFileLoadError) {
+      throw new Error(qualityFileLoadError.message);
+    }
+
+    for (const file of (qualityFiles ?? []) as QualityFileDeleteRow[]) {
+      const { driveId, itemId } = qualityFileSharePointIds(file);
+      if (!driveId || !itemId) continue;
+
+      try {
+        await deleteDriveItem({
+          driveId,
+          itemId,
+        });
+      } catch (error) {
+        console.error("Defect SharePoint delete warning", {
+          defectId,
+          fileId: file.id,
+          fileName: file.file_name,
+          error,
+        });
+
+        warningParts.push(
+          `SharePoint file "${clean(file.file_name) || file.id}" could not be removed`,
+        );
+      }
+    }
+
+    /*
+     * 2. Remove legacy Supabase Storage photos.
+     */
+    const { data: legacyPhotos, error: legacyPhotoLoadError } = await service
+      .from("defect_photos")
+      .select("id,photo_path")
+      .eq("defect_id", defectId);
+
+    if (legacyPhotoLoadError) {
+      // Some deployments may no longer use the legacy table. Do not block
+      // deletion solely because legacy photo metadata could not be read.
+      console.error("Legacy defect photo load warning", legacyPhotoLoadError);
+      warningParts.push("legacy photo metadata could not be checked");
+    } else {
+      const storagePaths = ((legacyPhotos ?? []) as LegacyPhotoRow[])
+        .map((row) => clean(row.photo_path))
+        .filter(
+          (path) =>
+            Boolean(path) &&
+            !/^https?:\/\//i.test(path) &&
+            path !== "pending",
+        );
+
+      if (storagePaths.length > 0) {
+        const { error: storageError } = await service.storage
+          .from("defect-photos")
+          .remove(storagePaths);
+
+        if (storageError) {
+          console.error("Legacy defect storage delete warning", storageError);
+          warningParts.push("one or more legacy defect photos could not be removed from storage");
+        }
+      }
+    }
+
+    /*
+     * 3. Delete TTTracker child rows explicitly so deletion does not depend
+     *    on database ON DELETE CASCADE configuration.
+     */
+    const { error: actionDeleteError } = await service
+      .from("defect_actions")
+      .delete()
+      .eq("defect_id", defectId);
+
+    if (actionDeleteError) {
+      throw new Error(
+        `Defect actions could not be removed: ${actionDeleteError.message}`,
+      );
+    }
+
+    if (!legacyPhotoLoadError) {
+      const { error: legacyPhotoDeleteError } = await service
+        .from("defect_photos")
+        .delete()
+        .eq("defect_id", defectId);
+
+      if (legacyPhotoDeleteError) {
+        throw new Error(
+          `Legacy defect photo records could not be removed: ${legacyPhotoDeleteError.message}`,
+        );
+      }
+    }
+
+    const { error: qualityFileDeleteError } = await service
+      .from("tower_quality_files")
+      .delete()
+      .eq("defect_id", defectId);
+
+    if (qualityFileDeleteError) {
+      throw new Error(
+        `Defect evidence records could not be removed: ${qualityFileDeleteError.message}`,
+      );
+    }
+
+    /*
+     * 4. Delete the Defect itself.
+     */
+    const { error: deleteError } = await service
+      .from("tower_defects")
+      .delete()
+      .eq("id", defectId)
+      .eq("project_id", defect.project_id)
+      .eq("tower_id", defect.tower_id);
+
+    if (deleteError) {
+      throw new Error(`Defect could not be deleted: ${deleteError.message}`);
+    }
+
+    return NextResponse.json({
+      success: true,
+      defectId,
+      defectNumber: defect.defect_number ?? null,
+      warning:
+        warningParts.length > 0
+          ? `${warningParts.join("; ")}. The Defect was still deleted from TTTracker.`
+          : null,
+    });
   } catch (error) {
     const apiError = qualityApiError(error);
     return NextResponse.json(

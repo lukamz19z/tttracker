@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  Trash2,
   X,
 } from "lucide-react";
 import { useParams } from "next/navigation";
@@ -605,6 +606,75 @@ export default function TowerRevisionsPage() {
     setBusyId(null);
   }
 
+  async function deleteRevision(revision: RevisionRow) {
+    const confirmation = window.prompt(
+      `Delete ${revision.fli_number}?\n\nThis permanently removes the Revision, all findings, SharePoint evidence and generated PDFs.\n\nType the full Revision number to confirm:`,
+    );
+
+    if (confirmation === null) return;
+
+    if (confirmation.trim() !== revision.fli_number) {
+      setMessage({
+        tone: "error",
+        text: "Revision was not deleted because the confirmation did not match.",
+      });
+      return;
+    }
+
+    setBusyId(`delete-${revision.id}`);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/quality/revisions/${encodeURIComponent(revision.id)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: revision.fli_number,
+            projectId,
+            towerId,
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        success?: boolean;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Revision could not be deleted.");
+      }
+
+      setExpanded((current) => {
+        const next = new Set(current);
+        next.delete(revision.id);
+        return next;
+      });
+
+      setMessage({
+        tone: "success",
+        text: payload.warning
+          ? `${revision.fli_number} deleted. ${payload.warning}`
+          : `${revision.fli_number} deleted successfully.`,
+      });
+
+      await load();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Revision could not be deleted.",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function openFile(fileId: string, popup?: Window | null) {
     const response = await apiFetch(`/api/quality/files/${encodeURIComponent(fileId)}/content`);
     if (!response.ok) {
@@ -824,6 +894,20 @@ export default function TowerRevisionsPage() {
                       <button type="button" onClick={() => openFinding(revision.id)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700"><Plus size={14} /> Finding</button>
                       {latestPdf ? <button type="button" onClick={() => void viewPdf(latestPdf)} className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700"><FileText size={14} /> View PDF</button> : null}
                       <button type="button" onClick={() => void createPdf(revision)} disabled={busyId === `pdf-${revision.id}` || revisionItems.length === 0} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{busyId === `pdf-${revision.id}` ? <Loader2 size={14} className="animate-spin" /> : <FileCheck2 size={14} />} Create PDF</button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteRevision(revision)}
+                        disabled={busyId === `delete-${revision.id}`}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                        title={`Delete ${revision.fli_number}`}
+                      >
+                        {busyId === `delete-${revision.id}` ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={14} />
+                        )}
+                        Delete
+                      </button>
                       <button type="button" onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(revision.id)) next.delete(revision.id); else next.add(revision.id); return next; })} className="rounded-xl border border-slate-200 p-2 text-slate-500">{isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</button>
                     </div>
                   </div>

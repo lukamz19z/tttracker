@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Trash2,
   X,
 } from "lucide-react";
 import { useParams } from "next/navigation";
@@ -190,6 +191,7 @@ export default function TowerDefectsPage() {
 
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [deletingDefectId, setDeletingDefectId] = useState<string | null>(null);
 
   const [actionsDefect, setActionsDefect] = useState<DefectRow | null>(null);
   const [actions, setActions] = useState<DefectAction[]>([]);
@@ -575,6 +577,85 @@ export default function TowerDefectsPage() {
     }
   }
 
+  async function deleteDefect(row: DefectRow) {
+    const confirmationLabel = row.defect_number || row.id;
+    const confirmation = window.prompt(
+      `Delete ${row.defect_number || "this Defect"}?\n\nThis permanently removes the Defect, actions and linked evidence.\n\nType ${confirmationLabel} to confirm:`,
+    );
+
+    if (confirmation === null) return;
+
+    if (confirmation.trim() !== confirmationLabel) {
+      setMessage({
+        tone: "error",
+        text: "Defect was not deleted because the confirmation did not match.",
+      });
+      return;
+    }
+
+    setDeletingDefectId(row.id);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/quality/defects/${encodeURIComponent(row.id)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: confirmationLabel,
+            projectId,
+            towerId,
+          }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        success?: boolean;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Defect could not be deleted.");
+      }
+
+      if (actionsDefect?.id === row.id) {
+        setActionsDefect(null);
+        setActions([]);
+        setNewAction("");
+      }
+
+      if (photosDefect?.id === row.id) {
+        clearPhotoViews();
+        setPhotosDefect(null);
+      }
+
+      if (editDraft?.id === row.id) {
+        setEditDraft(null);
+      }
+
+      setMessage({
+        tone: "success",
+        text: payload.warning
+          ? `${row.defect_number || "Defect"} deleted. ${payload.warning}`
+          : `${row.defect_number || "Defect"} deleted successfully.`,
+      });
+
+      await load();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Defect could not be deleted.",
+      });
+    } finally {
+      setDeletingDefectId(null);
+    }
+  }
+
   async function openActions(row: DefectRow) {
     const { data, error } = await supabase
       .from("defect_actions")
@@ -936,7 +1017,27 @@ export default function TowerDefectsPage() {
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClasses(row.status)}`}>{row.status}</span>{row.status === "Closed" ? <div className="mt-2 text-[11px] text-slate-500">{row.completed_by || "-"}<br />{prettyDateTime(row.completed_at)}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600">{prettyDateTime(row.identified_at || row.created_at)}<div className="mt-1 text-slate-400">{row.identified_by_label || row.uploaded_by || "-"}</div></td>
                   <td className="px-4 py-4"><button type="button" onClick={() => void openPhotos(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Camera size={14} /> Photos {filesByDefect.get(row.id)?.length ? `(${filesByDefect.get(row.id)?.length})` : ""}</button></td>
-                  <td className="px-4 py-4"><div className="flex justify-end gap-2"><button type="button" onClick={() => void openActions(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white" title="Actions / history"><MessageSquareText size={15} /></button><button type="button" onClick={() => startEdit(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white" title="Edit"><Pencil size={15} /></button>{row.status !== "Closed" ? <button type="button" onClick={() => void signOff(row)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-2 text-xs font-bold text-white"><CheckCircle2 size={14} /> Close</button> : null}</div></td>
+                  <td className="px-4 py-4">
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => void openActions(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white" title="Actions / history"><MessageSquareText size={15} /></button>
+                      <button type="button" onClick={() => startEdit(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white" title="Edit"><Pencil size={15} /></button>
+                      {row.status !== "Closed" ? <button type="button" onClick={() => void signOff(row)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-2 text-xs font-bold text-white"><CheckCircle2 size={14} /> Close</button> : null}
+                      <button
+                        type="button"
+                        onClick={() => void deleteDefect(row)}
+                        disabled={deletingDefectId === row.id}
+                        className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                        title={`Delete ${row.defect_number || "Defect"}`}
+                      >
+                        {deletingDefectId === row.id ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={14} />
+                        )}
+                        Delete
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {filteredRows.length === 0 ? <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-500">No Defects match this view.</td></tr> : null}
