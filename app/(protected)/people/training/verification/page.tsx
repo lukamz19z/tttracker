@@ -162,10 +162,34 @@ export default function TrainingVerificationPage() {
     setEmployees((payload?.employees ?? []) as Employee[]);
     setProjects((payload?.projects ?? []) as Project[]);
     setDocuments((payload?.documents ?? []) as DocumentRow[]);
+
+    const requestedRecordId =
+      typeof window !== "undefined"
+        ? clean(
+            new URLSearchParams(window.location.search).get(
+              "training_record_id",
+            ) ||
+              new URLSearchParams(window.location.search).get(
+                "recordId",
+              ),
+          )
+        : "";
+
     setSelectedId((current) => {
-      if (current && loadedRecords.some((row) => row.id === current)) {
+      if (
+        requestedRecordId &&
+        loadedRecords.some((row) => row.id === requestedRecordId)
+      ) {
+        return requestedRecordId;
+      }
+
+      if (
+        current &&
+        loadedRecords.some((row) => row.id === current)
+      ) {
         return current;
       }
+
       return loadedRecords[0]?.id ?? null;
     });
   }, [apiFetch]);
