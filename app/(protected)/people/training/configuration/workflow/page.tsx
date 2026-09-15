@@ -245,7 +245,7 @@ export default function TrainingWorkflowConfigurationPage() {
     userId: "",
     receivesInApp: true,
     receivesPush: true,
-    receivesEmail: false,
+    receivesEmail: true,
   });
 
   const apiFetch = useCallback(

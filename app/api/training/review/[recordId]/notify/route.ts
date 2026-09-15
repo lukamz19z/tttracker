@@ -147,36 +147,33 @@ export async function POST(
         .filter(Boolean),
     );
 
-    const missingRecipients = recipients.filter(
-      (recipient) => !alreadyNotified.has(recipient.userId),
+    const missingInAppRecipients = recipients.filter(
+      (recipient) =>
+        recipient.receivesInApp &&
+        !alreadyNotified.has(recipient.userId),
     );
 
-    if (missingRecipients.length === 0) {
-      return NextResponse.json({
-        success: true,
-        notified: 0,
-        alreadyNotified: recipients.length,
-        message:
-          "All configured reviewers already have an in-app notification for this record.",
-      });
-    }
-
-    const missingIds = missingRecipients.map(
+    // Manual "Notify Reviewers" is also the retry mechanism for email/push.
+    // An existing in-app notification must NOT prevent the configured reviewer
+    // from receiving email or push.
+    const inAppIds = missingInAppRecipients.map(
       (recipient) => recipient.userId,
     );
-    const inAppIds = missingRecipients
-      .filter((recipient) => recipient.receivesInApp)
-      .map((recipient) => recipient.userId);
-    const pushIds = missingRecipients
+    const pushIds = recipients
       .filter((recipient) => recipient.receivesPush)
+      .map((recipient) => recipient.userId);
+    const emailIds = recipients
+      .filter((recipient) => recipient.receivesEmail)
       .map((recipient) => recipient.userId);
 
     const notificationResult =
       await createTrainingNotifications({
         service,
-        userIds: missingIds,
+        userIds: recipientIds,
         inAppUserIds: inAppIds,
         pushUserIds: pushIds,
+        emailUserIds: emailIds,
+        emailSubject: `Training review required - ${employee?.full_name || "Employee"} - ${trainingType?.name || record.training_name || "Training"}`,
         eventType: "training_review_required",
         title: "Training record requires review",
         message: `${employee?.full_name || "An employee"} submitted ${
@@ -193,10 +190,11 @@ export async function POST(
 
     return NextResponse.json({
       success: true,
-      notified: missingRecipients.length,
+      notified: recipients.length,
       alreadyNotified: alreadyNotified.size,
       inAppCreated: notificationResult.inApp,
       pushAttempted: notificationResult.pushAttempted,
+      emailSent: notificationResult.emailSent,
     });
   } catch (error) {
     console.error("Training reviewer notification failed", error);

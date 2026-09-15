@@ -381,6 +381,7 @@ export default function TrainingVerificationPage() {
         notified?: number;
         alreadyNotified?: number;
         pushAttempted?: number;
+        emailSent?: number;
         message?: string;
       } | null = null;
 
@@ -413,6 +414,7 @@ export default function TrainingVerificationPage() {
       const notified = Number(payload?.notified ?? 0);
       const already = Number(payload?.alreadyNotified ?? 0);
       const pushAttempted = Number(payload?.pushAttempted ?? 0);
+      const emailSent = Number(payload?.emailSent ?? 0);
 
       setMessage({
         tone: "success",
@@ -422,7 +424,11 @@ export default function TrainingVerificationPage() {
             already > 0
               ? `; ${already} reviewer${already === 1 ? "" : "s"} already had one`
               : ""
-          }${pushAttempted > 0 ? `; ${pushAttempted} push notification${pushAttempted === 1 ? "" : "s"} attempted` : ""}.`,
+          }${pushAttempted > 0 ? `; ${pushAttempted} push notification${pushAttempted === 1 ? "" : "s"} attempted` : ""}${
+            emailSent > 0
+              ? `; ${emailSent} reviewer email${emailSent === 1 ? "" : "s"} sent`
+              : ""
+          }.`,
       });
     } catch (error) {
       setMessage({
