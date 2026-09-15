@@ -115,6 +115,7 @@ type Settings = {
   default_expiry_warning_days: number[];
   push_enabled: boolean;
   in_app_enabled: boolean;
+  auto_approve_authorised_uploads: boolean;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -145,6 +146,7 @@ const DEFAULT_SETTINGS: Settings = {
   default_expiry_warning_days: [90, 60, 30, 14, 7],
   push_enabled: true,
   in_app_enabled: true,
+  auto_approve_authorised_uploads: false,
 };
 
 function clean(value: unknown) {
@@ -1050,6 +1052,25 @@ export default function TrainingWorkflowConfigurationPage() {
                 }
               />
             </Field>
+
+            <div className="space-y-2">
+              <Toggle
+                label="Auto-approve authorised Admin / HSEQ / Training Officer uploads"
+                checked={settings.auto_approve_authorised_uploads}
+                onChange={(checked) =>
+                  setSettings((current) => ({
+                    ...current,
+                    auto_approve_authorised_uploads: checked,
+                  }))
+                }
+              />
+              <Hint>
+                When enabled, authorised Admin, HSEQ or Training Officer uploads publish
+                immediately without creating a review task for themselves.
+                Employee self-service uploads still follow the configured
+                review workflow.
+              </Hint>
+            </div>
 
             <div className="flex flex-col justify-end gap-2">
               <button

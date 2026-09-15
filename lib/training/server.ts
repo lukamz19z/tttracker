@@ -152,6 +152,8 @@ export function roleCanManageTraining(role: string) {
     "hseq",
     "safety",
     "safety_officer",
+    "training_officer",
+    "training_admin",
   ].includes(normaliseRole(role));
 }
 

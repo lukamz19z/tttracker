@@ -243,6 +243,48 @@ export default function TrainingBulkUploadPage() {
     })();
   }, [loadData]);
 
+  useEffect(() => {
+    if (loading) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedTypeId = clean(params.get("trainingTypeId"));
+    const requestedProjectId = clean(params.get("projectId"));
+    const requestedEmployees = clean(params.get("employeeIds"))
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (
+      requestedTypeId &&
+      types.some((type) => type.id === requestedTypeId)
+    ) {
+      setSelectedTypeId(requestedTypeId);
+    }
+
+    if (
+      requestedProjectId &&
+      projects.some((project) => project.id === requestedProjectId)
+    ) {
+      setProjectId(requestedProjectId);
+    }
+
+    if (requestedEmployees.length > 0) {
+      const validEmployeeIds = new Set(
+        employees.map((employee) => employee.id),
+      );
+
+      setSelectedEmployeeIds(
+        Array.from(
+          new Set(
+            requestedEmployees.filter((id) =>
+              validEmployeeIds.has(id),
+            ),
+          ),
+        ),
+      );
+    }
+  }, [employees, loading, projects, types]);
+
   const selectedType = useMemo(
     () => types.find((item) => item.id === selectedTypeId) ?? null,
     [selectedTypeId, types],

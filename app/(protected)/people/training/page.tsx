@@ -16,11 +16,15 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock3,
+  CalendarDays,
   FolderCog,
   GraduationCap,
+  Grid3X3,
   Loader2,
   RefreshCw,
   SearchCheck,
+  ListChecks,
+  TableProperties,
   UploadCloud,
   Users,
 } from "lucide-react";
@@ -98,6 +102,8 @@ function canManageTraining(role: string) {
     "hseq",
     "safety",
     "safety_officer",
+    "training_officer",
+    "training_admin",
   ].includes(normaliseRole(role));
 }
 
@@ -524,12 +530,14 @@ export default function TrainingPage() {
             value={stats.expiringSoon}
             hint="Records requiring renewal soon"
             icon={<Clock3 size={19} />}
+            href="/people/training/expiry"
           />
           <StatCard
             label="Expired"
             value={stats.expired}
             hint="Current records past expiry"
             icon={<AlertTriangle size={19} />}
+            href="/people/training/expiry"
           />
         </section>
 
@@ -545,9 +553,53 @@ export default function TrainingPage() {
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <ModuleCard
+              href="/people/training/register"
+              title="Training Register"
+              description="Search the controlled register by employee, certificate, provider, project, class and status."
+              icon={<TableProperties size={20} />}
+              badge="Register"
+              emphasis="blue"
+            />
+
+            <ModuleCard
+              href="/people/training/matrix"
+              title="Company Training Matrix"
+              description="View employees against configured Training types and role requirements, including gaps and pending evidence."
+              icon={<Grid3X3 size={20} />}
+              badge="Matrix"
+              emphasis="emerald"
+            />
+
+            <ModuleCard
+              href="/people/training/expiry"
+              title="Expiry Dashboard"
+              description="See expired records, upcoming renewals and evidence still waiting for verification."
+              icon={<Clock3 size={20} />}
+              badge={
+                stats.expiringSoon + stats.expired > 0
+                  ? String(stats.expiringSoon + stats.expired)
+                  : undefined
+              }
+              emphasis={
+                stats.expiringSoon + stats.expired > 0
+                  ? "amber"
+                  : "slate"
+              }
+            />
+
+            <ModuleCard
+              href="/people/training/planner"
+              title="Training Planner & Gap Analysis"
+              description="Find missing or expiring Training, tick the people you want and hand the selected group into Bulk Upload."
+              icon={<CalendarDays size={20} />}
+              badge="Planner"
+              emphasis="blue"
+            />
+
+            <ModuleCard
               href="/people/training/new"
               title="Add Training Record"
-              description="Upload a licence, VOC, ticket, induction or another configured training record."
+              description="Upload a licence, VOC, ticket, induction or another configured Training record."
               icon={<UploadCloud size={20} />}
               badge="Upload"
               emphasis="blue"
@@ -556,7 +608,7 @@ export default function TrainingPage() {
             <ModuleCard
               href="/people/training/verification"
               title="Verification Queue"
-              description="Review submitted evidence, request changes, reject it or approve it for SharePoint."
+              description="Review submitted evidence individually or bulk approve selected records for SharePoint publication."
               icon={<SearchCheck size={20} />}
               badge={
                 stats.awaitingReview > 0
@@ -566,6 +618,26 @@ export default function TrainingPage() {
               emphasis={
                 stats.awaitingReview > 0 ? "amber" : "slate"
               }
+            />
+
+            {isTrainingAdmin ? (
+              <ModuleCard
+                href="/people/training/project-requirements"
+                title="Project Requirements"
+                description="Configure project-wide and role-specific Training requirements, accepted alternatives and required classes."
+                icon={<ListChecks size={20} />}
+                badge="Admin"
+                emphasis="emerald"
+              />
+            ) : null}
+
+            <ModuleCard
+              href="/people/training/project-matrix"
+              title="Project Training Matrix"
+              description="Select the project workforce and check mobilisation readiness against project and role requirements."
+              icon={<ClipboardCheck size={20} />}
+              badge="Project"
+              emphasis="emerald"
             />
 
             {isTrainingAdmin ? (
@@ -581,9 +653,20 @@ export default function TrainingPage() {
 
             {isTrainingAdmin ? (
               <ModuleCard
+                href="/people/training/configuration"
+                title="Training Configuration"
+                description="Maintain Training categories, types, class options, validity and document rules."
+                icon={<GraduationCap size={20} />}
+                badge="Admin"
+                emphasis="slate"
+              />
+            ) : null}
+
+            {isTrainingAdmin ? (
+              <ModuleCard
                 href="/people/training/configuration/workflow"
                 title="Workflow & SharePoint"
-                description="Configure SharePoint storage, reviewer rules, metadata, expiry warnings and employee folder provisioning."
+                description="Configure SharePoint storage, reviewer rules, metadata, expiry warnings and authorised uploader behaviour."
                 icon={<FolderCog size={20} />}
                 badge="Admin"
                 emphasis="emerald"
@@ -594,10 +677,10 @@ export default function TrainingPage() {
 
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
           <p className="text-sm leading-6 text-slate-600">
-            Role requirements, project requirements, renewals,
-            history, courses, calendar and other unfinished modules
-            are intentionally hidden from this landing page until
-            those pages are actually built.
+            The register, matrices, expiry dashboard and planner all read the
+            same employee Training records. They do not maintain separate
+            certificate data, so approval and SharePoint remain the controlled
+            source of truth.
           </p>
         </section>
       </main>

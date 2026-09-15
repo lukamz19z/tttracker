@@ -238,7 +238,7 @@ function appUrl() {
     process.env.NEXT_PUBLIC_APP_URL ||
       process.env.APP_URL ||
       process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-      "",
+      "https://tttracker.com.au",
   );
 
   if (value && !/^https?:\/\//i.test(value)) {

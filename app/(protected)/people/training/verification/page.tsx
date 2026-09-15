@@ -7,12 +7,14 @@ import {
   ArrowLeft,
   BellRing,
   CheckCircle2,
+  CheckSquare,
   Eye,
   FileText,
   Loader2,
   RefreshCw,
   Search,
   ShieldCheck,
+  Square,
   XCircle,
 } from "lucide-react";
 
@@ -119,6 +121,7 @@ export default function TrainingVerificationPage() {
 
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<string[]>([]);
   const [reviewComment, setReviewComment] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -162,6 +165,11 @@ export default function TrainingVerificationPage() {
     setEmployees((payload?.employees ?? []) as Employee[]);
     setProjects((payload?.projects ?? []) as Project[]);
     setDocuments((payload?.documents ?? []) as DocumentRow[]);
+    setBulkSelectedIds((current) =>
+      current.filter((id) =>
+        loadedRecords.some((row) => row.id === id),
+      ),
+    );
 
     const requestedRecordId =
       typeof window !== "undefined"
@@ -321,6 +329,7 @@ export default function TrainingVerificationPage() {
         error?: string;
         notificationWarning?: string | null;
         workflowStatus?: string;
+        emailSent?: number;
       } | null = null;
 
       if (responseText) {
@@ -329,6 +338,7 @@ export default function TrainingVerificationPage() {
             error?: string;
             notificationWarning?: string | null;
             workflowStatus?: string;
+            emailSent?: number;
           };
         } catch {
           payload = null;
@@ -355,6 +365,8 @@ export default function TrainingVerificationPage() {
         );
       }
 
+      const emailSent = Number(payload?.emailSent ?? 0);
+
       const successText =
         action === "approve"
           ? "Training record approved and published to SharePoint."
@@ -362,11 +374,16 @@ export default function TrainingVerificationPage() {
             ? "Changes requested and saved."
             : "Training record rejected and saved.";
 
+      const emailText =
+        emailSent > 0
+          ? ` ${emailSent} outcome email${emailSent === 1 ? "" : "s"} sent.`
+          : "";
+
       setMessage({
         tone: payload?.notificationWarning ? "error" : "success",
         text: payload?.notificationWarning
           ? `${successText} ${payload.notificationWarning}`
-          : successText,
+          : `${successText}${emailText}`,
       });
 
       setReviewComment("");
@@ -378,6 +395,120 @@ export default function TrainingVerificationPage() {
           error instanceof Error
             ? error.message
             : "Unable to process the Training review.",
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function toggleBulkSelection(recordId: string) {
+    setBulkSelectedIds((current) =>
+      current.includes(recordId)
+        ? current.filter((id) => id !== recordId)
+        : [...current, recordId],
+    );
+  }
+
+  function selectAllFiltered() {
+    setBulkSelectedIds(filtered.map((record) => record.id));
+  }
+
+  function clearBulkSelection() {
+    setBulkSelectedIds([]);
+  }
+
+  async function approveSelected() {
+    const recordIds = bulkSelectedIds.filter((id) =>
+      records.some((record) => record.id === id),
+    );
+
+    if (recordIds.length === 0) {
+      setMessage({
+        tone: "error",
+        text: "Select at least one Training record to approve.",
+      });
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Approve and publish ${recordIds.length} selected Training record${
+          recordIds.length === 1 ? "" : "s"
+        }? Each record will be processed separately so one failure does not block the others.`,
+      )
+    ) {
+      return;
+    }
+
+    setBusyAction("bulk-approve");
+    setMessage(null);
+
+    try {
+      const response = await apiFetch("/api/training/review/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "approve",
+          recordIds,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            error?: string;
+            summary?: {
+              requested?: number;
+              approved?: number;
+              failed?: number;
+              emailsSent?: number;
+              notificationWarnings?: number;
+            };
+            failed?: Array<{ recordId: string; error: string }>;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          payload?.error || "Bulk Training approval failed.",
+        );
+      }
+
+      const approved = Number(payload?.summary?.approved ?? 0);
+      const failed = Number(payload?.summary?.failed ?? 0);
+      const emailsSent = Number(
+        payload?.summary?.emailsSent ?? 0,
+      );
+      const warningCount = Number(
+        payload?.summary?.notificationWarnings ?? 0,
+      );
+      const firstFailure = payload?.failed?.[0];
+
+      setMessage({
+        tone: failed > 0 ? "error" : "success",
+        text: `${approved} approved and published; ${failed} failed; ${emailsSent} outcome email${
+          emailsSent === 1 ? "" : "s"
+        } sent${
+          warningCount > 0
+            ? `; ${warningCount} notification warning${
+                warningCount === 1 ? "" : "s"
+              }`
+            : ""
+        }.${
+          firstFailure
+            ? ` First failure: ${firstFailure.error}`
+            : ""
+        }`,
+      });
+
+      setBulkSelectedIds([]);
+      await loadData();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to bulk approve Training records.",
       });
     } finally {
       setBusyAction(null);
@@ -604,6 +735,38 @@ export default function TrainingVerificationPage() {
               <div className="mt-3 text-xs font-black uppercase tracking-wide text-slate-500">
                 {filtered.length} item{filtered.length === 1 ? "" : "s"} awaiting action
               </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={selectAllFiltered}
+                  disabled={filtered.length === 0 || Boolean(busyAction)}
+                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-black text-slate-700 disabled:opacity-50"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={clearBulkSelection}
+                  disabled={bulkSelectedIds.length === 0 || Boolean(busyAction)}
+                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-black text-slate-700 disabled:opacity-50"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void approveSelected()}
+                  disabled={bulkSelectedIds.length === 0 || Boolean(busyAction)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-2.5 py-1.5 text-xs font-black text-white disabled:opacity-50"
+                >
+                  {busyAction === "bulk-approve" ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <CheckCircle2 size={13} />
+                  )}
+                  Approve Selected ({bulkSelectedIds.length})
+                </button>
+              </div>
             </div>
 
             <div className="max-h-[720px] overflow-y-auto">
@@ -625,43 +788,67 @@ export default function TrainingVerificationPage() {
                   const employee = employeeById.get(record.employee_id);
                   const active = selectedId === record.id;
 
+                  const bulkSelected =
+                    bulkSelectedIds.includes(record.id);
+
                   return (
-                    <button
+                    <div
                       key={record.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedId(record.id);
-                        setReviewComment(record.review_comment ?? "");
-                      }}
-                      className={`block w-full border-b border-slate-100 p-4 text-left last:border-b-0 ${
+                      className={`flex border-b border-slate-100 last:border-b-0 ${
                         active ? "bg-blue-50" : "hover:bg-slate-50"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-black text-slate-950">
-                            {employee?.full_name ?? "Unknown employee"}
+                      <button
+                        type="button"
+                        onClick={() => toggleBulkSelection(record.id)}
+                        className="flex w-12 shrink-0 items-start justify-center pt-5 text-blue-700"
+                        aria-label={
+                          bulkSelected
+                            ? "Remove from bulk approval"
+                            : "Add to bulk approval"
+                        }
+                      >
+                        {bulkSelected ? (
+                          <CheckSquare size={19} />
+                        ) : (
+                          <Square size={19} />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedId(record.id);
+                          setReviewComment(record.review_comment ?? "");
+                        }}
+                        className="block min-w-0 flex-1 p-4 pl-0 text-left"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-black text-slate-950">
+                              {employee?.full_name ?? "Unknown employee"}
+                            </div>
+                            <div className="mt-1 text-sm font-bold text-slate-700">
+                              {record.training_name}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              Submitted {dateTimeLabel(record.submitted_at)}
+                            </div>
                           </div>
-                          <div className="mt-1 text-sm font-bold text-slate-700">
-                            {record.training_name}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            Submitted {dateTimeLabel(record.submitted_at)}
-                          </div>
+                          <span
+                            className={`rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-wide ${
+                              record.workflow_status === "changes_required"
+                                ? "border-amber-200 bg-amber-50 text-amber-800"
+                                : "border-blue-200 bg-blue-50 text-blue-800"
+                            }`}
+                          >
+                            {record.workflow_status === "changes_required"
+                              ? "Changes"
+                              : "Pending"}
+                          </span>
                         </div>
-                        <span
-                          className={`rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-wide ${
-                            record.workflow_status === "changes_required"
-                              ? "border-amber-200 bg-amber-50 text-amber-800"
-                              : "border-blue-200 bg-blue-50 text-blue-800"
-                          }`}
-                        >
-                          {record.workflow_status === "changes_required"
-                            ? "Changes"
-                            : "Pending"}
-                        </span>
-                      </div>
-                    </button>
+                      </button>
+                    </div>
                   );
                 })
               )}
