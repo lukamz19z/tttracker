@@ -1,75 +1,57 @@
 "use client";
 
-import {
-  ChangeEvent,
-  FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
-  ArrowLeft,
-  CalendarDays,
   CheckCircle2,
-  FileText,
   Loader2,
   RefreshCw,
-  Search,
+  ShieldCheck,
   UploadCloud,
-  X,
+  UserRound,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-type ValidityMode = "never" | "manual" | "automatic";
-type ValidityUnit = "days" | "weeks" | "months" | "years";
-type SubtypeMode = "none" | "single" | "multiple";
-type FilenameDateField = "none" | "issue_date" | "expiry_date";
-type DocumentUploadType = "none" | "single" | "front_back";
-type ReplaceChoice = "replace" | "add" | "cancel" | null;
-
 type Employee = {
   id: string;
-  payrollId: string;
-  firstName: string;
-  lastName: string;
-  displayName: string;
-  active: boolean;
+  payroll_id: string | null;
+  full_name: string;
+  role: string | null;
+  user_id: string | null;
+  active: boolean | null;
 };
 
 type Project = {
   id: string;
-  code: string;
   name: string;
-  active: boolean;
+  project_number: string | null;
+  status: string | null;
 };
 
 type TrainingType = {
   id: string;
   category_id: string | null;
   name: string;
-  code: string;
-  description: string | null;
-  active: boolean;
-  requires_issue_date: boolean;
-  requires_expiry_date: boolean;
-  requires_certificate_number: boolean;
-  requires_issuer: boolean;
-  requires_project: boolean;
-  requires_document: boolean;
-  document_upload_type: DocumentUploadType;
-  allows_multiple_current: boolean;
-  subtype_mode: SubtypeMode;
-  validity_mode: ValidityMode;
+  short_code: string | null;
+  category: string | null;
+  active: boolean | null;
+  requires_issue_date: boolean | null;
+  requires_expiry_date: boolean | null;
+  allows_no_expiry: boolean | null;
+  validity_mode: string | null;
   validity_interval_value: number | null;
-  validity_interval_unit: ValidityUnit | null;
-  filename_date_field: FilenameDateField;
-  filename_components: string[];
-  sort_order: number;
+  validity_interval_unit: string | null;
+  requires_certificate_number: boolean | null;
+  requires_issuer: boolean | null;
+  requires_project: boolean | null;
+  requires_document: boolean | null;
+  document_upload_type: string | null;
+  allows_multiple_current: boolean | null;
+  subtype_mode: string | null;
+  requires_review: boolean | null;
 };
 
 type TrainingOption = {
@@ -78,399 +60,239 @@ type TrainingOption = {
   name: string;
   code: string;
   description: string | null;
-  sort_order: number;
+  active: boolean | null;
+  sort_order: number | null;
+};
+
+type CustomField = {
+  id: string;
+  training_type_id: string;
+  field_key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  options: unknown;
+  placeholder: string | null;
+  help_text: string | null;
   active: boolean;
+  sort_order: number;
 };
 
 type ExistingRecord = {
   id: string;
+  employee_id: string;
+  training_type_id: string | null;
   certificate_number: string | null;
+  option_codes: string[] | null;
+  class_codes: string[] | null;
   issue_date: string | null;
   expiry_date: string | null;
-  status: string | null;
-  option_codes: string[];
+  workflow_status: string | null;
+  current_version: boolean | null;
+  superseded_at: string | null;
+  revoked_at: string | null;
 };
 
-type FormState = {
-  employeeId: string;
-  trainingTypeId: string;
-  selectedOptionIds: string[];
-  projectId: string;
-  issuer: string;
-  certificateNumber: string;
-  issueDate: string;
-  expiryDate: string;
-  notes: string;
-  singleFile: File | null;
-  frontFile: File | null;
-  backFile: File | null;
-};
+type Message = { tone: "success" | "error"; text: string };
 
-type Message = {
-  tone: "success" | "error";
-  text: string;
-};
-
-const EMPTY_FORM: FormState = {
-  employeeId: "",
-  trainingTypeId: "",
-  selectedOptionIds: [],
-  projectId: "",
-  issuer: "",
-  certificateNumber: "",
-  issueDate: "",
-  expiryDate: "",
-  notes: "",
-  singleFile: null,
-  frontFile: null,
-  backFile: null,
-};
-
-const clean = (value: unknown) => String(value ?? "").trim();
-
-function firstNonEmpty(
-  row: Record<string, unknown>,
-  keys: string[],
-): string {
-  for (const key of keys) {
-    const value = clean(row[key]);
-    if (value) return value;
-  }
-  return "";
+function clean(value: unknown) {
+  return String(value ?? "").trim();
 }
 
-function toBoolean(value: unknown, fallback = true): boolean {
-  if (typeof value === "boolean") return value;
-  if (value === null || value === undefined) return fallback;
-  return !["false", "0", "inactive", "archived"].includes(
-    String(value).toLowerCase(),
-  );
+function normaliseRole(value: unknown) {
+  return clean(value).toLowerCase().replace(/\s+/g, "_");
 }
 
-function normaliseEmployee(row: Record<string, unknown>): Employee {
-  const firstName = firstNonEmpty(row, [
-    "first_name",
-    "firstname",
-    "given_name",
-    "givenName",
-  ]);
-  const lastName = firstNonEmpty(row, [
-    "last_name",
-    "lastname",
-    "surname",
-    "family_name",
-    "familyName",
-  ]);
-  const storedName = firstNonEmpty(row, [
-    "full_name",
-    "name",
-    "display_name",
-    "displayName",
-  ]);
-  const displayName =
-    [firstName, lastName].filter(Boolean).join(" ") ||
-    storedName ||
-    "Unnamed employee";
-
-  return {
-    id: clean(row.id),
-    payrollId:
-      firstNonEmpty(row, [
-        "payroll_id",
-        "employee_id",
-        "employee_code",
-        "employee_number",
-        "staff_id",
-        "code",
-      ]) || "",
-    firstName:
-      firstName || storedName.split(/\s+/).slice(0, -1).join(" "),
-    lastName:
-      lastName || storedName.split(/\s+/).slice(-1).join(""),
-    displayName,
-    active: toBoolean(row.active ?? row.is_active ?? row.status, true),
-  };
-}
-
-function normaliseProject(row: Record<string, unknown>): Project {
-  return {
-    id: clean(row.id),
-    code:
-      firstNonEmpty(row, [
-        "project_code",
-        "code",
-        "project_number",
-        "job_number",
-      ]) || "PROJECT",
-    name:
-      firstNonEmpty(row, ["name", "project_name", "title"]) ||
-      "Unnamed project",
-    active: toBoolean(row.active ?? row.is_active ?? row.status, true),
-  };
-}
-
-function normaliseFilenameComponents(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [
-      "employee_id",
-      "employee_name",
-      "record_code",
-      "option_code",
-      "project_code",
-      "expiry_date",
-    ];
-  }
-
-  return value.filter((item): item is string => typeof item === "string");
+function canManageOtherEmployees(role: string) {
+  return [
+    "admin",
+    "administrator",
+    "site_admin",
+    "hseq",
+    "safety",
+    "safety_officer",
+  ].includes(normaliseRole(role));
 }
 
 function addInterval(
   issueDate: string,
   value: number | null,
-  unit: ValidityUnit | null,
-): string {
+  unit: string | null,
+) {
   if (!issueDate || !value || !unit) return "";
 
-  const [year, month, day] = issueDate.split("-").map(Number);
-  if (!year || !month || !day) return "";
+  const date = new Date(`${issueDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
 
-  const date = new Date(Date.UTC(year, month - 1, day));
-
-  if (unit === "days") date.setUTCDate(date.getUTCDate() + value);
-  if (unit === "weeks") date.setUTCDate(date.getUTCDate() + value * 7);
-  if (unit === "months") date.setUTCMonth(date.getUTCMonth() + value);
-  if (unit === "years") date.setUTCFullYear(date.getUTCFullYear() + value);
+  if (unit === "days") date.setDate(date.getDate() + value);
+  if (unit === "weeks") date.setDate(date.getDate() + value * 7);
+  if (unit === "months") date.setMonth(date.getMonth() + value);
+  if (unit === "years") date.setFullYear(date.getFullYear() + value);
 
   return date.toISOString().slice(0, 10);
 }
 
-function safeFilenamePart(value: string): string {
-  return value
-    .trim()
-    .toUpperCase()
-    .replace(/&/g, "AND")
-    .replace(/[^A-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+function formatDate(value: string | null) {
+  if (!value) return "—";
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-AU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
 }
 
-function employeeNumberComponent(payrollId: string): string {
-  const cleaned = safeFilenamePart(payrollId || "###");
-  return cleaned.startsWith("EMP") ? cleaned : `EMP${cleaned}`;
+function fieldOptions(value: unknown) {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
-function employeeDisplayNumber(payrollId: string): string {
-  if (!payrollId) return "No Payroll ID";
-  return employeeNumberComponent(payrollId);
-}
-
-function employeeFilenameName(employee: Employee | null): string {
-  if (!employee) return "SURNAME_FIRSTNAME";
-
-  const surname = safeFilenamePart(employee.lastName || "SURNAME");
-  const firstName = safeFilenamePart(employee.firstName || "FIRSTNAME");
-
-  return `${surname}_${firstName}`;
-}
-
-function buildFilename(params: {
-  employee: Employee | null;
-  trainingType: TrainingType | null;
-  selectedOptions: TrainingOption[];
-  project: Project | null;
-  issueDate: string;
-  expiryDate: string;
-  originalFile: File | null;
-  documentSide?: "FRONT" | "BACK" | "";
-}): string {
-  const {
-    employee,
-    trainingType,
-    selectedOptions,
-    project,
-    issueDate,
-    expiryDate,
-    originalFile,
-    documentSide = "",
-  } = params;
-
-  const extension =
-    originalFile?.name.split(".").pop()?.toLowerCase() ||
-    (documentSide ? "jpg" : "pdf");
-
-  if (!trainingType) {
-    return `EMP###_SURNAME_FIRSTNAME_RECORD_CODE${
-      documentSide ? `_${documentSide}` : ""
-    }.${extension}`;
-  }
-
-  const values: Record<string, string> = {
-    employee_id: employeeNumberComponent(employee?.payrollId || "###"),
-    employee_name: employeeFilenameName(employee),
-    record_code: safeFilenamePart(trainingType.code || "RECORD_CODE"),
-    option_code: [...selectedOptions]
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((option) => safeFilenamePart(option.code))
-      .filter(Boolean)
-      .join("-"),
-    project_code: project ? safeFilenamePart(project.code) : "",
-    issue_date:
-      trainingType.filename_date_field === "issue_date" ? issueDate : "",
-    expiry_date:
-      trainingType.filename_date_field === "expiry_date" ? expiryDate : "",
-    document_side: documentSide,
-  };
-
-  const configured = normaliseFilenameComponents(
-    trainingType.filename_components,
-  );
-
-  const components = [
-    "employee_id",
-    "employee_name",
-    "record_code",
-    trainingType.subtype_mode === "none" ? null : "option_code",
-    trainingType.requires_project ? "project_code" : null,
-    trainingType.filename_date_field === "issue_date" ? "issue_date" : null,
-    trainingType.filename_date_field === "expiry_date"
-      ? "expiry_date"
-      : null,
-    trainingType.document_upload_type === "front_back"
-      ? "document_side"
-      : null,
-  ].filter((item): item is string => Boolean(item));
-
-  const ordered = configured.filter((item) => components.includes(item));
-
-  for (const item of components) {
-    if (!ordered.includes(item)) ordered.push(item);
-  }
-
-  const parts = ordered
-    .map((component) => values[component] || "")
-    .filter(Boolean);
-
-  return `${parts.join("_")}.${extension}`;
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return "No date";
-  const [year, month, day] = value.split("-");
-  if (!year || !month || !day) return value;
-  return `${day}/${month}/${year}`;
-}
-
-function optionCodesFromRecord(row: Record<string, unknown>): string[] {
-  const candidates = [
-    row.option_codes,
-    row.class_codes,
-    row.licence_classes,
-    row.selected_options,
-  ];
-
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) {
-      return candidate.map((item) => clean(item)).filter(Boolean);
-    }
-
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate
-        .split(/[,\s]+/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
-  }
-
-  return [];
-}
-
-export default function NewTrainingRecordPage() {
+export default function AddTrainingRecordPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+
+  const [currentRole, setCurrentRole] = useState("");
+  const [selfEmployeeId, setSelfEmployeeId] = useState("");
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [trainingTypes, setTrainingTypes] = useState<TrainingType[]>([]);
+  const [types, setTypes] = useState<TrainingType[]>([]);
   const [options, setOptions] = useState<TrainingOption[]>([]);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
 
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [employeeSearch, setEmployeeSearch] = useState("");
-  const [employeePickerOpen, setEmployeePickerOpen] = useState(false);
+  const [employeeId, setEmployeeId] = useState("");
+  const [trainingTypeId, setTrainingTypeId] = useState("");
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [issuer, setIssuer] = useState("");
+  const [certificateNumber, setCertificateNumber] = useState("");
+  const [issueDate, setIssueDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [metadata, setMetadata] = useState<Record<string, unknown>>({});
+  const [singleFile, setSingleFile] = useState<File | null>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+
+  const [existingRecords, setExistingRecords] = useState<ExistingRecord[]>([]);
+  const [replaceChoice, setReplaceChoice] = useState<"replace" | "add" | null>(null);
+  const [replaceRecordId, setReplaceRecordId] = useState("");
+
   const [loading, setLoading] = useState(true);
-  const [checkingExisting, setCheckingExisting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
 
-  const [existingRecords, setExistingRecords] = useState<ExistingRecord[]>([]);
-  const [replaceChoice, setReplaceChoice] = useState<ReplaceChoice>(null);
-  const [replaceRecordId, setReplaceRecordId] = useState("");
+  const apiFetch = useCallback(
+    async (url: string, init: RequestInit = {}) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${session.access_token}`);
+
+      return fetch(url, {
+        ...init,
+        headers,
+        cache: "no-store",
+      });
+    },
+    [supabase],
+  );
 
   const loadReferenceData = useCallback(async () => {
-    const [employeeResult, projectResult, typeResult, optionResult] =
-      await Promise.all([
-        supabase.from("employees").select("*"),
-        supabase.from("projects").select("*"),
-        supabase
-          .from("training_types")
-          .select(
-            "id, category_id, name, code:short_code, description, active, requires_issue_date, requires_expiry_date, requires_certificate_number, requires_issuer, requires_project, requires_document, document_upload_type, allows_multiple_current, subtype_mode, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, filename_components, sort_order",
-          )
-          .eq("active", true)
-          .order("sort_order")
-          .order("name"),
-        supabase
-          .from("training_type_options")
-          .select(
-            "id, training_type_id, name, code, description, sort_order, active",
-          )
-          .eq("active", true)
-          .order("sort_order")
-          .order("name"),
-      ]);
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-    const error =
-      employeeResult.error ??
-      projectResult.error ??
-      typeResult.error ??
-      optionResult.error;
+    if (userError) throw userError;
+    if (!user) throw new Error("You must be signed in.");
 
-    if (error) throw new Error(error.message);
+    const [
+      roleResult,
+      employeeResult,
+      projectResult,
+      typeResult,
+      optionResult,
+      fieldResult,
+    ] = await Promise.all([
+      supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("employees")
+        .select("id,payroll_id,full_name,role,user_id,active")
+        .eq("active", true)
+        .order("full_name"),
+      supabase
+        .from("projects")
+        .select("id,name,project_number,status")
+        .order("name"),
+      supabase
+        .from("training_types")
+        .select(
+          "id,category_id,name,short_code,category,active,requires_issue_date,requires_expiry_date,allows_no_expiry,validity_mode,validity_interval_value,validity_interval_unit,requires_certificate_number,requires_issuer,requires_project,requires_document,document_upload_type,allows_multiple_current,subtype_mode,requires_review",
+        )
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
+      supabase
+        .from("training_type_options")
+        .select(
+          "id,training_type_id,name,code,description,active,sort_order",
+        )
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
+      supabase
+        .from("training_type_fields")
+        .select(
+          "id,training_type_id,field_key,label,field_type,required,options,placeholder,help_text,active,sort_order",
+        )
+        .eq("active", true)
+        .order("sort_order"),
+    ]);
 
-    setEmployees(
-      ((employeeResult.data ?? []) as Record<string, unknown>[])
-        .map(normaliseEmployee)
-        .filter((employee) => employee.id && employee.active)
-        .sort((a, b) => a.displayName.localeCompare(b.displayName)),
-    );
+    const errors = [
+      roleResult.error,
+      employeeResult.error,
+      projectResult.error,
+      typeResult.error,
+      optionResult.error,
+      fieldResult.error,
+    ].filter(Boolean);
 
-    setProjects(
-      ((projectResult.data ?? []) as Record<string, unknown>[])
-        .map(normaliseProject)
-        .filter((project) => project.id && project.active)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    );
+    if (errors.length > 0) {
+      throw new Error(errors[0]?.message || "Unable to load Training form.");
+    }
 
-    setTrainingTypes(
-      (typeResult.data ?? []).map((item) => ({
-        ...(item as Omit<TrainingType, "filename_components">),
-        validity_mode:
-          (item.validity_mode as ValidityMode | null) ??
-          (item.requires_expiry_date ? "manual" : "never"),
-        validity_interval_value:
-          (item.validity_interval_value as number | null) ?? null,
-        validity_interval_unit:
-          (item.validity_interval_unit as ValidityUnit | null) ?? null,
-        filename_date_field:
-          (item.filename_date_field as FilenameDateField | null) ??
-          (item.requires_expiry_date ? "expiry_date" : "none"),
-        document_upload_type:
-          (item.document_upload_type as DocumentUploadType | null) ??
-          (item.requires_document ? "single" : "none"),
-        filename_components: normaliseFilenameComponents(
-          item.filename_components,
-        ),
-      })),
-    );
+    const loadedEmployees = (employeeResult.data ?? []) as Employee[];
+    const role = normaliseRole(roleResult.data?.role);
+    const self = loadedEmployees.find((item) => item.user_id === user.id);
 
+    setCurrentRole(role);
+    setSelfEmployeeId(self?.id ?? "");
+    setEmployees(loadedEmployees);
+    setProjects((projectResult.data ?? []) as Project[]);
+    setTypes((typeResult.data ?? []) as TrainingType[]);
     setOptions((optionResult.data ?? []) as TrainingOption[]);
+    setCustomFields((fieldResult.data ?? []) as CustomField[]);
+
+    setEmployeeId((current) => {
+      if (current && loadedEmployees.some((item) => item.id === current)) {
+        return current;
+      }
+
+      if (self?.id) return self.id;
+      if (canManageOtherEmployees(role)) return loadedEmployees[0]?.id ?? "";
+      return "";
+    });
   }, [supabase]);
 
   useEffect(() => {
@@ -483,7 +305,7 @@ export default function NewTrainingRecordPage() {
           text:
             error instanceof Error
               ? error.message
-              : "Unable to load training data.",
+              : "Unable to load Training form.",
         });
       } finally {
         setLoading(false);
@@ -491,357 +313,169 @@ export default function NewTrainingRecordPage() {
     })();
   }, [loadReferenceData]);
 
-  const selectedEmployee = useMemo(
-    () => employees.find((employee) => employee.id === form.employeeId) ?? null,
-    [employees, form.employeeId],
+  const selectedEmployee = employees.find((item) => item.id === employeeId) ?? null;
+  const selectedType = types.find((item) => item.id === trainingTypeId) ?? null;
+  const canChooseEmployee = canManageOtherEmployees(currentRole);
+
+  const typeOptions = useMemo(
+    () => options.filter((item) => item.training_type_id === trainingTypeId),
+    [options, trainingTypeId],
   );
 
-  const selectedType = useMemo(
-    () =>
-      trainingTypes.find((trainingType) => trainingType.id === form.trainingTypeId) ??
-      null,
-    [trainingTypes, form.trainingTypeId],
+  const typeFields = useMemo(
+    () => customFields.filter((item) => item.training_type_id === trainingTypeId),
+    [customFields, trainingTypeId],
   );
 
-  const availableOptions = useMemo(
-    () =>
-      options.filter(
-        (option) =>
-          option.training_type_id === form.trainingTypeId && option.active,
-      ),
-    [options, form.trainingTypeId],
+  const selectedOptions = typeOptions.filter((option) =>
+    selectedOptionIds.includes(option.id),
   );
 
-  const selectedOptions = useMemo(
-    () =>
-      availableOptions.filter((option) =>
-        form.selectedOptionIds.includes(option.id),
-      ),
-    [availableOptions, form.selectedOptionIds],
-  );
-
-  const selectedProject = useMemo(
-    () => projects.find((project) => project.id === form.projectId) ?? null,
-    [projects, form.projectId],
-  );
-
-  const filteredEmployees = useMemo(() => {
-    const query = employeeSearch.toLowerCase().trim();
-    const numericQuery = query.replace(/^emp/i, "");
-
-    return employees
-      .filter((employee) => {
-        if (!query) return true;
-
-        const searchText = [
-          employee.payrollId,
-          employeeDisplayNumber(employee.payrollId),
-          employee.displayName,
-          employee.firstName,
-          employee.lastName,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        return (
-          searchText.includes(query) ||
-          (!!numericQuery &&
-            employee.payrollId.toLowerCase().includes(numericQuery))
-        );
-      })
-      .slice(0, 10);
-  }, [employeeSearch, employees]);
-
-  const generatedFilenames = useMemo(() => {
-    const common = {
-      employee: selectedEmployee,
-      trainingType: selectedType,
-      selectedOptions,
-      project: selectedProject,
-      issueDate: form.issueDate,
-      expiryDate: form.expiryDate,
-    };
-
-    if (selectedType?.document_upload_type === "front_back") {
-      return {
-        single: "",
-        front: buildFilename({
-          ...common,
-          originalFile: form.frontFile,
-          documentSide: "FRONT",
-        }),
-        back: buildFilename({
-          ...common,
-          originalFile: form.backFile,
-          documentSide: "BACK",
-        }),
-      };
-    }
-
-    return {
-      single: buildFilename({
-        ...common,
-        originalFile: form.singleFile,
-      }),
-      front: "",
-      back: "",
-    };
-  }, [
-    form.backFile,
-    form.expiryDate,
-    form.frontFile,
-    form.issueDate,
-    form.singleFile,
-    selectedEmployee,
-    selectedOptions,
-    selectedProject,
-    selectedType,
-  ]);
-
+  useEffect(() => {
+    setSelectedOptionIds([]);
+    setMetadata({});
+    setProjectId("");
+    setIssuer("");
+    setCertificateNumber("");
+    setIssueDate("");
+    setExpiryDate("");
+    setNotes("");
+    setSingleFile(null);
+    setFrontFile(null);
+    setBackFile(null);
+    setExistingRecords([]);
+    setReplaceChoice(null);
+    setReplaceRecordId("");
+  }, [trainingTypeId]);
 
   useEffect(() => {
     if (!selectedType) return;
 
-    if (selectedType.validity_mode === "automatic") {
-      const calculated = addInterval(
-        form.issueDate,
-        selectedType.validity_interval_value,
-        selectedType.validity_interval_unit,
-      );
-
-      setForm((current) =>
-        current.expiryDate === calculated
-          ? current
-          : { ...current, expiryDate: calculated },
-      );
+    if (selectedType.validity_mode === "never") {
+      setExpiryDate("");
       return;
     }
 
-    if (selectedType.validity_mode === "never" && form.expiryDate) {
-      setForm((current) => ({ ...current, expiryDate: "" }));
+    if (selectedType.validity_mode === "automatic" && issueDate) {
+      setExpiryDate(
+        addInterval(
+          issueDate,
+          selectedType.validity_interval_value,
+          selectedType.validity_interval_unit,
+        ),
+      );
     }
-  }, [
-    form.expiryDate,
-    form.issueDate,
-    selectedType,
-  ]);
+  }, [issueDate, selectedType]);
 
   useEffect(() => {
-    setExistingRecords([]);
-    setReplaceChoice(null);
-    setReplaceRecordId("");
-
-    if (!form.employeeId || !form.trainingTypeId) return;
+    if (!employeeId || !trainingTypeId) {
+      setExistingRecords([]);
+      return;
+    }
 
     void (async () => {
-      setCheckingExisting(true);
-
       const { data, error } = await supabase
         .from("employee_training_records")
-        .select("*")
-        .eq("employee_id", form.employeeId)
-        .eq("training_type_id", form.trainingTypeId)
+        .select(
+          "id,employee_id,training_type_id,certificate_number,option_codes,class_codes,issue_date,expiry_date,workflow_status,current_version,superseded_at,revoked_at",
+        )
+        .eq("employee_id", employeeId)
+        .eq("training_type_id", trainingTypeId)
+        .eq("current_version", true)
         .is("superseded_at", null)
+        .is("revoked_at", null)
         .order("created_at", { ascending: false });
 
-      setCheckingExisting(false);
-
       if (error) {
-        setMessage({
-          tone: "error",
-          text: `Unable to check current records: ${error.message}`,
-        });
+        console.warn("Existing Training records could not be loaded", error);
+        setExistingRecords([]);
         return;
       }
 
-      const currentRecords = (
-        (data ?? []) as Record<string, unknown>[]
-      ).filter((row) => {
-        const status = clean(row.status).toLowerCase();
-        return !["superseded", "archived", "cancelled"].includes(status);
-      });
-
-      const normalised = currentRecords.map(
-        (row): ExistingRecord => ({
-          id: clean(row.id),
-          certificate_number: clean(row.certificate_number) || null,
-          issue_date: clean(row.issue_date) || null,
-          expiry_date: clean(row.expiry_date) || null,
-          status: clean(row.status) || null,
-          option_codes: optionCodesFromRecord(row),
-        }),
+      const rows = ((data ?? []) as ExistingRecord[]).filter(
+        (record) => clean(record.workflow_status) === "approved",
       );
 
-      setExistingRecords(normalised);
+      setExistingRecords(rows);
 
-      if (
-        normalised.length > 0 &&
-        selectedType &&
-        !selectedType.allows_multiple_current
-      ) {
+      if (rows.length === 0) {
+        setReplaceChoice(null);
+        setReplaceRecordId("");
+      } else if (rows.length === 1 && selectedType?.allows_multiple_current === false) {
         setReplaceChoice("replace");
-        setReplaceRecordId(normalised[0].id);
+        setReplaceRecordId(rows[0].id);
       }
     })();
-  }, [
-    form.employeeId,
-    form.trainingTypeId,
-    selectedType,
-    supabase,
-  ]);
+  }, [employeeId, selectedType?.allows_multiple_current, supabase, trainingTypeId]);
 
-  function chooseTrainingType(trainingTypeId: string) {
-    const nextType =
-      trainingTypes.find((trainingType) => trainingType.id === trainingTypeId) ??
-      null;
-
-    setForm((current) => ({
-      ...current,
-      trainingTypeId,
-      selectedOptionIds: [],
-      projectId: "",
-      issuer: "",
-      certificateNumber: "",
-      issueDate: "",
-      expiryDate: "",
-      notes: "",
-      singleFile: null,
-      frontFile: null,
-      backFile: null,
-    }));
-
-    setExistingRecords([]);
-    setReplaceChoice(null);
-    setReplaceRecordId("");
-
-    if (nextType?.validity_mode === "never") {
-      setForm((current) => ({ ...current, expiryDate: "" }));
-    }
-  }
-
-  function toggleOption(optionId: string) {
-    if (!selectedType || selectedType.subtype_mode === "none") return;
-
-    setForm((current) => {
-      if (selectedType.subtype_mode === "single") {
-        return {
-          ...current,
-          selectedOptionIds: current.selectedOptionIds.includes(optionId)
-            ? []
-            : [optionId],
-        };
-      }
-
-      return {
-        ...current,
-        selectedOptionIds: current.selectedOptionIds.includes(optionId)
-          ? current.selectedOptionIds.filter((id) => id !== optionId)
-          : [...current.selectedOptionIds, optionId],
-      };
-    });
-  }
-
-  function onFileChange(
-    field: "singleFile" | "frontFile" | "backFile",
-    event: ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0] ?? null;
-    setForm((current) => ({ ...current, [field]: file }));
-  }
-
-  function selectEmployee(employee: Employee) {
-    setForm((current) => ({ ...current, employeeId: employee.id }));
-    setEmployeeSearch(
-      `${employeeDisplayNumber(employee.payrollId)} — ${employee.displayName}`,
+  function customFieldMissing(field: CustomField) {
+    const value = metadata[field.field_key];
+    return (
+      value === undefined ||
+      value === null ||
+      value === "" ||
+      (Array.isArray(value) && value.length === 0) ||
+      (field.field_type === "checkbox" && value !== true)
     );
-    setEmployeePickerOpen(false);
   }
 
-  function clearEmployee() {
-    setForm((current) => ({ ...current, employeeId: "" }));
-    setEmployeeSearch("");
-    setEmployeePickerOpen(true);
-  }
+  function validate() {
+    if (!selectedEmployee) return "Select the employee.";
+    if (!selectedType) return "Select the Training Type.";
 
-  function validate(): string | null {
-    if (!form.employeeId) return "Select an employee.";
-    if (!form.trainingTypeId) return "Select a training type.";
-    if (!selectedType) return "The selected training type is unavailable.";
-
-    if (
-      selectedType.subtype_mode !== "none" &&
-      form.selectedOptionIds.length === 0
-    ) {
-      return "Select the required class or endorsement.";
+    if (!canChooseEmployee && selectedEmployee.id !== selfEmployeeId) {
+      return "You can only upload Training evidence for your own employee profile.";
     }
 
-    if (selectedType.requires_project && !form.projectId) {
+    if (selectedType.requires_project && !projectId) {
       return "Select the project.";
     }
 
-    if (selectedType.requires_issuer && !form.issuer.trim()) {
-      return "Enter the issuing organisation.";
+    if (selectedType.requires_issuer && !issuer.trim()) {
+      return "Enter the provider / issuing organisation.";
     }
 
-    if (
-      selectedType.requires_certificate_number &&
-      !form.certificateNumber.trim()
-    ) {
+    if (selectedType.requires_certificate_number && !certificateNumber.trim()) {
       return "Enter the certificate or licence number.";
     }
 
-    if (
-      (selectedType.requires_issue_date ||
-        selectedType.validity_mode === "automatic") &&
-      !form.issueDate
-    ) {
+    if (selectedType.requires_issue_date && !issueDate) {
       return "Enter the issue date.";
     }
 
     if (
-      selectedType.validity_mode === "manual" &&
+      selectedType.validity_mode !== "never" &&
       selectedType.requires_expiry_date &&
-      !form.expiryDate
+      !expiryDate
     ) {
       return "Enter the expiry date.";
     }
 
-    if (
-      selectedType.validity_mode === "automatic" &&
-      !form.expiryDate
-    ) {
-      return "The expiry date could not be calculated. Check the configured renewal interval.";
+    for (const field of typeFields) {
+      if (field.required && customFieldMissing(field)) {
+        return `Enter ${field.label}.`;
+      }
     }
 
-    if (
-      selectedType.document_upload_type === "single" &&
-      !form.singleFile
-    ) {
-      return "Select the certificate or licence document.";
-    }
-
-    if (
-      selectedType.document_upload_type === "front_back" &&
-      (!form.frontFile || !form.backFile)
-    ) {
-      return "Select both the front and back document files.";
+    if (selectedType.requires_document) {
+      if (selectedType.document_upload_type === "front_back") {
+        if (!frontFile || !backFile) return "Upload both the front and back files.";
+      } else if (!singleFile) {
+        return "Upload the required certificate / licence evidence.";
+      }
     }
 
     if (existingRecords.length > 0) {
-      if (!replaceChoice || replaceChoice === "cancel") {
-        return "Choose whether to replace a current record or add another current record.";
+      if (!replaceChoice) {
+        return "Choose whether this upload replaces a current record or is added as another current record.";
       }
 
       if (replaceChoice === "replace" && !replaceRecordId) {
         return "Select the current record being replaced.";
       }
 
-      if (
-        replaceChoice === "add" &&
-        !selectedType.allows_multiple_current
-      ) {
-        return "This training type does not allow multiple current records.";
+      if (replaceChoice === "add" && selectedType.allows_multiple_current === false) {
+        return "This Training Type does not allow multiple current records.";
       }
     }
 
@@ -852,9 +486,9 @@ export default function NewTrainingRecordPage() {
     event.preventDefault();
     setMessage(null);
 
-    const validationError = validate();
-    if (validationError) {
-      setMessage({ tone: "error", text: validationError });
+    const error = validate();
+    if (error) {
+      setMessage({ tone: "error", text: error });
       return;
     }
 
@@ -863,69 +497,68 @@ export default function NewTrainingRecordPage() {
     setSubmitting(true);
 
     try {
-      const payload = new FormData();
-
-      payload.set("employeeId", selectedEmployee.id);
-      payload.set("payrollId", selectedEmployee.payrollId);
-      payload.set("employeeFirstName", selectedEmployee.firstName);
-      payload.set("employeeLastName", selectedEmployee.lastName);
-      payload.set("trainingTypeId", selectedType.id);
-      payload.set("trainingTypeCode", selectedType.code);
-      payload.set(
-        "selectedOptionIds",
-        JSON.stringify(form.selectedOptionIds),
-      );
-      payload.set(
+      const form = new FormData();
+      form.set("employeeId", selectedEmployee.id);
+      form.set("trainingTypeId", selectedType.id);
+      form.set("projectId", projectId);
+      form.set("issuer", issuer.trim());
+      form.set("certificateNumber", certificateNumber.trim());
+      form.set("issueDate", issueDate);
+      form.set("expiryDate", expiryDate);
+      form.set("notes", notes.trim());
+      form.set("metadata", JSON.stringify(metadata));
+      form.set("selectedOptionIds", JSON.stringify(selectedOptionIds));
+      form.set(
         "selectedOptionCodes",
-        JSON.stringify(
-          selectedOptions
-            .sort((a, b) => a.sort_order - b.sort_order)
-            .map((option) => option.code),
-        ),
+        JSON.stringify(selectedOptions.map((option) => option.code)),
       );
-      payload.set("projectId", form.projectId);
-      payload.set("projectCode", selectedProject?.code ?? "");
-      payload.set("issuer", form.issuer.trim());
-      payload.set("certificateNumber", form.certificateNumber.trim());
-      payload.set("issueDate", form.issueDate);
-      payload.set("expiryDate", form.expiryDate);
-      payload.set("notes", form.notes.trim());
-      payload.set("documentUploadType", selectedType.document_upload_type);
-      payload.set("generatedFilename", generatedFilenames.single);
-      payload.set("generatedFrontFilename", generatedFilenames.front);
-      payload.set("generatedBackFilename", generatedFilenames.back);
-      payload.set("replacementMode", replaceChoice ?? "none");
-      payload.set("supersedesRecordId", replaceRecordId);
+      form.set(
+        "documentUploadType",
+        selectedType.document_upload_type || "single",
+      );
+      form.set("replacementMode", replaceChoice ?? "none");
+      form.set("supersedesRecordId", replaceRecordId);
+      form.set("source", selectedEmployee.id === selfEmployeeId ? "employee_self_service" : "website_admin");
 
-      if (form.singleFile) payload.set("file", form.singleFile);
-      if (form.frontFile) payload.set("frontFile", form.frontFile);
-      if (form.backFile) payload.set("backFile", form.backFile);
+      if (singleFile) form.set("file", singleFile);
+      if (frontFile) form.set("frontFile", frontFile);
+      if (backFile) form.set("backFile", backFile);
 
-      const response = await fetch("/api/training/records/upload", {
+      const response = await apiFetch("/api/training/records/upload", {
         method: "POST",
-        body: payload,
+        body: form,
       });
 
-      const result = (await response.json().catch(() => null)) as
-        | { error?: string; recordId?: string }
-        | null;
+      const result = await response.json().catch(() => null);
 
       if (!response.ok) {
-        throw new Error(
-          result?.error || "The training record could not be uploaded.",
-        );
+        throw new Error(result?.error || "The Training record could not be uploaded.");
       }
 
+      const successText =
+        result?.workflowStatus === "approved"
+          ? "Training record approved automatically and published to SharePoint."
+          : "Training record submitted. The document will be published to SharePoint after approval.";
+
       setMessage({
-        tone: "success",
-        text:
-          selectedType.document_upload_type === "front_back"
-            ? `Training record uploaded as ${generatedFilenames.front} and ${generatedFilenames.back}.`
-            : `Training record uploaded as ${generatedFilenames.single}.`,
+        tone: result?.notificationWarning ? "error" : "success",
+        text: result?.notificationWarning
+          ? `${successText} ${result.notificationWarning}`
+          : successText,
       });
 
-      setForm(EMPTY_FORM);
-      setEmployeeSearch("");
+      setTrainingTypeId("");
+      setSelectedOptionIds([]);
+      setProjectId("");
+      setIssuer("");
+      setCertificateNumber("");
+      setIssueDate("");
+      setExpiryDate("");
+      setNotes("");
+      setMetadata({});
+      setSingleFile(null);
+      setFrontFile(null);
+      setBackFile(null);
       setExistingRecords([]);
       setReplaceChoice(null);
       setReplaceRecordId("");
@@ -935,7 +568,7 @@ export default function NewTrainingRecordPage() {
         text:
           error instanceof Error
             ? error.message
-            : "The training record could not be uploaded.",
+            : "The Training record could not be uploaded.",
       });
     } finally {
       setSubmitting(false);
@@ -945,8 +578,8 @@ export default function NewTrainingRecordPage() {
   if (loading) {
     return (
       <AppShell>
-        <div className="flex min-h-[55vh] items-center justify-center">
-          <Loader2 className="animate-spin text-slate-500" size={28} />
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <Loader2 size={30} className="animate-spin text-slate-400" />
         </div>
       </AppShell>
     );
@@ -955,241 +588,158 @@ export default function NewTrainingRecordPage() {
   return (
     <AppShell>
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <div className="mb-2 flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-blue-700">
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.16em] text-blue-700">
                 <UploadCloud size={17} />
                 Training records
               </div>
-              <h1 className="text-3xl font-black tracking-tight text-slate-950">
-                Add Training Record
+              <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+                Upload Training Record
               </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Upload a certificate or licence, calculate its expiry from the
-                configured validity rules and save it to the employee’s
-                SharePoint training folder.
+              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
+                Employees can upload their own evidence. Admin/HSEQ can select an
+                employee and upload on their behalf. Type-specific rules and
+                required fields come from Training Configuration.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                href="/people/training"
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
+              >
+                Training Register
+              </Link>
+              {canChooseEmployee ? (
+                <Link
+                  href="/people/training/bulk-upload"
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
+                >
+                  Bulk Upload
+                </Link>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void loadReferenceData()}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
               >
                 <RefreshCw size={16} />
                 Refresh
               </button>
-              <Link
-                href="/people/training"
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <ArrowLeft size={16} />
-                Back to Training
-              </Link>
             </div>
           </div>
-        </header>
+        </section>
 
         {message ? (
-          <div
-            className={`flex items-start gap-3 rounded-2xl border p-4 text-sm font-semibold ${
+          <section
+            className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
               message.tone === "success"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-                : "border-red-200 bg-red-50 text-red-900"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-rose-200 bg-rose-50 text-rose-800"
             }`}
           >
-            {message.tone === "success" ? (
-              <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
-            ) : (
-              <AlertTriangle className="mt-0.5 shrink-0" size={18} />
-            )}
-            <span>{message.text}</span>
-            <button
-              type="button"
-              onClick={() => setMessage(null)}
-              className="ml-auto rounded-lg p-1 hover:bg-black/5"
-              aria-label="Dismiss message"
-            >
-              <X size={16} />
-            </button>
-          </div>
+            <div className="flex items-start gap-2">
+              {message.tone === "success" ? (
+                <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+              ) : (
+                <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+              )}
+              {message.text}
+            </div>
+          </section>
         ) : null}
 
-        <form onSubmit={submit} className="grid gap-6 xl:grid-cols-[1fr_380px]">
-          <section className="space-y-6">
-            <Card
-              title="1. Employee"
-              description="Search by payroll ID or employee name, then select the matching employee."
-            >
-              <div className="relative">
-                <Search
-                  size={17}
-                  className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-400"
-                />
-                <input
-                  value={employeeSearch}
-                  onFocus={() => setEmployeePickerOpen(true)}
-                  onChange={(event) => {
-                    setEmployeeSearch(event.target.value);
-                    setEmployeePickerOpen(true);
-                    if (form.employeeId) {
-                      setForm((current) => ({ ...current, employeeId: "" }));
-                    }
-                  }}
-                  placeholder="Search by payroll ID or employee name"
-                  autoComplete="off"
-                  className="w-full rounded-xl border border-slate-300 bg-white py-3 pl-10 pr-11 text-sm font-semibold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                />
-
-                {employeeSearch ? (
-                  <button
-                    type="button"
-                    onClick={clearEmployee}
-                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                    aria-label="Clear employee"
-                  >
-                    <X size={16} />
-                  </button>
-                ) : null}
-
-                {employeePickerOpen && !form.employeeId ? (
-                  <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                    {filteredEmployees.length ? (
-                      filteredEmployees.map((employee) => (
-                        <button
-                          key={employee.id}
-                          type="button"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => selectEmployee(employee)}
-                          className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-blue-50"
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-black text-slate-900">
-                              {employee.displayName}
-                            </div>
-                            <div className="mt-0.5 text-xs font-bold text-blue-700">
-                              {employeeDisplayNumber(employee.payrollId)}
-                            </div>
-                          </div>
-                          <span className="shrink-0 text-xs font-semibold text-slate-400">
-                            Select
-                          </span>
-                        </button>
-                      ))
-                    ) : (
-                      <div className="px-3 py-6 text-center text-sm font-semibold text-slate-500">
-                        No matching employees found.
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-
-              {selectedEmployee ? (
-                <div className="mt-3 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                  <div>
-                    <div className="text-sm font-black text-emerald-950">
-                      {selectedEmployee.displayName}
-                    </div>
-                    <div className="mt-0.5 text-xs font-bold text-emerald-700">
-                      {employeeDisplayNumber(selectedEmployee.payrollId)}
-                    </div>
-                  </div>
-                  <CheckCircle2 size={19} className="text-emerald-600" />
+        {!selfEmployeeId && !canChooseEmployee ? (
+          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+            <div className="flex items-start gap-3">
+              <UserRound size={22} className="mt-0.5" />
+              <div>
+                <div className="font-black">No employee profile is linked to your login</div>
+                <div className="mt-1 text-sm font-semibold leading-6">
+                  Ask an administrator to link your TTTracker login to your existing employee profile before using self-service Training upload.
                 </div>
-              ) : null}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <form onSubmit={submit} className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="space-y-6">
+            <Card title="1. Employee" description={canChooseEmployee ? "Select the employee or leave yourself selected." : "Your linked employee profile is used automatically."}>
+              {canChooseEmployee ? (
+                <Field label="Employee" required>
+                  <select className={inputClass} value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
+                    <option value="">Select...</option>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>
+                        {employee.payroll_id ? `${employee.payroll_id} - ` : ""}{employee.full_name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              ) : (
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <div className="font-black text-slate-950">{selectedEmployee?.full_name || "No linked employee"}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-500">{selectedEmployee?.payroll_id || "No Payroll ID"}</div>
+                </div>
+              )}
             </Card>
 
-            <Card
-              title="2. Training type"
-              description="The selected type controls classes, required fields, validity and the filename."
-            >
-              <select
-                value={form.trainingTypeId}
-                onChange={(event) => chooseTrainingType(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                <option value="">Select training type</option>
-                {trainingTypes.map((trainingType) => (
-                  <option key={trainingType.id} value={trainingType.id}>
-                    {trainingType.name} ({trainingType.code})
-                  </option>
-                ))}
-              </select>
+            <Card title="2. Training Type" description="The selected type controls the fields, expiry logic and document requirements.">
+              <Field label="Training Type" required>
+                <select className={inputClass} value={trainingTypeId} onChange={(event) => setTrainingTypeId(event.target.value)}>
+                  <option value="">Select...</option>
+                  {types.map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.name}{type.short_code ? ` (${type.short_code})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </Field>
 
-              {selectedType?.description ? (
-                <p className="mt-3 rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600">
-                  {selectedType.description}
-                </p>
-              ) : null}
-
-              {selectedType?.subtype_mode !== "none" ? (
-                <div className="mt-5">
-                  <div className="mb-2 text-sm font-black text-slate-900">
-                    Classes / endorsements
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {availableOptions.map((option) => {
-                      const selected = form.selectedOptionIds.includes(option.id);
+              {typeOptions.length > 0 ? (
+                <div className="mt-4">
+                  <div className="mb-2 text-sm font-black text-slate-800">Classes / endorsements</div>
+                  <div className="flex flex-wrap gap-2">
+                    {typeOptions.map((option) => {
+                      const checked = selectedOptionIds.includes(option.id);
+                      const single = selectedType?.subtype_mode === "single";
 
                       return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => toggleOption(option.id)}
-                          className={`rounded-xl border px-3 py-3 text-left transition ${
-                            selected
-                              ? "border-blue-600 bg-blue-50 ring-2 ring-blue-100"
-                              : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                          }`}
-                        >
-                          <div className="text-sm font-black text-slate-900">
-                            {option.code}
-                          </div>
-                          <div className="mt-0.5 text-xs font-medium text-slate-600">
-                            {option.name}
-                          </div>
-                        </button>
+                        <label key={option.id} className={`cursor-pointer rounded-xl border px-3 py-2 text-sm font-bold ${checked ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700"}`}>
+                          <input
+                            type={single ? "radio" : "checkbox"}
+                            name={single ? "training-option" : undefined}
+                            className="mr-2"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedOptionIds((current) => {
+                                if (single) return [option.id];
+                                return checked ? current.filter((id) => id !== option.id) : [...current, option.id];
+                              });
+                            }}
+                          />
+                          {option.code || option.name}
+                        </label>
                       );
                     })}
                   </div>
-
-                  {availableOptions.length === 0 ? (
-                    <p className="mt-2 text-sm font-semibold text-amber-700">
-                      No active classes or endorsements are configured for this
-                      training type.
-                    </p>
-                  ) : null}
                 </div>
               ) : null}
             </Card>
 
-            <Card
-              title="3. Record information"
-              description="Only fields enabled for the selected training type are shown."
-            >
-              {!selectedType ? (
-                <EmptyState text="Select a training type to display its record fields." />
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
+            {selectedType ? (
+              <Card title="3. Record Details" description="Only the fields enabled by this Training Type are shown.">
+                <div className="grid gap-4 md:grid-cols-2">
                   {selectedType.requires_project ? (
                     <Field label="Project" required>
-                      <select
-                        value={form.projectId}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            projectId: event.target.value,
-                          }))
-                        }
-                        className={inputClass}
-                      >
-                        <option value="">Select project</option>
+                      <select className={inputClass} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                        <option value="">Select...</option>
                         {projects.map((project) => (
                           <option key={project.id} value={project.id}>
-                            {project.code} — {project.name}
+                            {project.project_number ? `${project.project_number} - ` : ""}{project.name}
                           </option>
                         ))}
                       </select>
@@ -1197,223 +747,108 @@ export default function NewTrainingRecordPage() {
                   ) : null}
 
                   {selectedType.requires_issuer ? (
-                    <Field label="Issuing organisation" required>
-                      <input
-                        value={form.issuer}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            issuer: event.target.value,
-                          }))
-                        }
-                        className={inputClass}
-                        placeholder="e.g. RTO or licensing authority"
-                      />
+                    <Field label="Provider / Issuer" required>
+                      <input className={inputClass} value={issuer} onChange={(event) => setIssuer(event.target.value)} />
                     </Field>
                   ) : null}
 
                   {selectedType.requires_certificate_number ? (
-                    <Field label="Certificate / licence number" required>
-                      <input
-                        value={form.certificateNumber}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            certificateNumber: event.target.value,
-                          }))
-                        }
-                        className={inputClass}
-                        placeholder="Enter document number"
-                      />
+                    <Field label="Certificate / Licence Number" required>
+                      <input className={inputClass} value={certificateNumber} onChange={(event) => setCertificateNumber(event.target.value)} />
                     </Field>
                   ) : null}
 
-                  {selectedType.requires_issue_date ||
-                  selectedType.validity_mode === "automatic" ? (
-                    <Field label="Issue date" required>
+                  {(selectedType.requires_issue_date || selectedType.validity_mode === "automatic") ? (
+                    <Field label="Issue Date" required>
+                      <input type="date" className={inputClass} value={issueDate} onChange={(event) => setIssueDate(event.target.value)} />
+                    </Field>
+                  ) : null}
+
+                  {selectedType.validity_mode !== "never" && selectedType.requires_expiry_date ? (
+                    <Field label="Expiry Date" required>
                       <input
                         type="date"
-                        value={form.issueDate}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            issueDate: event.target.value,
-                          }))
-                        }
                         className={inputClass}
+                        value={expiryDate}
+                        readOnly={selectedType.validity_mode === "automatic"}
+                        onChange={(event) => setExpiryDate(event.target.value)}
                       />
                     </Field>
                   ) : null}
+                </div>
 
-                  {selectedType.validity_mode === "manual" ? (
-                    <Field
-                      label="Expiry date"
-                      required={selectedType.requires_expiry_date}
-                    >
-                      <input
-                        type="date"
-                        value={form.expiryDate}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            expiryDate: event.target.value,
-                          }))
-                        }
-                        className={inputClass}
+                {typeFields.length > 0 ? (
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    {typeFields.map((field) => (
+                      <DynamicField
+                        key={field.id}
+                        field={field}
+                        value={metadata[field.field_key]}
+                        onChange={(value) => setMetadata((current) => ({ ...current, [field.field_key]: value }))}
                       />
-                    </Field>
-                  ) : null}
-
-                  {selectedType.validity_mode === "automatic" ? (
-                    <Field label="Calculated expiry date" required>
-                      <div className="relative">
-                        <CalendarDays
-                          size={17}
-                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                        />
-                        <input
-                          type="date"
-                          value={form.expiryDate}
-                          readOnly
-                          className={`${inputClass} bg-slate-100 pl-10 text-slate-700`}
-                        />
-                      </div>
-                      <p className="mt-1.5 text-xs font-semibold text-slate-500">
-                        Issue date + {selectedType.validity_interval_value ?? "—"}{" "}
-                        {selectedType.validity_interval_unit ?? "configured interval"}.
-                      </p>
-                    </Field>
-                  ) : null}
-
-                  {selectedType.validity_mode === "never" ? (
-                    <div className="sm:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
-                      This training type is configured not to expire.
-                    </div>
-                  ) : null}
-
-                  <div className="sm:col-span-2">
-                    <Field label="Internal notes">
-                      <textarea
-                        value={form.notes}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            notes: event.target.value,
-                          }))
-                        }
-                        rows={4}
-                        className={inputClass}
-                        placeholder="Optional notes for administrators"
-                      />
-                    </Field>
+                    ))}
                   </div>
-                </div>
-              )}
-            </Card>
+                ) : null}
 
-            <Card
-              title="4. Certificate or licence document"
-              description="Original files are uploaded to SharePoint exactly as selected. Nothing is converted into a PDF."
-            >
-              {!selectedType ? (
-                <EmptyState text="Select a training type to display its upload requirements." />
-              ) : selectedType.document_upload_type === "none" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-600">
-                  This training type does not require a document upload.
+                <div className="mt-4">
+                  <Field label="Notes">
+                    <textarea className={`${inputClass} min-h-24`} value={notes} onChange={(event) => setNotes(event.target.value)} />
+                  </Field>
                 </div>
-              ) : selectedType.document_upload_type === "front_back" ? (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <DocumentUpload
-                    label="Front"
-                    required
-                    file={form.frontFile}
-                    onChange={(event) => onFileChange("frontFile", event)}
-                    onClear={() =>
-                      setForm((current) => ({ ...current, frontFile: null }))
-                    }
-                  />
-                  <DocumentUpload
-                    label="Back"
-                    required
-                    file={form.backFile}
-                    onChange={(event) => onFileChange("backFile", event)}
-                    onClear={() =>
-                      setForm((current) => ({ ...current, backFile: null }))
-                    }
-                  />
-                </div>
-              ) : (
-                <DocumentUpload
-                  label="Document"
-                  required
-                  file={form.singleFile}
-                  onChange={(event) => onFileChange("singleFile", event)}
-                  onClear={() =>
-                    setForm((current) => ({ ...current, singleFile: null }))
-                  }
-                />
-              )}
-            </Card>
-
-            {checkingExisting ? (
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-600 shadow-sm">
-                <Loader2 className="animate-spin" size={17} />
-                Checking for current records…
-              </div>
+              </Card>
             ) : null}
 
-            {existingRecords.length > 0 && selectedType ? (
-              <Card
-                title="5. Existing current record"
-                description="Choose explicitly whether this upload replaces a current record."
-              >
-                <div className="space-y-3">
-                  {existingRecords.map((record) => (
-                    <label
-                      key={record.id}
-                      className={`block rounded-xl border p-4 ${
-                        replaceChoice === "replace" &&
-                        replaceRecordId === record.id
-                          ? "border-blue-500 bg-blue-50"
-                          : "border-slate-200 bg-white"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="radio"
-                          name="replacement-record"
-                          checked={
-                            replaceChoice === "replace" &&
-                            replaceRecordId === record.id
-                          }
-                          onChange={() => {
-                            setReplaceChoice("replace");
-                            setReplaceRecordId(record.id);
-                          }}
-                          className="mt-1"
-                        />
-                        <div>
-                          <div className="font-black text-slate-900">
-                            {selectedType.name}
-                            {record.option_codes.length
-                              ? ` — ${record.option_codes.join(", ")}`
-                              : ""}
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-600">
-                            Issue: {formatDate(record.issue_date)} · Expiry:{" "}
-                            {formatDate(record.expiry_date)}
-                          </div>
-                          {record.certificate_number ? (
-                            <div className="mt-1 text-xs font-semibold text-slate-500">
-                              Number: {record.certificate_number}
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </label>
-                  ))}
+            {selectedType?.requires_document ? (
+              <Card title="4. Evidence" description="The file is held in TTTracker staging until review, then published to SharePoint after approval.">
+                {selectedType.document_upload_type === "front_back" ? (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Front" required>
+                      <input type="file" className={fileInputClass} onChange={(event) => setFrontFile(event.target.files?.[0] ?? null)} />
+                    </Field>
+                    <Field label="Back" required>
+                      <input type="file" className={fileInputClass} onChange={(event) => setBackFile(event.target.files?.[0] ?? null)} />
+                    </Field>
+                  </div>
+                ) : (
+                  <Field label="Certificate / Licence / Evidence" required>
+                    <input type="file" className={fileInputClass} onChange={(event) => setSingleFile(event.target.files?.[0] ?? null)} />
+                  </Field>
+                )}
+                <div className="mt-3 text-xs font-semibold leading-5 text-slate-500">
+                  Final filenames are generated server-side from your configured Training filename rules.
+                </div>
+              </Card>
+            ) : null}
 
-                  {selectedType.allows_multiple_current ? (
+            {existingRecords.length > 0 ? (
+              <Card title="5. Existing Current Record" description="The old record stays current until the replacement is approved.">
+                <div className="space-y-3">
+                  {existingRecords.map((record) => {
+                    const codes = record.option_codes?.length ? record.option_codes : record.class_codes ?? [];
+                    return (
+                      <label key={record.id} className={`block rounded-xl border p-4 ${replaceChoice === "replace" && replaceRecordId === record.id ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"}`}>
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="replacement-record"
+                            checked={replaceChoice === "replace" && replaceRecordId === record.id}
+                            onChange={() => {
+                              setReplaceChoice("replace");
+                              setReplaceRecordId(record.id);
+                            }}
+                            className="mt-1"
+                          />
+                          <div>
+                            <div className="font-black text-slate-900">Replace this record{codes.length ? ` — ${codes.join(", ")}` : ""}</div>
+                            <div className="mt-1 text-sm font-semibold text-slate-600">Issue: {formatDate(record.issue_date)} · Expiry: {formatDate(record.expiry_date)}</div>
+                            {record.certificate_number ? <div className="mt-1 text-xs font-semibold text-slate-500">Number: {record.certificate_number}</div> : null}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+
+                  {selectedType?.allows_multiple_current ? (
                     <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">
                       <input
                         type="radio"
@@ -1426,13 +861,8 @@ export default function NewTrainingRecordPage() {
                         className="mt-1"
                       />
                       <div>
-                        <div className="font-black text-slate-900">
-                          Add another current record
-                        </div>
-                        <div className="mt-1 text-sm font-semibold text-slate-600">
-                          Keep the existing record current and add this upload as
-                          an additional current record.
-                        </div>
+                        <div className="font-black text-slate-900">Add another current record</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-600">Keep the existing approved record current as well.</div>
                       </div>
                     </label>
                   ) : null}
@@ -1441,105 +871,33 @@ export default function NewTrainingRecordPage() {
             ) : null}
           </section>
 
-          <aside className="space-y-6 xl:sticky xl:top-6 xl:self-start">
-            <Card
-              title="Upload summary"
-              description="Review the record before submitting."
-            >
-              <SummaryRow
-                label="Employee"
-                value={
-                  selectedEmployee
-                    ? `${employeeDisplayNumber(selectedEmployee.payrollId)} — ${selectedEmployee.displayName}`
-                    : "Not selected"
-                }
-              />
-              <SummaryRow
-                label="Training type"
-                value={
-                  selectedType
-                    ? `${selectedType.name} (${selectedType.code})`
-                    : "Not selected"
-                }
-              />
-              <SummaryRow
-                label="Classes"
-                value={
-                  selectedOptions.length
-                    ? selectedOptions.map((option) => option.code).join(", ")
-                    : "None"
-                }
-              />
-              <SummaryRow
-                label="Issue date"
-                value={form.issueDate ? formatDate(form.issueDate) : "Not set"}
-              />
-              <SummaryRow
-                label="Expiry date"
-                value={
-                  selectedType?.validity_mode === "never"
-                    ? "Does not expire"
-                    : form.expiryDate
-                      ? formatDate(form.expiryDate)
-                      : "Not set"
-                }
-              />
-
-              <SummaryRow
-                label="Upload type"
-                value={
-                  selectedType?.document_upload_type === "front_back"
-                    ? "Front and back"
-                    : selectedType?.document_upload_type === "single"
-                      ? "Single document"
-                      : "No document"
-                }
-              />
-
-              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-950 p-4">
-                <div className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">
-                  Generated SharePoint filename
-                </div>
-                {selectedType?.document_upload_type === "front_back" ? (
-                  <div className="mt-2 space-y-2">
-                    <div className="break-all font-mono text-sm font-bold leading-6 text-white">
-                      {generatedFilenames.front}
-                    </div>
-                    <div className="break-all font-mono text-sm font-bold leading-6 text-white">
-                      {generatedFilenames.back}
-                    </div>
-                  </div>
-                ) : selectedType?.document_upload_type === "none" ? (
-                  <div className="mt-2 text-sm font-semibold text-slate-400">
-                    No document filename required
-                  </div>
-                ) : (
-                  <div className="mt-2 break-all font-mono text-sm font-bold leading-6 text-white">
-                    {generatedFilenames.single}
-                  </div>
-                )}
-              </div>
+          <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+            <Card title="Submission Summary">
+              <SummaryRow label="Employee" value={selectedEmployee ? `${selectedEmployee.payroll_id || "No Payroll ID"} — ${selectedEmployee.full_name}` : "Not selected"} />
+              <SummaryRow label="Training" value={selectedType ? `${selectedType.name}${selectedType.short_code ? ` (${selectedType.short_code})` : ""}` : "Not selected"} />
+              <SummaryRow label="Classes" value={selectedOptions.length ? selectedOptions.map((item) => item.code).join(", ") : "None"} />
+              <SummaryRow label="Issue" value={issueDate ? formatDate(issueDate) : "Not set"} />
+              <SummaryRow label="Expiry" value={selectedType?.validity_mode === "never" ? "Does not expire" : expiryDate ? formatDate(expiryDate) : "Not set"} />
+              <SummaryRow label="Review" value={selectedType?.requires_review === false ? "Auto-approved" : "Reviewer approval required"} />
             </Card>
+
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-900">
+              <div className="flex items-start gap-2">
+                <ShieldCheck size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  Evidence requiring review is not published to SharePoint until a configured reviewer approves it.
+                </div>
+              </div>
+            </div>
 
             <button
               type="submit"
-              disabled={submitting}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-700 px-5 py-4 text-sm font-black text-white shadow-lg shadow-blue-200 transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={submitting || !selectedEmployee || !selectedType}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-700 px-5 py-4 text-sm font-black text-white shadow-lg shadow-blue-200 disabled:opacity-50"
             >
-              {submitting ? (
-                <Loader2 className="animate-spin" size={18} />
-              ) : (
-                <UploadCloud size={18} />
-              )}
-              {submitting ? "Uploading…" : "Upload Training Record"}
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : <UploadCloud size={18} />}
+              {submitting ? "Submitting..." : "Submit Training Record"}
             </button>
-
-            <p className="px-2 text-xs font-semibold leading-5 text-slate-500">
-              This page sends the record and document to{" "}
-              <code>/api/training/records/upload</code>. That server route must
-              upload to SharePoint, insert the Supabase record and process any
-              selected superseding action.
-            </p>
           </aside>
         </form>
       </main>
@@ -1550,6 +908,9 @@ export default function NewTrainingRecordPage() {
 const inputClass =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
 
+const fileInputClass =
+  "block w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-black file:text-slate-700";
+
 function Card({
   title,
   description,
@@ -1557,15 +918,13 @@ function Card({
 }: {
   title: string;
   description?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5">
         <h2 className="text-lg font-black text-slate-950">{title}</h2>
-        {description ? (
-          <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
-        ) : null}
+        {description ? <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p> : null}
       </div>
       {children}
     </section>
@@ -1579,13 +938,12 @@ function Field({
 }: {
   label: string;
   required?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-black text-slate-800">
-        {label}
-        {required ? <span className="ml-1 text-red-600">*</span> : null}
+        {label}{required ? <span className="ml-1 text-rose-600">*</span> : null}
       </span>
       {children}
     </label>
@@ -1596,79 +954,81 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-3 last:border-b-0">
       <span className="text-sm font-semibold text-slate-500">{label}</span>
-      <span className="max-w-[62%] text-right text-sm font-black text-slate-900">
-        {value}
-      </span>
+      <span className="max-w-[62%] text-right text-sm font-black text-slate-900">{value}</span>
     </div>
   );
 }
 
-function DocumentUpload({
-  label,
-  required,
-  file,
+function DynamicField({
+  field,
+  value,
   onChange,
-  onClear,
 }: {
-  label: string;
-  required?: boolean;
-  file: File | null;
-  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onClear: () => void;
+  field: CustomField;
+  value: unknown;
+  onChange: (value: unknown) => void;
 }) {
-  return (
-    <div>
-      <div className="mb-2 text-sm font-black text-slate-800">
-        {label}
-        {required ? <span className="ml-1 text-red-600">*</span> : null}
-      </div>
-      <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition hover:border-blue-400 hover:bg-blue-50">
-        <UploadCloud size={30} className="text-blue-700" />
-        <span className="mt-3 max-w-full truncate text-sm font-black text-slate-900">
-          {file ? file.name : `Choose ${label.toLowerCase()} file`}
-        </span>
-        <span className="mt-1 text-xs font-semibold text-slate-500">
-          PDF, JPG, PNG, HEIC or WEBP
-        </span>
-        <input
-          type="file"
-          className="sr-only"
-          onChange={onChange}
-          accept=".pdf,.png,.jpg,.jpeg,.heic,.webp"
-        />
+  const options = fieldOptions(field.options);
+
+  if (field.field_type === "checkbox") {
+    return (
+      <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} className="h-5 w-5 rounded border-slate-300" />
+        <span className="text-sm font-black text-slate-800">{field.label}{field.required ? <span className="ml-1 text-rose-600">*</span> : null}</span>
       </label>
+    );
+  }
 
-      {file ? (
-        <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <FileText size={18} className="shrink-0 text-slate-500" />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-bold text-slate-900">
-                {file.name}
-              </div>
-              <div className="text-xs font-semibold text-slate-500">
-                {(file.size / 1024 / 1024).toFixed(2)} MB
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClear}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-            aria-label={`Remove ${label.toLowerCase()} file`}
-          >
-            <X size={17} />
-          </button>
+  if (field.field_type === "select") {
+    return (
+      <Field label={field.label} required={field.required}>
+        <select className={inputClass} value={clean(value)} onChange={(event) => onChange(event.target.value)}>
+          <option value="">Select...</option>
+          {options.map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      </Field>
+    );
+  }
+
+  if (field.field_type === "multiselect") {
+    const selected = Array.isArray(value) ? value.map(String) : [];
+    return (
+      <div>
+        <div className="mb-2 text-sm font-black text-slate-800">{field.label}{field.required ? <span className="ml-1 text-rose-600">*</span> : null}</div>
+        <div className="flex flex-wrap gap-2">
+          {options.map((option) => {
+            const checked = selected.includes(option);
+            return (
+              <label key={option} className={`cursor-pointer rounded-xl border px-3 py-2 text-sm font-bold ${checked ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700"}`}>
+                <input type="checkbox" className="mr-2" checked={checked} onChange={() => onChange(checked ? selected.filter((item) => item !== option) : [...selected, option])} />
+                {option}
+              </label>
+            );
+          })}
         </div>
-      ) : null}
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
-function EmptyState({ text }: { text: string }) {
+  if (field.field_type === "textarea") {
+    return (
+      <Field label={field.label} required={field.required}>
+        <textarea className={`${inputClass} min-h-24`} placeholder={field.placeholder ?? ""} value={clean(value)} onChange={(event) => onChange(event.target.value)} />
+      </Field>
+    );
+  }
+
+  const type = field.field_type === "number" ? "number" : field.field_type === "date" ? "date" : "text";
+
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm font-semibold text-slate-500">
-      {text}
-    </div>
+    <Field label={field.label} required={field.required}>
+      <input
+        type={type}
+        className={inputClass}
+        placeholder={field.placeholder ?? ""}
+        value={clean(value)}
+        onChange={(event) => onChange(field.field_type === "number" ? Number(event.target.value) : event.target.value)}
+      />
+    </Field>
   );
 }
