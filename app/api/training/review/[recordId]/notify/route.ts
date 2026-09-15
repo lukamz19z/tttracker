@@ -128,7 +128,10 @@ export async function POST(
         .from("user_notifications")
         .select("user_id")
         .eq("event_type", "training_review_required")
-        .eq("event_id", recordId)
+        .eq("action_route", "/people/training/verification")
+        .contains("action_params", {
+          training_record_id: recordId,
+        })
         .in("user_id", recipientIds);
 
     if (existingError) {

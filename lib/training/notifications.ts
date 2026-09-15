@@ -209,10 +209,11 @@ export async function createTrainingNotifications({
 
   const now = new Date().toISOString();
 
-  // Existing TTTracker notifications use event_id to link a notification
-  // back to the originating record. Do not assume source_table/source_record_id
-  // columns exist in the existing user_notifications table.
+  // user_notifications.event_id is a real foreign key used by TTTracker's
+  // existing notification-event pipeline. A Training record UUID must NOT be
+  // written into that FK. The Training record link stays in action_params.
   void sourceTable;
+  void sourceRecordId;
 
   const rows = inAppRecipients.map((userId) => ({
     user_id: userId,
@@ -224,7 +225,6 @@ export async function createTrainingNotifications({
     archived_at: null,
     action_route: actionRoute,
     action_params: actionParams,
-    event_id: sourceRecordId,
     created_at: now,
   }));
 
