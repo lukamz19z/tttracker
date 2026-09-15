@@ -451,7 +451,7 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
             <HeaderLink href={`/project/${projectId}/tower/${towerId}/deliveries`} label="Deliveries" />
             <HeaderLink href={`/project/${projectId}/tower/${towerId}/materials`} label="Materials" />
             <HeaderLink href={`/project/${projectId}/tower/${towerId}/defects`} label="Defects" />
-            <HeaderLink href={`/project/${projectId}/tower/${towerId}/revision`} label="Revision" />
+            <HeaderLink href={`/project/${projectId}/tower/${towerId}/revisions`} label="Revision" />
             <HeaderLink href={`/project/${projectId}/tower/${towerId}/photos`} label="Photos" />
           </div>
         </div>
