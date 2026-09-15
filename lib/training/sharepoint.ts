@@ -2,7 +2,9 @@ import {
   ensureDriveFolder,
   getBCContractingSite,
   getDriveByName,
+  getDriveChildByName,
   graphRequest,
+  renameDriveItem,
   uploadDriveItemContent,
   type SharePointDriveItem,
 } from "@/lib/sharepoint/graph";
@@ -56,6 +58,10 @@ type TrainingRecordRow = {
   class_codes: string[] | null;
   metadata: Record<string, unknown> | null;
   sharepoint_web_url: string | null;
+  workflow_status?: string | null;
+  record_status?: string | null;
+  current_version?: boolean | null;
+  superseded_at?: string | null;
 };
 
 type TrainingTypeRow = {
@@ -92,7 +98,7 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function employeeFolderName(template: string, employee: EmployeeRow) {
+export function employeeFolderName(template: string, employee: EmployeeRow) {
   const payroll = clean(employee.payroll_id);
   const name = clean(employee.full_name) || "Employee";
 
@@ -210,7 +216,14 @@ export async function ensureEmployeeBaseTrainingFolder({
     ),
   });
 
+  const template =
+    clean(settings.employee_folder_template) ||
+    "{payroll_id} - {employee_name}";
+  const expectedFolderName = employeeFolderName(template, employee);
+
   let employeeFolder: SharePointDriveItem | null = null;
+  let renamed = false;
+  let createdOrLinked = false;
 
   if (
     clean(employee.sharepoint_drive_id) === driveId &&
@@ -227,30 +240,53 @@ export async function ensureEmployeeBaseTrainingFolder({
     }
   }
 
+  if (employeeFolder && employeeFolder.name !== expectedFolderName) {
+    const conflictingFolder = await getDriveChildByName({
+      driveId,
+      parentItemId: baseFolder.id,
+      name: expectedFolderName,
+    });
+
+    if (
+      conflictingFolder &&
+      conflictingFolder.id !== employeeFolder.id
+    ) {
+      throw new Error(
+        `Cannot rename SharePoint folder "${employeeFolder.name}" to "${expectedFolderName}" because another folder with the corrected name already exists. Resolve the duplicate folder before syncing this employee.`,
+      );
+    }
+
+    employeeFolder = await renameDriveItem({
+      driveId,
+      itemId: employeeFolder.id,
+      name: expectedFolderName,
+    });
+    renamed = true;
+  }
+
   if (!employeeFolder) {
-    const template =
-      clean(settings.employee_folder_template) ||
-      "{payroll_id} - {employee_name}";
-
-    const folderName = employeeFolderName(template, employee);
-
     employeeFolder = await ensureDriveFolder({
       driveId,
       parentItemId: baseFolder.id,
-      name: folderName,
+      name: expectedFolderName,
     });
+    createdOrLinked = true;
+  }
 
-    const { error } = await service
-      .from("employees")
-      .update({
-        sharepoint_drive_id: driveId,
-        sharepoint_folder_id: employeeFolder.id,
-        sharepoint_web_url: employeeFolder.webUrl ?? null,
-        sharepoint_folder_name: employeeFolder.name,
-      })
-      .eq("id", employee.id);
+  // Always refresh the stored references. This also captures the new webUrl
+  // returned after a SharePoint rename.
+  const { error: employeeUpdateError } = await service
+    .from("employees")
+    .update({
+      sharepoint_drive_id: driveId,
+      sharepoint_folder_id: employeeFolder.id,
+      sharepoint_web_url: employeeFolder.webUrl ?? null,
+      sharepoint_folder_name: employeeFolder.name,
+    })
+    .eq("id", employee.id);
 
-    if (error) throw new Error(error.message);
+  if (employeeUpdateError) {
+    throw new Error(employeeUpdateError.message);
   }
 
   const trainingFolder = await ensureDriveFolder({
@@ -267,6 +303,9 @@ export async function ensureEmployeeBaseTrainingFolder({
     baseFolder,
     employeeFolder,
     trainingFolder,
+    expectedFolderName,
+    renamed,
+    createdOrLinked,
   };
 }
 
@@ -427,6 +466,170 @@ async function patchSharePointMetadata({
       body: JSON.stringify(fields),
     },
   );
+}
+
+
+export async function syncEmployeeTrainingSharePoint({
+  service,
+  employee,
+  syncMetadata = true,
+}: {
+  service: TrainingService;
+  employee: EmployeeRow;
+  syncMetadata?: boolean;
+}) {
+  const folder = await ensureEmployeeBaseTrainingFolder({
+    service,
+    employee,
+  });
+
+  let metadataUpdated = 0;
+  let documentLinksRefreshed = 0;
+  let recordsChecked = 0;
+
+  if (syncMetadata) {
+    const { data: records, error: recordsError } = await service
+      .from("employee_training_records")
+      .select("*")
+      .eq("employee_id", employee.id);
+
+    if (recordsError) throw new Error(recordsError.message);
+
+    const recordRows = (records ?? []) as TrainingRecordRow[];
+    recordsChecked = recordRows.length;
+
+    if (recordRows.length > 0) {
+      const recordById = new Map(
+        recordRows.map((record) => [record.id, record]),
+      );
+      const recordIds = recordRows.map((record) => record.id);
+
+      const { data: documents, error: documentError } = await service
+        .from("employee_training_documents")
+        .select(
+          "id,training_record_id,sharepoint_drive_id,sharepoint_item_id,sharepoint_web_url,sharepoint_folder_path",
+        )
+        .in("training_record_id", recordIds);
+
+      if (documentError) throw new Error(documentError.message);
+
+      for (const document of documents ?? []) {
+        const itemId = clean(document.sharepoint_item_id);
+        if (!itemId) continue;
+
+        const record = recordById.get(clean(document.training_record_id));
+        if (!record) continue;
+
+        const status =
+          clean(record.workflow_status) === "approved" &&
+          record.current_version !== false &&
+          !record.superseded_at
+            ? "Approved"
+            : record.superseded_at || record.current_version === false
+              ? "Superseded"
+              : clean(record.record_status) || "Approved";
+
+        const fields = await metadataFields({
+          service,
+          settings: folder.settings,
+          record,
+          employee,
+          status,
+        });
+
+        if (Object.keys(fields).length > 0) {
+          await patchSharePointMetadata({
+            driveId: folder.driveId,
+            itemId,
+            fields,
+          });
+          metadataUpdated += 1;
+        }
+
+        const currentItem = await graphRequest<SharePointDriveItem>(
+          `/drives/${encodeURIComponent(
+            folder.driveId,
+          )}/items/${encodeURIComponent(
+            itemId,
+          )}?$select=id,name,webUrl,parentReference`,
+        );
+
+        const oldPath = clean(document.sharepoint_folder_path);
+        const pathParts = oldPath ? oldPath.split("/") : [];
+        const refreshedPath =
+          pathParts.length > 1
+            ? [folder.employeeFolder.name, ...pathParts.slice(1)].join("/")
+            : oldPath || null;
+
+        const { error: documentUpdateError } = await service
+          .from("employee_training_documents")
+          .update({
+            sharepoint_drive_id: folder.driveId,
+            sharepoint_web_url: currentItem.webUrl ?? null,
+            sharepoint_folder_path: refreshedPath,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", document.id);
+
+        if (documentUpdateError) {
+          throw new Error(documentUpdateError.message);
+        }
+
+        documentLinksRefreshed += 1;
+      }
+
+      // Refresh the record-level SharePoint URL from the first published
+      // document for each record where one is available.
+      for (const record of recordRows) {
+        const { data: firstDocument, error: firstDocumentError } =
+          await service
+            .from("employee_training_documents")
+            .select("sharepoint_web_url")
+            .eq("training_record_id", record.id)
+            .not("sharepoint_web_url", "is", null)
+            .order("sequence_number", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+        if (firstDocumentError) {
+          throw new Error(firstDocumentError.message);
+        }
+
+        const firstDocumentUrl = clean(
+          firstDocument?.sharepoint_web_url,
+        );
+
+        if (firstDocumentUrl) {
+          const { error: recordUpdateError } = await service
+            .from("employee_training_records")
+            .update({
+              sharepoint_web_url: firstDocumentUrl,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", record.id);
+
+          if (recordUpdateError) {
+            throw new Error(recordUpdateError.message);
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    employeeId: employee.id,
+    employeeName: employee.full_name,
+    payrollId: clean(employee.payroll_id) || null,
+    driveId: folder.driveId,
+    folderId: folder.employeeFolder.id,
+    folderName: folder.employeeFolder.name,
+    webUrl: folder.employeeFolder.webUrl ?? null,
+    renamed: folder.renamed,
+    createdOrLinked: folder.createdOrLinked,
+    recordsChecked,
+    metadataUpdated,
+    documentLinksRefreshed,
+  };
 }
 
 export async function publishApprovedTrainingRecord({

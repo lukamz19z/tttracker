@@ -8,6 +8,7 @@ import {
   BellRing,
   CheckCircle2,
   Database,
+  ExternalLink,
   FileCog,
   FolderCog,
   FolderSync,
@@ -15,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -86,7 +88,19 @@ type Employee = {
   full_name: string;
   user_id: string | null;
   active: boolean | null;
+  sharepoint_drive_id: string | null;
   sharepoint_folder_id: string | null;
+  sharepoint_web_url: string | null;
+  sharepoint_folder_name: string | null;
+};
+
+type SharePointColumn = {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  hidden: boolean;
+  readOnly: boolean;
 };
 
 type RoleRow = {
@@ -149,8 +163,105 @@ const DEFAULT_SETTINGS: Settings = {
   auto_approve_authorised_uploads: false,
 };
 
+const CORE_METADATA_FIELDS: Array<{
+  key: keyof Settings["core_metadata_map"];
+  label: string;
+  source: string;
+  example: string;
+}> = [
+  {
+    key: "employee_id",
+    label: "Payroll ID",
+    source: "Employee profile → payroll_id",
+    example: "1600",
+  },
+  {
+    key: "employee_name",
+    label: "Employee Name",
+    source: "Employee profile → full_name",
+    example: "Luka Zetovic",
+  },
+  {
+    key: "training_type",
+    label: "Training Type",
+    source: "Training record",
+    example: "CPR",
+  },
+  {
+    key: "training_code",
+    label: "Training Code",
+    source: "Configured short code",
+    example: "CPR",
+  },
+  {
+    key: "certificate_number",
+    label: "Certificate Number",
+    source: "Training record",
+    example: "CERT-12345",
+  },
+  {
+    key: "provider",
+    label: "Provider",
+    source: "Training record",
+    example: "Training Provider",
+  },
+  {
+    key: "issue_date",
+    label: "Issue Date",
+    source: "Training record",
+    example: "15/09/2026",
+  },
+  {
+    key: "expiry_date",
+    label: "Expiry Date",
+    source: "Training record",
+    example: "15/09/2027",
+  },
+  {
+    key: "project",
+    label: "Project",
+    source: "Linked project",
+    example: "P.25.0002 - HumeLink West",
+  },
+  {
+    key: "status",
+    label: "Status",
+    source: "TTTracker workflow",
+    example: "Approved",
+  },
+  {
+    key: "tttracker_record_id",
+    label: "TTTracker Record ID",
+    source: "Internal audit link",
+    example: "UUID",
+  },
+  {
+    key: "option_codes",
+    label: "Classes / Option Codes",
+    source: "Configured Training options",
+    example: "DG, RB",
+  },
+];
+
 function clean(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function expectedEmployeeFolderName(
+  template: string,
+  employee: Employee,
+) {
+  const payroll = clean(employee.payroll_id);
+  const name = clean(employee.full_name) || "Employee";
+
+  return (
+    template
+      .replaceAll("{payroll_id}", payroll)
+      .replaceAll("{employee_name}", name)
+      .replace(/\s*-\s*-\s*/g, " - ")
+      .replace(/^\s*-\s*|\s*-\s*$/g, "")
+      .trim() || name
+  );
 }
 
 function csvNumbers(value: string) {
@@ -219,12 +330,22 @@ export default function TrainingWorkflowConfigurationPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [roleRows, setRoleRows] = useState<RoleRow[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
+  const [sharePointColumns, setSharePointColumns] = useState<
+    SharePointColumn[]
+  >([]);
+  const [columnError, setColumnError] = useState("");
+  const [loadingColumns, setLoadingColumns] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   const [selectedTypeId, setSelectedTypeId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [provisioning, setProvisioning] = useState(false);
+  const [syncingSharePoint, setSyncingSharePoint] = useState(false);
+  const [syncingEmployeeId, setSyncingEmployeeId] = useState<string | null>(
+    null,
+  );
+  const [employeeFolderSearch, setEmployeeFolderSearch] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
 
   const [newField, setNewField] = useState({
@@ -272,6 +393,57 @@ export default function TrainingWorkflowConfigurationPage() {
     [supabase],
   );
 
+  const loadSharePointColumns = useCallback(
+    async (driveId: string) => {
+      const resolvedDriveId = clean(driveId);
+
+      if (!resolvedDriveId) {
+        setSharePointColumns([]);
+        setColumnError("");
+        return;
+      }
+
+      setLoadingColumns(true);
+      setColumnError("");
+
+      try {
+        const response = await apiFetch(
+          `/api/training/configuration/sharepoint?driveId=${encodeURIComponent(
+            resolvedDriveId,
+          )}`,
+        );
+
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              columns?: SharePointColumn[];
+              columnError?: string | null;
+              error?: string;
+            }
+          | null;
+
+        if (!response.ok) {
+          throw new Error(
+            clean(payload?.error) ||
+              "Unable to load SharePoint library columns.",
+          );
+        }
+
+        setSharePointColumns(payload?.columns ?? []);
+        setColumnError(clean(payload?.columnError));
+      } catch (error) {
+        setSharePointColumns([]);
+        setColumnError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load SharePoint library columns.",
+        );
+      } finally {
+        setLoadingColumns(false);
+      }
+    },
+    [apiFetch],
+  );
+
   const loadData = useCallback(async () => {
     const [
       categoryResult,
@@ -308,7 +480,7 @@ export default function TrainingWorkflowConfigurationPage() {
       supabase
         .from("employees")
         .select(
-          "id,payroll_id,full_name,user_id,active,sharepoint_folder_id",
+          "id,payroll_id,full_name,user_id,active,sharepoint_drive_id,sharepoint_folder_id,sharepoint_web_url,sharepoint_folder_name",
         )
         .order("full_name"),
       supabase.from("user_roles").select("user_id,role"),
@@ -339,7 +511,9 @@ export default function TrainingWorkflowConfigurationPage() {
     setRules((ruleResult.data ?? []) as ReviewRule[]);
     setEmployees((employeeResult.data ?? []) as Employee[]);
     setRoleRows((roleResult.data ?? []) as RoleRow[]);
-    setSettings(normaliseSettings(settingsResult.data));
+
+    const loadedSettings = normaliseSettings(settingsResult.data);
+    setSettings(loadedSettings);
 
     const loadedTypes = (typeResult.data ?? []) as TrainingType[];
     setSelectedTypeId((current) => {
@@ -361,7 +535,16 @@ export default function TrainingWorkflowConfigurationPage() {
     } catch (error) {
       console.warn("SharePoint drive list could not be loaded", error);
     }
-  }, [apiFetch, supabase]);
+
+    if (clean(loadedSettings.sharepoint_drive_id)) {
+      await loadSharePointColumns(
+        clean(loadedSettings.sharepoint_drive_id),
+      );
+    } else {
+      setSharePointColumns([]);
+      setColumnError("");
+    }
+  }, [apiFetch, loadSharePointColumns, supabase]);
 
   useEffect(() => {
     void (async () => {
@@ -420,6 +603,30 @@ export default function TrainingWorkflowConfigurationPage() {
   const linkedFolderCount = employees.filter(
     (employee) => clean(employee.sharepoint_folder_id),
   ).length;
+
+  const mappedMetadataCount = Object.values(
+    settings.core_metadata_map,
+  ).filter((value) => clean(value)).length;
+
+  const visibleFolderEmployees = useMemo(() => {
+    const query = employeeFolderSearch.trim().toLowerCase();
+
+    return employees
+      .filter((employee) => employee.active !== false)
+      .filter((employee) => {
+        if (!query) return true;
+
+        return [
+          employee.full_name,
+          employee.payroll_id,
+          employee.sharepoint_folder_name,
+        ]
+          .map(clean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      });
+  }, [employeeFolderSearch, employees]);
 
   async function saveSettings() {
     setSaving(true);
@@ -841,6 +1048,118 @@ export default function TrainingWorkflowConfigurationPage() {
     }
   }
 
+  async function syncEmployeeSharePoint(
+    employeeIds?: string[],
+  ) {
+    const syncingOne =
+      Array.isArray(employeeIds) && employeeIds.length === 1;
+
+    if (
+      !syncingOne &&
+      !window.confirm(
+        "Sync all active employee SharePoint folders with the current payroll IDs/names and refresh configured metadata on existing published Training documents?",
+      )
+    ) {
+      return;
+    }
+
+    if (syncingOne) {
+      setSyncingEmployeeId(employeeIds[0]);
+    } else {
+      setSyncingSharePoint(true);
+    }
+
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        "/api/training/employees/sync-sharepoint",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            includeInactive: false,
+            employeeIds: employeeIds ?? [],
+            syncMetadata: true,
+          }),
+        },
+      );
+
+      const responseText = await response.text();
+
+      const payload = responseText
+        ? (JSON.parse(responseText) as {
+            error?: string;
+            synced?: number;
+            failed?: number;
+            renamed?: number;
+            createdOrLinked?: number;
+            metadataUpdated?: number;
+            documentLinksRefreshed?: number;
+            failures?: Array<{
+              employeeName?: string;
+              error?: string;
+            }>;
+          })
+        : null;
+
+      if (!response.ok) {
+        throw new Error(
+          clean(payload?.error) ||
+            "SharePoint employee sync failed.",
+        );
+      }
+
+      await loadData();
+
+      const synced = Number(payload?.synced ?? 0);
+      const failed = Number(payload?.failed ?? 0);
+      const renamed = Number(payload?.renamed ?? 0);
+      const linked = Number(payload?.createdOrLinked ?? 0);
+      const metadataUpdated = Number(payload?.metadataUpdated ?? 0);
+      const linksRefreshed = Number(
+        payload?.documentLinksRefreshed ?? 0,
+      );
+
+      setMessage({
+        tone: failed > 0 ? "error" : "success",
+        text:
+          failed > 0
+            ? `${synced} employee SharePoint profile${
+                synced === 1 ? "" : "s"
+              } synced; ${failed} failed. ${renamed} folder${
+                renamed === 1 ? "" : "s"
+              } renamed; ${metadataUpdated} document metadata item${
+                metadataUpdated === 1 ? "" : "s"
+              } refreshed. ${
+                payload?.failures?.[0]?.error
+                  ? `First error: ${payload.failures[0].error}`
+                  : ""
+              }`
+            : `${synced} employee SharePoint profile${
+                synced === 1 ? "" : "s"
+              } synced. ${renamed} folder${
+                renamed === 1 ? "" : "s"
+              } renamed, ${linked} linked/created, ${metadataUpdated} document metadata item${
+                metadataUpdated === 1 ? "" : "s"
+              } refreshed and ${linksRefreshed} document link${
+                linksRefreshed === 1 ? "" : "s"
+              } refreshed.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to sync employee SharePoint folders.",
+      });
+    } finally {
+      setSyncingSharePoint(false);
+      setSyncingEmployeeId(null);
+    }
+  }
+
   if (loading) {
     return (
       <AppShell>
@@ -962,10 +1281,11 @@ export default function TrainingWorkflowConfigurationPage() {
                 SharePoint employee folders
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600">
-                This supports employees that already existed before the update.
-                If a profile has no SharePoint folder ID, TTTracker finds or
-                creates the employee folder and writes the link back to that
-                existing employee profile.
+                Missing folders can be provisioned here. The sync action also
+                checks linked folders against the employee&apos;s current payroll
+                ID and name, renames the existing SharePoint folder when needed,
+                and refreshes configured metadata on already-published Training
+                documents.
               </p>
             </div>
           </div>
@@ -978,11 +1298,15 @@ export default function TrainingWorkflowConfigurationPage() {
                   const drive = drives.find(
                     (item) => item.id === event.target.value,
                   );
+                  const driveId = event.target.value;
+
                   setSettings((current) => ({
                     ...current,
-                    sharepoint_drive_id: event.target.value || null,
+                    sharepoint_drive_id: driveId || null,
                     sharepoint_drive_name: drive?.name ?? null,
                   }));
+
+                  void loadSharePointColumns(driveId);
                 }}
                 className={inputClass}
               >
@@ -1099,50 +1423,377 @@ export default function TrainingWorkflowConfigurationPage() {
                 )}
                 Provision Existing Employee Profiles
               </button>
+              <button
+                type="button"
+                onClick={() => void syncEmployeeSharePoint()}
+                disabled={
+                  syncingSharePoint ||
+                  provisioning ||
+                  !settings.sharepoint_drive_id
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-300 bg-blue-50 px-4 py-3 text-sm font-black text-blue-800 disabled:opacity-50"
+              >
+                {syncingSharePoint ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+                Sync Folders & Metadata
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h3 className="font-black text-slate-950">
+                  Employee SharePoint links
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  Use Sync after correcting an employee&apos;s payroll ID or name.
+                  TTTracker renames the existing folder by SharePoint item ID, so
+                  the Training subfolders and certificates stay inside the same
+                  folder.
+                </p>
+              </div>
+
+              <label className="relative w-full lg:max-w-sm">
+                <Search
+                  size={16}
+                  className="absolute left-3 top-3.5 text-slate-400"
+                />
+                <input
+                  className={`${inputClass} pl-9`}
+                  placeholder="Search employee or payroll ID..."
+                  value={employeeFolderSearch}
+                  onChange={(event) =>
+                    setEmployeeFolderSearch(event.target.value)
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 max-h-96 overflow-y-auto rounded-xl border border-slate-200 bg-white">
+              <div className="divide-y divide-slate-100">
+                {visibleFolderEmployees.map((employee) => {
+                  const expectedName = expectedEmployeeFolderName(
+                    settings.employee_folder_template,
+                    employee,
+                  );
+                  const linked = Boolean(
+                    clean(employee.sharepoint_folder_id),
+                  );
+                  const folderMatches =
+                    linked &&
+                    clean(employee.sharepoint_folder_name) === expectedName;
+
+                  return (
+                    <div
+                      key={employee.id}
+                      className="grid gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] lg:items-center"
+                    >
+                      <div>
+                        <div className="font-black text-slate-950">
+                          {employee.full_name}
+                        </div>
+                        <div className="mt-1 text-xs font-semibold text-slate-500">
+                          Payroll ID: {clean(employee.payroll_id) || "Missing"}
+                        </div>
+                      </div>
+
+                      <div className="text-sm">
+                        <div className="font-semibold text-slate-700">
+                          Current:{" "}
+                          {clean(employee.sharepoint_folder_name) ||
+                            "Not linked"}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Expected: {expectedName}
+                        </div>
+                        <div
+                          className={`mt-1 text-xs font-black ${
+                            !linked
+                              ? "text-amber-700"
+                              : folderMatches
+                                ? "text-emerald-700"
+                                : "text-blue-700"
+                          }`}
+                        >
+                          {!linked
+                            ? "Needs provisioning"
+                            : folderMatches
+                              ? "Folder name matches"
+                              : "Needs folder sync"}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        {employee.sharepoint_web_url ? (
+                          <a
+                            href={employee.sharepoint_web_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700"
+                          >
+                            <ExternalLink size={14} />
+                            Open
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void syncEmployeeSharePoint([employee.id])
+                          }
+                          disabled={
+                            Boolean(syncingEmployeeId) ||
+                            syncingSharePoint ||
+                            !settings.sharepoint_drive_id
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-700 px-3 py-2 text-xs font-black text-white disabled:opacity-50"
+                        >
+                          {syncingEmployeeId === employee.id ? (
+                            <Loader2
+                              size={14}
+                              className="animate-spin"
+                            />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          Sync
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {visibleFolderEmployees.length === 0 ? (
+                  <div className="p-6 text-center text-sm font-semibold text-slate-500">
+                    No employees match the search.
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-5 flex items-start gap-3">
-            <div className="rounded-xl bg-violet-50 p-2 text-violet-700">
-              <Database size={20} />
+          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-violet-50 p-2 text-violet-700">
+                <Database size={20} />
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-slate-950">
+                  SharePoint metadata mapping
+                </h2>
+                <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
+                  Metadata is information stored in SharePoint columns against
+                  the certificate file. It is separate from the file name and
+                  folder name. Mapping tells TTTracker which existing SharePoint
+                  column should receive each TTTracker value.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xl font-black text-slate-950">
-                SharePoint metadata mapping
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-slate-600">
-                Enter the SharePoint column internal name for any field you
-                want written to the uploaded document&apos;s metadata.
+
+            <button
+              type="button"
+              onClick={() =>
+                void loadSharePointColumns(
+                  clean(settings.sharepoint_drive_id),
+                )
+              }
+              disabled={
+                loadingColumns || !settings.sharepoint_drive_id
+              }
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-black text-violet-800 disabled:opacity-50"
+            >
+              {loadingColumns ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <RefreshCw size={16} />
+              )}
+              Refresh SharePoint Columns
+            </button>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+              <div className="text-sm font-black text-blue-950">
+                1. The certificate file
+              </div>
+              <p className="mt-2 text-sm leading-6 text-blue-900">
+                Example: <strong>CPR - Luka Zetovic.pdf</strong>. The file still
+                lives under the employee&apos;s Training folder.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+              <div className="text-sm font-black text-violet-950">
+                2. Metadata sits on that file
+              </div>
+              <p className="mt-2 text-sm leading-6 text-violet-900">
+                Example columns: Payroll ID = <strong>1600</strong>, Training
+                Type = <strong>CPR</strong>, Expiry Date ={" "}
+                <strong>15/09/2027</strong>.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-sm font-black text-emerald-950">
+                3. Why use it?
+              </div>
+              <p className="mt-2 text-sm leading-6 text-emerald-900">
+                SharePoint can filter, group and search certificates by employee,
+                Training type, expiry, project or status without relying on the
+                folder name.
               </p>
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {Object.entries(settings.core_metadata_map).map(
-              ([key, value]) => (
-                <Field key={key} label={key.replaceAll("_", " ")}>
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+            <strong>Important:</strong> this page does not create SharePoint
+            columns. Create the columns in the selected SharePoint document
+            library first, then click <strong>Refresh SharePoint Columns</strong>{" "}
+            and map them below. Leaving a mapping blank is completely valid —
+            TTTracker will still upload the file, it just will not write that
+            metadata field.
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-600">
+            <span>
+              {mappedMetadataCount} of {CORE_METADATA_FIELDS.length} TTTracker
+              fields mapped
+            </span>
+            <span>·</span>
+            <span>
+              {sharePointColumns.length} writable SharePoint column
+              {sharePointColumns.length === 1 ? "" : "s"} loaded
+            </span>
+          </div>
+
+          {columnError ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+              SharePoint columns could not be loaded automatically:{" "}
+              {columnError}
+            </div>
+          ) : null}
+
+          <datalist id="training-sharepoint-columns">
+            {sharePointColumns.map((column) => (
+              <option
+                key={column.id}
+                value={column.name}
+              >
+                {column.displayName}
+              </option>
+            ))}
+          </datalist>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {CORE_METADATA_FIELDS.map((field) => {
+              const value = clean(
+                settings.core_metadata_map[field.key],
+              );
+              const mappedColumn = sharePointColumns.find(
+                (column) => column.name === value,
+              );
+
+              return (
+                <div
+                  key={field.key}
+                  className="rounded-2xl border border-slate-200 p-4"
+                >
+                  <div className="font-black text-slate-950">
+                    {field.label}
+                  </div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    {field.source} · Example: {field.example}
+                  </div>
+
+                  <label className="mt-3 block">
+                    <span className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
+                      SharePoint column
+                    </span>
+                    <select
+                      className={inputClass}
+                      value={
+                        mappedColumn
+                          ? mappedColumn.name
+                          : value
+                            ? "__manual__"
+                            : ""
+                      }
+                      onChange={(event) => {
+                        const nextValue =
+                          event.target.value === "__manual__"
+                            ? value
+                            : event.target.value;
+
+                        setSettings((current) => ({
+                          ...current,
+                          core_metadata_map: {
+                            ...current.core_metadata_map,
+                            [field.key]: nextValue,
+                          },
+                        }));
+                      }}
+                    >
+                      <option value="">Do not write this metadata</option>
+                      {sharePointColumns.map((column) => (
+                        <option
+                          key={column.id}
+                          value={column.name}
+                        >
+                          {column.displayName} ({column.name})
+                        </option>
+                      ))}
+                      {value && !mappedColumn ? (
+                        <option value="__manual__">
+                          Current/manual: {value}
+                        </option>
+                      ) : null}
+                    </select>
+                  </label>
+
                   <input
-                    className={inputClass}
-                    placeholder="SharePoint internal column name"
+                    list="training-sharepoint-columns"
+                    className={`${inputClass} mt-2`}
+                    placeholder="Or enter SharePoint internal name manually"
                     value={value}
                     onChange={(event) =>
                       setSettings((current) => ({
                         ...current,
                         core_metadata_map: {
                           ...current.core_metadata_map,
-                          [key]: event.target.value,
+                          [field.key]: event.target.value,
                         },
                       }))
                     }
                   />
-                </Field>
-              ),
-            )}
+
+                  {mappedColumn ? (
+                    <div className="mt-2 text-xs font-semibold text-emerald-700">
+                      Maps to: {mappedColumn.displayName}
+                    </div>
+                  ) : value ? (
+                    <div className="mt-2 text-xs font-semibold text-amber-700">
+                      Manual internal name. Confirm this exists in SharePoint.
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-slate-400">
+                      Not mapped.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
-          <div className="mt-5 flex justify-end">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-3xl text-xs leading-5 text-slate-500">
+              When you run <strong>Sync Folders & Metadata</strong>, existing
+              published certificates are re-written using the current employee
+              payroll ID/name and the mappings saved here.
+            </p>
+
             <button
               type="button"
               onClick={() => void saveSettings()}
