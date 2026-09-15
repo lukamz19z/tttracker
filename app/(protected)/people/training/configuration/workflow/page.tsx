@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowLeft,
   BellRing,
   CheckCircle2,
   Database,
@@ -757,22 +758,73 @@ export default function TrainingWorkflowConfigurationPage() {
         },
       );
 
-      const payload = await response.json();
+      const responseText = await response.text();
+
+      let payload: {
+        error?: string;
+        provisioned?: number;
+        failed?: number;
+        successes?: unknown[];
+        failures?: Array<{
+          employeeId?: string;
+          employeeName?: string;
+          error?: string;
+        }>;
+      } | null = null;
+
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText) as {
+            error?: string;
+            provisioned?: number;
+            failed?: number;
+            successes?: unknown[];
+            failures?: Array<{
+              employeeId?: string;
+              employeeName?: string;
+              error?: string;
+            }>;
+          };
+        } catch {
+          payload = null;
+        }
+      }
 
       if (!response.ok) {
+        const serverMessage = clean(payload?.error);
+        const rawMessage = clean(responseText);
+
+        console.error("Employee folder provisioning failed", {
+          status: response.status,
+          statusText: response.statusText,
+          response: rawMessage,
+        });
+
         throw new Error(
-          payload?.error || "Employee folders could not be provisioned.",
+          serverMessage ||
+            (rawMessage && !rawMessage.startsWith("<")
+              ? `Provisioning failed (${response.status}): ${rawMessage.slice(0, 500)}`
+              : `Provisioning failed (${response.status} ${response.statusText}). The API returned an HTML page instead of JSON. Confirm that app/api/training/employees/provision-folders/route.ts exists and check the Next.js terminal for a route compile error.`),
+        );
+      }
+
+      if (!payload) {
+        throw new Error(
+          `Provisioning returned an invalid response (${response.status} ${response.statusText}).`,
         );
       }
 
       await loadData();
 
+      const failed = Number(payload.failed ?? 0);
+      const provisioned = Number(payload.provisioned ?? 0);
+
       setMessage({
-        tone: payload.failed > 0 ? "error" : "success",
+        tone: failed > 0 ? "error" : "success",
         text:
-          payload.failed > 0
-            ? `${payload.provisioned} employee folders linked/created; ${payload.failed} failed. Check the server log or retry after fixing the affected profile.`
-            : `${payload.provisioned} active employee profiles are now linked to SharePoint folders.`,
+          failed > 0
+            ? `${provisioned} employee folders linked/created; ${failed} failed. ${payload.failures?.[0]?.error ? `First error: ${payload.failures[0].error}` : "Check the server log or retry after fixing the affected profile."}`
+            : `${provisioned} active employee profiles are now linked to SharePoint folders.`,
       });
     } catch (error) {
       setMessage({
@@ -800,6 +852,16 @@ export default function TrainingWorkflowConfigurationPage() {
   return (
     <AppShell>
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div>
+          <Link
+            href="/people/training"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            Back to Training
+          </Link>
+        </div>
+
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>

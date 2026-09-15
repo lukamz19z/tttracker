@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState, type ReactNode } 
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowLeft,
   CheckCircle2,
   Loader2,
   RefreshCw,
@@ -529,10 +530,42 @@ export default function AddTrainingRecordPage() {
         body: form,
       });
 
-      const result = await response.json().catch(() => null);
+      const responseText = await response.text();
+
+      let result: {
+        error?: string;
+        workflowStatus?: string;
+        notificationWarning?: string | null;
+      } | null = null;
+
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText) as {
+            error?: string;
+            workflowStatus?: string;
+            notificationWarning?: string | null;
+          };
+        } catch {
+          result = null;
+        }
+      }
 
       if (!response.ok) {
-        throw new Error(result?.error || "The Training record could not be uploaded.");
+        const serverMessage = clean(result?.error);
+        const rawMessage = clean(responseText);
+
+        console.error("Training upload failed", {
+          status: response.status,
+          statusText: response.statusText,
+          response: rawMessage,
+        });
+
+        throw new Error(
+          serverMessage ||
+            (rawMessage && !rawMessage.startsWith("<")
+              ? `Upload failed (${response.status}): ${rawMessage.slice(0, 500)}`
+              : `Upload failed (${response.status} ${response.statusText}). The upload API did not return a valid TTTracker error response.`),
+        );
       }
 
       const successText =
@@ -588,6 +621,16 @@ export default function AddTrainingRecordPage() {
   return (
     <AppShell>
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div>
+          <Link
+            href="/people/training"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            Back to Training
+          </Link>
+        </div>
+
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>

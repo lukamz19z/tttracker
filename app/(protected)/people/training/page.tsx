@@ -10,26 +10,18 @@ import {
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowLeft,
   BadgeCheck,
-  BookOpenCheck,
-  CalendarDays,
   CheckCircle2,
   ChevronRight,
   ClipboardCheck,
   Clock3,
-  FileClock,
-  FilePlus2,
   FolderCog,
   GraduationCap,
-  History,
-  LayoutDashboard,
   Loader2,
   RefreshCw,
   SearchCheck,
-  Settings2,
-  ShieldCheck,
   UploadCloud,
-  UserCheck,
   Users,
 } from "lucide-react";
 
@@ -211,12 +203,15 @@ function StatCard({
     </div>
   );
 
-  return href ? (
-    <Link href={href} className="transition hover:-translate-y-0.5">
+  if (!href) return content;
+
+  return (
+    <Link
+      href={href}
+      className="block transition hover:-translate-y-0.5"
+    >
       {content}
     </Link>
-  ) : (
-    content
   );
 }
 
@@ -271,9 +266,7 @@ export default function TrainingPage() {
             .maybeSingle(),
           supabase
             .from("employees")
-            .select(
-              "id,active,sharepoint_folder_id",
-            ),
+            .select("id,active,sharepoint_folder_id"),
           supabase
             .from("employee_training_records")
             .select(
@@ -392,6 +385,16 @@ export default function TrainingPage() {
   return (
     <AppShell>
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div>
+          <Link
+            href="/people"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <ArrowLeft size={16} />
+            Back to People
+          </Link>
+        </div>
+
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
           <div className="p-6 sm:p-7">
             <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -404,9 +407,8 @@ export default function TrainingPage() {
                   Training
                 </h1>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                  Manage employee licences, VOCs, inductions,
-                  project onboarding, evidence, renewals and
-                  compliance from one controlled register.
+                  Manage employee training evidence, verification,
+                  SharePoint publishing and bulk VOC or course uploads.
                 </p>
               </div>
 
@@ -509,7 +511,6 @@ export default function TrainingPage() {
             value={stats.currentRecords}
             hint="Approved current employee records"
             icon={<CheckCircle2 size={19} />}
-            href="/people/training/history"
           />
           <StatCard
             label="Verification"
@@ -521,26 +522,24 @@ export default function TrainingPage() {
           <StatCard
             label="Expiring in 30 days"
             value={stats.expiringSoon}
-            hint="Renewals requiring attention soon"
+            hint="Records requiring renewal soon"
             icon={<Clock3 size={19} />}
-            href="/people/training/renewals"
           />
           <StatCard
             label="Expired"
             value={stats.expired}
             hint="Current records past expiry"
             icon={<AlertTriangle size={19} />}
-            href="/people/training/renewals"
           />
         </section>
 
         <section className="space-y-3">
           <div>
             <h2 className="text-lg font-black text-slate-950">
-              Training register
+              Training actions
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Day-to-day employee Training and compliance tools.
+              Only modules that currently exist in TTTracker are shown here.
             </p>
           </div>
 
@@ -548,15 +547,16 @@ export default function TrainingPage() {
             <ModuleCard
               href="/people/training/new"
               title="Add Training Record"
-              description="Upload a licence, VOC, ticket, induction or other configured Training record."
-              icon={<FilePlus2 size={20} />}
+              description="Upload a licence, VOC, ticket, induction or another configured training record."
+              icon={<UploadCloud size={20} />}
               badge="Upload"
               emphasis="blue"
             />
+
             <ModuleCard
               href="/people/training/verification"
               title="Verification Queue"
-              description="Review submitted evidence, approve it for SharePoint, request changes or reject it."
+              description="Review submitted evidence, request changes, reject it or approve it for SharePoint."
               icon={<SearchCheck size={20} />}
               badge={
                 stats.awaitingReview > 0
@@ -567,142 +567,38 @@ export default function TrainingPage() {
                 stats.awaitingReview > 0 ? "amber" : "slate"
               }
             />
-            <ModuleCard
-              href="/people/training/history"
-              title="Training History"
-              description="View employee Training records, previous versions, superseded evidence and audit history."
-              icon={<History size={20} />}
-            />
-            <ModuleCard
-              href="/people/training/renewals"
-              title="Renewals & Expiry"
-              description="Track upcoming expiries, expired records and Training that needs to be renewed."
-              icon={<FileClock size={20} />}
-              badge={
-                stats.expiringSoon + stats.expired > 0
-                  ? String(stats.expiringSoon + stats.expired)
-                  : undefined
-              }
-              emphasis={
-                stats.expiringSoon + stats.expired > 0
-                  ? "amber"
-                  : "slate"
-              }
-            />
-            <ModuleCard
-              href="/people/training/requirements"
-              title="Role Requirements"
-              description="Define and review Training requirements attached to employee roles."
-              icon={<UserCheck size={20} />}
-            />
-            <ModuleCard
-              href="/people/training/project-compliance"
-              title="Project Compliance"
-              description="Check whether employees meet the Training and onboarding requirements for a project."
-              icon={<ShieldCheck size={20} />}
-              emphasis="emerald"
-            />
-          </div>
-        </section>
 
-        <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-black text-slate-950">
-              Planning & onboarding
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Manage project requirements, scheduled Training and
-              upcoming workforce activity.
-            </p>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <ModuleCard
-              href="/people/training/project-requirements"
-              title="Project Requirements"
-              description="Configure the licences, competencies, inductions and onboarding requirements for each project."
-              icon={<BookOpenCheck size={20} />}
-            />
-            <ModuleCard
-              href="/people/training/courses"
-              title="Courses & VOC Sessions"
-              description="Plan group Training, VOCs and courses and track attendees and completion requirements."
-              icon={<GraduationCap size={20} />}
-            />
-            <ModuleCard
-              href="/people/training/calendar"
-              title="Training Calendar"
-              description="View upcoming Training, VOCs, renewals and expiry-related activity."
-              icon={<CalendarDays size={20} />}
-            />
-            <ModuleCard
-              href="/people/training/dashboard"
-              title="Training Dashboard"
-              description="Open the detailed Training compliance dashboard and reporting view."
-              icon={<LayoutDashboard size={20} />}
-            />
             {isTrainingAdmin ? (
               <ModuleCard
                 href="/people/training/bulk-upload"
-                title="Bulk Training Upload"
-                description="Submit the same course, VOC or Training event for multiple employees while keeping evidence employee-specific."
+                title="Bulk Training / VOC Upload"
+                description="Submit the same course or VOC for multiple employees while keeping certificate evidence employee-specific."
                 icon={<Users size={20} />}
                 badge="Admin"
                 emphasis="blue"
               />
             ) : null}
-          </div>
-        </section>
 
-        {isTrainingAdmin ? (
-          <section className="space-y-3">
-            <div>
-              <h2 className="text-lg font-black text-slate-950">
-                Administration
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Configure Training types, controlled workflow,
-                SharePoint publishing and reviewer rules.
-              </p>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <ModuleCard
-                href="/people/training/configuration"
-                title="Training Configuration"
-                description="Manage categories, Training types, validity rules, options, document requirements and naming."
-                icon={<Settings2 size={20} />}
-                badge="Admin"
-              />
+            {isTrainingAdmin ? (
               <ModuleCard
                 href="/people/training/configuration/workflow"
                 title="Workflow & SharePoint"
-                description="Configure reviewers, SharePoint folders, custom fields, expiry warnings and existing employee folder provisioning."
+                description="Configure SharePoint storage, reviewer rules, metadata, expiry warnings and employee folder provisioning."
                 icon={<FolderCog size={20} />}
                 badge="Admin"
-                emphasis="blue"
+                emphasis="emerald"
               />
-            </div>
-          </section>
-        ) : null}
+            ) : null}
+          </div>
+        </section>
 
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-          <div className="flex items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200">
-              <ShieldCheck size={19} />
-            </div>
-            <div>
-              <h2 className="text-sm font-black text-slate-950">
-                Controlled Training workflow
-              </h2>
-              <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-                New evidence is staged for verification first. Once
-                approved, TTTracker publishes it to the employee&apos;s
-                configured SharePoint Training folder and only then
-                supersedes the previous approved version.
-              </p>
-            </div>
-          </div>
+          <p className="text-sm leading-6 text-slate-600">
+            Role requirements, project requirements, renewals,
+            history, courses, calendar and other unfinished modules
+            are intentionally hidden from this landing page until
+            those pages are actually built.
+          </p>
         </section>
       </main>
     </AppShell>
