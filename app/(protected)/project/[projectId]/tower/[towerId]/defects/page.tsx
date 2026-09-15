@@ -19,6 +19,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
+import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
 import TowerHeader from "@/components/towers/TowerHeader";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -159,6 +160,7 @@ export default function TowerDefectsPage() {
   const [rows, setRows] = useState<DefectRow[]>([]);
   const [issueTypes, setIssueTypes] = useState<IssueType[]>([]);
   const [qualityFiles, setQualityFiles] = useState<QualityFile[]>([]);
+  const [towerMembers, setTowerMembers] = useState<TowerMaterialMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -202,7 +204,7 @@ export default function TowerDefectsPage() {
     if (!towerId || !projectId) return;
     setLoading(true);
 
-    const [towerRes, docketRes, defectRes, issueRes, fileRes] = await Promise.all([
+    const [towerRes, docketRes, defectRes, issueRes, fileRes, memberRes] = await Promise.all([
       supabase.from("towers").select("*").eq("id", towerId).single(),
       supabase
         .from("tower_daily_dockets")
@@ -227,6 +229,12 @@ export default function TowerDefectsPage() {
         .eq("tower_id", towerId)
         .eq("file_role", "defect_photo")
         .order("created_at"),
+      supabase
+        .from("tower_material_members")
+        .select("id,tower_id,bundle_reference,drawing_number,mark_no,qty_per_tower,section,tower_segment")
+        .eq("tower_id", towerId)
+        .order("tower_segment")
+        .order("mark_no"),
     ]);
 
     if (towerRes.error) console.error("Tower load error", towerRes.error);
@@ -234,12 +242,14 @@ export default function TowerDefectsPage() {
     if (defectRes.error) console.error("Defect load error", defectRes.error);
     if (issueRes.error) console.error("Issue type load error", issueRes.error);
     if (fileRes.error) console.error("Quality file load error", fileRes.error);
+    if (memberRes.error) console.error("Tower member load error", memberRes.error);
 
     setTower((towerRes.data as TowerRow | null) ?? null);
     setLatestDate(docketRes.data?.[0]?.docket_date ?? null);
     setRows((defectRes.data ?? []) as DefectRow[]);
     setIssueTypes((issueRes.data ?? []) as IssueType[]);
     setQualityFiles((fileRes.data ?? []) as QualityFile[]);
+    setTowerMembers((memberRes.data ?? []) as TowerMaterialMember[]);
     setLoading(false);
   }, [projectId, supabase, towerId]);
 
@@ -701,8 +711,50 @@ export default function TowerDefectsPage() {
                   {defectIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </Field>
-              <Field label="Tower segment"><input value={form.segment} onChange={(event) => setForm((current) => ({ ...current, segment: event.target.value }))} placeholder="Body 2, Peak, Leg…" className="input" /></Field>
-              <Field label="Member number"><input value={form.member_number} onChange={(event) => setForm((current) => ({ ...current, member_number: event.target.value }))} placeholder="Optional" className="input" /></Field>
+              <TowerMemberFields
+                members={towerMembers}
+                segment={form.segment}
+                memberNumber={form.member_number}
+                onSegmentChange={(segment) =>
+                  setForm((current) => ({
+                    ...current,
+                    segment,
+                    member_number:
+                      current.member_number &&
+                      !towerMembers.some(
+                        (member) =>
+                          member.mark_no === current.member_number &&
+                          (member.tower_segment ?? "") === segment,
+                      )
+                        ? ""
+                        : current.member_number,
+                    drawing_number:
+                      current.member_number &&
+                      !towerMembers.some(
+                        (member) =>
+                          member.mark_no === current.member_number &&
+                          (member.tower_segment ?? "") === segment,
+                      )
+                        ? ""
+                        : current.drawing_number,
+                  }))
+                }
+                onMemberNumberChange={(member_number) =>
+                  setForm((current) => ({
+                    ...current,
+                    member_number,
+                    drawing_number: "",
+                  }))
+                }
+                onSelectMember={(member) =>
+                  setForm((current) => ({
+                    ...current,
+                    member_number: member.mark_no,
+                    segment: member.tower_segment || current.segment,
+                    drawing_number: member.drawing_number || "",
+                  }))
+                }
+              />
               <Field label="Drawing"><input value={form.drawing_number} onChange={(event) => setForm((current) => ({ ...current, drawing_number: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Severity"><select value={form.severity} onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as DefectRow["severity"] }))} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
               <Field label="Responsibility"><input value={form.responsibility} onChange={(event) => setForm((current) => ({ ...current, responsibility: event.target.value }))} placeholder="BC / UGL / Supplier / Client" className="input" /></Field>
@@ -753,8 +805,54 @@ export default function TowerDefectsPage() {
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Common issue"><select value={editDraft.issue_type_id} onChange={(event) => setEditDraft((current) => current ? { ...current, issue_type_id: event.target.value } : current)} className="input"><option value="">Other / not selected</option>{defectIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
             <Field label="Status"><select value={editDraft.status} onChange={(event) => setEditDraft((current) => current ? { ...current, status: event.target.value as DefectRow["status"] } : current)} className="input"><option>Open</option><option>In Progress</option><option>Fixed</option><option>Closed</option></select></Field>
-            <Field label="Segment"><input value={editDraft.segment} onChange={(event) => setEditDraft((current) => current ? { ...current, segment: event.target.value } : current)} className="input" /></Field>
-            <Field label="Member"><input value={editDraft.member_number} onChange={(event) => setEditDraft((current) => current ? { ...current, member_number: event.target.value } : current)} className="input" /></Field>
+            <TowerMemberFields
+              members={towerMembers}
+              segment={editDraft.segment}
+              memberNumber={editDraft.member_number}
+              segmentLabel="Tower segment"
+              memberLabel="Member number"
+              onSegmentChange={(segment) =>
+                setEditDraft((current) => {
+                  if (!current) return current;
+                  const currentMemberStillMatches =
+                    !current.member_number ||
+                    towerMembers.some(
+                      (member) =>
+                        member.mark_no === current.member_number &&
+                        (member.tower_segment ?? "") === segment,
+                    );
+                  return {
+                    ...current,
+                    segment,
+                    member_number: currentMemberStillMatches
+                      ? current.member_number
+                      : "",
+                    drawing_number: currentMemberStillMatches
+                      ? current.drawing_number
+                      : "",
+                  };
+                })
+              }
+              onMemberNumberChange={(member_number) =>
+                setEditDraft((current) =>
+                  current
+                    ? { ...current, member_number, drawing_number: "" }
+                    : current,
+                )
+              }
+              onSelectMember={(member) =>
+                setEditDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        member_number: member.mark_no,
+                        segment: member.tower_segment || current.segment,
+                        drawing_number: member.drawing_number || "",
+                      }
+                    : current,
+                )
+              }
+            />
             <Field label="Drawing"><input value={editDraft.drawing_number} onChange={(event) => setEditDraft((current) => current ? { ...current, drawing_number: event.target.value } : current)} className="input" /></Field>
             <Field label="Severity"><select value={editDraft.severity} onChange={(event) => setEditDraft((current) => current ? { ...current, severity: event.target.value as DefectRow["severity"] } : current)} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
             <Field label="Responsibility"><input value={editDraft.responsibility} onChange={(event) => setEditDraft((current) => current ? { ...current, responsibility: event.target.value } : current)} className="input" /></Field>

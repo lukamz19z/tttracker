@@ -116,7 +116,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,item_number,issue_type_id,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,item_number,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
@@ -161,7 +161,10 @@ export async function POST(request: Request, context: RouteContext) {
       const after = files.some(
         (file) => file.revision_item_id === item.id && file.file_role === "after_photo",
       );
-      return !before || !after || !String(item.rectification_comment ?? "").trim();
+      const issueSelected = Boolean(
+        item.issue_type_id || String(item.other_issue_text ?? "").trim(),
+      );
+      return !issueSelected || !before || !after;
     });
 
     if (incomplete.length > 0) {
@@ -171,7 +174,7 @@ export async function POST(request: Request, context: RouteContext) {
         .join(", ");
       return NextResponse.json(
         {
-          error: `${labels}${incomplete.length > 6 ? " and others" : ""} need a Before photo, rectification comment and After photo before the controlled PDF can be created.`,
+          error: `${labels}${incomplete.length > 6 ? " and others" : ""} need a common issue (or Other description), Before photo and After photo before the controlled PDF can be created.`,
         },
         { status: 409 },
       );
@@ -204,11 +207,14 @@ export async function POST(request: Request, context: RouteContext) {
 
       pdfItems.push({
         itemNumber: Number(item.item_number),
-        issueType: issueTypeMap.get(item.issue_type_id) || "Other",
+        issueType:
+          issueTypeMap.get(item.issue_type_id) ||
+          String(item.other_issue_text ?? "").trim() ||
+          "Other",
         towerSegment: item.tower_segment,
         memberNumber: item.member_number,
         drawingNumber: item.drawing_number,
-        finding: item.finding,
+        finding: String(item.finding ?? ""),
         rectificationComment: String(item.rectification_comment ?? ""),
         status: item.status,
         beforeTakenAt: item.before_taken_at,

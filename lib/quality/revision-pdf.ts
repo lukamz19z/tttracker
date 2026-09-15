@@ -29,8 +29,8 @@ export type RevisionPdfItem = {
   towerSegment?: string | null;
   memberNumber?: string | null;
   drawingNumber?: string | null;
-  finding: string;
-  rectificationComment: string;
+  finding?: string | null;
+  rectificationComment?: string | null;
   status: string;
   beforeTakenAt?: string | null;
   beforeTakenByLabel?: string | null;
@@ -367,7 +367,13 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     keyValue(margin + 4, iy + 7, "Tower segment", text(item.towerSegment) || "-", 50);
     keyValue(margin + 59, iy + 7, "Member", text(item.memberNumber) || "-", 38);
     keyValue(margin + 103, iy + 7, "Drawing", text(item.drawingNumber) || "-", 70);
-    keyValue(margin + 4, iy + 24, "Finding", item.finding, 82);
+    keyValue(
+      margin + 4,
+      iy + 24,
+      "Client Finding",
+      text(item.finding) || "No additional client comment.",
+      82,
+    );
     keyValue(margin + 96, iy + 24, "Status", item.status, 70);
     iy += 53;
 
@@ -403,7 +409,10 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     setText(C.slate);
-    const rectification = doc.splitTextToSize(item.rectificationComment || "-", contentWidth) as string[];
+    const rectification = doc.splitTextToSize(
+      text(item.rectificationComment) || "No additional rectification comment.",
+      contentWidth,
+    ) as string[];
     doc.text(rectification.slice(0, 7), margin, iy);
 
     const extraBefore = item.beforePhotos.slice(1);

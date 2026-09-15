@@ -19,6 +19,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
+import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
 import TowerHeader from "@/components/towers/TowerHeader";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -65,6 +66,7 @@ type RevisionItem = {
   tower_id: string;
   item_number: number;
   issue_type_id: string | null;
+  other_issue_text: string | null;
   tower_segment: string | null;
   member_number: string | null;
   drawing_number: string | null;
@@ -103,6 +105,7 @@ type RevisionDraft = {
 type FindingDraft = {
   revision_id: string;
   issue_type_id: string;
+  other_issue_text: string;
   tower_segment: string;
   member_number: string;
   drawing_number: string;
@@ -116,6 +119,7 @@ type FindingEdit = {
   id: string;
   revision_id: string;
   issue_type_id: string;
+  other_issue_text: string;
   tower_segment: string;
   member_number: string;
   drawing_number: string;
@@ -149,6 +153,7 @@ const BLANK_REVISION: RevisionDraft = {
 const BLANK_FINDING: FindingDraft = {
   revision_id: "",
   issue_type_id: "",
+  other_issue_text: "",
   tower_segment: "",
   member_number: "",
   drawing_number: "",
@@ -195,6 +200,7 @@ export default function TowerRevisionsPage() {
   const [items, setItems] = useState<RevisionItem[]>([]);
   const [files, setFiles] = useState<QualityFile[]>([]);
   const [issueTypes, setIssueTypes] = useState<IssueType[]>([]);
+  const [towerMembers, setTowerMembers] = useState<TowerMaterialMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -234,7 +240,7 @@ export default function TowerRevisionsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [towerRes, docketRes, revisionRes, itemRes, fileRes, issueRes] = await Promise.all([
+    const [towerRes, docketRes, revisionRes, itemRes, fileRes, issueRes, memberRes] = await Promise.all([
       supabase.from("towers").select("*").eq("id", towerId).single(),
       supabase
         .from("tower_daily_dockets")
@@ -267,6 +273,12 @@ export default function TowerRevisionsPage() {
         .eq("project_id", projectId)
         .order("sort_order")
         .order("name"),
+      supabase
+        .from("tower_material_members")
+        .select("id,tower_id,bundle_reference,drawing_number,mark_no,qty_per_tower,section,tower_segment")
+        .eq("tower_id", towerId)
+        .order("tower_segment")
+        .order("mark_no"),
     ]);
 
     if (towerRes.error) console.error(towerRes.error);
@@ -274,6 +286,7 @@ export default function TowerRevisionsPage() {
     if (itemRes.error) console.error(itemRes.error);
     if (fileRes.error) console.error(fileRes.error);
     if (issueRes.error) console.error(issueRes.error);
+    if (memberRes.error) console.error("Tower member load error", memberRes.error);
 
     setTower((towerRes.data as TowerRow | null) ?? null);
     setLatestDate(docketRes.data?.[0]?.docket_date ?? null);
@@ -281,6 +294,7 @@ export default function TowerRevisionsPage() {
     setItems((itemRes.data ?? []) as RevisionItem[]);
     setFiles((fileRes.data ?? []) as QualityFile[]);
     setIssueTypes((issueRes.data ?? []) as IssueType[]);
+    setTowerMembers((memberRes.data ?? []) as TowerMaterialMember[]);
     setLoading(false);
   }, [projectId, supabase, towerId]);
 
@@ -300,7 +314,10 @@ export default function TowerRevisionsPage() {
   }, [issueTypes]);
 
   const issueName = useCallback(
-    (id: string | null) => issueTypes.find((item) => item.id === id)?.name || "Other",
+    (id: string | null, otherIssueText?: string | null) =>
+      (id ? issueTypes.find((item) => item.id === id)?.name : null) ||
+      otherIssueText?.trim() ||
+      "Other",
     [issueTypes],
   );
 
@@ -430,10 +447,19 @@ export default function TowerRevisionsPage() {
   }
 
   async function saveFinding() {
-    if (!findingDraft || !findingDraft.finding.trim()) {
-      setMessage({ tone: "error", text: "Enter the client inspection finding." });
+    if (!findingDraft) return;
+
+    if (!findingDraft.issue_type_id) {
+      setMessage({ tone: "error", text: "Select a common issue or choose Other." });
       return;
     }
+
+    const isOtherIssue = findingDraft.issue_type_id === "__other__";
+    if (isOtherIssue && !findingDraft.other_issue_text.trim()) {
+      setMessage({ tone: "error", text: "Enter the issue details for Other." });
+      return;
+    }
+
     setFindingSaving(true);
     setMessage(null);
     try {
@@ -441,8 +467,7 @@ export default function TowerRevisionsPage() {
         data: { user },
       } = await supabase.auth.getUser();
       const hasAfter = findingDraft.afterFiles.length > 0;
-      const status: RevisionItem["status"] =
-        hasAfter && findingDraft.rectification_comment.trim() ? "Rectified" : "Open";
+      const status: RevisionItem["status"] = hasAfter ? "Rectified" : "Open";
 
       const { data, error } = await supabase
         .from("tower_revision_items")
@@ -450,12 +475,16 @@ export default function TowerRevisionsPage() {
           revision_id: findingDraft.revision_id,
           project_id: projectId,
           tower_id: towerId,
-          issue_type_id: findingDraft.issue_type_id || null,
+          issue_type_id: isOtherIssue ? null : findingDraft.issue_type_id,
+          other_issue_text: isOtherIssue
+            ? findingDraft.other_issue_text.trim()
+            : null,
           tower_segment: findingDraft.tower_segment.trim() || null,
           member_number: findingDraft.member_number.trim() || null,
           drawing_number: findingDraft.drawing_number.trim() || null,
-          finding: findingDraft.finding.trim(),
-          rectification_comment: findingDraft.rectification_comment.trim() || null,
+          finding: findingDraft.finding.trim() || null,
+          rectification_comment:
+            findingDraft.rectification_comment.trim() || null,
           status,
           created_by: user?.id ?? null,
         })
@@ -500,7 +529,8 @@ export default function TowerRevisionsPage() {
     setFindingEdit({
       id: item.id,
       revision_id: item.revision_id,
-      issue_type_id: item.issue_type_id || "",
+      issue_type_id: item.issue_type_id || "__other__",
+      other_issue_text: item.other_issue_text || "",
       tower_segment: item.tower_segment || "",
       member_number: item.member_number || "",
       drawing_number: item.drawing_number || "",
@@ -511,7 +541,19 @@ export default function TowerRevisionsPage() {
   }
 
   async function saveFindingEdit() {
-    if (!findingEdit?.finding.trim()) return;
+    if (!findingEdit) return;
+
+    if (!findingEdit.issue_type_id) {
+      setMessage({ tone: "error", text: "Select a common issue or choose Other." });
+      return;
+    }
+
+    const isOtherIssue = findingEdit.issue_type_id === "__other__";
+    if (isOtherIssue && !findingEdit.other_issue_text.trim()) {
+      setMessage({ tone: "error", text: "Enter the issue details for Other." });
+      return;
+    }
+
     setFindingEditSaving(true);
     try {
       const itemFiles = filesByItem.get(findingEdit.id) ?? [];
@@ -519,19 +561,23 @@ export default function TowerRevisionsPage() {
       const status =
         findingEdit.status === "Verified"
           ? "Verified"
-          : hasAfter && findingEdit.rectification_comment.trim()
+          : hasAfter
             ? "Rectified"
             : "Open";
 
       const { error } = await supabase
         .from("tower_revision_items")
         .update({
-          issue_type_id: findingEdit.issue_type_id || null,
+          issue_type_id: isOtherIssue ? null : findingEdit.issue_type_id,
+          other_issue_text: isOtherIssue
+            ? findingEdit.other_issue_text.trim()
+            : null,
           tower_segment: findingEdit.tower_segment.trim() || null,
           member_number: findingEdit.member_number.trim() || null,
           drawing_number: findingEdit.drawing_number.trim() || null,
-          finding: findingEdit.finding.trim(),
-          rectification_comment: findingEdit.rectification_comment.trim() || null,
+          finding: findingEdit.finding.trim() || null,
+          rectification_comment:
+            findingEdit.rectification_comment.trim() || null,
           status,
         })
         .eq("id", findingEdit.id);
@@ -688,8 +734,15 @@ export default function TowerRevisionsPage() {
     const itemFiles = filesByItem.get(item.id) ?? [];
     const before = itemFiles.some((file) => file.file_role === "before_photo");
     const after = itemFiles.some((file) => file.file_role === "after_photo");
-    const comment = Boolean(item.rectification_comment?.trim());
-    return { before, after, comment, complete: before && after && comment };
+    const issueSelected = Boolean(
+      item.issue_type_id || item.other_issue_text?.trim(),
+    );
+    return {
+      before,
+      after,
+      issueSelected,
+      complete: before && after && issueSelected,
+    };
   }
 
   if (loading) return <div className="p-8 text-sm text-slate-500">Loading Revisions…</div>;
@@ -798,9 +851,9 @@ export default function TowerRevisionsPage() {
                           <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                               <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">ITEM {String(item.item_number).padStart(3, "0")}</span><span className="font-bold text-slate-900">{issueName(item.issue_type_id)}</span><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{complete.complete ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Evidence Complete</span> : <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Evidence Incomplete</span>}</div>
+                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">ITEM {String(item.item_number).padStart(3, "0")}</span><span className="font-bold text-slate-900">{issueName(item.issue_type_id, item.other_issue_text)}</span><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{complete.complete ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Evidence Complete</span> : <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Evidence Incomplete</span>}</div>
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3"><span>Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
-                                <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.finding}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "Not recorded yet."}</div></div></div>
+                                <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.finding || "No additional client comment."}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
                                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]"><span className={`rounded-lg px-2 py-1 ${beforeCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Before {beforeCount ? `✓ (${beforeCount})` : "missing"}</span><span className={`rounded-lg px-2 py-1 ${item.rectification_comment?.trim() ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Comment {item.rectification_comment?.trim() ? "✓" : "missing"}</span><span className={`rounded-lg px-2 py-1 ${afterCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>After {afterCount ? `✓ (${afterCount})` : "missing"}</span></div>
                               </div>
                               <div className="flex shrink-0 gap-2"><button type="button" onClick={() => void openEvidence(item)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700"><Camera size={14} /> Evidence</button><button type="button" onClick={() => editFinding(item)} className="rounded-lg border border-slate-200 p-2 text-slate-600"><Pencil size={14} /></button></div>
@@ -839,12 +892,58 @@ export default function TowerRevisionsPage() {
       {findingDraft ? (
         <Modal title="Add Inspection Finding" subtitle={revisions.find((revision) => revision.id === findingDraft.revision_id)?.fli_number} onClose={() => setFindingDraft(null)} wide>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-            <Field label="Common issue"><select value={findingDraft.issue_type_id} onChange={(event) => setFindingDraft((current) => current ? { ...current, issue_type_id: event.target.value } : current)} className="input"><option value="">Other / not selected</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
-            <Field label="Tower segment"><input value={findingDraft.tower_segment} onChange={(event) => setFindingDraft((current) => current ? { ...current, tower_segment: event.target.value } : current)} placeholder="Body 2 / Peak / Leg…" className="input" /></Field>
-            <Field label="Member number"><input value={findingDraft.member_number} onChange={(event) => setFindingDraft((current) => current ? { ...current, member_number: event.target.value } : current)} placeholder="Optional" className="input" /></Field>
+            <Field label="Common issue"><select value={findingDraft.issue_type_id} onChange={(event) => setFindingDraft((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
+            {findingDraft.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingDraft.other_issue_text} onChange={(event) => setFindingDraft((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
+            <TowerMemberFields
+              members={towerMembers}
+              segment={findingDraft.tower_segment}
+              memberNumber={findingDraft.member_number}
+              onSegmentChange={(tower_segment) =>
+                setFindingDraft((current) => {
+                  if (!current) return current;
+                  const currentMemberStillMatches =
+                    !current.member_number ||
+                    towerMembers.some(
+                      (member) =>
+                        member.mark_no === current.member_number &&
+                        (member.tower_segment ?? "") === tower_segment,
+                    );
+                  return {
+                    ...current,
+                    tower_segment,
+                    member_number: currentMemberStillMatches
+                      ? current.member_number
+                      : "",
+                    drawing_number: currentMemberStillMatches
+                      ? current.drawing_number
+                      : "",
+                  };
+                })
+              }
+              onMemberNumberChange={(member_number) =>
+                setFindingDraft((current) =>
+                  current
+                    ? { ...current, member_number, drawing_number: "" }
+                    : current,
+                )
+              }
+              onSelectMember={(member) =>
+                setFindingDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        member_number: member.mark_no,
+                        tower_segment:
+                          member.tower_segment || current.tower_segment,
+                        drawing_number: member.drawing_number || "",
+                      }
+                    : current,
+                )
+              }
+            />
             <Field label="Drawing"><input value={findingDraft.drawing_number} onChange={(event) => setFindingDraft((current) => current ? { ...current, drawing_number: event.target.value } : current)} placeholder="Optional" className="input" /></Field>
           </div>
-          <div className="mt-3 grid gap-3 lg:grid-cols-2"><Field label="Client finding"><textarea rows={5} value={findingDraft.finding} onChange={(event) => setFindingDraft((current) => current ? { ...current, finding: event.target.value } : current)} placeholder="What was flagged during the inspection?" className="input" /></Field><Field label="Rectification comment"><textarea rows={5} value={findingDraft.rectification_comment} onChange={(event) => setFindingDraft((current) => current ? { ...current, rectification_comment: event.target.value } : current)} placeholder="What was changed / rectified? Can be added later." className="input" /></Field></div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2"><Field label="Client finding (optional)"><textarea rows={5} value={findingDraft.finding} onChange={(event) => setFindingDraft((current) => current ? { ...current, finding: event.target.value } : current)} placeholder="What was flagged during the inspection?" className="input" /></Field><Field label="Rectification comment (optional)"><textarea rows={5} value={findingDraft.rectification_comment} onChange={(event) => setFindingDraft((current) => current ? { ...current, rectification_comment: event.target.value } : current)} placeholder="What was changed / rectified? Can be added later." className="input" /></Field></div>
           <div className="mt-3 grid gap-3 lg:grid-cols-2"><PhotoChooser label="Before photo(s)" help="Evidence of the client finding before rectification." files={findingDraft.beforeFiles} onChange={(selected) => setFindingDraft((current) => current ? { ...current, beforeFiles: selected } : current)} /><PhotoChooser label="After photo(s)" help="Evidence after BC rectification. Can be added later." files={findingDraft.afterFiles} onChange={(selected) => setFindingDraft((current) => current ? { ...current, afterFiles: selected } : current)} /></div>
           <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setFindingDraft(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold">Cancel</button><button type="button" onClick={() => void saveFinding()} disabled={findingSaving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{findingSaving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Save Finding</button></div>
         </Modal>
@@ -853,13 +952,59 @@ export default function TowerRevisionsPage() {
       {findingEdit ? (
         <Modal title="Edit Finding" subtitle={`Item ${String(items.find((item) => item.id === findingEdit.id)?.item_number || 0).padStart(3, "0")}`} onClose={() => setFindingEdit(null)}>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Common issue"><select value={findingEdit.issue_type_id} onChange={(event) => setFindingEdit((current) => current ? { ...current, issue_type_id: event.target.value } : current)} className="input"><option value="">Other / not selected</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+            <Field label="Common issue"><select value={findingEdit.issue_type_id} onChange={(event) => setFindingEdit((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
+            {findingEdit.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingEdit.other_issue_text} onChange={(event) => setFindingEdit((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
             <Field label="Status"><select value={findingEdit.status} onChange={(event) => setFindingEdit((current) => current ? { ...current, status: event.target.value as RevisionItem["status"] } : current)} className="input"><option>Open</option><option>Rectified</option><option>Verified</option></select></Field>
-            <Field label="Tower segment"><input value={findingEdit.tower_segment} onChange={(event) => setFindingEdit((current) => current ? { ...current, tower_segment: event.target.value } : current)} className="input" /></Field>
-            <Field label="Member"><input value={findingEdit.member_number} onChange={(event) => setFindingEdit((current) => current ? { ...current, member_number: event.target.value } : current)} className="input" /></Field>
+            <TowerMemberFields
+              members={towerMembers}
+              segment={findingEdit.tower_segment}
+              memberNumber={findingEdit.member_number}
+              onSegmentChange={(tower_segment) =>
+                setFindingEdit((current) => {
+                  if (!current) return current;
+                  const currentMemberStillMatches =
+                    !current.member_number ||
+                    towerMembers.some(
+                      (member) =>
+                        member.mark_no === current.member_number &&
+                        (member.tower_segment ?? "") === tower_segment,
+                    );
+                  return {
+                    ...current,
+                    tower_segment,
+                    member_number: currentMemberStillMatches
+                      ? current.member_number
+                      : "",
+                    drawing_number: currentMemberStillMatches
+                      ? current.drawing_number
+                      : "",
+                  };
+                })
+              }
+              onMemberNumberChange={(member_number) =>
+                setFindingEdit((current) =>
+                  current
+                    ? { ...current, member_number, drawing_number: "" }
+                    : current,
+                )
+              }
+              onSelectMember={(member) =>
+                setFindingEdit((current) =>
+                  current
+                    ? {
+                        ...current,
+                        member_number: member.mark_no,
+                        tower_segment:
+                          member.tower_segment || current.tower_segment,
+                        drawing_number: member.drawing_number || "",
+                      }
+                    : current,
+                )
+              }
+            />
             <div className="md:col-span-2"><Field label="Drawing"><input value={findingEdit.drawing_number} onChange={(event) => setFindingEdit((current) => current ? { ...current, drawing_number: event.target.value } : current)} className="input" /></Field></div>
-            <div className="md:col-span-2"><Field label="Client finding"><textarea rows={4} value={findingEdit.finding} onChange={(event) => setFindingEdit((current) => current ? { ...current, finding: event.target.value } : current)} className="input" /></Field></div>
-            <div className="md:col-span-2"><Field label="Rectification comment"><textarea rows={4} value={findingEdit.rectification_comment} onChange={(event) => setFindingEdit((current) => current ? { ...current, rectification_comment: event.target.value } : current)} className="input" /></Field></div>
+            <div className="md:col-span-2"><Field label="Client finding (optional)"><textarea rows={4} value={findingEdit.finding} onChange={(event) => setFindingEdit((current) => current ? { ...current, finding: event.target.value } : current)} className="input" /></Field></div>
+            <div className="md:col-span-2"><Field label="Rectification comment (optional)"><textarea rows={4} value={findingEdit.rectification_comment} onChange={(event) => setFindingEdit((current) => current ? { ...current, rectification_comment: event.target.value } : current)} className="input" /></Field></div>
           </div>
           <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setFindingEdit(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold">Cancel</button><button type="button" onClick={() => void saveFindingEdit()} disabled={findingEditSaving} className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{findingEditSaving ? "Saving…" : "Save Changes"}</button></div>
         </Modal>
