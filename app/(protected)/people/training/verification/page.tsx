@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
   CheckCircle2,
   Eye,
   FileText,
@@ -290,11 +291,43 @@ export default function TrainingVerificationPage() {
         },
       );
 
-      const payload = await response.json().catch(() => null);
+      const responseText = await response.text();
+
+      let payload: {
+        error?: string;
+        notificationWarning?: string | null;
+        workflowStatus?: string;
+      } | null = null;
+
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText) as {
+            error?: string;
+            notificationWarning?: string | null;
+            workflowStatus?: string;
+          };
+        } catch {
+          payload = null;
+        }
+      }
 
       if (!response.ok) {
+        const serverMessage = clean(payload?.error);
+        const rawMessage = clean(responseText);
+
+        console.error("Training review action failed", {
+          status: response.status,
+          statusText: response.statusText,
+          response: rawMessage,
+          recordId: selected.id,
+          action,
+        });
+
         throw new Error(
-          payload?.error || "The Training review action failed.",
+          serverMessage ||
+            (rawMessage && !rawMessage.startsWith("<")
+              ? `Review failed (${response.status}): ${rawMessage.slice(0, 500)}`
+              : `Review failed (${response.status} ${response.statusText}). The review API returned HTML instead of JSON. Confirm app/api/training/review/[recordId]/route.ts exists and check the Next.js terminal for a route compile error.`),
         );
       }
 
@@ -321,6 +354,83 @@ export default function TrainingVerificationPage() {
           error instanceof Error
             ? error.message
             : "Unable to process the Training review.",
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function notifyReviewers() {
+    if (!selected) return;
+
+    setBusyAction("notify");
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(
+        `/api/training/review/${selected.id}/notify`,
+        {
+          method: "POST",
+        },
+      );
+
+      const responseText = await response.text();
+
+      let payload: {
+        error?: string;
+        notified?: number;
+        alreadyNotified?: number;
+        pushAttempted?: number;
+        message?: string;
+      } | null = null;
+
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText) as {
+            error?: string;
+            notified?: number;
+            alreadyNotified?: number;
+            pushAttempted?: number;
+            message?: string;
+          };
+        } catch {
+          payload = null;
+        }
+      }
+
+      if (!response.ok) {
+        const serverMessage = clean(payload?.error);
+        const rawMessage = clean(responseText);
+
+        throw new Error(
+          serverMessage ||
+            (rawMessage && !rawMessage.startsWith("<")
+              ? `Notification failed (${response.status}): ${rawMessage.slice(0, 500)}`
+              : `Notification failed (${response.status} ${response.statusText}). Confirm app/api/training/review/[recordId]/notify/route.ts exists.`),
+        );
+      }
+
+      const notified = Number(payload?.notified ?? 0);
+      const already = Number(payload?.alreadyNotified ?? 0);
+      const pushAttempted = Number(payload?.pushAttempted ?? 0);
+
+      setMessage({
+        tone: "success",
+        text:
+          payload?.message ||
+          `${notified} reviewer notification${notified === 1 ? "" : "s"} created${
+            already > 0
+              ? `; ${already} reviewer${already === 1 ? "" : "s"} already had one`
+              : ""
+          }${pushAttempted > 0 ? `; ${pushAttempted} push notification${pushAttempted === 1 ? "" : "s"} attempted` : ""}.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to notify Training reviewers.",
       });
     } finally {
       setBusyAction(null);
@@ -395,13 +505,26 @@ export default function TrainingVerificationPage() {
               </p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Link
                 href="/people/training/configuration/workflow"
                 className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
               >
                 Reviewer Settings
               </Link>
+              <button
+                type="button"
+                onClick={() => void notifyReviewers()}
+                disabled={!selected || Boolean(busyAction)}
+                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-bold text-blue-800 disabled:opacity-50"
+              >
+                {busyAction === "notify" ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <BellRing size={16} />
+                )}
+                Notify Reviewers
+              </button>
               <button
                 type="button"
                 onClick={() => void loadData()}
