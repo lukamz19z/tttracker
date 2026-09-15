@@ -1096,6 +1096,9 @@ export default function TrainingWorkflowConfigurationPage() {
             createdOrLinked?: number;
             metadataUpdated?: number;
             documentLinksRefreshed?: number;
+            documentsMoved?: number;
+            supersededArchived?: number;
+            legacyTrainingFoldersRemoved?: number;
             failures?: Array<{
               employeeName?: string;
               error?: string;
@@ -1120,6 +1123,13 @@ export default function TrainingWorkflowConfigurationPage() {
       const linksRefreshed = Number(
         payload?.documentLinksRefreshed ?? 0,
       );
+      const documentsMoved = Number(payload?.documentsMoved ?? 0);
+      const supersededArchived = Number(
+        payload?.supersededArchived ?? 0,
+      );
+      const legacyFoldersRemoved = Number(
+        payload?.legacyTrainingFoldersRemoved ?? 0,
+      );
 
       setMessage({
         tone: failed > 0 ? "error" : "success",
@@ -1129,7 +1139,11 @@ export default function TrainingWorkflowConfigurationPage() {
                 synced === 1 ? "" : "s"
               } synced; ${failed} failed. ${renamed} folder${
                 renamed === 1 ? "" : "s"
-              } renamed; ${metadataUpdated} document metadata item${
+              } renamed; ${documentsMoved} published file${
+                documentsMoved === 1 ? "" : "s"
+              } moved into the simplified folder structure; ${supersededArchived} superseded file${
+                supersededArchived === 1 ? "" : "s"
+              } archived; ${metadataUpdated} metadata item${
                 metadataUpdated === 1 ? "" : "s"
               } refreshed. ${
                 payload?.failures?.[0]?.error
@@ -1140,11 +1154,17 @@ export default function TrainingWorkflowConfigurationPage() {
                 synced === 1 ? "" : "s"
               } synced. ${renamed} folder${
                 renamed === 1 ? "" : "s"
-              } renamed, ${linked} linked/created, ${metadataUpdated} document metadata item${
+              } renamed, ${linked} linked/created, ${documentsMoved} published file${
+                documentsMoved === 1 ? "" : "s"
+              } moved, ${supersededArchived} superseded file${
+                supersededArchived === 1 ? "" : "s"
+              } archived, ${metadataUpdated} metadata item${
                 metadataUpdated === 1 ? "" : "s"
-              } refreshed and ${linksRefreshed} document link${
+              } refreshed, ${linksRefreshed} document link${
                 linksRefreshed === 1 ? "" : "s"
-              } refreshed.`,
+              } refreshed and ${legacyFoldersRemoved} empty legacy Training folder${
+                legacyFoldersRemoved === 1 ? "" : "s"
+              } removed.`,
       });
     } catch (error) {
       setMessage({
@@ -1284,8 +1304,8 @@ export default function TrainingWorkflowConfigurationPage() {
                 Missing folders can be provisioned here. The sync action also
                 checks linked folders against the employee&apos;s current payroll
                 ID and name, renames the existing SharePoint folder when needed,
-                and refreshes configured metadata on already-published Training
-                documents.
+                migrates tracked files out of the old employee Training subfolder,
+                archives superseded evidence, and refreshes configured metadata.
               </p>
             </div>
           </div>
@@ -1349,18 +1369,25 @@ export default function TrainingWorkflowConfigurationPage() {
               </Hint>
             </Field>
 
-            <Field label="Training subfolder">
-              <input
-                className={inputClass}
-                value={settings.training_subfolder_name}
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    training_subfolder_name: event.target.value,
-                  }))
-                }
-              />
-            </Field>
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+              <div className="text-sm font-black text-blue-950">
+                Simplified employee folder structure
+              </div>
+              <div className="mt-2 text-sm leading-6 text-blue-900">
+                The redundant employee <strong>Training</strong> subfolder is no
+                longer used. Published files now go directly to:
+                <div className="mt-2 rounded-xl bg-white px-3 py-2 font-mono text-xs text-slate-700">
+                  {clean(settings.sharepoint_base_folder) || "Employees"} /
+                  {" "}
+                  {"{payroll_id} - {employee_name}"} / Category
+                </div>
+                <div className="mt-2 rounded-xl bg-white px-3 py-2 font-mono text-xs text-slate-700">
+                  {clean(settings.sharepoint_base_folder) || "Employees"} /
+                  {" "}
+                  {"{payroll_id} - {employee_name}"} / Superseded
+                </div>
+              </div>
+            </div>
 
             <Field label="Default expiry warnings (days)">
               <input
@@ -1451,8 +1478,9 @@ export default function TrainingWorkflowConfigurationPage() {
                 </h3>
                 <p className="mt-1 text-sm leading-6 text-slate-600">
                   Use Sync after correcting an employee&apos;s payroll ID or name.
-                  TTTracker renames the existing folder by SharePoint item ID, so
-                  the Training subfolders and certificates stay inside the same
+                  TTTracker renames the existing folder by SharePoint item ID.
+                  Current files are moved directly into their category folder and
+                  superseded files are moved into the employee&apos;s Superseded
                   folder.
                 </p>
               </div>

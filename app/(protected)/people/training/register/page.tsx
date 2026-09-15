@@ -9,6 +9,7 @@ import {
 import Link from "next/link";
 import {
   ArrowLeft,
+  CheckSquare,
   Download,
   ExternalLink,
   Filter,
@@ -16,6 +17,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Square,
   UploadCloud,
 } from "lucide-react";
 
@@ -190,6 +192,31 @@ function csv(value: unknown) {
 export default function TrainingRegisterPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
+  const apiFetch = useCallback(
+    async (url: string, init: RequestInit = {}) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const headers = new Headers(init.headers);
+      headers.set(
+        "Authorization",
+        `Bearer ${session.access_token}`,
+      );
+
+      return fetch(url, {
+        ...init,
+        headers,
+        cache: "no-store",
+      });
+    },
+    [supabase],
+  );
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -207,6 +234,10 @@ export default function TrainingRegisterPage() {
   );
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>(
+    [],
+  );
   const [error, setError] = useState("");
 
   const loadData = useCallback(async () => {
@@ -472,6 +503,115 @@ export default function TrainingRegisterPage() {
     }
   }
 
+  const selectedSet = useMemo(
+    () => new Set(selectedRecordIds),
+    [selectedRecordIds],
+  );
+
+  function toggleRecordSelection(recordId: string) {
+    setSelectedRecordIds((current) =>
+      current.includes(recordId)
+        ? current.filter((id) => id !== recordId)
+        : [...current, recordId],
+    );
+  }
+
+  function selectFilteredEvidence() {
+    setSelectedRecordIds(
+      filtered
+        .filter((record) => Boolean(record.sharepoint_web_url))
+        .map((record) => record.id),
+    );
+  }
+
+  function clearSelectedEvidence() {
+    setSelectedRecordIds([]);
+  }
+
+  function downloadNameFromResponse(
+    response: Response,
+    fallback: string,
+  ) {
+    const disposition = response.headers.get("content-disposition") || "";
+
+    const utfMatch = disposition.match(
+      /filename\*=UTF-8''([^;]+)/i,
+    );
+
+    if (utfMatch?.[1]) {
+      try {
+        return decodeURIComponent(utfMatch[1]);
+      } catch {
+        return utfMatch[1];
+      }
+    }
+
+    const plainMatch = disposition.match(
+      /filename="?([^";]+)"?/i,
+    );
+
+    return plainMatch?.[1] || fallback;
+  }
+
+  async function downloadTrainingEvidence(recordIds: string[]) {
+    if (recordIds.length === 0) return;
+
+    setDownloading(true);
+    setError("");
+
+    try {
+      const response = await apiFetch("/api/training/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recordIds,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+
+        throw new Error(
+          payload?.error || "Training evidence export failed.",
+        );
+      }
+
+      const blob = await response.blob();
+      const fallback =
+        recordIds.length === 1
+          ? "Training-Evidence"
+          : `TTTracker-Training-Export-${new Date()
+              .toISOString()
+              .slice(0, 10)}.zip`;
+
+      const fileName = downloadNameFromResponse(
+        response,
+        fallback,
+      );
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Unable to download Training evidence.",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   function exportCsv() {
     const headers = [
       "Employee",
@@ -599,6 +739,42 @@ export default function TrainingRegisterPage() {
                 />
                 Refresh
               </button>
+              <button
+                type="button"
+                onClick={selectFilteredEvidence}
+                disabled={filtered.length === 0 || downloading}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700 disabled:opacity-50"
+              >
+                <CheckSquare size={16} />
+                Select Filtered
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void downloadTrainingEvidence(selectedRecordIds)
+                }
+                disabled={
+                  selectedRecordIds.length === 0 || downloading
+                }
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
+              >
+                {downloading ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Download size={16} />
+                )}
+                Download Selected ({selectedRecordIds.length})
+              </button>
+              {selectedRecordIds.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearSelectedEvidence}
+                  disabled={downloading}
+                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-black text-slate-600 disabled:opacity-50"
+                >
+                  Clear
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={exportCsv}
@@ -736,14 +912,20 @@ export default function TrainingRegisterPage() {
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4 text-sm font-black text-slate-700">
-            {filtered.length} record{filtered.length === 1 ? "" : "s"}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-4 text-sm font-black text-slate-700">
+            <span>
+              {filtered.length} record{filtered.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-xs text-slate-500">
+              Select published records to create a client evidence ZIP.
+            </span>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-[1400px] w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="w-14 px-4 py-3">Select</th>
                   <th className="px-4 py-3">Employee</th>
                   <th className="px-4 py-3">Training</th>
                   <th className="px-4 py-3">Certificate</th>
@@ -770,8 +952,40 @@ export default function TrainingRegisterPage() {
                     ? null
                     : trainingDaysUntil(record.expiry_date);
 
+                  const published = Boolean(
+                    record.sharepoint_web_url,
+                  );
+                  const selected = selectedSet.has(record.id);
+
                   return (
                     <tr key={record.id} className="align-top hover:bg-slate-50">
+                      <td className="px-4 py-4">
+                        <button
+                          type="button"
+                          disabled={!published || downloading}
+                          onClick={() =>
+                            toggleRecordSelection(record.id)
+                          }
+                          className={
+                            published
+                              ? "text-blue-700 disabled:opacity-50"
+                              : "text-slate-300"
+                          }
+                          title={
+                            published
+                              ? selected
+                                ? "Remove from client export"
+                                : "Add to client export"
+                              : "No published SharePoint evidence"
+                          }
+                        >
+                          {selected ? (
+                            <CheckSquare size={20} />
+                          ) : (
+                            <Square size={20} />
+                          )}
+                        </button>
+                      </td>
                       <td className="px-4 py-4">
                         <div className="font-black text-slate-950">
                           {employee?.full_name ?? "Unknown employee"}
@@ -831,15 +1045,30 @@ export default function TrainingRegisterPage() {
                       </td>
                       <td className="px-4 py-4">
                         {record.sharepoint_web_url ? (
-                          <a
-                            href={record.sharepoint_web_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 font-black text-blue-700 hover:text-blue-900"
-                          >
-                            <ExternalLink size={15} />
-                            Open
-                          </a>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <a
+                              href={record.sharepoint_web_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1.5 font-black text-blue-700 hover:text-blue-900"
+                            >
+                              <ExternalLink size={15} />
+                              Open
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void downloadTrainingEvidence([
+                                  record.id,
+                                ])
+                              }
+                              disabled={downloading}
+                              className="inline-flex items-center gap-1.5 font-black text-emerald-700 hover:text-emerald-900 disabled:opacity-50"
+                            >
+                              <Download size={15} />
+                              Download
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-slate-400">Not published</span>
                         )}
@@ -851,7 +1080,7 @@ export default function TrainingRegisterPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={11}
                       className="px-5 py-12 text-center text-sm font-semibold text-slate-500"
                     >
                       No Training records match the selected filters.

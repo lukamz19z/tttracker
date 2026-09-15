@@ -23,6 +23,13 @@ export type SharePointDriveItem = {
     id?: string;
     path?: string;
   };
+  folder?: {
+    childCount?: number;
+  };
+  file?: {
+    mimeType?: string;
+  };
+  size?: number;
 };
 
 type GraphDriveList = {
@@ -180,7 +187,7 @@ export async function listDriveChildren({
       driveId,
     )}/items/${encodeURIComponent(
       parentItemId,
-    )}/children?$select=id,name,webUrl,parentReference`,
+    )}/children?$select=id,name,webUrl,parentReference,folder,file,size`,
   );
 }
 
@@ -296,6 +303,47 @@ export async function uploadDriveItemContent({
   return (await response.json()) as SharePointDriveItem;
 }
 
+export async function downloadDriveItemContent({
+  driveId,
+  itemId,
+}: {
+  driveId: string;
+  itemId: string;
+}) {
+  const token = await getGraphAccessToken();
+
+  const response = await fetch(
+    graphUrl(
+      `/drives/${encodeURIComponent(
+        driveId,
+      )}/items/${encodeURIComponent(itemId)}/content`,
+    ),
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+      redirect: "follow",
+    },
+  );
+
+  if (!response.ok) {
+    const responseBody = await response.text();
+
+    throw new Error(
+      `Microsoft Graph file download failed (${response.status} ${response.statusText}): ${responseBody}`,
+    );
+  }
+
+  return {
+    content: new Uint8Array(await response.arrayBuffer()),
+    contentType:
+      response.headers.get("content-type") ||
+      "application/octet-stream",
+  };
+}
+
 export async function renameDriveItem({
   driveId,
   itemId,
@@ -313,6 +361,31 @@ export async function renameDriveItem({
       method: "PATCH",
       body: JSON.stringify({
         name,
+      }),
+    },
+  );
+}
+
+export async function moveDriveItem({
+  driveId,
+  itemId,
+  parentItemId,
+}: {
+  driveId: string;
+  itemId: string;
+  parentItemId: string;
+}) {
+  return graphRequest<SharePointDriveItem>(
+    `/drives/${encodeURIComponent(
+      driveId,
+    )}/items/${encodeURIComponent(itemId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        parentReference: {
+          id: parentItemId,
+        },
+        "@microsoft.graph.conflictBehavior": "rename",
       }),
     },
   );

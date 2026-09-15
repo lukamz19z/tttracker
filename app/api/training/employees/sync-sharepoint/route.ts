@@ -97,6 +97,9 @@ export async function POST(request: Request) {
       recordsChecked: number;
       metadataUpdated: number;
       documentLinksRefreshed: number;
+      documentsMoved: number;
+      supersededArchived: number;
+      legacyTrainingFolderRemoved: boolean;
     }> = [];
 
     const failures: Array<{
@@ -164,6 +167,17 @@ export async function POST(request: Request) {
         (total, item) => total + item.documentLinksRefreshed,
         0,
       ),
+      documentsMoved: successes.reduce(
+        (total, item) => total + item.documentsMoved,
+        0,
+      ),
+      supersededArchived: successes.reduce(
+        (total, item) => total + item.supersededArchived,
+        0,
+      ),
+      legacyTrainingFoldersRemoved: successes.filter(
+        (item) => item.legacyTrainingFolderRemoved,
+      ).length,
       successes,
       failures,
     });

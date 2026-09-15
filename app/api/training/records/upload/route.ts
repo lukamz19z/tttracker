@@ -9,7 +9,11 @@ import {
   roleCanManageTraining,
   trainingApiError,
 } from "@/lib/training/server";
-import { ensureEmployeeBaseTrainingFolder, publishApprovedTrainingRecord } from "@/lib/training/sharepoint";
+import {
+  archiveSupersededTrainingRecord,
+  ensureEmployeeBaseTrainingFolder,
+  publishApprovedTrainingRecord,
+} from "@/lib/training/sharepoint";
 import { createTrainingNotifications } from "@/lib/training/notifications";
 
 export const runtime = "nodejs";
@@ -650,6 +654,14 @@ export async function POST(request: Request) {
 
       if (supersedesRecordId) {
         const supersededAt = new Date().toISOString();
+
+        // The new evidence is already safely in SharePoint at this point.
+        // Move the old published evidence into the employee Superseded folder
+        // before the database marks that record as superseded.
+        await archiveSupersededTrainingRecord({
+          service,
+          recordId: supersedesRecordId,
+        });
 
         const { error: supersedeError } = await service
           .from("employee_training_records")

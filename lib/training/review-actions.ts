@@ -5,7 +5,10 @@ import {
   userCanReviewTraining,
 } from "@/lib/training/server";
 import { createTrainingNotifications } from "@/lib/training/notifications";
-import { publishApprovedTrainingRecord } from "@/lib/training/sharepoint";
+import {
+  archiveSupersededTrainingRecord,
+  publishApprovedTrainingRecord,
+} from "@/lib/training/sharepoint";
 
 export type TrainingReviewAction =
   | "approve"
@@ -377,6 +380,14 @@ export async function executeTrainingReviewAction({
     }
 
     if (trainingRecord.supersedes_record_id) {
+      // Archive the previous SharePoint evidence only after the replacement
+      // has published successfully. If archiving fails, the approval is not
+      // finalised and the reviewer can retry safely.
+      await archiveSupersededTrainingRecord({
+        service,
+        recordId: trainingRecord.supersedes_record_id,
+      });
+
       const { error: supersedeError } = await service
         .from("employee_training_records")
         .update({
