@@ -3,10 +3,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import {
-  authUserEmailMap,
   createDocketAdminSupabase,
   requireAuthenticatedProjectUser,
 } from "@/lib/dockets/server";
+import {
+  resolveSystemUserIdentity,
+  resolveSystemUserIdentityById,
+} from "@/lib/dockets/system-user-identity";
 import { isConfiguredBcReviewer } from "@/lib/dockets/reviewers";
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
 import { loadSystemPdfBranding } from "@/lib/branding/server";
@@ -85,6 +88,8 @@ type DocketRow = {
   leading_hand: string | null;
   approval_status: string | null;
   bc_rep_name: string | null;
+  bc_rep_email?: string | null;
+  bc_rep_user_id?: string | null;
   bc_signature_data_url?: string | null;
   bc_signed_at?: string | null;
   bc_submitted_by?: string | null;
@@ -1213,16 +1218,11 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const reviewerMap = await authUserEmailMap(admin, [user.id]);
-    const reviewer = reviewerMap.get(user.id);
+    const reviewerIdentity = await resolveSystemUserIdentity(admin, user);
 
     const reviewedAt = new Date().toISOString();
-    const reviewerName =
-      reviewer?.name ||
-      user.user_metadata?.full_name ||
-      user.user_metadata?.name ||
-      null;
-    const reviewerEmail = reviewer?.email || user.email || null;
+    const reviewerName = reviewerIdentity.name;
+    const reviewerEmail = reviewerIdentity.email;
 
     if (body.action === "request_changes") {
       const { error: docketUpdateError } = await admin
@@ -1295,10 +1295,10 @@ export async function POST(request: Request, context: RouteContext) {
       ]);
 
       if (docket.bc_submitted_by) {
-        const submitterMap = await authUserEmailMap(admin, [
+        const submitter = await resolveSystemUserIdentityById(
+          admin,
           docket.bc_submitted_by,
-        ]);
-        const submitter = submitterMap.get(docket.bc_submitted_by);
+        );
 
         if (submitter?.email) {
           const bundle = await loadPdfBundle(admin, docket);

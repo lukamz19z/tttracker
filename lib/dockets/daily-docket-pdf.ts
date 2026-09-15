@@ -105,6 +105,35 @@ const C = {
 function text(value: unknown) {
   return value === null || value === undefined ? "" : String(value);
 }
+
+function normaliseIdentityEmail(value: unknown) {
+  return text(value).trim().toLowerCase();
+}
+
+function normaliseIdentityName(name: unknown, email: unknown) {
+  const rawName = text(name).trim();
+  const normalisedEmail = normaliseIdentityEmail(email);
+
+  if (!rawName) return "";
+  if (!normalisedEmail) return rawName;
+
+  // Prevent old/legacy values such as "person@email.com person@email.com"
+  // or "Full Name person@email.com" from rendering a duplicated email.
+  return rawName
+    .split(/\s+/)
+    .filter((part) => part.toLowerCase() !== normalisedEmail)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function identityLabel(name: unknown, email: unknown) {
+  const safeEmail = normaliseIdentityEmail(email);
+  const safeName = normaliseIdentityName(name, safeEmail);
+
+  if (safeName && safeEmail) return `${safeName} · ${safeEmail}`;
+  return safeName || safeEmail || "";
+}
 function number(value: unknown) {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
@@ -759,20 +788,45 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   function signatureCard(title: string, name: unknown, email: unknown, approvedAt: unknown, signature: unknown) {
     ensure(35);
     const h = 31;
+    const safeEmail = normaliseIdentityEmail(email);
+    const safeName = normaliseIdentityName(name, safeEmail);
+
     setFill(C.pale); setDraw(C.border); doc.roundedRect(margin, y, contentWidth, h, 1.5, 1.5, "FD");
     doc.setFont("helvetica", "bold"); doc.setFontSize(8); setText(C.navy);
     doc.text(title.toUpperCase(), margin + 3, y + 5);
     setFill(C.white); doc.rect(margin + 3, y + 8, 54, 19, "F");
+
     if (isPngDataUrl(signature)) {
-      try { doc.addImage(text(signature), "PNG", margin + 5, y + 9, 50, 16, undefined, "FAST"); }
-      catch { doc.setFont("helvetica", "italic"); doc.setFontSize(7); setText(C.muted); doc.text("Signature unavailable", margin + 6, y + 18); }
+      try {
+        doc.addImage(text(signature), "PNG", margin + 5, y + 9, 50, 16, undefined, "FAST");
+      } catch {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(7);
+        setText(C.muted);
+        doc.text("Signature unavailable", margin + 6, y + 18);
+      }
     } else {
-      doc.setFont("helvetica", "italic"); doc.setFontSize(7); setText(C.muted); doc.text("No signature recorded", margin + 6, y + 18);
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(7);
+      setText(C.muted);
+      doc.text("No signature recorded", margin + 6, y + 18);
     }
+
     const dx = margin + 64;
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); setText(C.navy); doc.text(text(name) || "—", dx, y + 12);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7.3); setText(C.slate);
-    if (text(email)) doc.text(text(email), dx, y + 18);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    setText(C.navy);
+    doc.text(safeName || safeEmail || "—", dx, y + 12);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.3);
+    setText(C.slate);
+
+    if (safeEmail && safeEmail !== safeName.toLowerCase()) {
+      doc.text(safeEmail, dx, y + 18);
+    }
+
     doc.text(`Approved: ${formatDateTime(approvedAt)}`, dx, y + 24);
     y += h + 4;
   }
@@ -786,9 +840,18 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
     ["Weather", text(data.docket.weather) || "—"],
     ["Primary Tower", towerDisplayName(data, primaryTowerId)],
     ["Towers Worked", workedTowers.map(id => towerDisplayName(data, id)).join(", ") || tower],
-    ["BC Representative", text(data.docket.bc_rep_name) || "—"],
+    [
+      "BC Representative",
+      identityLabel(data.docket.bc_rep_name, data.docket.bc_rep_email) || "—",
+    ],
     ["Document Status", `${state} · ${rev}`],
-    ["Client Representative", text(data.docket.client_rep_name) || (state === "DRAFT" ? "Pending approval" : "—")],
+    [
+      "Client Representative",
+      identityLabel(
+        data.docket.client_approved_name || data.docket.client_rep_name,
+        data.docket.client_approved_email,
+      ) || (state === "DRAFT" ? "Pending approval" : "—"),
+    ],
   ]);
 
   const dailySummary = text(data.docket.daily_site_summary).trim();
@@ -1267,7 +1330,7 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   signatureCard(
     "BC Representative Sign-Off",
     data.docket.bc_rep_name,
-    "",
+    data.docket.bc_rep_email,
     data.docket.bc_signed_at || data.docket.bc_submitted_at,
     data.docket.bc_signature_data_url,
   );

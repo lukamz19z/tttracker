@@ -34,7 +34,6 @@ type ClientAction = "approve" | "request_changes";
 
 type ClientReviewBody = {
   action?: ClientAction;
-  name?: string;
   signatureDataUrl?: string;
   comments?: string;
 };
@@ -62,6 +61,8 @@ type DocketRow = {
   leading_hand: string | null;
   approval_status: string | null;
   bc_rep_name: string | null;
+  bc_rep_email?: string | null;
+  bc_rep_user_id?: string | null;
   bc_signature_data_url?: string | null;
   bc_signed_at?: string | null;
   bc_approved_at?: string | null;
@@ -495,7 +496,9 @@ function publicDocketPayload({
     crew: docket.crew,
     leadingHand: docket.leading_hand,
     bcRepresentative: docket.bc_rep_name,
+    bcRepresentativeEmail: docket.bc_rep_email ?? null,
     bcApprovedBy: docket.bc_approved_name,
+    bcApprovedEmail: docket.bc_approved_email ?? null,
     bcApprovedAt: docket.bc_approved_at,
     project: {
       name: project.name,
@@ -935,6 +938,21 @@ export async function GET(_request: Request, context: RouteContext) {
       );
     }
 
+    const signerName = String(approval.recipient_name ?? "").trim();
+    const signerEmail = String(approval.recipient_email ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (!signerName || !signerEmail) {
+      return NextResponse.json(
+        {
+          error:
+            "This approval link is not linked to a complete client contact. Ask BC to reissue the Daily Docket approval.",
+        },
+        { status: 409 },
+      );
+    }
+
     const bundle = await loadBundle(admin, approval.docket_id);
 
     if (bundle.docket.approval_status !== "client_pending") {
@@ -1028,16 +1046,8 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    const name = String(body.name ?? "").trim();
     const comments = String(body.comments ?? "").trim();
     const signatureDataUrl = String(body.signatureDataUrl ?? "").trim();
-
-    if (!name) {
-      return NextResponse.json(
-        { error: "Enter your name before submitting your response." },
-        { status: 400 },
-      );
-    }
 
     if (body.action === "request_changes" && !comments) {
       return NextResponse.json(
@@ -1064,6 +1074,23 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json(
         { error: unavailable || "This approval link is invalid." },
         { status: 410 },
+      );
+    }
+
+    // The client identity is fixed to the configured contact attached to this
+    // secure approval token. It is not supplied by the browser.
+    const signerName = String(approval.recipient_name ?? "").trim();
+    const signerEmail = String(approval.recipient_email ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (!signerName || !signerEmail) {
+      return NextResponse.json(
+        {
+          error:
+            "This approval link is not linked to a complete client contact. Ask BC to reissue the Daily Docket approval.",
+        },
+        { status: 409 },
       );
     }
 
@@ -1136,8 +1163,7 @@ export async function POST(request: Request, context: RouteContext) {
     claimedAt = now;
     claimAdmin = admin;
 
-    const recipientEmail =
-      String(approval.recipient_email ?? "").trim().toLowerCase() || null;
+    const recipientEmail = signerEmail;
 
     if (body.action === "request_changes") {
       const { error: docketUpdateError } = await admin
@@ -1158,7 +1184,7 @@ export async function POST(request: Request, context: RouteContext) {
         .from("tower_docket_approvals")
         .update({
           status: "changes_requested",
-          reviewed_by_name: name,
+          reviewed_by_name: signerName,
           reviewed_by_email: recipientEmail,
           reviewed_at: now,
           comments: comments || null,
@@ -1198,7 +1224,7 @@ export async function POST(request: Request, context: RouteContext) {
           event_type: "client_changes_requested",
           revision: approvalRevision,
           performed_by: null,
-          performed_by_name: name,
+          performed_by_name: signerName,
           performed_by_email: recipientEmail,
           comments: comments || null,
           metadata: {
@@ -1262,7 +1288,7 @@ export async function POST(request: Request, context: RouteContext) {
                   </tr>
                   <tr>
                     <td style="padding:7px 0;color:#64748b">Client Representative</td>
-                    <td style="padding:7px 0">${escapeHtml(name)}</td>
+                    <td style="padding:7px 0">${escapeHtml(signerName)}</td>
                   </tr>
                   ${
                     comments
@@ -1348,10 +1374,10 @@ export async function POST(request: Request, context: RouteContext) {
         bcApprovalData.signature_data_url || null,
       bc_approval_signature_data_url:
         bcApprovalData.signature_data_url || null,
-      client_rep_name: name,
+      client_rep_name: signerName,
       signed_date: now.slice(0, 10),
       client_approved_at: now,
-      client_approved_name: name,
+      client_approved_name: signerName,
       client_approved_email: recipientEmail,
       client_signature_data_url: signatureDataUrl,
       finalised_at: now,
@@ -1413,12 +1439,12 @@ export async function POST(request: Request, context: RouteContext) {
 
         client_submitted_at: now,
         client_approved_at: now,
-        client_approved_name: name,
+        client_approved_name: signerName,
         client_approved_email: recipientEmail,
         client_signature_data_url: signatureDataUrl,
 
         // Compatibility fields already used by the existing docket UI/PDF.
-        client_rep_name: name,
+        client_rep_name: signerName,
         signed_date: now.slice(0, 10),
 
         finalised_at: now,
@@ -1483,12 +1509,12 @@ export async function POST(request: Request, context: RouteContext) {
       .from("tower_docket_approvals")
       .update({
         status: "approved",
-        reviewed_by_name: name,
+        reviewed_by_name: signerName,
         reviewed_by_email: recipientEmail,
         reviewed_at: now,
         comments: comments || null,
         client_signature_data_url: signatureDataUrl,
-        client_signed_name: name,
+        client_signed_name: signerName,
         client_signed_email: recipientEmail,
         client_signed_at: now,
       })
@@ -1535,7 +1561,7 @@ export async function POST(request: Request, context: RouteContext) {
           event_type: "client_approved",
           revision: approvalRevision,
           performed_by: null,
-          performed_by_name: name,
+          performed_by_name: signerName,
           performed_by_email: recipientEmail,
           comments: comments || null,
           metadata: {
@@ -1549,7 +1575,7 @@ export async function POST(request: Request, context: RouteContext) {
           event_type: "final_published_to_sharepoint",
           revision: approvalRevision,
           performed_by: null,
-          performed_by_name: name,
+          performed_by_name: signerName,
           performed_by_email: recipientEmail,
           comments: published.item.webUrl ?? null,
           metadata: {
@@ -1603,7 +1629,7 @@ export async function POST(request: Request, context: RouteContext) {
           event_type: "final_client_recipients_resolved",
           revision: approvalRevision,
           performed_by: null,
-          performed_by_name: name,
+          performed_by_name: signerName,
           performed_by_email: recipientEmail,
           metadata: {
             client_final_recipient_names: finalContacts.map(
@@ -1691,7 +1717,7 @@ export async function POST(request: Request, context: RouteContext) {
                 </tr>
                 <tr>
                   <td style="padding:7px 0;color:#64748b">Client Representative</td>
-                  <td style="padding:7px 0">${escapeHtml(name)}</td>
+                  <td style="padding:7px 0">${escapeHtml(signerName)}</td>
                 </tr>
                 <tr>
                   <td style="padding:7px 0;color:#64748b">Approved</td>

@@ -7,12 +7,15 @@ import TowerMemberFields, { type TowerMaterialMember } from "@/components/qualit
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import {
+  resolveSystemUserIdentity,
+  type SystemUserIdentity,
+} from "@/lib/dockets/system-user-identity";
+import {
   SECTION_PROGRESS_WEIGHTS,
   SECTION_V2_DEFS,
   calculateHours,
   calculateProductionHours,
   delayHoursForWorker,
-  calculateLabourRows,
   calculateLabourTotals,
   calculateMobilisationManhours,
   calculateMobilisationWorkerCount,
@@ -396,6 +399,8 @@ type DocketRecord = {
   rfi_references?: string[] | null;
   missing_items_bolts: string | null;
   bc_rep_name: string | null;
+  bc_rep_email?: string | null;
+  bc_rep_user_id?: string | null;
   client_rep_name: string | null;
   signed_date: string | null;
   docket_file_url: string | null;
@@ -419,10 +424,12 @@ type DocketRecord = {
   bc_submitted_at?: string | null;
   bc_approved_at?: string | null;
   bc_approved_name?: string | null;
+  bc_approved_email?: string | null;
   bc_signature_data_url?: string | null;
   bc_signed_at?: string | null;
   client_approved_at?: string | null;
   client_approved_name?: string | null;
+  client_approved_email?: string | null;
   draft_sharepoint_web_url?: string | null;
   final_sharepoint_web_url?: string | null;
 };
@@ -1216,12 +1223,23 @@ export default function DailyDocketForm({
     rfiReferencesToText(initialDocket?.rfi_references)
   );
   const [bcRepName, setBcRepName] = useState(toStringValue(initialDocket?.bc_rep_name));
+  const [bcRepEmail, setBcRepEmail] = useState(toStringValue(initialDocket?.bc_rep_email));
+  const [bcRepUserId, setBcRepUserId] = useState(toStringValue(initialDocket?.bc_rep_user_id));
+  const [currentUserIdentity, setCurrentUserIdentity] = useState<SystemUserIdentity | null>(null);
+  const [signoffIdentityLoading, setSignoffIdentityLoading] = useState(true);
+  const [signoffIdentityError, setSignoffIdentityError] = useState("");
   const [bcSignatureDataUrl, setBcSignatureDataUrl] = useState(
     toStringValue(initialDocket?.bc_signature_data_url)
   );
   const [bcSignedAt, setBcSignedAt] = useState(toStringValue(initialDocket?.bc_signed_at));
   const [clientRepName, setClientRepName] = useState(toStringValue(initialDocket?.client_rep_name));
   const [signedDate, setSignedDate] = useState(toStringValue(initialDocket?.signed_date));
+  const [bcApprovedName, setBcApprovedName] = useState(toStringValue(initialDocket?.bc_approved_name));
+  const [bcApprovedEmail, setBcApprovedEmail] = useState(toStringValue(initialDocket?.bc_approved_email));
+  const [bcApprovedAt, setBcApprovedAt] = useState(toStringValue(initialDocket?.bc_approved_at));
+  const [clientApprovedName, setClientApprovedName] = useState(toStringValue(initialDocket?.client_approved_name));
+  const [clientApprovedEmail, setClientApprovedEmail] = useState(toStringValue(initialDocket?.client_approved_email));
+  const [clientApprovedAt, setClientApprovedAt] = useState(toStringValue(initialDocket?.client_approved_at));
   const [docketFile, setDocketFile] = useState<File | null>(null);
   const [existingDocketFileUrl, setExistingDocketFileUrl] = useState(toStringValue(initialDocket?.docket_file_url));
   const [sharePointUrl, setSharePointUrl] = useState(toStringValue(initialDocket?.sharepoint_web_url));
@@ -1273,6 +1291,7 @@ export default function DailyDocketForm({
   const [defectMembers, setDefectMembers] = useState<TowerMaterialMember[]>([]);
   const [towerDefectOptions, setTowerDefectOptions] = useState<ExistingTowerDefect[]>([]);
   const [defectLinkSelection, setDefectLinkSelection] = useState("");
+  const [defectStatusBusyId, setDefectStatusBusyId] = useState("");
   const [primaryWorkActivity, setPrimaryWorkActivity] = useState<ProductionActivity>("mixed");
   const [primaryWorkNotes, setPrimaryWorkNotes] = useState("");
   const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
@@ -1360,6 +1379,60 @@ export default function DailyDocketForm({
   function collapseAllSections() {
     setOpenSections(new Set());
   }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSignoffIdentity() {
+      setSignoffIdentityLoading(true);
+      setSignoffIdentityError("");
+
+      try {
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (error || !user) {
+          throw new Error("You must be signed in to TTTracker before signing this Daily Docket.");
+        }
+
+        const identity = await resolveSystemUserIdentity(supabase, user);
+
+        if (cancelled) return;
+
+        setCurrentUserIdentity(identity);
+
+        // For an unsigned docket, show the current logged-in identity immediately.
+        // Existing signed dockets retain the identity that was stored with the signature.
+        if (!bcSignatureDataUrl) {
+          setBcRepName(identity.name);
+          setBcRepEmail(identity.email);
+          setBcRepUserId(identity.userId);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCurrentUserIdentity(null);
+          setSignoffIdentityError(
+            error instanceof Error
+              ? error.message
+              : "Your TTTracker sign-off identity could not be loaded.",
+          );
+        }
+      } finally {
+        if (!cancelled) setSignoffIdentityLoading(false);
+      }
+    }
+
+    void loadSignoffIdentity();
+
+    return () => {
+      cancelled = true;
+    };
+    // The browser client is recreated by the existing page component. We only
+    // resolve the signed-in identity when the mounted docket/user context changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, towerId]);
 
   const qualityApiFetch = useCallback(
     async (
@@ -2082,10 +2155,18 @@ export default function DailyDocketForm({
         setIncidentNotes(toStringValue(initialDocket.incident_notes));
 
         setBcRepName(toStringValue(initialDocket.bc_rep_name));
+        setBcRepEmail(toStringValue(initialDocket.bc_rep_email));
+        setBcRepUserId(toStringValue(initialDocket.bc_rep_user_id));
         setBcSignatureDataUrl(toStringValue(initialDocket.bc_signature_data_url));
         setBcSignedAt(toStringValue(initialDocket.bc_signed_at));
         setClientRepName(toStringValue(initialDocket.client_rep_name));
         setSignedDate(toStringValue(initialDocket.signed_date));
+        setBcApprovedName(toStringValue(initialDocket.bc_approved_name));
+        setBcApprovedEmail(toStringValue(initialDocket.bc_approved_email));
+        setBcApprovedAt(toStringValue(initialDocket.bc_approved_at));
+        setClientApprovedName(toStringValue(initialDocket.client_approved_name));
+        setClientApprovedEmail(toStringValue(initialDocket.client_approved_email));
+        setClientApprovedAt(toStringValue(initialDocket.client_approved_at));
         setExistingDocketFileUrl(toStringValue(initialDocket.docket_file_url));
         setSharePointUrl(toStringValue(initialDocket.sharepoint_web_url));
         setSharePointStatus(toStringValue(initialDocket.sharepoint_sync_status));
@@ -2292,10 +2373,18 @@ export default function DailyDocketForm({
       setIncidentNotes(toStringValue(data.incident_notes));
 
       setBcRepName(toStringValue(data.bc_rep_name));
+      setBcRepEmail(toStringValue(data.bc_rep_email));
+      setBcRepUserId(toStringValue(data.bc_rep_user_id));
       setBcSignatureDataUrl(toStringValue(data.bc_signature_data_url));
       setBcSignedAt(toStringValue(data.bc_signed_at));
       setClientRepName(toStringValue(data.client_rep_name));
       setSignedDate(toStringValue(data.signed_date));
+      setBcApprovedName(toStringValue(data.bc_approved_name));
+      setBcApprovedEmail(toStringValue(data.bc_approved_email));
+      setBcApprovedAt(toStringValue(data.bc_approved_at));
+      setClientApprovedName(toStringValue(data.client_approved_name));
+      setClientApprovedEmail(toStringValue(data.client_approved_email));
+      setClientApprovedAt(toStringValue(data.client_approved_at));
       setExistingDocketFileUrl(toStringValue(data.docket_file_url));
       setSharePointUrl(toStringValue(data.sharepoint_web_url));
       setSharePointStatus(toStringValue(data.sharepoint_sync_status));
@@ -4345,6 +4434,8 @@ export default function DailyDocketForm({
       raw_manhours: totalLabourHours,
       production_manhours: totalProductionHours,
       bc_rep_name: bcRepName.trim() || null,
+      bc_rep_email: bcRepEmail.trim().toLowerCase() || null,
+      bc_rep_user_id: bcRepUserId.trim() || null,
       bc_signature_data_url: bcSignatureDataUrl || null,
       bc_signed_at: bcSignatureDataUrl
         ? bcSignedAt || new Date().toISOString()
@@ -5368,6 +5459,85 @@ export default function DailyDocketForm({
     }
   }
 
+  async function updateLinkedDefectStatus(
+    defect: LinkedDocketDefect,
+    nextStatus: ExistingTowerDefect["status"],
+  ) {
+    if (locked || isView || defectStatusBusyId) return;
+    if (defect.status === nextStatus) return;
+
+    if (
+      nextStatus === "Closed" &&
+      !window.confirm(
+        `Close ${defect.defect_number || "this Defect"}? This will close the same controlled Defect shown on the tower Defects page.`,
+      )
+    ) {
+      return;
+    }
+
+    setDefectStatusBusyId(defect.id);
+
+    try {
+      const response = await qualityApiFetch(
+        `/api/quality/defects/${encodeURIComponent(defect.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus }),
+        },
+      );
+
+      const payload = (await response.json()) as {
+        defect?: ExistingTowerDefect;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.defect) {
+        throw new Error(
+          payload.error || "The Defect status could not be updated.",
+        );
+      }
+
+      const updated = payload.defect;
+
+      setLinkedDocketDefects((current) =>
+        current.map((row) =>
+          row.id === defect.id
+            ? {
+                ...row,
+                ...updated,
+                link_id: row.link_id,
+                link_type: row.link_type,
+              }
+            : row,
+        ),
+      );
+
+      setTowerDefectOptions((current) =>
+        current.map((row) => (row.id === defect.id ? updated : row)),
+      );
+
+      if (payload.warning) {
+        window.alert(payload.warning);
+      }
+    } catch (error) {
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "The Defect status could not be updated.",
+      );
+    } finally {
+      setDefectStatusBusyId("");
+    }
+  }
+
+  function openTowerDefectRegister() {
+    router.push(
+      `/project/${encodeURIComponent(projectId)}/tower/${encodeURIComponent(towerId)}/defects`,
+    );
+  }
+
   async function syncDocketDefects(docketIdValue: string) {
     // Remove only the Daily Docket association. Never delete the controlled
     // Defect record from the Defect Register.
@@ -5925,6 +6095,26 @@ export default function DailyDocketForm({
   function handleBcSignatureChange(value: string) {
     if (isView || locked) return;
 
+    if (value && !currentUserIdentity) {
+      window.alert(
+        signoffIdentityError ||
+          "Your TTTracker user identity must be loaded before signing.",
+      );
+      return;
+    }
+
+    if (value && currentUserIdentity) {
+      setBcRepName(currentUserIdentity.name);
+      setBcRepEmail(currentUserIdentity.email);
+      setBcRepUserId(currentUserIdentity.userId);
+    } else if (!value && currentUserIdentity) {
+      // Clearing a signature keeps the current logged-in identity visible so
+      // the user knows exactly who will be recorded when they sign again.
+      setBcRepName(currentUserIdentity.name);
+      setBcRepEmail(currentUserIdentity.email);
+      setBcRepUserId(currentUserIdentity.userId);
+    }
+
     setBcSignatureDataUrl(value);
     setBcSignedAt(value ? new Date().toISOString() : "");
   }
@@ -6218,11 +6408,19 @@ export default function DailyDocketForm({
       setIncidentType("");
       setIncidentNotes("");
 
-      setBcRepName("");
+      setBcRepName(currentUserIdentity?.name || "");
+      setBcRepEmail(currentUserIdentity?.email || "");
+      setBcRepUserId(currentUserIdentity?.userId || "");
       setBcSignatureDataUrl("");
       setBcSignedAt("");
       setClientRepName("");
       setSignedDate("");
+      setBcApprovedName("");
+      setBcApprovedEmail("");
+      setBcApprovedAt("");
+      setClientApprovedName("");
+      setClientApprovedEmail("");
+      setClientApprovedAt("");
       setDocketFile(null);
       setExistingDocketFileUrl("");
       setSharePointUrl("");
@@ -7490,10 +7688,21 @@ export default function DailyDocketForm({
         tone="amber"
       >
         <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
-          Defects raised here use the same controlled <strong>DEF</strong> register,
-          SharePoint photo storage, assignment and project notification rules as the
-          tower Defects page. Saving the Daily Docket creates the Defect and links it
-          back to this docket for traceability.
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              Defects raised here use the same controlled <strong>DEF</strong> register,
+              SharePoint photo storage, assignment and project notification rules as the
+              tower Defects page. Saving the Daily Docket creates the Defect and links it
+              back to this docket for traceability.
+            </div>
+            <button
+              type="button"
+              onClick={openTowerDefectRegister}
+              className="shrink-0 rounded-xl border border-blue-300 bg-white px-3 py-2 text-xs font-black text-blue-800 hover:bg-blue-100"
+            >
+              Open Tower Defects
+            </button>
+          </div>
         </div>
 
         {(linkedDocketDefects.length > 0 ||
@@ -7551,15 +7760,45 @@ export default function DailyDocketForm({
                   </div>
                 </div>
 
-                {!locked && !isView && (
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => removeLinkedDocketDefect(defect)}
-                    className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                    onClick={openTowerDefectRegister}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50"
                   >
-                    Unlink
+                    Open Defect Register
                   </button>
-                )}
+
+                  {!locked && !isView && (
+                    <>
+                      <select
+                        value={defect.status}
+                        disabled={defectStatusBusyId === defect.id}
+                        onChange={(event) =>
+                          void updateLinkedDefectStatus(
+                            defect,
+                            event.target.value as ExistingTowerDefect["status"],
+                          )
+                        }
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-700 disabled:opacity-50"
+                        aria-label={`Status for ${defect.defect_number || "Defect"}`}
+                      >
+                        <option value="Open">Open</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Fixed">Fixed</option>
+                        <option value="Closed">Closed</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => removeLinkedDocketDefect(defect)}
+                        className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-100"
+                      >
+                        Unlink
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
 
@@ -10184,12 +10423,30 @@ export default function DailyDocketForm({
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
-          <Input
-            label="BC Representative"
-            value={bcRepName}
-            onChange={setBcRepName}
-            disabled={locked || isView}
-          />
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="text-xs font-black uppercase tracking-wide text-slate-500">
+              BC Representative
+            </div>
+            {signoffIdentityLoading && !bcRepName ? (
+              <div className="mt-2 text-sm text-slate-500">Loading signed-in TTTracker user…</div>
+            ) : signoffIdentityError && !bcRepName ? (
+              <div className="mt-2 text-sm font-semibold text-red-700">
+                {signoffIdentityError}
+              </div>
+            ) : (
+              <>
+                <div className="mt-2 text-sm font-black text-slate-900">
+                  {bcRepName || currentUserIdentity?.name || "—"}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-600">
+                  {bcRepEmail || currentUserIdentity?.email || "—"}
+                </div>
+              </>
+            )}
+            <div className="mt-2 text-[11px] leading-4 text-slate-500">
+              Taken from the logged-in TTTracker account. This name and email cannot be typed manually.
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium mb-1">
@@ -10223,13 +10480,22 @@ export default function DailyDocketForm({
           <SignaturePad
             value={bcSignatureDataUrl}
             onChange={handleBcSignatureChange}
-            disabled={locked || isView}
+            disabled={
+              locked ||
+              isView ||
+              signoffIdentityLoading ||
+              (!currentUserIdentity && !bcSignatureDataUrl)
+            }
           />
 
           {bcSignatureDataUrl && (
             <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
               <span>
-                Signed by <strong className="text-slate-700">{bcRepName.trim() || "BC Representative"}</strong>
+                Signed by{" "}
+                <strong className="text-slate-700">
+                  {bcRepName.trim() || "BC Representative"}
+                </strong>
+                {bcRepEmail.trim() ? ` · ${bcRepEmail.trim()}` : ""}
               </span>
               {bcSignedAt && (
                 <span>
@@ -10240,21 +10506,48 @@ export default function DailyDocketForm({
           )}
         </div>
 
-        {(clientRepName || signedDate) && (
-          <div className="grid md:grid-cols-2 gap-4">
-            <Input
-              label="Client Representative"
-              value={clientRepName}
-              onChange={setClientRepName}
-              disabled
-            />
-            <Input
-              label="Approval Date"
-              type="date"
-              value={signedDate}
-              onChange={setSignedDate}
-              disabled
-            />
+        {(bcApprovedName || bcApprovedEmail || bcApprovedAt) && (
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4">
+            <div className="text-xs font-black uppercase tracking-wide text-blue-700">
+              BC Reviewer Approval
+            </div>
+            <div className="mt-2 text-sm font-black text-slate-900">
+              {bcApprovedName || "—"}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-600">
+              {bcApprovedEmail || "—"}
+            </div>
+            {bcApprovedAt && (
+              <div className="mt-2 text-xs text-slate-500">
+                Approved {new Date(bcApprovedAt).toLocaleString()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(clientApprovedName ||
+          clientApprovedEmail ||
+          clientApprovedAt ||
+          clientRepName ||
+          signedDate) && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
+            <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
+              Client Approval
+            </div>
+            <div className="mt-2 text-sm font-black text-slate-900">
+              {clientApprovedName || clientRepName || "—"}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-600">
+              {clientApprovedEmail || "—"}
+            </div>
+            {(clientApprovedAt || signedDate) && (
+              <div className="mt-2 text-xs text-slate-500">
+                Approved{" "}
+                {clientApprovedAt
+                  ? new Date(clientApprovedAt).toLocaleString()
+                  : signedDate}
+              </div>
+            )}
           </div>
         )}
 
@@ -10451,88 +10744,6 @@ function AllocationMetric({
         {label}
       </div>
       <div className="mt-0.5 text-lg font-black">{value}</div>
-    </div>
-  );
-}
-
-function WorkerAllocationPicker({
-  workers,
-  selected,
-  disabled,
-  onToggle,
-  onSelectAll,
-  onClear,
-}: {
-  workers: string[];
-  selected: string[];
-  disabled: boolean;
-  onToggle: (workerName: string) => void;
-  onSelectAll: () => void;
-  onClear: () => void;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-xs font-black uppercase tracking-wide text-slate-500">
-            Workers on this tower
-          </div>
-          <div className="mt-0.5 text-xs text-slate-400">
-            Production MH is calculated once from Labour. Additional towers only split that productive total by percentage; the primary tower receives the balance automatically.
-          </div>
-        </div>
-
-        {!disabled && workers.length > 0 && (
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={onSelectAll}
-              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-200"
-            >
-              All
-            </button>
-            <button
-              type="button"
-              onClick={onClear}
-              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-black text-slate-700 hover:bg-slate-200"
-            >
-              Clear
-            </button>
-          </div>
-        )}
-      </div>
-
-      {workers.length === 0 ? (
-        <div className="mt-2 text-xs text-slate-500">
-          Add workers in the Labour section first.
-        </div>
-      ) : (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {workers.map((workerName) => {
-            const isSelected = selected.some(
-              (name) =>
-                normalizeWorkerName(name) === normalizeWorkerName(workerName)
-            );
-
-            return (
-              <button
-                key={workerName}
-                type="button"
-                disabled={disabled}
-                onClick={() => onToggle(workerName)}
-                className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
-                  isSelected
-                    ? "border-slate-900 bg-slate-900 text-white"
-                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
-                } disabled:opacity-60`}
-              >
-                {isSelected ? "✓ " : ""}
-                {workerName}
-              </button>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

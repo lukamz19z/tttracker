@@ -7,10 +7,13 @@ import {
   loadQualityTower,
   qualityApiError,
   qualityTowerLabel,
-  qualityUserLabel,
   requireQualityUser,
 } from "@/lib/quality/server";
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
+import {
+  resolveSystemUserIdentity,
+  resolveSystemUserIdentityById,
+} from "@/lib/dockets/system-user-identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,16 +72,9 @@ async function userLabel(
   userId: string | null,
 ) {
   if (!userId) return null;
-  const { data } = await service.auth.admin.getUserById(userId);
-  const user = data.user;
 
-  return user
-    ? clean(
-        user.user_metadata?.full_name ||
-          user.user_metadata?.name ||
-          user.email,
-      ) || "TTTracker User"
-    : null;
+  const identity = await resolveSystemUserIdentityById(service, userId);
+  return identity ? identity.display : null;
 }
 
 async function issueName(
@@ -138,6 +134,8 @@ export async function PATCH(
       projectId: current.project_id,
     });
 
+    const actorIdentity = await resolveSystemUserIdentity(service, user);
+
     const nextAssignedUserId =
       body.assignedToUserId === undefined
         ? current.assigned_to_user_id
@@ -193,7 +191,7 @@ export async function PATCH(
       assigned_to_label: nextAssignedLabel,
       completed_by:
         nextStatus === "Closed"
-          ? qualityUserLabel(user)
+          ? actorIdentity.display
           : nextStatus !== current.status
             ? null
             : current.completed_by,
@@ -230,7 +228,7 @@ export async function PATCH(
       issueName(service, defect.project_id, defect.issue_type_id),
     ]);
 
-    const actorLabel = qualityUserLabel(user);
+    const actorLabel = actorIdentity.display;
     let warning: string | null = null;
 
     try {

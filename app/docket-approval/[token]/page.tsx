@@ -66,7 +66,9 @@ type ApprovalResponse = {
     crew: string | null;
     leadingHand: string | null;
     bcRepresentative: string | null;
+    bcRepresentativeEmail: string | null;
     bcApprovedBy: string | null;
+    bcApprovedEmail: string | null;
     bcApprovedAt: string | null;
     project: {
       name: string | null;
@@ -197,7 +199,6 @@ export default function ClientDailyDocketApprovalPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [docket, setDocket] = useState<ApprovalResponse["docket"] | null>(null);
 
-  const [name, setName] = useState("");
   const [comments, setComments] = useState("");
   const [signature, setSignature] = useState("");
   const [submitting, setSubmitting] = useState<"approve" | "request_changes" | null>(
@@ -249,7 +250,6 @@ export default function ClientDailyDocketApprovalPage() {
         if (cancelled) return;
 
         setDocket(payload.docket);
-        setName(payload.docket.recipient.name || "");
       } catch (error) {
         if (!cancelled) {
           setLoadError(
@@ -273,13 +273,6 @@ export default function ClientDailyDocketApprovalPage() {
   const submit = useCallback(
     async (action: "approve" | "request_changes") => {
       if (!token || !docket) return;
-
-      const trimmedName = name.trim();
-
-      if (!trimmedName) {
-        setSubmitError("Enter your name before submitting your response.");
-        return;
-      }
 
       if (action === "approve" && !signature) {
         setSubmitError("Please sign the Daily Docket before approving it.");
@@ -319,7 +312,6 @@ export default function ClientDailyDocketApprovalPage() {
             },
             body: JSON.stringify({
               action,
-              name: trimmedName,
               signatureDataUrl: action === "approve" ? signature : undefined,
               comments: comments.trim() || undefined,
             }),
@@ -347,7 +339,7 @@ export default function ClientDailyDocketApprovalPage() {
         setSubmitting(null);
       }
     },
-    [comments, docket, name, signature, token],
+    [comments, docket, signature, token],
   );
 
   if (loading) {
@@ -442,7 +434,14 @@ export default function ClientDailyDocketApprovalPage() {
                     label="Revision"
                     value={`R${String(Math.max(1, Number(docket.revision || 1))).padStart(2, "0")}`}
                   />
-                  <SummaryItem label="Client Representative" value={name} />
+                  <SummaryItem
+                    label="Client Representative"
+                    value={docket.recipient.name || "—"}
+                  />
+                  <SummaryItem
+                    label="Client Email"
+                    value={docket.recipient.email || "—"}
+                  />
                 </div>
               </div>
 
@@ -560,14 +559,20 @@ export default function ClientDailyDocketApprovalPage() {
                 <SummaryBlock
                   label="BC Representative"
                   value={docket.bcRepresentative || "—"}
+                  subvalue={docket.bcRepresentativeEmail || undefined}
                 />
                 <SummaryBlock
                   label="BC Approved By"
                   value={docket.bcApprovedBy || "—"}
                   subvalue={
-                    docket.bcApprovedAt
-                      ? formatDateTime(docket.bcApprovedAt)
-                      : undefined
+                    [
+                      docket.bcApprovedEmail,
+                      docket.bcApprovedAt
+                        ? formatDateTime(docket.bcApprovedAt)
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
                   }
                 />
               </div>
@@ -781,8 +786,7 @@ export default function ClientDailyDocketApprovalPage() {
               </h2>
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 By approving this Daily Docket, you confirm that the docket has
-                been reviewed and accepted on behalf of the client. Your name,
-                signature and approval time will be recorded on the final copy.
+                been reviewed and accepted on behalf of the client. Your configured name and email, signature and approval time will be recorded on the final copy.
               </p>
 
               <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -826,23 +830,19 @@ export default function ClientDailyDocketApprovalPage() {
                   void submit("approve");
                 }}
               >
-                <div>
-                  <label
-                    htmlFor="client-name"
-                    className="block text-sm font-medium text-slate-700"
-                  >
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Client Representative
-                  </label>
-                  <input
-                    id="client-name"
-                    type="text"
-                    value={name}
-                    disabled={submitting !== null}
-                    onChange={(event) => setName(event.target.value)}
-                    autoComplete="name"
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                    placeholder="Full name"
-                  />
+                  </p>
+                  <p className="mt-2 text-sm font-bold text-slate-900">
+                    {docket.recipient.name || "—"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {docket.recipient.email || "—"}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-slate-500">
+                    This identity is fixed to the configured client contact for this secure approval link and cannot be edited.
+                  </p>
                 </div>
 
                 <div>

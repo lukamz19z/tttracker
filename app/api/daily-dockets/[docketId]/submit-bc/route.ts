@@ -6,6 +6,7 @@ import {
   getBcReviewerRecipients,
   isConfiguredBcReviewer,
 } from "@/lib/dockets/reviewers";
+import { resolveSystemUserIdentity } from "@/lib/dockets/system-user-identity";
 import {
   docketEmailShell,
   sendDailyDocketEmail,
@@ -26,6 +27,8 @@ type DocketRow = {
   leading_hand: string | null;
   approval_status: string | null;
   bc_rep_name: string | null;
+  bc_rep_email: string | null;
+  bc_rep_user_id: string | null;
   bc_signature_data_url: string | null;
   bc_signed_at: string | null;
   approval_revision: number | null;
@@ -534,6 +537,8 @@ export async function POST(
         leading_hand,
         approval_status,
         bc_rep_name,
+        bc_rep_email,
+        bc_rep_user_id,
         bc_signature_data_url,
         bc_signed_at,
         approval_revision,
@@ -601,6 +606,23 @@ export async function POST(
       return NextResponse.json(
         { error: "You do not have access to submit this Daily Docket." },
         { status: 403 },
+      );
+    }
+
+    const signerIdentity = await resolveSystemUserIdentity(service, user);
+
+    // A signature is permanently associated with the user account that made it.
+    // Do not silently relabel another person's saved signature as the current user.
+    if (
+      docket.bc_rep_user_id &&
+      docket.bc_rep_user_id !== signerIdentity.userId
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This Daily Docket was signed by another TTTracker user. That user must submit it, or the signature must be cleared and re-signed by the current user.",
+        },
+        { status: 409 },
       );
     }
 
@@ -679,6 +701,10 @@ export async function POST(
         bc_submitted_at: submittedAt,
         bc_submitted_by: user.id,
         approval_revision: revision,
+        bc_rep_user_id: signerIdentity.userId,
+        bc_rep_name: signerIdentity.name,
+        bc_rep_email: signerIdentity.email,
+        bc_signed_at: docket.bc_signed_at || submittedAt,
       })
       .eq("id", docket.id)
       .in("approval_status", [
@@ -722,11 +748,8 @@ export async function POST(
       docketId: docket.id,
       projectId: docket.project_id,
       actorUserId: user.id,
-      actorName:
-        user.user_metadata?.full_name ||
-        user.user_metadata?.name ||
-        null,
-      actorEmail: user.email || null,
+      actorName: signerIdentity.name,
+      actorEmail: signerIdentity.email,
       eventType: previousRevision > 0 ? "bc_resubmitted" : "bc_submitted",
       revision,
       metadata: {
@@ -856,7 +879,7 @@ export async function POST(
             </tr>
             <tr>
               <td style="padding:8px 0;color:#64748b;">BC Representative</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.bc_rep_name || "—"}</td>
+              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${escapeHtml(signerIdentity.name)} · ${escapeHtml(signerIdentity.email)}</td>
             </tr>
           </table>
 

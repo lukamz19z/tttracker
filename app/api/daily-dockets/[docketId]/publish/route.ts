@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
 import { generateDailyDocketPdf } from "@/lib/dockets/daily-docket-pdf";
+import { resolveSystemUserIdentity } from "@/lib/dockets/system-user-identity";
 import { publishDailyDocketPdfToSharePoint } from "@/lib/sharepoint/daily-dockets";
 
 export const runtime = "nodejs";
@@ -86,10 +87,56 @@ export async function POST(_request: Request, context: RouteContext) {
       );
     }
 
-    if (!docket.bc_rep_name?.trim()) {
+    if (!docket.bc_signature_data_url?.trim()) {
       return NextResponse.json(
-        { error: "The Daily Docket must be BC signed before it can be published." },
+        {
+          error:
+            "The Daily Docket must be signed by the BC Representative before it can be published.",
+        },
         { status: 409 },
+      );
+    }
+
+    const signerIdentity = await resolveSystemUserIdentity(supabase, user);
+
+    if (
+      docket.bc_rep_user_id &&
+      docket.bc_rep_user_id !== signerIdentity.userId
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This Daily Docket was signed by another TTTracker user. The recorded signer must publish it, or the signature must be cleared and re-signed by the current user.",
+        },
+        { status: 409 },
+      );
+    }
+
+    /*
+     * Always regenerate the internal BC sign-off identity from the authenticated
+     * TTTracker account. The browser cannot choose or type these values.
+     */
+    const canonicalDocket = {
+      ...docket,
+      bc_rep_user_id: signerIdentity.userId,
+      bc_rep_name: signerIdentity.name,
+      bc_rep_email: signerIdentity.email,
+      bc_signed_at: docket.bc_signed_at || new Date().toISOString(),
+    };
+
+    const { error: signerUpdateError } = await supabase
+      .from("tower_daily_dockets")
+      .update({
+        bc_rep_user_id: canonicalDocket.bc_rep_user_id,
+        bc_rep_name: canonicalDocket.bc_rep_name,
+        bc_rep_email: canonicalDocket.bc_rep_email,
+        bc_signed_at: canonicalDocket.bc_signed_at,
+      })
+      .eq("id", docketId);
+
+    if (signerUpdateError) {
+      throw new Error(
+        `The Daily Docket signer identity could not be saved: ${signerUpdateError.message}`,
       );
     }
 
@@ -105,13 +152,31 @@ export async function POST(_request: Request, context: RouteContext) {
       supabase
         .from("projects")
         .select("id,name,project_number,client,sharepoint_site_id,sharepoint_drive_id,sharepoint_folder_id")
-        .eq("id", docket.project_id)
+        .eq("id", canonicalDocket.project_id)
         .single(),
-      supabase.from("towers").select("*").eq("id", docket.tower_id).single(),
-      supabase.from("tower_docket_labour").select("*").eq("docket_id", docketId).order("worker_name"),
-      supabase.from("tower_docket_plant").select("*").eq("docket_id", docketId),
-      supabase.from("tower_docket_delays").select("*").eq("docket_id", docketId).order("created_at"),
-      supabase.from("tower_docket_progress").select("*").eq("docket_id", docketId),
+      supabase
+        .from("towers")
+        .select("*")
+        .eq("id", canonicalDocket.tower_id)
+        .single(),
+      supabase
+        .from("tower_docket_labour")
+        .select("*")
+        .eq("docket_id", docketId)
+        .order("worker_name"),
+      supabase
+        .from("tower_docket_plant")
+        .select("*")
+        .eq("docket_id", docketId),
+      supabase
+        .from("tower_docket_delays")
+        .select("*")
+        .eq("docket_id", docketId)
+        .order("created_at"),
+      supabase
+        .from("tower_docket_progress")
+        .select("*")
+        .eq("docket_id", docketId),
       supabase
         .from("tower_material_events")
         .select(`
@@ -125,11 +190,15 @@ export async function POST(_request: Request, context: RouteContext) {
     ]);
 
     if (projectResult.error || !projectResult.data) {
-      throw new Error(projectResult.error?.message ?? "Project could not be loaded.");
+      throw new Error(
+        projectResult.error?.message ?? "Project could not be loaded.",
+      );
     }
 
     if (towerResult.error || !towerResult.data) {
-      throw new Error(towerResult.error?.message ?? "Tower could not be loaded.");
+      throw new Error(
+        towerResult.error?.message ?? "Tower could not be loaded.",
+      );
     }
 
     const childError =
@@ -140,14 +209,18 @@ export async function POST(_request: Request, context: RouteContext) {
       materialEventResult.error;
 
     if (childError) {
-      throw new Error(`Daily Docket details could not be loaded: ${childError.message}`);
+      throw new Error(
+        `Daily Docket details could not be loaded: ${childError.message}`,
+      );
     }
 
     const project = projectResult.data;
     const tower = towerResult.data;
 
     if (!project.sharepoint_drive_id || !project.sharepoint_folder_id) {
-      throw new Error("This project is not linked to its Project Delivery SharePoint folder.");
+      throw new Error(
+        "This project is not linked to its Project Delivery SharePoint folder.",
+      );
     }
 
     const towerName = String(
@@ -155,10 +228,12 @@ export async function POST(_request: Request, context: RouteContext) {
     ).trim();
 
     if (!towerName) {
-      throw new Error("The tower does not have a usable name for its SharePoint folder.");
+      throw new Error(
+        "The tower does not have a usable name for its SharePoint folder.",
+      );
     }
 
-    const docketDate = String(docket.docket_date ?? "").slice(0, 10);
+    const docketDate = String(canonicalDocket.docket_date ?? "").slice(0, 10);
 
     if (!docketDate) {
       throw new Error("The Daily Docket does not have a docket date.");
@@ -175,7 +250,7 @@ export async function POST(_request: Request, context: RouteContext) {
     const pdf = generateDailyDocketPdf({
       project,
       tower,
-      docket,
+      docket: canonicalDocket,
       labour: labourResult.data ?? [],
       plant: plantResult.data ?? [],
       delays: delayResult.data ?? [],
@@ -203,7 +278,8 @@ export async function POST(_request: Request, context: RouteContext) {
         sharepoint_folder_id: published.folder.id,
         sharepoint_item_id: published.item.id,
         sharepoint_web_url: published.item.webUrl ?? null,
-        docket_file_url: published.item.webUrl ?? docket.docket_file_url ?? null,
+        docket_file_url:
+          published.item.webUrl ?? canonicalDocket.docket_file_url ?? null,
         sharepoint_synced_at: now,
         sharepoint_sync_status: "published",
         sharepoint_sync_error: null,
@@ -219,6 +295,11 @@ export async function POST(_request: Request, context: RouteContext) {
     return NextResponse.json({
       success: true,
       docketId,
+      signer: {
+        userId: signerIdentity.userId,
+        name: signerIdentity.name,
+        email: signerIdentity.email,
+      },
       fileName: published.fileName,
       sharePoint: {
         driveId: project.sharepoint_drive_id,
@@ -243,7 +324,10 @@ export async function POST(_request: Request, context: RouteContext) {
         })
         .eq("id", docketId);
     } catch (statusError) {
-      console.error("DAILY DOCKET SHAREPOINT STATUS ERROR:", statusError);
+      console.error(
+        "DAILY DOCKET SHAREPOINT STATUS ERROR:",
+        statusError,
+      );
     }
 
     return NextResponse.json(
