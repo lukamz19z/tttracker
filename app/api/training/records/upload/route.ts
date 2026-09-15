@@ -699,10 +699,9 @@ export async function POST(request: Request) {
       }));
     }
 
-    reviewerRecipients = reviewerRecipients.filter(
-      (recipient) => recipient.userId !== identity.userId,
-    );
-
+    // Do not automatically remove the submitting user from the reviewer list.
+    // If that user is explicitly configured as a Training reviewer (or belongs
+    // to a configured reviewer role), they should receive the review task.
     const reviewerIds = reviewerRecipients.map(
       (recipient) => recipient.userId,
     );

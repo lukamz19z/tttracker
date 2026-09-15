@@ -107,11 +107,7 @@ export async function POST(
         trainingTypeId,
         categoryId: clean(trainingType?.category_id) || null,
       })
-    ).filter(
-      (recipient) =>
-        recipient.userId &&
-        recipient.userId !== clean(record.submitted_by_user_id),
-    );
+    ).filter((recipient) => Boolean(recipient.userId));
 
     if (recipients.length === 0) {
       return NextResponse.json(
