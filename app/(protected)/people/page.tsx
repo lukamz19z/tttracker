@@ -6,6 +6,7 @@ import {
   ArrowRight,
   CheckCircle2,
   ChevronDown,
+  ClipboardCheck,
   Download,
   Edit3,
   ExternalLink,
@@ -761,7 +762,7 @@ export default function PeoplePage() {
           />
         </section>
 
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <NavigationCard
             icon={<UsersRound size={20} />}
             title="Crews"
@@ -781,6 +782,14 @@ export default function PeoplePage() {
             title="PPE Register"
             description="Current employee sizing is already included in this register and can later receive a dedicated view."
             disabled
+          />
+
+          <NavigationCard
+            icon={<ClipboardCheck size={20} />}
+            title="Site Prestarts"
+            description="Review site prestarts, discussion revisions, signed employees and completed SharePoint PDFs."
+            href="/people/prestarts"
+            label="Open prestart register"
           />
         </section>
 
