@@ -42,7 +42,9 @@ import {
   X,
 } from "lucide-react-native";
 
+import { PermissionScreen } from "@/components/common/PermissionScreen";
 import { useAuth } from "@/contexts/AuthContext";
+import { mobileRouteForNotification } from "@/lib/notifications/routing";
 import { supabase } from "@/lib/supabase";
 
 type NotificationSeverity =
@@ -195,33 +197,11 @@ function getNotificationIcon(
 function resolveNotificationHref(
   notification: UserNotification,
 ): Href | null {
-  const route = notification.action_route?.trim();
-
-  if (!route) return null;
-
-  const params = notification.action_params ?? {};
-  const query = new URLSearchParams();
-
-  for (const [key, value] of Object.entries(params)) {
-    if (
-      value !== null &&
-      value !== undefined &&
-      typeof value !== "object"
-    ) {
-      query.set(key, String(value));
-    }
-  }
-
-  const queryText = query.toString();
-  const routeWithSlash = route.startsWith("/")
-    ? route
-    : `/${route}`;
-
-  return (
-    queryText
-      ? `${routeWithSlash}?${queryText}`
-      : routeWithSlash
-  ) as Href;
+  return mobileRouteForNotification({
+    ...notification,
+    action_route: notification.action_route ?? null,
+    action_params: notification.action_params ?? null,
+  });
 }
 
 function getSeverityLabel(severity: NotificationSeverity) {
@@ -783,7 +763,8 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <PermissionScreen permission="mobile.notifications">
+      <SafeAreaView style={styles.safeArea}>
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
@@ -1415,7 +1396,8 @@ export default function NotificationsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </SafeAreaView>
+      </SafeAreaView>
+    </PermissionScreen>
   );
 }
 

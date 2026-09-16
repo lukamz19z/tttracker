@@ -1,0 +1,4 @@
+import { useMaterials } from "@/contexts/MaterialsContext";
+import { MaterialCard, MaterialsShell } from "@/components/materials/MaterialsShell";
+const c=(v:unknown)=>String(v??"").trim();
+export default function Transfers(){const{data}=useMaterials();const tower=new Map((data?.towers??[]).map(t=>[c(t.id),c(t.name)]));return <MaterialsShell title="Transfers" subtitle="Tower-to-tower bundle movements from the live project register.">{(data?.transfers??[]).map((r,i)=><MaterialCard key={c(r.id)||String(i)} title={`Bundle ${c(r.bundle_no)||"—"} · Qty ${c(r.quantity)||"—"}`} subtitle={`${tower.get(c(r.source_tower_id))||"Source"} → ${tower.get(c(r.destination_tower_id))||"Destination"}`} meta={[c(r.status),c(r.transferred_by_name),c(r.transferred_at)].filter(Boolean).join(" · ")}/>)}</MaterialsShell>}

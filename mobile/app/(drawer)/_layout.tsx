@@ -3,19 +3,17 @@ import {
   DrawerItem,
   type DrawerContentComponentProps,
 } from "@react-navigation/drawer";
-import { useRouter, type Href } from "expo-router";
 import { Drawer } from "expo-router/drawer";
+import { useRouter, type Href } from "expo-router";
 import {
-  useCallback,
-  useEffect,
-  useState,
-  type ComponentType,
-} from "react";
-import {
+  BadgeCheck,
   Bell,
   Boxes,
+  Circle,
   ClipboardCheck,
+  Construction,
   FilePenLine,
+  ReceiptText,
   FileText,
   Gauge,
   GraduationCap,
@@ -23,243 +21,44 @@ import {
   Home,
   LogOut,
   PackageSearch,
+  Receipt,
   TriangleAlert,
   Truck,
   UserCircle,
+  UsersRound,
   Wrench,
+  type LucideIcon,
 } from "lucide-react-native";
-import {
-  Alert,
-  AppState,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, AppState, Pressable, StyleSheet, Text, View } from "react-native";
 
-import {
-  type MobileRole,
-  useAuth,
-} from "@/contexts/AuthContext";
+import { AppFooter } from "@/components/common/AppFooter";
+import { SyncStatus } from "@/components/sync/SyncStatus";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAccess, type DynamicNavigationItem } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
 
-type DrawerIcon = ComponentType<{
-  size?: number;
-  color?: string;
-  strokeWidth?: number;
-}>;
-
-type DrawerItemDefinition = {
-  label: string;
-  screen: string;
-  icon: DrawerIcon;
-  roles: MobileRole[];
-  leadingHandAccess?: boolean;
-  notificationItem?: boolean;
+const ICONS: Record<string, LucideIcon> = {
+  home: Home,
+  bell: Bell,
+  "badge-check": BadgeCheck,
+  gauge: Gauge,
+  "graduation-cap": GraduationCap,
+  receipt: Receipt,
+  "package-search": PackageSearch,
+  "clipboard-check": ClipboardCheck,
+  construction: Construction,
+  truck: Truck,
+  "users-round": UsersRound,
+  "file-pen-line": FilePenLine,
+  "triangle-alert": TriangleAlert,
+  "hard-hat": HardHat,
+  "file-text": FileText,
+  "file-receipt": ReceiptText,
+  boxes: Boxes,
+  wrench: Wrench,
+  "user-circle": UserCircle,
 };
-
-type DrawerSectionDefinition = {
-  title: string;
-  items: DrawerItemDefinition[];
-};
-
-const ALL_ROLES: MobileRole[] = [
-  "admin",
-  "hseq",
-  "asset_manager",
-  "commercial",
-  "editor",
-  "crew",
-  "viewer",
-];
-
-const EMPLOYEE_ROLES: MobileRole[] = [
-  "admin",
-  "hseq",
-  "asset_manager",
-  "commercial",
-  "editor",
-  "crew",
-];
-
-const FIELD_ROLES: MobileRole[] = [
-  "admin",
-  "hseq",
-  "editor",
-  "crew",
-];
-
-const ASSET_ROLES: MobileRole[] = [
-  "admin",
-  "asset_manager",
-];
-
-const HSEQ_ADMIN_ROLES: MobileRole[] = [
-  "admin",
-  "hseq",
-];
-
-function normalisePosition(value?: string | null) {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-}
-
-function isLeadingHand(value?: string | null) {
-  return normalisePosition(value) === "leading_hand";
-}
-
-const DRAWER_SECTIONS: DrawerSectionDefinition[] = [
-  {
-    title: "OVERVIEW",
-    items: [
-      {
-        label: "Home",
-        screen: "index",
-        icon: Home,
-        roles: ALL_ROLES,
-      },
-      {
-        label: "Notifications",
-        screen: "notifications",
-        icon: Bell,
-        roles: ALL_ROLES,
-        notificationItem: true,
-      },
-      {
-        label: "Project Progress",
-        screen: "project-progress",
-        icon: Gauge,
-        roles: FIELD_ROLES,
-      },
-    ],
-  },
-  {
-    title: "MY RECORDS",
-    items: [
-      {
-        label: "My Training",
-        screen: "training",
-        icon: GraduationCap,
-        roles: EMPLOYEE_ROLES,
-      },
-    ],
-  },
-  {
-    title: "FIELD OPERATIONS",
-    items: [
-      {
-        label: "Search Materials",
-        screen: "materials",
-        icon: PackageSearch,
-        roles: FIELD_ROLES,
-      },
-      {
-        label: "Vehicle Prestart",
-        screen: "vehicle-prestart",
-        icon: ClipboardCheck,
-        roles: EMPLOYEE_ROLES,
-      },
-      {
-        label: "Truck Delivery",
-        screen: "truck-delivery",
-        icon: Truck,
-        roles: FIELD_ROLES,
-      },
-      {
-        label: "Site Prestart",
-        screen: "site-prestart",
-        icon: ClipboardCheck,
-        roles: HSEQ_ADMIN_ROLES,
-        leadingHandAccess: true,
-      },
-    ],
-  },
-  {
-    title: "QUALITY",
-    items: [
-      {
-        label: "Revisions / Rectifications",
-        screen: "revisions",
-        icon: FilePenLine,
-        roles: FIELD_ROLES,
-      },
-      {
-        label: "Defects",
-        screen: "defects",
-        icon: TriangleAlert,
-        roles: HSEQ_ADMIN_ROLES,
-        leadingHandAccess: true,
-      },
-    ],
-  },
-  {
-    title: "TOWER OPERATIONS",
-    items: [
-      {
-        label: "Tower Progress",
-        screen: "tower-progress",
-        icon: HardHat,
-        roles: FIELD_ROLES,
-      },
-      {
-        label: "Daily Dockets",
-        screen: "daily-dockets",
-        icon: FileText,
-        roles: ["admin"],
-        leadingHandAccess: true,
-      },
-    ],
-  },
-  {
-    title: "ASSETS",
-    items: [
-      {
-        label: "All Assets",
-        screen: "assets",
-        icon: Boxes,
-        roles: ASSET_ROLES,
-      },
-      {
-        label: "Fleet Jobs",
-        screen: "fleet-jobs",
-        icon: Wrench,
-        roles: ASSET_ROLES,
-      },
-    ],
-  },
-  {
-    title: "ACCOUNT",
-    items: [
-      {
-        label: "My Profile",
-        screen: "profile",
-        icon: UserCircle,
-        roles: ALL_ROLES,
-      },
-    ],
-  },
-];
-
-function formatRole(role: MobileRole) {
-  switch (role) {
-    case "admin":
-      return "Administrator";
-    case "hseq":
-      return "HSEQ";
-    case "asset_manager":
-      return "Asset Manager";
-    case "commercial":
-      return "Commercial";
-    case "editor":
-      return "Editor";
-    case "viewer":
-      return "Viewer";
-    default:
-      return "Crew / Field";
-  }
-}
 
 function formatUnreadCount(count: number) {
   return count > 99 ? "99+" : String(count);
@@ -269,161 +68,144 @@ function useUnreadNotificationCount(channelScope: string) {
   const [count, setCount] = useState(0);
 
   const loadUnreadCount = useCallback(async () => {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    const { data: userResult } = await supabase.auth.getUser();
+    const user = userResult.user;
+    if (!user) {
       setCount(0);
       return;
     }
 
     const { count: unreadCount, error } = await supabase
       .from("user_notifications")
-      .select("id", {
-        count: "exact",
-        head: true,
-      })
+      .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
       .is("read_at", null)
       .is("archived_at", null);
 
-    if (error) {
-      console.warn(
-        "Unable to load unread notification count:",
-        error.message,
-      );
-      return;
-    }
-
-    setCount(unreadCount ?? 0);
+    if (!error) setCount(unreadCount ?? 0);
   }, []);
 
   useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null;
     let mounted = true;
-    let channel:
-      | ReturnType<typeof supabase.channel>
-      | null = null;
 
-    async function subscribe() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
+    void (async () => {
+      const { data: userResult } = await supabase.auth.getUser();
       if (!mounted) return;
-
       await loadUnreadCount();
-
-      if (!user) return;
+      if (!userResult.user) return;
 
       channel = supabase
-        .channel(`layout-notifications-${channelScope}-${user.id}`)
+        .channel(`mobile-notifications-${channelScope}-${userResult.user.id}`)
         .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "user_notifications",
-            filter: `user_id=eq.${user.id}`,
+            filter: `user_id=eq.${userResult.user.id}`,
           },
-          () => {
-            void loadUnreadCount();
-          },
+          () => void loadUnreadCount(),
         )
         .subscribe();
-    }
+    })();
 
-    void subscribe();
-
-    const appStateSubscription = AppState.addEventListener(
-      "change",
-      (state) => {
-        if (state === "active") {
-          void loadUnreadCount();
-        }
-      },
-    );
+    const appListener = AppState.addEventListener("change", (state) => {
+      if (state === "active") void loadUnreadCount();
+    });
 
     return () => {
       mounted = false;
-      appStateSubscription.remove();
-
-      if (channel) {
-        void supabase.removeChannel(channel);
-      }
+      appListener.remove();
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [channelScope, loadUnreadCount]);
 
-  return {
-    unreadCount: count,
-    refreshUnreadCount: loadUnreadCount,
-  };
+  return count;
 }
 
-function NotificationHeaderButton() {
+function navScreenName(route: string) {
+  const withoutQuery = route.split("?")[0] ?? route;
+  const parts = withoutQuery.split("/").filter(Boolean);
+  const drawerIndex = parts.indexOf("(drawer)");
+  if (drawerIndex >= 0) return parts[drawerIndex + 1] ?? "index";
+  return parts.at(-1) ?? "index";
+}
+
+function HeaderNotifications() {
   const router = useRouter();
-  const { unreadCount } = useUnreadNotificationCount("header");
+  const count = useUnreadNotificationCount("header");
 
   return (
     <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={
-        unreadCount > 0
-          ? `${unreadCount} unread notifications`
-          : "Open notifications"
-      }
-      onPress={() => router.push("/notifications" as Href)}
-      style={({ pressed }) => [
-        styles.headerNotificationButton,
-        pressed && styles.pressed,
-      ]}
+      onPress={() => router.push("/(drawer)/notifications" as Href)}
+      style={styles.headerBell}
     >
-      <Bell size={21} color="#0f172a" strokeWidth={2.2} />
-
-      {unreadCount > 0 ? (
-        <View style={styles.headerNotificationBadge}>
-          <Text style={styles.headerNotificationBadgeText}>
-            {formatUnreadCount(unreadCount)}
-          </Text>
+      <Bell size={21} color="#0f172a" />
+      {count > 0 ? (
+        <View style={styles.headerBadge}>
+          <Text style={styles.headerBadgeText}>{formatUnreadCount(count)}</Text>
         </View>
       ) : null}
     </Pressable>
   );
 }
 
-function CustomDrawerContent(
-  props: DrawerContentComponentProps,
-) {
+function DynamicTitle({ code, fallback }: { code: string; fallback: string }) {
+  const { navigation } = useAccess();
+  const item = navigation.find((row) => row.code === code);
+  return <Text style={styles.headerTitle}>{item?.label ?? fallback}</Text>;
+}
+
+function CustomDrawerContent(props: DrawerContentComponentProps) {
+  const router = useRouter();
   const { profile, signOut } = useAuth();
-  const { unreadCount } = useUnreadNotificationCount("drawer");
+  const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
+  const unreadCount = useUnreadNotificationCount("drawer");
 
-  const role = profile?.mobileRole ?? "crew";
+  const visibleItems = useMemo(
+    () =>
+      navigation.filter(
+        (item) =>
+          item.active !== false &&
+          can(item.permission_code) &&
+          hasCapability(item.capability_key) &&
+          (!item.requires_project || Boolean(profile?.projectId)),
+      ),
+    [navigation, can, hasCapability, profile?.projectId],
+  );
 
-  const activeRouteName =
-    props.state.routes[props.state.index]?.name ?? "index";
+  const sections = useMemo(() => {
+    const map = new Map<
+      string,
+      { code: string; label: string; sort: number; items: DynamicNavigationItem[] }
+    >();
 
-  const leadingHand = isLeadingHand(profile?.employeeRole);
+    for (const item of visibleItems) {
+      const current = map.get(item.section_code) ?? {
+        code: item.section_code,
+        label: item.section_label,
+        sort: item.section_sort_order,
+        items: [],
+      };
+      current.items.push(item);
+      map.set(item.section_code, current);
+    }
 
-  const visibleSections = DRAWER_SECTIONS.map((section) => ({
-    ...section,
-    items: section.items.filter(
-      (item) =>
-        item.roles.includes(role) ||
-        (item.leadingHandAccess === true && leadingHand),
-    ),
-  })).filter((section) => section.items.length > 0);
+    return Array.from(map.values())
+      .map((section) => ({ ...section, items: [...section.items].sort((a, b) => a.sort_order - b.sort_order) }))
+      .sort((a, b) => a.sort - b.sort);
+  }, [visibleItems]);
+
+  const activeRouteName = props.state.routes[props.state.index]?.name ?? "index";
+  const roleText = roles.length ? roles.map((role) => role.name).join(" + ") : profile?.employeeRole || "TTTracker User";
+  const approvalTotal = approvalCounts.dailyDockets + approvalCounts.expenseClaims + approvalCounts.invoices;
 
   async function handleSignOut() {
     try {
       await signOut();
     } catch (error) {
-      Alert.alert(
-        "Unable to sign out",
-        error instanceof Error
-          ? error.message
-          : "Please try again.",
-      );
+      Alert.alert("Unable to sign out", error instanceof Error ? error.message : "Please try again.");
     }
   }
 
@@ -431,131 +213,76 @@ function CustomDrawerContent(
     <View style={styles.drawer}>
       <View style={styles.profileHeader}>
         <View style={styles.profileTopRow}>
-          <View style={styles.logo}>
-            <Text style={styles.logoText}>TT</Text>
-          </View>
-
+          <View style={styles.logo}><Text style={styles.logoText}>TT</Text></View>
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              unreadCount > 0
-                ? `${unreadCount} unread notifications`
-                : "Open notifications"
-            }
             onPress={() => {
-              props.navigation.navigate("notifications");
+              router.push("/(drawer)/notifications" as Href);
               props.navigation.closeDrawer();
             }}
-            style={({ pressed }) => [
-              styles.profileNotificationButton,
-              unreadCount > 0 &&
-                styles.profileNotificationButtonActive,
-              pressed && styles.pressed,
-            ]}
+            style={[styles.profileNotificationButton, unreadCount > 0 && styles.profileNotificationButtonActive]}
           >
-            <Bell
-              size={21}
-              color={unreadCount > 0 ? "#ffffff" : "#334155"}
-              strokeWidth={2.2}
-            />
-
+            <Bell size={21} color={unreadCount > 0 ? "#fff" : "#334155"} />
             {unreadCount > 0 ? (
               <View style={styles.profileNotificationBadge}>
-                <Text style={styles.profileNotificationBadgeText}>
-                  {formatUnreadCount(unreadCount)}
-                </Text>
+                <Text style={styles.profileNotificationBadgeText}>{formatUnreadCount(unreadCount)}</Text>
               </View>
             ) : null}
           </Pressable>
         </View>
 
-        <Text style={styles.userName}>
-          {profile?.fullName ?? "TTTracker User"}
-        </Text>
-
-        <Text style={styles.userRole}>
-          {formatRole(role)}
-          {profile?.employeeRole
-            ? ` · ${profile.employeeRole}`
-            : ""}
-        </Text>
+        <Text style={styles.product}>{appConfig.product_name || "TTTracker"}</Text>
+        <Text style={styles.userName}>{profile?.fullName ?? "TTTracker User"}</Text>
+        <Text style={styles.userRole}>{roleText}</Text>
 
         <View style={styles.contextCard}>
           <Text style={styles.contextLabel}>CURRENT PROJECT</Text>
           <Text style={styles.contextValue} numberOfLines={2}>
             {profile?.projectNumber
               ? `${profile.projectNumber} — ${profile.projectName ?? ""}`
-              : profile?.projectName ?? "No project allocated"}
+              : profile?.projectName ?? "No project selected"}
           </Text>
-
           <Text style={styles.contextCrew}>
             {profile?.crewNumber
-              ? `Crew ${profile.crewNumber}${
-                  profile.crewName
-                    ? ` — ${profile.crewName}`
-                    : ""
-                }`
+              ? `Crew ${profile.crewNumber}${profile.crewName ? ` — ${profile.crewName}` : ""}`
               : profile?.crewName ?? "No crew allocated"}
           </Text>
         </View>
       </View>
 
-      <DrawerContentScrollView
-        {...props}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {visibleSections.map((section) => (
-          <View key={section.title} style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              {section.title}
-            </Text>
-
+      <DrawerContentScrollView {...props} contentContainerStyle={styles.scrollContent}>
+        {sections.map((section) => (
+          <View key={section.code} style={styles.section}>
+            <Text style={styles.sectionTitle}>{section.label}</Text>
             {section.items.map((item) => {
-              const Icon = item.icon;
-              const focused = activeRouteName === item.screen;
+              const Icon = ICONS[item.icon_key] ?? Circle;
+              const screenName = navScreenName(item.route);
+              const focused = activeRouteName === screenName;
+              const badgeCount =
+                item.code === "notifications"
+                  ? unreadCount
+                  : item.code === "approvals"
+                    ? approvalTotal
+                    : 0;
 
               return (
                 <DrawerItem
-                  key={item.screen}
+                  key={item.code}
+                  focused={focused}
                   label={({ color }) => (
                     <View style={styles.drawerLabelRow}>
-                      <Text
-                        style={[
-                          styles.drawerLabel,
-                          { color },
-                        ]}
-                      >
-                        {item.label}
-                      </Text>
-
-                      {item.notificationItem &&
-                      unreadCount > 0 ? (
+                      <Text style={[styles.drawerLabel, { color }]}>{item.label}</Text>
+                      {badgeCount > 0 ? (
                         <View style={styles.drawerBadge}>
-                          <Text style={styles.drawerBadgeText}>
-                            {formatUnreadCount(unreadCount)}
-                          </Text>
+                          <Text style={styles.drawerBadgeText}>{formatUnreadCount(badgeCount)}</Text>
                         </View>
                       ) : null}
                     </View>
                   )}
-                  focused={focused}
                   onPress={() => {
-                    props.navigation.navigate(item.screen);
+                    router.push(item.route as Href);
                     props.navigation.closeDrawer();
                   }}
-                  icon={({
-                    color,
-                    size,
-                  }: {
-                    color: string;
-                    size: number;
-                  }) => (
-                    <Icon
-                      color={color}
-                      size={size}
-                      strokeWidth={2.2}
-                    />
-                  )}
+                  icon={({ color, size }) => <Icon color={color} size={size} strokeWidth={2.2} />}
                   activeTintColor="#0f172a"
                   inactiveTintColor="#475569"
                   activeBackgroundColor="#e2e8f0"
@@ -568,21 +295,12 @@ function CustomDrawerContent(
       </DrawerContentScrollView>
 
       <View style={styles.footer}>
-        <View style={styles.syncRow}>
-          <View style={styles.syncDot} />
-          <Text style={styles.syncText}>All changes uploaded</Text>
-        </View>
-
-        <Pressable
-          onPress={() => void handleSignOut()}
-          style={({ pressed }) => [
-            styles.signOutButton,
-            pressed && styles.pressed,
-          ]}
-        >
+        <SyncStatus />
+        <Pressable onPress={() => void handleSignOut()} style={styles.signOutButton}>
           <LogOut size={18} color="#b91c1c" />
           <Text style={styles.signOutText}>Sign out</Text>
         </Pressable>
+        <AppFooter compact />
       </View>
     </View>
   );
@@ -591,355 +309,72 @@ function CustomDrawerContent(
 export default function DrawerLayout() {
   return (
     <Drawer
-      drawerContent={(
-        props: DrawerContentComponentProps,
-      ) => <CustomDrawerContent {...props} />}
+      drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
-        headerStyle: {
-          backgroundColor: "#ffffff",
-        },
+        headerStyle: { backgroundColor: "#fff" },
         headerTintColor: "#0f172a",
-        headerTitleStyle: {
-          fontWeight: "800",
-        },
-        headerRight: () => <NotificationHeaderButton />,
-        headerRightContainerStyle: {
-          paddingRight: 14,
-        },
+        headerTitleStyle: { fontWeight: "800" },
+        headerRight: () => <HeaderNotifications />,
+        headerRightContainerStyle: { paddingRight: 14 },
         drawerType: "front",
         swipeEnabled: true,
-        drawerStyle: {
-          width: 316,
-          backgroundColor: "#ffffff",
-        },
-        sceneStyle: {
-          backgroundColor: "#f8fafc",
-        },
+        drawerStyle: { width: 316, backgroundColor: "#fff" },
+        sceneStyle: { backgroundColor: "#f8fafc" },
       }}
     >
-      <Drawer.Screen name="index" options={{ title: "Home" }} />
-
-      <Drawer.Screen
-        name="notifications"
-        options={{
-          title: "Notification Centre",
-          headerRight: () => null,
-        }}
-      />
-
-      <Drawer.Screen
-        name="project-progress"
-        options={{ title: "Project Progress" }}
-      />
-
-      <Drawer.Screen
-        name="training"
-        options={{ title: "My Training" }}
-      />
-
-      <Drawer.Screen
-        name="materials"
-        options={{ title: "Search Materials" }}
-      />
-
-      <Drawer.Screen
-        name="vehicle-prestart"
-        options={{ title: "Vehicle Prestart" }}
-      />
-
-      <Drawer.Screen
-        name="site-prestart"
-        options={{ title: "Site Prestart" }}
-      />
-
-      <Drawer.Screen
-        name="truck-delivery"
-        options={{ title: "Truck Delivery" }}
-      />
-
-      <Drawer.Screen
-        name="revisions"
-        options={{ title: "Revisions / Rectifications" }}
-      />
-
-      <Drawer.Screen
-        name="defects"
-        options={{ title: "Defects" }}
-      />
-
-      <Drawer.Screen
-        name="tower-progress"
-        options={{ title: "Tower Progress" }}
-      />
-
-      <Drawer.Screen
-        name="daily-dockets"
-        options={{ title: "Daily Dockets" }}
-      />
-
-      <Drawer.Screen
-        name="assets"
-        options={{ title: "Assets" }}
-      />
-
-      <Drawer.Screen
-        name="fleet-jobs"
-        options={{ title: "Fleet Jobs" }}
-      />
-
-      <Drawer.Screen
-        name="profile"
-        options={{ title: "My Profile" }}
-      />
+      <Drawer.Screen name="index" options={{ headerTitle: () => <DynamicTitle code="home" fallback="Home" /> }} />
+      <Drawer.Screen name="notifications" options={{ headerTitle: () => <DynamicTitle code="notifications" fallback="Notifications" />, headerRight: () => null }} />
+      <Drawer.Screen name="approvals" options={{ headerTitle: () => <DynamicTitle code="approvals" fallback="My Approvals" /> }} />
+      <Drawer.Screen name="project-progress" options={{ headerTitle: () => <DynamicTitle code="project-progress" fallback="Project Progress" /> }} />
+      <Drawer.Screen name="training" options={{ headerTitle: () => <DynamicTitle code="training" fallback="My Training" /> }} />
+      <Drawer.Screen name="expenses" options={{ headerTitle: () => <DynamicTitle code="expenses" fallback="Expense Claims" /> }} />
+      <Drawer.Screen name="materials" options={{ headerTitle: () => <DynamicTitle code="materials" fallback="Materials" /> }} />
+      <Drawer.Screen name="vehicle-prestart" options={{ headerTitle: () => <DynamicTitle code="vehicle-prestart" fallback="Vehicle Prestart" /> }} />
+      <Drawer.Screen name="plant-prestart" options={{ headerTitle: () => <DynamicTitle code="plant-prestart" fallback="Plant Prestart" /> }} />
+      <Drawer.Screen name="site-prestart" options={{ headerTitle: () => <DynamicTitle code="site-prestart" fallback="Site Prestart" /> }} />
+      <Drawer.Screen name="truck-delivery" options={{ headerTitle: () => <DynamicTitle code="deliveries" fallback="Deliveries" /> }} />
+      <Drawer.Screen name="revisions" options={{ headerTitle: () => <DynamicTitle code="revisions" fallback="Revisions / Rectifications" /> }} />
+      <Drawer.Screen name="defects" options={{ headerTitle: () => <DynamicTitle code="defects" fallback="Defects" /> }} />
+      <Drawer.Screen name="tower-progress" options={{ headerTitle: () => <DynamicTitle code="tower-progress" fallback="Tower Progress" /> }} />
+      <Drawer.Screen name="daily-dockets" options={{ headerTitle: () => <DynamicTitle code="daily-dockets" fallback="Daily Dockets" /> }} />
+      <Drawer.Screen name="invoices" options={{ headerTitle: () => <DynamicTitle code="invoices" fallback="Invoices" /> }} />
+      <Drawer.Screen name="assets" options={{ headerTitle: () => <DynamicTitle code="assets" fallback="Assets" /> }} />
+      <Drawer.Screen name="fleet-jobs" options={{ headerTitle: () => <DynamicTitle code="fleet-jobs" fallback="Fleet Jobs" /> }} />
+      <Drawer.Screen name="profile" options={{ headerTitle: () => <DynamicTitle code="profile" fallback="My Profile" /> }} />
     </Drawer>
   );
 }
 
 const styles = StyleSheet.create({
-  drawer: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-  },
-
-  profileHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 56,
-    paddingBottom: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e2e8f0",
-  },
-
-  profileTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-  },
-
-  logo: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#0f172a",
-    marginBottom: 13,
-  },
-
-  logoText: {
-    color: "#ffffff",
-    fontSize: 19,
-    fontWeight: "900",
-  },
-
-  profileNotificationButton: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#ffffff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  profileNotificationButtonActive: {
-    borderColor: "#2563eb",
-    backgroundColor: "#2563eb",
-  },
-
-  profileNotificationBadge: {
-    position: "absolute",
-    top: -7,
-    right: -7,
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: "#ffffff",
-    backgroundColor: "#dc2626",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 4,
-  },
-
-  profileNotificationBadgeText: {
-    color: "#ffffff",
-    fontSize: 8,
-    fontWeight: "900",
-  },
-
-  userName: {
-    color: "#0f172a",
-    fontSize: 19,
-    fontWeight: "900",
-  },
-
-  userRole: {
-    color: "#2563eb",
-    fontSize: 12,
-    fontWeight: "800",
-    marginTop: 4,
-  },
-
-  contextCard: {
-    borderWidth: 1,
-    borderColor: "#dbeafe",
-    borderRadius: 16,
-    backgroundColor: "#eff6ff",
-    padding: 13,
-    marginTop: 15,
-  },
-
-  contextLabel: {
-    color: "#2563eb",
-    fontSize: 9,
-    fontWeight: "900",
-    letterSpacing: 1,
-  },
-
-  contextValue: {
-    color: "#0f172a",
-    fontSize: 13,
-    fontWeight: "800",
-    lineHeight: 18,
-    marginTop: 5,
-  },
-
-  contextCrew: {
-    color: "#64748b",
-    fontSize: 11,
-    marginTop: 5,
-  },
-
-  scrollContent: {
-    paddingTop: 10,
-    paddingBottom: 18,
-  },
-
-  section: {
-    marginBottom: 12,
-  },
-
-  sectionTitle: {
-    color: "#94a3b8",
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.2,
-    paddingHorizontal: 22,
-    marginBottom: 4,
-  },
-
-  drawerItem: {
-    borderRadius: 12,
-    marginHorizontal: 10,
-    marginVertical: 1,
-  },
-
-  drawerLabelRow: {
-    flex: 1,
-    minHeight: 24,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  drawerLabel: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-
-  drawerBadge: {
-    minWidth: 26,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#dc2626",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 6,
-    marginLeft: 8,
-  },
-
-  drawerBadgeText: {
-    color: "#ffffff",
-    fontSize: 9,
-    fontWeight: "900",
-  },
-
-  footer: {
-    borderTopWidth: 1,
-    borderTopColor: "#e2e8f0",
-    padding: 17,
-  },
-
-  syncRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-
-  syncDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#16a34a",
-    marginRight: 8,
-  },
-
-  syncText: {
-    color: "#15803d",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-
-  signOutButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    borderRadius: 12,
-    backgroundColor: "#fef2f2",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-
-  signOutText: {
-    color: "#b91c1c",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-
-  headerNotificationButton: {
-    width: 41,
-    height: 41,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    backgroundColor: "#ffffff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  headerNotificationBadge: {
-    position: "absolute",
-    top: -6,
-    right: -7,
-    minWidth: 21,
-    height: 21,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: "#ffffff",
-    backgroundColor: "#dc2626",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 4,
-  },
-
-  headerNotificationBadgeText: {
-    color: "#ffffff",
-    fontSize: 8,
-    fontWeight: "900",
-  },
-
-  pressed: {
-    opacity: 0.72,
-  },
+  drawer: { flex: 1, backgroundColor: "#fff" },
+  profileHeader: { paddingHorizontal: 20, paddingTop: 52, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
+  profileTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  logo: { width: 50, height: 50, borderRadius: 16, backgroundColor: "#0f172a", alignItems: "center", justifyContent: "center" },
+  logoText: { color: "#fff", fontWeight: "900", fontSize: 19 },
+  product: { marginTop: 10, color: "#64748b", fontSize: 10, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase" },
+  userName: { color: "#0f172a", fontWeight: "900", fontSize: 19, marginTop: 2 },
+  userRole: { color: "#2563eb", fontSize: 11, fontWeight: "800", marginTop: 4 },
+  profileNotificationButton: { width: 43, height: 43, borderRadius: 14, borderWidth: 1, borderColor: "#cbd5e1", alignItems: "center", justifyContent: "center" },
+  profileNotificationButtonActive: { backgroundColor: "#2563eb", borderColor: "#2563eb" },
+  profileNotificationBadge: { position: "absolute", top: -7, right: -7, minWidth: 22, height: 22, borderRadius: 11, backgroundColor: "#dc2626", borderWidth: 2, borderColor: "#fff", alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
+  profileNotificationBadgeText: { color: "#fff", fontSize: 8, fontWeight: "900" },
+  contextCard: { borderWidth: 1, borderColor: "#dbeafe", backgroundColor: "#eff6ff", borderRadius: 16, padding: 13, marginTop: 15 },
+  contextLabel: { color: "#2563eb", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
+  contextValue: { color: "#0f172a", fontSize: 13, fontWeight: "800", lineHeight: 18, marginTop: 5 },
+  contextCrew: { color: "#64748b", fontSize: 11, marginTop: 5 },
+  scrollContent: { paddingTop: 10, paddingBottom: 18 },
+  section: { marginBottom: 12 },
+  sectionTitle: { color: "#94a3b8", fontSize: 10, fontWeight: "900", letterSpacing: 1.25, marginHorizontal: 20, marginTop: 8, marginBottom: 5 },
+  drawerItem: { borderRadius: 12, marginHorizontal: 10, marginVertical: 1 },
+  drawerLabelRow: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  drawerLabel: { fontSize: 13, fontWeight: "800" },
+  drawerBadge: { minWidth: 22, height: 20, paddingHorizontal: 6, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#dc2626" },
+  drawerBadgeText: { color: "#fff", fontSize: 9, fontWeight: "900" },
+  footer: { borderTopWidth: 1, borderTopColor: "#e2e8f0", paddingHorizontal: 18, paddingTop: 12, paddingBottom: 10, gap: 10 },
+  signOutButton: { flexDirection: "row", alignItems: "center", gap: 9, borderRadius: 12, backgroundColor: "#fff1f2", paddingVertical: 10, paddingHorizontal: 12 },
+  signOutText: { color: "#b91c1c", fontWeight: "800", fontSize: 12 },
+  headerBell: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center", justifyContent: "center" },
+  headerBadge: { position: "absolute", top: -5, right: -5, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
+  headerBadgeText: { color: "#fff", fontSize: 8, fontWeight: "900" },
+  headerTitle: { color: "#0f172a", fontWeight: "900", fontSize: 17 },
 });

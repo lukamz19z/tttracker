@@ -29,7 +29,8 @@ import {
 } from "lucide-react-native";
 
 import { ProjectSelector } from "@/components/ProjectSelector";
-import { type MobileRole, useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
 
 type Tower = {
@@ -311,18 +312,6 @@ function formatDate(value: string | null) {
   });
 }
 
-function formatRole(role: MobileRole) {
-  switch (role) {
-    case "admin":
-      return "Administrator";
-    case "leading_hand":
-      return "Leading Hand";
-    case "mechanic":
-      return "Mechanic";
-    default:
-      return "Crew Member";
-  }
-}
 
 function crewDisplay(
   crewNumber: string | null,
@@ -355,15 +344,22 @@ export default function HomeScreen() {
   const [notificationsError, setNotificationsError] =
     useState<string | null>(null);
 
-  const role = profile?.mobileRole ?? "crew";
-  const isCrew = role === "crew";
-  const isLeadingHand = role === "leading_hand";
-  const isMechanic = role === "mechanic";
-  const isAdmin = role === "admin";
+  const { can, roles } = useAccess();
 
-  const canSeePerformance = isAdmin || isLeadingHand;
-  const canUseTowerOperations = isAdmin || isLeadingHand;
-  const canUseAssets = isAdmin || isMechanic;
+  const roleLabel = roles.length > 0
+    ? roles.map((assignedRole) => assignedRole.name).join(" + ")
+    : profile?.employeeRole || "TTTracker User";
+
+  const canUseProjects = can("mobile.projects");
+  const canSeePerformance = can("mobile.projects");
+  const canUseTowerProgress = can("mobile.tower_progress");
+  const canUseDockets = can("mobile.daily_dockets");
+  const canUseTowerOperations = canUseTowerProgress || canUseDockets;
+  const canUseAssets = can("mobile.assets") || can("mobile.fleet_jobs");
+  const canUseFleetJobs = can("mobile.fleet_jobs");
+  const canUseMaterials = can("mobile.materials");
+  const canUseDeliveries = can("mobile.deliveries");
+  const canUseDefects = can("mobile.defects");
 
   const selectedProject =
     profile?.availableProjects.find(
@@ -829,7 +825,7 @@ export default function HomeScreen() {
           <Text style={styles.eyebrow}>TTTRACKER MOBILE</Text>
           <Text style={styles.heading}>Welcome, {fullName}</Text>
           <Text style={styles.role}>
-            {formatRole(role)}
+            {roleLabel}
             {profile?.employeeRole ? ` · ${profile.employeeRole}` : ""}
           </Text>
           <Text style={styles.crew}>
@@ -847,7 +843,7 @@ export default function HomeScreen() {
           />
         ) : null}
 
-        {isAdmin || isLeadingHand ? (
+        {canUseProjects ? (
           <View style={styles.projectSelectorWrapper}>
             <ProjectSelector />
           </View>
@@ -991,23 +987,19 @@ export default function HomeScreen() {
         <View style={styles.sectionHeader}>
           <View>
             <Text style={styles.sectionTitle}>
-              {isCrew
-                ? "Today"
-                : isMechanic
-                  ? "Maintenance workspace"
-                  : isLeadingHand
-                    ? "Field control"
-                    : "Management workspace"}
+              {canUseAssets && !canUseTowerOperations
+                ? "Maintenance workspace"
+                : canUseTowerOperations
+                  ? "Field workspace"
+                  : "Today"}
             </Text>
             <Text style={styles.sectionSubtitle}>
-              {isCrew
-                ? "Your home page is intentionally limited to reminders, notifications and current towers."
-                : "Only actions available to your current role are shown here."}
+              Only actions available through your current TTTracker permissions are shown here.
             </Text>
           </View>
         </View>
 
-        {isCrew ? (
+        {!canUseTowerOperations && !canUseAssets ? (
           <View style={styles.roleMessageCard}>
             <View style={styles.roleMessageIcon}>
               <CircleCheck size={22} color="#166534" strokeWidth={2.3} />
@@ -1037,7 +1029,7 @@ export default function HomeScreen() {
               />
             ) : null}
 
-            {isLeadingHand ? (
+            {canUseDockets ? (
               <QuickAction
                 label="Truck Delivery"
                 icon={Truck}
@@ -1061,7 +1053,7 @@ export default function HomeScreen() {
               />
             ) : null}
 
-            {isMechanic ? (
+            {canUseFleetJobs ? (
               <QuickAction
                 label="Vehicle Prestarts"
                 icon={ClipboardCheck}
@@ -1069,7 +1061,7 @@ export default function HomeScreen() {
               />
             ) : null}
 
-            {isAdmin ? (
+            {canUseProjects ? (
               <QuickAction
                 label="Compliance"
                 icon={ShieldCheck}
@@ -1079,7 +1071,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {isAdmin || isLeadingHand ? (
+        {canUseProjects ? (
           <>
         {dashboardError ? (
           <ErrorCard
@@ -1226,7 +1218,7 @@ export default function HomeScreen() {
           </>
         ) : null}
 
-        {!isMechanic ? (
+        {canUseTowerProgress ? (
           <>
         <View style={styles.sectionHeader}>
           <View>
@@ -1281,7 +1273,7 @@ export default function HomeScreen() {
           </>
         ) : null}
 
-        {(isAdmin || isLeadingHand) && dashboard.deliveryTowers.length > 0 ? (
+        {canUseDeliveries && dashboard.deliveryTowers.length > 0 ? (
           <>
             <View style={styles.sectionHeader}>
               <View>

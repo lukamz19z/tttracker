@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +19,7 @@ import {
   View,
 } from "react-native";
 
+import { PermissionScreen } from "@/components/common/PermissionScreen";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
 
@@ -259,15 +260,6 @@ function docketStatus(d: Docket) {
   if (isSigned(d)) return "Approved";
   return approvalLabel(d.approval_status);
 }
-function normaliseRole(value: string | null | undefined) {
-  const role = clean(value).toLowerCase();
-  if (role === "site_admin" || role === "administrator") return "admin";
-  if (role === "safety" || role === "safety_manager") return "hseq";
-  if (role === "assets" || role === "mechanic") return "asset_manager";
-  if (role === "commercial_manager") return "commercial";
-  if (role === "leading_hand" || role === "field") return "crew";
-  return role;
-}
 function inferBodyExtension(t: Tower | null) {
   const extra = t?.extra_data ?? {};
   for (const [k,v] of Object.entries(extra)) {
@@ -374,7 +366,6 @@ export default function DailyDocketScreen() {
   const [towerSearch,setTowerSearch]=useState(""), [search,setSearch]=useState(""), [form,setForm]=useState<FormState|null>(null);
   const [loading,setLoading]=useState(true), [refreshing,setRefreshing]=useState(false), [saving,setSaving]=useState(false), [prefilling,setPrefilling]=useState(false);
   const [currentUserId,setCurrentUserId]=useState("");
-  const [reviewerRoles,setReviewerRoles]=useState<string[]>([]);
   const [pendingReviewDocketId,setPendingReviewDocketId]=useState("");
 
   useEffect(()=>{
@@ -385,7 +376,7 @@ export default function DailyDocketScreen() {
   const loadData=useCallback(async(showLoader=true)=>{
     if(!projectId){setLoading(false);return;} if(showLoader)setLoading(true);
     try{
-      const [towerRes,crewRes,employeeRes,docketRes,reviewerRoleRes]=await Promise.all([
+      const [towerRes,crewRes,employeeRes,docketRes]=await Promise.all([
         supabase.from("towers").select("id,project_id,name,line,status,progress,extra_data").eq("project_id",projectId).order("name"),
         supabase.from("crews").select("id,crew_number,crew_name,leading_hand,active").order("crew_number"),
         supabase.from("employees").select("id,full_name,role,crew_id,active").order("full_name"),
@@ -394,20 +385,9 @@ export default function DailyDocketScreen() {
           .select("id,project_id,tower_id,docket_date,crew,leading_hand,weather,rate_type,progress_model,approval_status,approval_revision,assembly_percent,erection_percent,lunch_break_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,mobilisation_notes,missing_items_bolts,delays_comments,raw_manhours,production_manhours,incident_occurred,incident_type,incident_notes,bc_rep_name,bc_submitted_by,bc_signature_data_url,bc_signed_at,client_rep_name,signed_date")
           .eq("project_id",projectId)
           .order("docket_date",{ascending:false}),
-        supabase
-          .from("project_docket_approval_roles")
-          .select("role,receives_bc_review")
-          .eq("project_id",projectId)
-          .eq("receives_bc_review",true),
       ]);
       if(towerRes.error)throw towerRes.error;
       if(docketRes.error)throw docketRes.error;
-      if(reviewerRoleRes.error)throw reviewerRoleRes.error;
-      setReviewerRoles(
-        (reviewerRoleRes.data??[])
-          .map((row:any)=>normaliseRole(clean(row.role)))
-          .filter(Boolean)
-      );
       const dockets=(docketRes.data??[]) as Docket[], ids=dockets.map(d=>d.id);
       let labour:LabourDb[]=[],progress:ProgressDb[]=[],delays:DelayDb[]=[],plant:PlantDb[]=[],materialEvents:any[]=[];
       if(ids.length){
@@ -442,7 +422,8 @@ export default function DailyDocketScreen() {
       if(!url)return;
       const pathMatch=url.match(/\/dockets\/([^/?#]+)\/review(?:[/?#]|$)/i);
       if(pathMatch?.[1]){
-        setPendingReviewDocketId(decodeURIComponent(pathMatch[1]));
+        const docketId=decodeURIComponent(pathMatch[1]);
+        router.push(`/approvals/dockets/${encodeURIComponent(docketId)}` as Href);
         return;
       }
       const queryMatch=url.match(/[?&]docketId=([^&#]+)/i);
@@ -461,11 +442,12 @@ export default function DailyDocketScreen() {
   function canEditDocket(d:Docket){
     const status=clean(d.approval_status)||"legacy";
     if(isSigned(d)||["final","legacy_final","client_pending"].includes(status))return false;
-    if(status==="submitted_bc"){
-      const isSubmitter=Boolean(currentUserId&&clean(d.bc_submitted_by)===currentUserId);
-      const isReviewer=reviewerRoles.includes(normaliseRole(p?.role));
-      return isSubmitter||isReviewer;
-    }
+    // Once submitted, the standard field editor is locked.
+    // Configured BC reviewers act through My Approvals, where exact-user
+    // reviewer authority, signature requirements and workflow transitions are
+    // enforced by the server. A returned docket becomes editable again when
+    // its status changes to bc_changes_requested/client_changes_requested.
+    if(status==="submitted_bc")return false;
     return true;
   }
 
@@ -605,7 +587,7 @@ export default function DailyDocketScreen() {
     setPendingReviewDocketId("");
   // openBundle/canEditDocket intentionally use the latest loaded project state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[pendingReviewDocketId,bundles,currentUserId,reviewerRoles]);
+  },[pendingReviewDocketId,bundles,currentUserId]);
 
 
   function updateLabour(i:number,k:keyof LabourRow,v:string){setForm(f=>!f?f:{...f,labourRows:f.labourRows.map((r,x)=>{if(x!==i)return r;const n={...r,[k]:v};if(k==="time_in"||k==="time_out")n.total_hours=calculateHours(n.time_in,n.time_out);return n;})});}
@@ -1157,9 +1139,9 @@ export default function DailyDocketScreen() {
     </View>;
   }
 
-  if(loading)return <SafeAreaView style={styles.safeArea}><View style={styles.loading}><ActivityIndicator size="large" color="#2563EB"/><Text style={styles.loadingText}>Loading daily dockets…</Text></View></SafeAreaView>;
+  if(loading)return <PermissionScreen permission="mobile.daily_dockets"><SafeAreaView style={styles.safeArea}><View style={styles.loading}><ActivityIndicator size="large" color="#2563EB"/><Text style={styles.loadingText}>Loading daily dockets…</Text></View></SafeAreaView></PermissionScreen>;
 
-  return <SafeAreaView style={styles.safeArea}><View style={styles.screen}>
+  return <PermissionScreen permission="mobile.daily_dockets"><SafeAreaView style={styles.safeArea}><View style={styles.screen}>
     <View style={styles.header}><View style={styles.headerRow}><View style={styles.headerText}><Text style={styles.title}>Daily Dockets</Text><Text style={styles.subtitle}>{projectNumber?`${projectNumber} · ${projectName}`:projectName||"No project selected"}</Text></View><Pressable style={styles.addButton} onPress={openCreate}><Ionicons name="add" size={23} color="#FFF"/></Pressable><Pressable style={styles.refreshButton} onPress={()=>void refresh()}>{refreshing?<ActivityIndicator size="small" color="#334155"/>:<Ionicons name="refresh" size={20} color="#334155"/>}</Pressable></View></View>
     {!projectId?<Empty title="No project selected" text="Select a project from Home first."/>:<FlatList data={visibleBundles} keyExtractor={i=>i.docket.id} renderItem={renderDocket} contentContainerStyle={styles.listContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} ListHeaderComponent={<View>
       <Pressable style={styles.towerSelector} onPress={()=>setTowerPickerOpen(true)}><View style={styles.towerText}><Text style={styles.towerLabel}>SELECTED TOWER</Text><Text style={styles.towerValue}>{selectedTower?towerLabel(selectedTower):"Choose a tower"}</Text></View><Ionicons name="chevron-down" size={19} color="#64748B"/></Pressable>
@@ -1168,7 +1150,7 @@ export default function DailyDocketScreen() {
     </View>} ListEmptyComponent={<Empty title="No dockets for this tower" text="Tap + to create the first docket."/>}/>}
     <TowerPicker visible={towerPickerOpen} towers={visibleTowers} search={towerSearch} onSearch={setTowerSearch} onClose={()=>setTowerPickerOpen(false)} onSelect={t=>{setSelectedTowerId(t.id);setTowerPickerOpen(false);setSearch("");}}/>
     <DocketEditor form={form} tower={towers.find(r=>r.id===form?.towerId)??null} towers={towers} crews={crews} employees={employees} saving={saving} prefilling={prefilling} onClose={()=>setForm(null)} onChange={setForm} onSelectCrew={id=>void selectCrew(id)} onPrefill={()=>void prefillPreviousDay()} onUpdateLabour={updateLabour} onBlurLabourTime={blurLabourTime} onUpdateProgress={updateProgress} onUpdatePlant={updatePlant} onBlurPlantTime={blurPlantTime} onUpdateDelay={updateDelay} onUpdateEvent={updateEvent} onUpdateItem={updateItem} onUpdatePerson={updatePerson} onUpdateMPlant={updateMPlant} onSearchMaterial={(ei,ii,q)=>void searchProjectMaterial(ei,ii,q)} onChooseCatalogItem={chooseCatalogItem} onSave={()=>void saveDocket()}/>
-  </View></SafeAreaView>;
+  </View></SafeAreaView></PermissionScreen>;
 }
 
 function DocketEditor(props:{

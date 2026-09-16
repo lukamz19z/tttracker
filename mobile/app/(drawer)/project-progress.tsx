@@ -23,10 +23,8 @@ import {
   Scale,
 } from "lucide-react-native";
 
-import {
-  type MobileRole,
-  useAuth,
-} from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
 
 type ProjectRow = {
@@ -418,14 +416,6 @@ function getDeliveredQty(
   );
 }
 
-function canSeePerformance(
-  role: MobileRole,
-) {
-  return (
-    role === "admin" ||
-    role === "leading_hand"
-  );
-}
 
 function projectLabel(
   project: ProjectRow | null,
@@ -441,12 +431,9 @@ function projectLabel(
 
 export default function ProjectProgressScreen() {
   const { profile } = useAuth();
+  const { can } = useAccess();
 
-  const role =
-    profile?.mobileRole ?? "crew";
-
-  const performanceVisible =
-    canSeePerformance(role);
+  const performanceVisible = can("mobile.projects");
 
   const projectId =
     profile?.projectId ?? null;

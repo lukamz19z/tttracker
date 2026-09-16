@@ -26,6 +26,7 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import {
   readSitePrestartJson,
   sitePrestartApi,
@@ -189,7 +190,8 @@ function breathDisplay(value: unknown) {
 
 export default function SitePrestartScreen() {
   const { profile } = useAuth();
-  const role = profile?.mobileRole ?? "crew";
+  const { can } = useAccess();
+  const canUseSitePrestart = can("mobile.site_prestarts");
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -361,7 +363,7 @@ export default function SitePrestartScreen() {
   }, []);
 
   useEffect(() => {
-    if (role !== "admin") {
+    if (!canUseSitePrestart) {
       setLoading(false);
       return;
     }
@@ -380,7 +382,7 @@ export default function SitePrestartScreen() {
         setLoading(false);
       }
     })();
-  }, [loadBootstrap, role]);
+  }, [canUseSitePrestart, loadBootstrap]);
 
   async function refresh() {
     setRefreshing(true);
@@ -842,7 +844,7 @@ export default function SitePrestartScreen() {
     );
   }
 
-  if (role !== "admin") {
+  if (!canUseSitePrestart) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.accessCard}>

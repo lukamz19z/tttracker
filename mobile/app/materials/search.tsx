@@ -1,0 +1,9 @@
+import { useMemo, useState } from "react";
+import { TextInput, StyleSheet, Text, View } from "react-native";
+import { useMaterials } from "@/contexts/MaterialsContext";
+import { MaterialCard, MaterialsShell } from "@/components/materials/MaterialsShell";
+const c=(v:unknown)=>String(v??"").trim(); const hay=(r:Record<string,unknown>)=>Object.values(r).map(c).join(" ").toLowerCase();
+export default function MaterialSearch(){const {data}=useMaterials();const[q,setQ]=useState("");// Separate expression avoids coercion mistakes while keeping all project data searchable.
+const rows=useMemo(()=>{const x=q.trim().toLowerCase();if(!x||!data)return[];const all=[...data.members.map(r=>({type:"Member",r})),...data.bundles.map(r=>({type:"Bundle",r})),...data.bolts.map(r=>({type:"Bolt",r}))];return all.filter(item=>hay(item.r).includes(x)).slice(0,100)},[data,q]);
+return <MaterialsShell title="Search" subtitle="Searches the locally cached project register, so it works offline."><TextInput value={q} onChangeText={setQ} placeholder="Member, bundle, drawing, segment, bolt…" style={s.input}/>{q&&!rows.length?<Text style={s.none}>No matches.</Text>:null}{rows.map((item,i)=>{const r=item.r;const title=item.type==="Member"?c(r.mark_no)||"Member":item.type==="Bundle"?`Bundle ${c(r.bundle_no)}`:`${c(r.bolt_diameter)} ${c(r.length)}`;const subtitle=item.type==="Member"?[c(r.bundle_reference),c(r.drawing_number),c(r.tower_segment)].filter(Boolean).join(" · "):item.type==="Bundle"?[c(r.section),`Qty ${c(r.qty_required)}`].filter(Boolean).join(" · "):[c(r.tower_segment),c(r.dn_sn),`Qty ${c(r.qty)}`].filter(Boolean).join(" · ");return <MaterialCard key={`${item.type}-${c(r.id)||i}`} title={`${item.type}: ${title}`} subtitle={subtitle} meta={`Tower ${c(r.tower_id)}`}/>})}</MaterialsShell>}
+const s=StyleSheet.create({input:{borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",borderRadius:13,padding:13},none:{color:"#64748b",textAlign:"center",padding:30}});

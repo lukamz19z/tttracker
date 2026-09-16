@@ -16,10 +16,8 @@ import {
   View,
 } from "react-native";
 
-import {
-  type MobileRole,
-  useAuth,
-} from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
 
 type Tower = {
@@ -349,12 +347,9 @@ async function safeSelectFirstExisting<T>(
 
 export default function TowerProgressScreen() {
   const { profile } = useAuth();
+  const { can } = useAccess();
 
-  const role: MobileRole =
-    profile?.mobileRole ?? "crew";
-
-  const canOpenDockets =
-    role === "leading_hand" || role === "admin";
+  const canOpenDockets = can("mobile.daily_dockets");
 
   const projectId = profile?.projectId ?? "";
 

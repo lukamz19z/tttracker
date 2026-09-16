@@ -44,10 +44,8 @@ import {
   X,
 } from "lucide-react-native";
 
-import {
-  type MobileRole,
-  useAuth,
-} from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
 
 type SelectOption = {
@@ -122,18 +120,6 @@ function nullableTrimmed(value: string) {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function formatRole(role: MobileRole) {
-  switch (role) {
-    case "admin":
-      return "Administrator";
-    case "leading_hand":
-      return "Leading Hand";
-    case "mechanic":
-      return "Mechanic";
-    default:
-      return "Crew Member";
-  }
-}
 
 function formatCrew(
   crewNumber: string | null | undefined,
@@ -211,7 +197,10 @@ export default function ProfileScreen() {
   );
 
   const user = session?.user ?? null;
-  const role = profile?.mobileRole ?? "crew";
+  const { roles } = useAccess();
+  const roleLabel = roles.length > 0
+    ? roles.map((assignedRole) => assignedRole.name).join(" + ")
+    : profile?.employeeRole || "TTTracker User";
 
   const fullName =
     employee?.full_name ||
@@ -514,7 +503,7 @@ export default function ProfileScreen() {
             <View style={styles.identityContent}>
               <Text style={styles.identityName}>{displayName}</Text>
               <Text style={styles.identityRole}>
-                {formatRole(role)}
+                {roleLabel}
                 {(employee?.role ?? profile?.employeeRole)
                   ? ` · ${employee?.role ?? profile?.employeeRole}`
                   : ""}
@@ -563,7 +552,7 @@ export default function ProfileScreen() {
             <InfoRow
               icon={UserRound}
               label="App access"
-              value={formatRole(role)}
+              value={roleLabel}
             />
             <InfoDivider />
             <InfoRow
