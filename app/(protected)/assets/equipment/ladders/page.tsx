@@ -2,10 +2,12 @@
 
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   Edit,
+  FileText,
   Plus,
   RefreshCw,
   Save,
@@ -14,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
+import { syncEquipmentSharePointFolderClient } from "@/lib/assets/client-sharepoint";
 import { PageHeader, PageShell, RegisterList } from "../../components";
 
 type Crew = {
@@ -339,17 +342,25 @@ export default function LaddersPage() {
       updated_at: new Date().toISOString(),
     };
 
+    let savedId = editingId;
+
     if (!editingId) {
-      const { error } = await supabase.from("equipment_ladders").insert({
-        ladder_number: nextNumber,
-        ...payload,
-      });
+      const { data, error } = await supabase
+        .from("equipment_ladders")
+        .insert({
+          ladder_number: nextNumber,
+          ...payload,
+        })
+        .select("id")
+        .single();
 
       if (error) {
         alert(`Failed to save ladder: ${error.message}`);
         setSaving(false);
         return;
       }
+
+      savedId = data?.id ?? null;
     } else {
       const { error } = await supabase
         .from("equipment_ladders")
@@ -360,6 +371,24 @@ export default function LaddersPage() {
         alert(`Failed to update ladder: ${error.message}`);
         setSaving(false);
         return;
+      }
+    }
+
+    if (savedId) {
+      try {
+        await syncEquipmentSharePointFolderClient({
+          supabase,
+          equipmentType: "ladder",
+          equipmentId: savedId,
+        });
+      } catch (sharePointError) {
+        alert(
+          `Ladder saved, but its SharePoint folder could not be synchronised: ${
+            sharePointError instanceof Error
+              ? sharePointError.message
+              : "Unknown SharePoint error."
+          }`,
+        );
       }
     }
 
@@ -638,6 +667,14 @@ export default function LaddersPage() {
             label: "Actions",
             render: (item) => (
               <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/equipment/records/ladder/${item.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                >
+                  <FileText size={14} />
+                  Documents
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => openEditForm(item)}
@@ -727,6 +764,14 @@ export default function LaddersPage() {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/equipment/records/ladder/${item.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                >
+                  <FileText size={14} />
+                  Documents
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => openEditForm(item)}

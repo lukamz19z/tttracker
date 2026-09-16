@@ -19,7 +19,6 @@ import type {
   AssetEventRow,
   AssetRecord,
   AssetServiceRecordRow,
-  LegacyAssetDocument,
 } from "@/lib/assets/types";
 
 export const runtime = "nodejs";
@@ -57,34 +56,6 @@ type FleetJobRaw = {
   completed_at?: string | null;
   completed_date?: string | null;
 };
-
-async function legacyDocuments({
-  service,
-  assetType,
-  assetId,
-}: {
-  service: AssetServiceClient;
-  assetType: "vehicle" | "plant";
-  assetId: string;
-}) {
-  const table =
-    assetType === "vehicle" ? "vehicle_documents" : "plant_asset_documents";
-  const idColumn =
-    assetType === "vehicle" ? "vehicle_asset_id" : "plant_asset_id";
-
-  const { data, error } = await service
-    .from(table)
-    .select("*")
-    .eq(idColumn, assetId)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    console.warn(`Legacy ${assetType} documents could not be loaded`, error);
-    return [];
-  }
-
-  return (data ?? []) as LegacyAssetDocument[];
-}
 
 async function projectHistory({
   service,
@@ -151,7 +122,6 @@ export async function GET(request: Request, context: RouteContext) {
       eventResult,
       documentTypeResult,
       spend,
-      legacyDocs,
       projects,
     ] = await Promise.all([
       service
@@ -187,7 +157,6 @@ export async function GET(request: Request, context: RouteContext) {
         .order("sort_order")
         .order("name"),
       loadAssetSpend({ service, assetType, assetId }),
-      legacyDocuments({ service, assetType, assetId }),
       projectHistory({ service, assetType, assetId }),
     ]);
 
@@ -230,7 +199,6 @@ export async function GET(request: Request, context: RouteContext) {
       assetType,
       assetLabel: assetLabel(assetType, asset),
       documents: (documentResult.data ?? []) as AssetDocumentRow[],
-      legacyDocuments: legacyDocs,
       services,
       serviceItems,
       prestarts: prestartResult.error ? [] : prestartResult.data ?? [],

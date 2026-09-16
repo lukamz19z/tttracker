@@ -1,4 +1,5 @@
 import {
+  deleteDriveItem,
   ensureDriveFolder,
   getDriveChildByName,
   graphRequest,
@@ -552,7 +553,6 @@ export async function publishAssetDocument(
   });
 
   const assetColumn = assetIdColumn(assetType);
-
   let previousDocuments: AssetDocumentRow[] = [];
   let supersededCategoryFolder: SharePointDriveItem | null = null;
   let supersededPath = "";
@@ -584,19 +584,6 @@ export async function publishAssetDocument(
         superseded.superseded.name,
         superseded.categoryFolder.name,
       ].join("/");
-
-      for (const previous of previousDocuments) {
-        if (
-          clean(previous.sharepoint_drive_id) === resolved.driveId &&
-          clean(previous.sharepoint_item_id)
-        ) {
-          await moveDriveItem({
-            driveId: resolved.driveId,
-            itemId: previous.sharepoint_item_id,
-            parentItemId: superseded.categoryFolder.id,
-          });
-        }
-      }
     }
   }
 
@@ -606,154 +593,216 @@ export async function publishAssetDocument(
     name: fileName,
   });
 
-  if (collision) {
+  const previousItemIds = new Set(
+    previousDocuments.map((row) => clean(row.sharepoint_item_id)).filter(Boolean),
+  );
+
+  if (collision && !previousItemIds.has(collision.id)) {
     throw new Error(
       `${fileName} already exists in the current Asset SharePoint folder. Check the configured date / naming rule before uploading.`,
     );
   }
 
-  const item = await uploadDriveItemContent({
-    driveId: resolved.driveId,
-    parentItemId: resolved.categoryFolder.id,
-    fileName,
-    content: input.content,
-    contentType: input.contentType || "application/octet-stream",
-  });
+  const movedPrevious: Array<{ itemId: string; previousFolderId: string | null }> = [];
+  let uploadedItem: SharePointDriveItem | null = null;
 
-  const { data: inserted, error: insertError } = await service
-    .from("asset_documents")
-    .insert({
-      asset_type: assetType,
-      vehicle_asset_id: assetType === "vehicle" ? assetId : null,
-      plant_asset_id: assetType === "plant" ? assetId : null,
-      document_type_id: documentType.id,
-      document_type_name: documentType.name,
-      document_type_code: documentType.code,
-      naming_template_snapshot: documentType.naming_template,
-      replacement_mode_snapshot: documentType.replacement_mode,
-      document_category: documentType.category,
-      title: clean(input.title) || documentType.name,
-      document_date: clean(input.documentDate) || null,
-      expiry_date: clean(input.expiryDate) || null,
-      supplier: clean(input.supplier) || null,
-      invoice_number: clean(input.invoiceNumber) || null,
-      amount_ex_gst: input.amountExGst ?? null,
-      gst_amount: input.gstAmount ?? null,
-      amount_inc_gst: input.amountIncGst ?? null,
-      service_record_id: clean(input.serviceRecordId) || null,
-      fleet_job_id: clean(input.fleetJobId) || null,
-      financial_submission_id: clean(input.financialSubmissionId) || null,
-      financial_item_id: clean(input.financialItemId) || null,
-      financial_attachment_id: clean(input.financialAttachmentId) || null,
-      source: input.source ?? "assets",
-      generated_by_module: clean(input.generatedByModule) || null,
-      file_name: fileName,
-      content_type: input.contentType || "application/octet-stream",
-      file_size_bytes:
-        input.content instanceof ArrayBuffer
-          ? input.content.byteLength
-          : input.content.byteLength,
-      sharepoint_site_id: resolved.settings.sharepoint_site_id,
-      sharepoint_drive_id: resolved.driveId,
-      sharepoint_folder_id: resolved.categoryFolder.id,
-      sharepoint_item_id: item.id,
-      sharepoint_web_url: item.webUrl ?? null,
-      sharepoint_folder_path: [
-        resolved.baseFolder.name,
-        resolved.typeFolder.name,
-        resolved.assetFolder.name,
-        resolved.categoryFolder.name,
-      ].join("/"),
-      is_current: documentType.replacement_mode === "current",
-      supersedes_document_id: previousDocuments[0]?.id ?? null,
-      superseded_by_document_id: null,
-      superseded_at: null,
-      superseded_by: null,
-      uploaded_by: identity.userId,
-      uploaded_by_name: identity.name,
-      active: true,
-    })
-    .select("*")
-    .single();
-
-  if (insertError) throw new Error(insertError.message);
-
-  const document = inserted as AssetDocumentRow;
-
-  if (previousDocuments.length > 0) {
-    const now = new Date().toISOString();
-
-    for (const previous of previousDocuments) {
-      const { error } = await service
-        .from("asset_documents")
-        .update({
-          active: false,
-          is_current: false,
-          superseded_by_document_id: document.id,
-          superseded_at: now,
-          superseded_by: identity.userId,
-          sharepoint_folder_id:
-            supersededCategoryFolder?.id ?? previous.sharepoint_folder_id,
-          sharepoint_folder_path:
-            supersededPath || previous.sharepoint_folder_path,
-        })
-        .eq("id", previous.id);
-
-      if (error) throw new Error(error.message);
+  try {
+    // Current-document replacements are moved only immediately before the new
+    // upload. If the upload/metadata insert fails, the catch block restores
+    // them to the current category folder so a failed upload cannot strand the
+    // previous controlled document in Superseded.
+    if (supersededCategoryFolder) {
+      for (const previous of previousDocuments) {
+        if (
+          clean(previous.sharepoint_drive_id) === resolved.driveId &&
+          clean(previous.sharepoint_item_id)
+        ) {
+          await moveDriveItem({
+            driveId: resolved.driveId,
+            itemId: previous.sharepoint_item_id,
+            parentItemId: supersededCategoryFolder.id,
+          });
+          movedPrevious.push({
+            itemId: previous.sharepoint_item_id,
+            previousFolderId: previous.sharepoint_folder_id,
+          });
+        }
+      }
     }
-  }
 
-  if (documentType.replacement_mode === "current") {
-    await updateMappedAssetField({
-      service,
-      assetType,
-      assetId,
-      documentType,
-      documentDate: input.documentDate,
-      expiryDate: input.expiryDate,
+    uploadedItem = await uploadDriveItemContent({
+      driveId: resolved.driveId,
+      parentItemId: resolved.categoryFolder.id,
+      fileName,
+      content: input.content,
+      contentType: input.contentType || "application/octet-stream",
     });
-  }
 
-  if (input.createTimelineEvent !== false) {
-    const { error } = await service.from("asset_events").insert({
-      asset_type: assetType,
-      vehicle_asset_id: assetType === "vehicle" ? assetId : null,
-      plant_asset_id: assetType === "plant" ? assetId : null,
-      event_type:
-        documentType.system_key === "risk_assessment"
-          ? "compliance"
-          : "document",
-      event_date:
-        clean(input.documentDate) ||
-        clean(input.expiryDate) ||
-        new Date().toISOString().slice(0, 10),
-      title: `${documentType.name} updated`,
-      description: fileName,
-      supplier: clean(input.supplier) || null,
-      cost: input.amountIncGst ?? null,
-      odometer_km: null,
-      engine_hours: null,
-      fleet_job_id: clean(input.fleetJobId) || null,
-      service_record_id: clean(input.serviceRecordId) || null,
-      document_id: document.id,
-      financial_submission_id: clean(input.financialSubmissionId) || null,
-      performed_by: identity.userId,
-      performed_by_name: identity.name,
-      metadata: {
+    const { data: inserted, error: insertError } = await service
+      .from("asset_documents")
+      .insert({
+        asset_type: assetType,
+        vehicle_asset_id: assetType === "vehicle" ? assetId : null,
+        plant_asset_id: assetType === "plant" ? assetId : null,
         document_type_id: documentType.id,
+        document_type_name: documentType.name,
         document_type_code: documentType.code,
-        replacement_mode: documentType.replacement_mode,
-        superseded_count: previousDocuments.length,
-        action_route: assetDetailRoute(assetType, assetId),
-      },
-    });
+        naming_template_snapshot: documentType.naming_template,
+        replacement_mode_snapshot: documentType.replacement_mode,
+        document_category: documentType.category,
+        title: clean(input.title) || documentType.name,
+        document_date: clean(input.documentDate) || null,
+        expiry_date: clean(input.expiryDate) || null,
+        supplier: clean(input.supplier) || null,
+        invoice_number: clean(input.invoiceNumber) || null,
+        amount_ex_gst: input.amountExGst ?? null,
+        gst_amount: input.gstAmount ?? null,
+        amount_inc_gst: input.amountIncGst ?? null,
+        service_record_id: clean(input.serviceRecordId) || null,
+        fleet_job_id: clean(input.fleetJobId) || null,
+        financial_submission_id: clean(input.financialSubmissionId) || null,
+        financial_item_id: clean(input.financialItemId) || null,
+        financial_attachment_id: clean(input.financialAttachmentId) || null,
+        source: input.source ?? "assets",
+        generated_by_module: clean(input.generatedByModule) || null,
+        file_name: fileName,
+        content_type: input.contentType || "application/octet-stream",
+        file_size_bytes: input.content.byteLength,
+        sharepoint_site_id: resolved.settings.sharepoint_site_id,
+        sharepoint_drive_id: resolved.driveId,
+        sharepoint_folder_id: resolved.categoryFolder.id,
+        sharepoint_item_id: uploadedItem.id,
+        sharepoint_web_url: uploadedItem.webUrl ?? null,
+        sharepoint_folder_path: [
+          resolved.baseFolder.name,
+          resolved.typeFolder.name,
+          resolved.assetFolder.name,
+          resolved.categoryFolder.name,
+        ].join("/"),
+        is_current: documentType.replacement_mode === "current",
+        supersedes_document_id: previousDocuments[0]?.id ?? null,
+        superseded_by_document_id: null,
+        superseded_at: null,
+        superseded_by: null,
+        uploaded_by: identity.userId,
+        uploaded_by_name: identity.name,
+        active: true,
+      })
+      .select("*")
+      .single();
 
-    if (error) {
-      console.error("Asset document timeline insert warning", error);
+    if (insertError) throw new Error(insertError.message);
+
+    const document = inserted as AssetDocumentRow;
+
+    if (previousDocuments.length > 0) {
+      const now = new Date().toISOString();
+
+      for (const previous of previousDocuments) {
+        const { error } = await service
+          .from("asset_documents")
+          .update({
+            active: false,
+            is_current: false,
+            superseded_by_document_id: document.id,
+            superseded_at: now,
+            superseded_by: identity.userId,
+            sharepoint_folder_id:
+              supersededCategoryFolder?.id ?? previous.sharepoint_folder_id,
+            sharepoint_folder_path:
+              supersededPath || previous.sharepoint_folder_path,
+          })
+          .eq("id", previous.id);
+
+        if (error) {
+          console.error(
+            `Asset document ${previous.id} supersede metadata warning`,
+            error,
+          );
+        }
+      }
     }
-  }
 
-  return document;
+    if (documentType.replacement_mode === "current") {
+      await updateMappedAssetField({
+        service,
+        assetType,
+        assetId,
+        documentType,
+        documentDate: input.documentDate,
+        expiryDate: input.expiryDate,
+      });
+    }
+
+    if (input.createTimelineEvent !== false) {
+      const { error } = await service.from("asset_events").insert({
+        asset_type: assetType,
+        vehicle_asset_id: assetType === "vehicle" ? assetId : null,
+        plant_asset_id: assetType === "plant" ? assetId : null,
+        event_type:
+          documentType.system_key === "risk_assessment"
+            ? "compliance"
+            : "document",
+        event_date:
+          clean(input.documentDate) ||
+          clean(input.expiryDate) ||
+          new Date().toISOString().slice(0, 10),
+        title: `${documentType.name} updated`,
+        description: fileName,
+        supplier: clean(input.supplier) || null,
+        cost: input.amountIncGst ?? null,
+        odometer_km: null,
+        engine_hours: null,
+        fleet_job_id: clean(input.fleetJobId) || null,
+        service_record_id: clean(input.serviceRecordId) || null,
+        document_id: document.id,
+        financial_submission_id: clean(input.financialSubmissionId) || null,
+        performed_by: identity.userId,
+        performed_by_name: identity.name,
+        metadata: {
+          document_type_id: documentType.id,
+          document_type_code: documentType.code,
+          replacement_mode: documentType.replacement_mode,
+          superseded_count: previousDocuments.length,
+          action_route: assetDetailRoute(assetType, assetId),
+        },
+      });
+
+      if (error) {
+        console.error("Asset document timeline insert warning", error);
+      }
+    }
+
+    return document;
+  } catch (error) {
+    if (uploadedItem?.id) {
+      try {
+        await deleteDriveItem({
+          driveId: resolved.driveId,
+          itemId: uploadedItem.id,
+        });
+      } catch (cleanupError) {
+        console.error("Failed to clean up incomplete SharePoint upload", cleanupError);
+      }
+    }
+
+    for (const moved of movedPrevious) {
+      try {
+        await moveDriveItem({
+          driveId: resolved.driveId,
+          itemId: moved.itemId,
+          parentItemId: resolved.categoryFolder.id,
+        });
+      } catch (restoreError) {
+        console.error(
+          `Failed to restore previous SharePoint document ${moved.itemId}`,
+          restoreError,
+        );
+      }
+    }
+
+    throw error;
+  }
 }
 
 export type RecursiveAssetFile = {

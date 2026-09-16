@@ -2,9 +2,11 @@
 
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { Edit, FileText, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
+import { syncEquipmentSharePointFolderClient } from "@/lib/assets/client-sharepoint";
 import { PageHeader, PageShell, RegisterList } from "../../components";
 
 type Crew = {
@@ -267,6 +269,8 @@ export default function TorqueWrenchesPage() {
   async function handleSave() {
     setSaving(true);
 
+    let savedId = editingId;
+
     if (!editingId) {
       const payload = {
         torque_wrench_number: nextNumber,
@@ -278,15 +282,19 @@ export default function TorqueWrenchesPage() {
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("equipment_torque_wrenches")
-        .insert(payload);
+        .insert(payload)
+        .select("id")
+        .single();
 
       if (error) {
         alert(`Failed to save torque wrench: ${error.message}`);
         setSaving(false);
         return;
       }
+
+      savedId = data?.id ?? null;
     } else {
       const payload = {
         serial_number: clean(form.serial_number) || null,
@@ -306,6 +314,24 @@ export default function TorqueWrenchesPage() {
         alert(`Failed to update torque wrench: ${error.message}`);
         setSaving(false);
         return;
+      }
+    }
+
+    if (savedId) {
+      try {
+        await syncEquipmentSharePointFolderClient({
+          supabase,
+          equipmentType: "torque_wrench",
+          equipmentId: savedId,
+        });
+      } catch (sharePointError) {
+        alert(
+          `Torque wrench saved, but its SharePoint folder could not be synchronised: ${
+            sharePointError instanceof Error
+              ? sharePointError.message
+              : "Unknown SharePoint error."
+          }`,
+        );
       }
     }
 
@@ -560,6 +586,14 @@ export default function TorqueWrenchesPage() {
             label: "Actions",
             render: (item) => (
               <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/equipment/records/torque_wrench/${item.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                >
+                  <FileText size={14} />
+                  Documents
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => openEditForm(item)}
@@ -642,6 +676,14 @@ export default function TorqueWrenchesPage() {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                <Link
+                  href={`/assets/equipment/records/torque_wrench/${item.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                >
+                  <FileText size={14} />
+                  Documents
+                </Link>
+
                 <button
                   type="button"
                   onClick={() => openEditForm(item)}

@@ -2,10 +2,12 @@
 
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   Edit,
+  FileText,
   Minus,
   Plus,
   Printer,
@@ -16,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
+import { syncEquipmentSharePointFolderClient } from "@/lib/assets/client-sharepoint";
 import { PageHeader, PageShell } from "../../components";
 
 type TabKey = "ppe" | "first-aid" | "snake-bite" | "spare-keys";
@@ -792,6 +795,22 @@ export default function InventoryPage() {
 
     if (kitId) {
       await syncKitInspectionItems(kitId, payload.kit_type);
+
+      try {
+        await syncEquipmentSharePointFolderClient({
+          supabase,
+          equipmentType: "inventory_kit",
+          equipmentId: kitId,
+        });
+      } catch (sharePointError) {
+        alert(
+          `Inventory kit saved, but its SharePoint folder could not be synchronised: ${
+            sharePointError instanceof Error
+              ? sharePointError.message
+              : "Unknown SharePoint error."
+          }`,
+        );
+      }
     }
 
     closeKitForm();
@@ -1622,6 +1641,10 @@ function KitsSection({
                         <button type="button" onClick={() => setSelectedKitId(kit.id)} className="rounded-lg border px-3 py-2 text-xs font-bold">
                           Inspect
                         </button>
+                        <Link href={`/assets/equipment/records/inventory_kit/${kit.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                          <FileText size={14} className="mr-1 inline" />
+                          Documents
+                        </Link>
                         <button type="button" onClick={() => openKitForm(kit)} className="rounded-lg border px-3 py-2 text-xs font-bold">
                           Edit
                         </button>

@@ -26,14 +26,14 @@ export async function GET(request: Request, context: RouteContext) {
     const { data: document, error } = await service
       .from("asset_documents")
       .select(
-        "id,file_name,content_type,sharepoint_drive_id,sharepoint_item_id,active",
+        "id,file_name,content_type,sharepoint_drive_id,sharepoint_item_id,active,superseded_at",
       )
       .eq("id", documentId)
       .maybeSingle();
 
     if (error) throw new Error(error.message);
 
-    if (!document || document.active === false) {
+    if (!document) {
       return NextResponse.json(
         { error: "Asset document could not be found." },
         { status: 404 },

@@ -55,6 +55,7 @@ export type AssetSettings = {
   sharepoint_base_folder: string;
   vehicle_folder_name: string;
   plant_folder_name: string;
+  equipment_folder_name: string;
   superseded_folder_name: string;
   document_folders: Record<string, string>;
   max_file_size_mb: number;

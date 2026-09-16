@@ -11,7 +11,6 @@ import {
   FileText,
   FolderSync,
   HardHat,
-  History,
   Loader2,
   ReceiptText,
   RefreshCw,
@@ -39,7 +38,6 @@ import type {
   AssetServiceRecordRow,
   AssetSpendRow,
   AssetType,
-  LegacyAssetDocument,
 } from "@/lib/assets/types";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -98,7 +96,6 @@ type OverviewPayload = {
   assetType: AssetType;
   assetLabel: string;
   documents: AssetDocumentRow[];
-  legacyDocuments: LegacyAssetDocument[];
   services: AssetServiceRecordRow[];
   serviceItems: ServiceItemRow[];
   prestarts: PrestartRow[];
@@ -362,7 +359,7 @@ export function AssetDetail({ assetType, assetId }: { assetType: AssetType; asse
     { id: "overview", label: "Overview" },
     { id: "history", label: "History", count: data.events.length },
     { id: "service", label: "Service History", count: data.services.length },
-    { id: "documents", label: "Documents", count: data.documents.length + data.legacyDocuments.length },
+    { id: "documents", label: "Documents", count: data.documents.length },
     { id: "spend", label: "Spend", count: data.spend.length },
     { id: "prestarts", label: "Prestarts", count: data.prestarts.length },
     { id: "fleet", label: "Fleet Jobs", count: data.fleetJobs.length },
@@ -455,7 +452,7 @@ export function AssetDetail({ assetType, assetId }: { assetType: AssetType; asse
           {tab === "overview" ? <OverviewTab data={data} assetType={assetType} /> : null}
           {tab === "history" ? <HistoryTab events={data.events} projectHistory={data.projectHistory} /> : null}
           {tab === "service" ? <ServiceTab services={data.services} items={data.serviceItems} documents={data.documents} onViewDocument={viewDocument} /> : null}
-          {tab === "documents" ? <DocumentsTab documents={data.documents} legacyDocuments={data.legacyDocuments} onViewDocument={viewDocument} /> : null}
+          {tab === "documents" ? <DocumentsTab documents={data.documents} onViewDocument={viewDocument} /> : null}
           {tab === "spend" ? <SpendTab rows={data.spend} /> : null}
           {tab === "prestarts" ? <PrestartsTab rows={data.prestarts} /> : null}
           {tab === "fleet" ? <FleetJobsTab rows={data.fleetJobs} /> : null}
@@ -627,30 +624,16 @@ function ServiceTab({ services, items, documents, onViewDocument }: { services: 
   );
 }
 
-function DocumentsTab({ documents, legacyDocuments, onViewDocument }: { documents: AssetDocumentRow[]; legacyDocuments: LegacyAssetDocument[]; onViewDocument: (document: AssetDocumentRow) => Promise<void> }) {
+function DocumentsTab({ documents, onViewDocument }: { documents: AssetDocumentRow[]; onViewDocument: (document: AssetDocumentRow) => Promise<void> }) {
   const current = documents.filter((document) => document.active);
   const superseded = documents.filter((document) => !document.active || Boolean(document.superseded_at));
 
-  if (documents.length === 0 && legacyDocuments.length === 0) return <Empty text="No controlled Asset documents yet." />;
+  if (documents.length === 0) return <Empty text="No controlled SharePoint Asset documents yet." />;
 
   return (
     <div className="space-y-7">
-      <DocumentTable title="Current / Historical Controlled Documents" documents={current} onViewDocument={onViewDocument} empty="No current controlled documents." />
-      <DocumentTable title="Superseded Documents" documents={superseded} onViewDocument={onViewDocument} empty="No superseded documents." superseded />
-      {legacyDocuments.length > 0 ? (
-        <section>
-          <div className="mb-3 flex items-center gap-2"><History size={17} className="text-slate-400" /><h3 className="font-black text-slate-900">Legacy Documents</h3></div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {legacyDocuments.map((document) => (
-              <div key={document.id} className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                <div className="font-black text-slate-900">{document.file_name || document.document_type || "Legacy document"}</div>
-                <div className="mt-1 text-xs text-slate-600">{titleCase(document.document_type)} · {dateLabel(document.created_at)}</div>
-                {document.file_url ? <a href={document.file_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-xs font-black text-blue-700"><ExternalLink size={13} /> Open legacy file</a> : null}
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <DocumentTable title="Current / Historical SharePoint Documents" documents={current} onViewDocument={onViewDocument} empty="No current controlled SharePoint documents." />
+      <DocumentTable title="Superseded SharePoint Documents" documents={superseded} onViewDocument={onViewDocument} empty="No superseded documents." superseded />
     </div>
   );
 }

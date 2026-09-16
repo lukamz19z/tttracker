@@ -175,8 +175,14 @@ type EvidenceRow = {
   assessment_id: string;
   response_id: string | null;
   evidence_type: "photo" | "document" | "other";
-  storage_bucket: string;
-  storage_path: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  sharepoint_site_id?: string | null;
+  sharepoint_drive_id?: string | null;
+  sharepoint_folder_id?: string | null;
+  sharepoint_item_id?: string | null;
+  sharepoint_web_url?: string | null;
+  sharepoint_folder_path?: string | null;
   file_name: string | null;
   mime_type: string | null;
   file_size_bytes: number | null;
@@ -186,7 +192,7 @@ type EvidenceRow = {
   display_order: number;
   include_in_report: boolean;
   created_at: string;
-  signedUrl?: string | null;
+  previewUrl?: string | null;
 };
 
 type SectionGroup = {
@@ -409,6 +415,19 @@ export default function RiskAssessmentChecklistPage() {
   const assessmentId = params.assessmentId;
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
+  const apiFetch = useCallback(
+    async (url: string, init: RequestInit = {}) => {
+      const { data: auth } = await supabase.auth.getSession();
+      if (!auth.session?.access_token) {
+        throw new Error("Your session has expired. Sign in again.");
+      }
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${auth.session.access_token}`);
+      return fetch(url, { ...init, headers, cache: "no-store" });
+    },
+    [supabase],
+  );
+
   const [assessment, setAssessment] =
     useState<AssessmentRow | null>(null);
   const [responses, setResponses] = useState<ResponseRow[]>([]);
@@ -483,16 +502,23 @@ export default function RiskAssessmentChecklistPage() {
 
     const evidenceWithUrls = await Promise.all(
       loadedEvidence.map(async (item) => {
-        const { data } = await supabase.storage
-          .from(item.storage_bucket)
-          .createSignedUrl(item.storage_path, 60 * 60);
+        if (!item.sharepoint_item_id) {
+          return { ...item, previewUrl: null };
+        }
 
-        return {
-          ...item,
-          signedUrl: data?.signedUrl ?? null,
-        };
+        try {
+          const response = await apiFetch(
+            `/api/assets/risk-assessments/evidence/${item.id}/content`,
+          );
+          if (!response.ok) return { ...item, previewUrl: null };
+          const blob = await response.blob();
+          return { ...item, previewUrl: URL.createObjectURL(blob) };
+        } catch {
+          return { ...item, previewUrl: null };
+        }
       }),
     );
+
 
     setAssessment(loadedAssessment);
     setResponses(loadedResponses);
@@ -512,7 +538,7 @@ export default function RiskAssessmentChecklistPage() {
     );
 
     setLoading(false);
-  }, [assessmentId, supabase]);
+  }, [apiFetch, assessmentId, supabase]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -899,7 +925,6 @@ export default function RiskAssessmentChecklistPage() {
     if (readOnly) return;
 
     const file = event.target.files?.[0];
-
     if (!file) return;
 
     const allowedTypes = [
@@ -928,81 +953,39 @@ export default function RiskAssessmentChecklistPage() {
     setUploadingId(response.id);
     clearMessages();
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      setUploadingId(null);
-      setErrorMessage("You must be signed in to upload evidence.");
-      return;
-    }
-
-    const extension =
-      file.name.split(".").pop()?.toLowerCase() || "file";
-    const safeName = file.name
-      .replace(/\.[^/.]+$/, "")
-      .replace(/[^a-zA-Z0-9-_]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 80);
-
     const evidenceSequence =
       (evidenceByResponse.get(response.id)?.length ?? 0) + 1;
 
-    const storagePath = `${user.id}/${assessmentId}/${response.id}/${file.lastModified}-${evidenceSequence}-${safeName}.${extension}`;
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("responseId", response.id);
+      formData.set("caption", response.item_title);
+      formData.set("displayOrder", String(evidenceSequence));
+      formData.set("includeInReport", "true");
 
-    const { error: uploadError } = await supabase.storage
-      .from("asset-risk-assessments")
-      .upload(storagePath, file, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: file.type,
-      });
-
-    if (uploadError) {
-      setUploadingId(null);
-      setErrorMessage(
-        `Failed to upload evidence: ${uploadError.message}`,
+      const uploadResponse = await apiFetch(
+        `/api/assets/risk-assessments/${assessmentId}/evidence`,
+        { method: "POST", body: formData },
       );
+      const uploadPayload = (await uploadResponse.json()) as { error?: string };
+      if (!uploadResponse.ok) {
+        throw new Error(uploadPayload.error || "Evidence upload failed.");
+      }
+    } catch (uploadError) {
+      setUploadingId(null);
       event.target.value = "";
+      setErrorMessage(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "Evidence upload failed.",
+      );
       return;
     }
-
-    const evidenceType =
-      file.type === "application/pdf"
-        ? "document"
-        : "photo";
-
-    const { error: insertError } = await supabase
-      .from("asset_risk_assessment_evidence")
-      .insert({
-        assessment_id: assessmentId,
-        response_id: response.id,
-        evidence_type: evidenceType,
-        storage_bucket: "asset-risk-assessments",
-        storage_path: storagePath,
-        file_name: file.name,
-        mime_type: file.type,
-        file_size_bytes: file.size,
-        caption: response.item_title,
-        display_order:
-          (evidenceByResponse.get(response.id)?.length ?? 0) + 1,
-        include_in_report: true,
-        uploaded_by: user.id,
-      });
 
     setUploadingId(null);
     event.target.value = "";
-
-    if (insertError) {
-      setErrorMessage(
-        `Evidence uploaded but could not be registered: ${insertError.message}`,
-      );
-      return;
-    }
-
-    setMessage("Evidence uploaded.");
+    setMessage("Evidence uploaded to SharePoint.");
     await loadAssessment();
   }
 
@@ -1017,23 +1000,26 @@ export default function RiskAssessmentChecklistPage() {
 
     setUploadingId(item.id);
 
-    await supabase.storage
-      .from(item.storage_bucket)
-      .remove([item.storage_path]);
-
-    const { error } = await supabase
-      .from("asset_risk_assessment_evidence")
-      .delete()
-      .eq("id", item.id);
-
-    setUploadingId(null);
-
-    if (error) {
+    try {
+      const response = await apiFetch(
+        `/api/assets/risk-assessments/evidence/${item.id}/content`,
+        { method: "DELETE" },
+      );
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Evidence could not be deleted.");
+      }
+    } catch (deleteError) {
+      setUploadingId(null);
       setErrorMessage(
-        `Failed to delete evidence: ${error.message}`,
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Evidence could not be deleted.",
       );
       return;
     }
+
+    setUploadingId(null);
 
     setMessage("Evidence deleted.");
     await loadAssessment();
@@ -2069,29 +2055,35 @@ function AssessmentItem({
                   className="overflow-hidden rounded-xl border border-slate-200 bg-white"
                 >
                   {item.mime_type?.startsWith("image/") &&
-                  item.signedUrl ? (
+                  item.previewUrl ? (
                     <a
-                      href={item.signedUrl}
+                      href={item.previewUrl}
                       target="_blank"
                       rel="noreferrer"
                       className="block"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={item.signedUrl}
+                        src={item.previewUrl}
                         alt={item.caption || item.file_name || "Evidence"}
                         className="h-36 w-full object-cover"
                       />
                     </a>
                   ) : (
-                    <a
-                      href={item.signedUrl ?? "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex h-28 items-center justify-center bg-slate-50 text-slate-500"
-                    >
-                      <FileText size={28} />
-                    </a>
+                    item.previewUrl ? (
+                      <a
+                        href={item.previewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-28 items-center justify-center bg-slate-50 text-slate-500"
+                      >
+                        <FileText size={28} />
+                      </a>
+                    ) : (
+                      <div className="flex h-28 items-center justify-center bg-amber-50 px-4 text-center text-xs font-bold text-amber-800">
+                        Legacy evidence — migrate this file to SharePoint before opening it here.
+                      </div>
+                    )
                   )}
 
                   <div className="flex items-center justify-between gap-2 p-3">

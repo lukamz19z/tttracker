@@ -2,11 +2,13 @@
 
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import {
   Download,
   Edit,
+  FileText,
   FileUp,
   Plus,
   Printer,
@@ -18,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
+import { syncEquipmentSharePointFolderClient } from "@/lib/assets/client-sharepoint";
 import { PageHeader, PageShell } from "../../components";
 
 type Crew = {
@@ -490,14 +493,22 @@ export default function FallArrestPage() {
       updated_at: new Date().toISOString(),
     };
 
+    let savedId = editingId;
+
     if (!editingId) {
-      const { error } = await supabase.from("equipment_lifting_gear").insert(payload);
+      const { data, error } = await supabase
+        .from("equipment_lifting_gear")
+        .insert(payload)
+        .select("id")
+        .single();
 
       if (error) {
         alert(`Failed to save fall arrest item: ${error.message}`);
         setSaving(false);
         return;
       }
+
+      savedId = data?.id ?? null;
     } else {
       const { error } = await supabase
         .from("equipment_lifting_gear")
@@ -508,6 +519,24 @@ export default function FallArrestPage() {
         alert(`Failed to update fall arrest item: ${error.message}`);
         setSaving(false);
         return;
+      }
+    }
+
+    if (savedId) {
+      try {
+        await syncEquipmentSharePointFolderClient({
+          supabase,
+          equipmentType: "fall_arrest",
+          equipmentId: savedId,
+        });
+      } catch (sharePointError) {
+        alert(
+          `Fall arrest item saved, but its SharePoint folder could not be synchronised: ${
+            sharePointError instanceof Error
+              ? sharePointError.message
+              : "Unknown SharePoint error."
+          }`,
+        );
       }
     }
 
@@ -975,6 +1004,14 @@ export default function FallArrestPage() {
                           <Tags size={14} />
                           Inspect
                         </button>
+
+                        <Link
+                          href={`/assets/equipment/records/fall_arrest/${item.id}`}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 shadow-sm hover:bg-blue-100"
+                        >
+                          <FileText size={14} />
+                          Documents
+                        </Link>
 
                         <button
                           type="button"
