@@ -1,170 +1,214 @@
 "use client";
 
+import {
+  Boxes,
+  ClipboardCheck,
+  FileCheck2,
+  RefreshCw,
+  Gauge,
+  HardHat,
+  PackageSearch,
+  Settings,
+  ShieldCheck,
+  Truck,
+  Wrench,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
 
-const topNav = [
-  { label: "Home", href: "/" },
-  { label: "Projects", href: "/projects" },
-  { label: "Assets", href: "/assets" },
-  { label: "Admin", href: "/admin" },
-];
+type NavItem = {
+  label: string;
+  href: string;
+  icon: typeof Gauge;
+  children?: Array<{ label: string; href: string }>;
+};
 
-const assetNav = [
-  { label: "Dashboard", href: "/assets" },
-  { label: "Fleet Jobs", href: "/assets/fleet-jobs" },
-  { label: "Plant", href: "/assets/plant" },
-  { label: "Vehicles", href: "/assets/vehicles" },
+const NAV: NavItem[] = [
+  { label: "Overview", href: "/assets", icon: Gauge },
+  { label: "Update Asset", href: "/assets/update", icon: RefreshCw },
+  { label: "Fleet Jobs", href: "/assets/fleet-jobs", icon: Wrench },
+  { label: "Service Register", href: "/assets/services", icon: FileCheck2 },
+  { label: "Plant", href: "/assets/plant", icon: HardHat },
+  { label: "Vehicles", href: "/assets/vehicles", icon: Truck },
   {
     label: "Equipment",
     href: "/assets/equipment",
+    icon: Boxes,
     children: [
       { label: "Overview", href: "/assets/equipment" },
       { label: "Inventory", href: "/assets/equipment/inventory" },
       { label: "Lifting Gear", href: "/assets/equipment/lifting-gear" },
       { label: "Generators", href: "/assets/equipment/generators" },
       { label: "Ladders", href: "/assets/equipment/ladders" },
-      {
-        label: "Torque Wrenches",
-        href: "/assets/equipment/torque-wrenches",
-      },
+      { label: "Torque Wrenches", href: "/assets/equipment/torque-wrenches" },
       { label: "Fall Arrest", href: "/assets/equipment/fall-arrest" },
     ],
   },
-  { label: "Prestarts", href: "/assets/prestarts" },
-  { label: "Inspections", href: "/assets/inspections" },
+  { label: "Prestarts", href: "/assets/prestarts", icon: ClipboardCheck },
   {
     label: "Risk Assessments",
     href: "/assets/risk-assessments",
+    icon: ShieldCheck,
   },
-  { label: "Compliance", href: "/assets/compliance" },
+  { label: "Compliance", href: "/assets/compliance", icon: PackageSearch },
+  {
+    label: "Configuration",
+    href: "/assets/configuration",
+    icon: Settings,
+    children: [
+      { label: "General", href: "/assets/configuration" },
+      {
+        label: "Document Types",
+        href: "/assets/configuration/document-types",
+      },
+    ],
+  },
 ];
+
+function isActive(pathname: string, href: string) {
+  if (href === "/assets") return pathname === "/assets";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export default function AssetsLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      {/* TOPBAR */}
-      <header className="sticky top-0 z-50 border-b border-slate-200 bg-white">
-        <div className="flex h-16 items-center justify-between px-6">
-          <div className="flex items-center gap-10">
+    <div className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="flex min-h-16 items-center justify-between gap-4 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-4">
             <Link
               href="/"
-              className="text-xl font-bold tracking-tight text-slate-900"
+              className="shrink-0 text-lg font-black tracking-tight text-slate-950"
             >
               TTTracker
             </Link>
 
-            <nav className="hidden items-center gap-2 md:flex">
-              {topNav.map((item) => {
-                const active =
-                  pathname === item.href ||
-                  (item.href !== "/" && pathname.startsWith(item.href));
+            <div className="hidden h-7 w-px bg-slate-200 sm:block" />
+
+            <div className="min-w-0">
+              <div className="truncate text-sm font-black text-slate-900">
+                Assets & Fleet
+              </div>
+              <div className="hidden truncate text-xs text-slate-500 sm:block">
+                Asset lifecycle, servicing, compliance, documents and spend
+              </div>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/assets/update"
+              className="hidden rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 hover:bg-slate-50 md:inline-flex"
+            >
+              Update Asset
+            </Link>
+
+            <Link
+              href="/assets/services/new"
+              className="hidden rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white shadow-sm hover:bg-slate-800 sm:inline-flex"
+            >
+              BC Service
+            </Link>
+
+            <Link
+              href="/"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              Main Menu
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto flex max-w-[1800px]">
+        <aside className="sticky top-16 hidden h-[calc(100vh-64px)] w-72 shrink-0 overflow-y-auto border-r border-slate-200 bg-white px-4 py-5 lg:block">
+          <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+              Asset Management
+            </div>
+            <div className="mt-2 text-sm font-bold leading-6 text-slate-700">
+              Structured service history in TTTracker. Controlled files in SharePoint.
+            </div>
+          </div>
+
+          <nav className="space-y-1.5">
+            {NAV.map((item) => {
+              const active = isActive(pathname, item.href);
+              const Icon = item.icon;
+
+              return (
+                <div key={item.href}>
+                  <Link
+                    href={item.href}
+                    className={`flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-bold transition ${
+                      active
+                        ? "bg-slate-950 text-white shadow-sm"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                    }`}
+                  >
+                    <Icon size={18} />
+                    <span>{item.label}</span>
+                  </Link>
+
+                  {item.children && active ? (
+                    <div className="ml-5 mt-1.5 space-y-1 border-l border-slate-200 pl-3">
+                      {item.children.map((child) => {
+                        const childActive = pathname === child.href;
+
+                        return (
+                          <Link
+                            key={child.href}
+                            href={child.href}
+                            className={`block rounded-lg px-3 py-2 text-xs font-bold ${
+                              childActive
+                                ? "bg-slate-100 text-slate-950"
+                                : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                            }`}
+                          >
+                            {child.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </nav>
+        </aside>
+
+        <main className="min-w-0 flex-1">
+          <div className="border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {NAV.map((item) => {
+                const active = isActive(pathname, item.href);
 
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`px-4 py-2 text-sm font-medium transition ${
+                    className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black ${
                       active
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-600 hover:bg-slate-100"
+                        ? "bg-slate-950 text-white"
+                        : "bg-slate-100 text-slate-600"
                     }`}
                   >
                     {item.label}
                   </Link>
                 );
               })}
-            </nav>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href="/settings"
-              className="border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Settings
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {/* CONTENT */}
-      <div className="flex">
-        {/* SIDEBAR */}
-        <aside className="sticky top-16 hidden h-[calc(100vh-64px)] w-64 shrink-0 border-r border-slate-200 bg-white p-5 lg:block">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">
-              Asset Manager
-            </p>
-
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">
-              Fleet Assets
-            </h2>
-
-            <p className="mt-2 text-sm text-slate-500">
-              Plant, vehicles, equipment, prestarts, inspections, risk
-              assessments and Fleet Jobs.
-            </p>
-          </div>
-
-          <nav className="mt-8 flex h-[calc(100vh-260px)] flex-col overflow-y-auto">
-            <div className="space-y-2">
-              {assetNav.map((item) => {
-                const hasChildren = "children" in item && item.children;
-
-                const active =
-                  pathname === item.href ||
-                  (item.href !== "/assets" && pathname.startsWith(item.href));
-
-                return (
-                  <div key={item.href}>
-                    <Link
-                      href={item.href}
-                      className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
-                        active
-                          ? "bg-slate-900 text-white shadow-sm"
-                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-
-                    {hasChildren && active && (
-                      <div className="mt-2 space-y-1 border-l border-slate-200 pl-3">
-                        {item.children.map((child) => {
-                          const childActive = pathname === child.href;
-
-                          return (
-                            <Link
-                              key={child.href}
-                              href={child.href}
-                              className={`block rounded-lg px-3 py-2 text-xs font-medium transition ${
-                                childActive
-                                  ? "bg-slate-100 text-slate-950"
-                                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-                              }`}
-                            >
-                              {child.label}
-                            </Link>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
             </div>
-          </nav>
-        </aside>
+          </div>
 
-        {/* PAGE CONTENT */}
-        <main className="min-w-0 flex-1">{children}</main>
+          {children}
+        </main>
       </div>
     </div>
   );
