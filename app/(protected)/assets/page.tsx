@@ -35,7 +35,10 @@ type ServiceRow = {
   record_type: string;
   service_date: string;
   summary: string;
+  provider_type: "internal" | "external";
+  provider_name: string | null;
   mechanic_name: string | null;
+  supplier: string | null;
   amount_inc_gst: number | string | null;
   status: string;
 };
@@ -120,7 +123,7 @@ export default function AssetsDashboardPage() {
     [supabase],
   );
 
-  const load = useCallback(async () => {
+  const fetchDashboard = useCallback(async () => {
     const response = await apiFetch("/api/assets/dashboard");
     const payload = (await response.json()) as DashboardPayload;
 
@@ -128,24 +131,42 @@ export default function AssetsDashboardPage() {
       throw new Error(payload.error || "Assets dashboard could not be loaded.");
     }
 
-    setData(payload);
+    return payload;
   }, [apiFetch]);
 
+  const load = useCallback(async () => {
+    const payload = await fetchDashboard();
+    setData(payload);
+  }, [fetchDashboard]);
+
   useEffect(() => {
-    void (async () => {
-      try {
-        await load();
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Assets dashboard could not be loaded.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [load]);
+    let cancelled = false;
+
+    void fetchDashboard()
+      .then((payload) => {
+        if (!cancelled) {
+          setData(payload);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Assets dashboard could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchDashboard]);
 
   async function refresh() {
     setRefreshing(true);
@@ -219,7 +240,7 @@ export default function AssetsDashboardPage() {
                   className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white"
                 >
                   <Wrench size={16} />
-                  BC Service
+                  Record Service
                 </Link>
 
                 <Link
@@ -364,10 +385,14 @@ export default function AssetsDashboardPage() {
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
                         {dateLabel(service.service_date)} ·{" "}
-                        {titleCase(service.record_type)}
-                        {service.mechanic_name
-                          ? ` · ${service.mechanic_name}`
-                          : ""}
+                        {titleCase(service.record_type)} ·{" "}
+                        {service.provider_type === "external"
+                          ? service.provider_name ||
+                            service.supplier ||
+                            "External workshop"
+                          : service.mechanic_name ||
+                            service.provider_name ||
+                            "BC Contracting"}
                       </div>
                     </div>
                     <div className="shrink-0 text-xs font-black text-slate-700">

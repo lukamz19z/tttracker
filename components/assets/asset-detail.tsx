@@ -201,27 +201,54 @@ export function AssetDetail({ assetType, assetId }: { assetType: AssetType; asse
     [supabase],
   );
 
-  const load = useCallback(async () => {
-    const response = await apiFetch(`/api/assets/${assetType}/${assetId}/overview`);
+  const fetchOverview = useCallback(async () => {
+    const response = await apiFetch(
+      `/api/assets/${assetType}/${assetId}/overview`,
+    );
     const payload = (await response.json()) as OverviewPayload;
-    if (!response.ok) throw new Error(payload.error || "Asset could not be loaded.");
-    setData(payload);
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Asset could not be loaded.");
+    }
+
+    return payload;
   }, [apiFetch, assetId, assetType]);
 
+  const load = useCallback(async () => {
+    const payload = await fetchOverview();
+    setData(payload);
+  }, [fetchOverview]);
+
   useEffect(() => {
-    void (async () => {
-      try {
-        await load();
-      } catch (loadError) {
-        setMessage({
-          tone: "error",
-          text: loadError instanceof Error ? loadError.message : "Asset could not be loaded.",
-        });
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [load]);
+    let cancelled = false;
+
+    void fetchOverview()
+      .then((payload) => {
+        if (!cancelled) {
+          setData(payload);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setMessage({
+            tone: "error",
+            text:
+              loadError instanceof Error
+                ? loadError.message
+                : "Asset could not be loaded.",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchOverview]);
 
   async function refresh() {
     setRefreshing(true);
@@ -376,7 +403,7 @@ export function AssetDetail({ assetType, assetId }: { assetType: AssetType; asse
                   <Settings2 size={16} /> Update Asset
                 </Link>
                 <Link href={`/assets/services/new?assetType=${assetType}&assetId=${assetId}&recordType=service`} className="action-primary">
-                  <Wrench size={16} /> BC Service
+                  <Wrench size={16} /> Record Service
                 </Link>
                 <button type="button" onClick={() => setUploadOpen(true)} className="action-secondary">
                   <Upload size={16} /> Upload Document
@@ -570,11 +597,11 @@ function ServiceTab({ services, items, documents, onViewDocument }: { services: 
                   <StatusBadge label={titleCase(record.provider_type === "internal" ? "BC Service" : "External Service")} tone={record.provider_type === "internal" ? "emerald" : "slate"} />
                 </div>
                 <div className="mt-2 text-lg font-black text-slate-900">{record.summary}</div>
-                <div className="mt-1 text-sm text-slate-500">{dateLabel(record.service_date)} · {record.mechanic_name || record.provider_name || "Service"}{record.odometer_km !== null ? ` · ${numberLabel(record.odometer_km, "km")}` : ""}{record.engine_hours !== null ? ` · ${numberLabel(record.engine_hours, "h")}` : ""}</div>
+                <div className="mt-1 text-sm text-slate-500">{dateLabel(record.service_date)} · {record.provider_type === "external" ? record.provider_name || record.supplier || "External workshop" : record.mechanic_name || record.provider_name || "BC Contracting"}{record.odometer_km !== null ? ` · ${numberLabel(record.odometer_km, "km")}` : ""}{record.engine_hours !== null ? ` · ${numberLabel(record.engine_hours, "h")}` : ""}</div>
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-sm font-black text-slate-900">{money(record.amount_inc_gst)}</div>
-                {report ? <button type="button" onClick={() => void onViewDocument(report)} className="action-secondary"><FileText size={14} /> Service PDF</button> : null}
+                {report ? <button type="button" onClick={() => void onViewDocument(report)} className="action-secondary"><FileText size={14} /> {record.provider_type === "external" ? "External Service Document" : "BC Service PDF"}</button> : null}
               </div>
             </div>
             <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">

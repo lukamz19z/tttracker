@@ -192,7 +192,9 @@ export function AssetServiceForm({
   const [amountExGst, setAmountExGst] = useState("");
   const [gstAmount, setGstAmount] = useState("");
   const [amountIncGst, setAmountIncGst] = useState("");
+  const [serviceFile, setServiceFile] = useState<File | null>(null);
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [useServiceFileAsInvoice, setUseServiceFileAsInvoice] = useState(false);
   const [createFinanceRecord, setCreateFinanceRecord] = useState(true);
 
   const [issues, setIssues] = useState<IssueRow[]>([newIssue()]);
@@ -219,44 +221,53 @@ export function AssetServiceForm({
     [supabase],
   );
 
+  const fetchBootstrap = useCallback(async () => {
+    const response = await apiFetch("/api/assets/bootstrap");
+    const payload = (await response.json()) as BootstrapPayload;
+
+    if (!response.ok) {
+      throw new Error(
+        payload.error || "Asset service setup could not be loaded.",
+      );
+    }
+
+    if (!payload.canManage) {
+      throw new Error(
+        "Administrator or Asset Manager access is required to create service records.",
+      );
+    }
+
+    return payload;
+  }, [apiFetch]);
+
   useEffect(() => {
-    void (async () => {
-      try {
-        const response = await apiFetch("/api/assets/bootstrap");
-        const payload = (await response.json()) as BootstrapPayload;
+    let cancelled = false;
 
-        if (!response.ok) {
-          throw new Error(
-            payload.error || "Asset service setup could not be loaded.",
+    void fetchBootstrap()
+      .then((payload) => {
+        if (!cancelled) {
+          setBootstrap(payload);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Asset service setup could not be loaded.",
           );
         }
-
-        if (!payload.canManage) {
-          throw new Error(
-            "Administrator or Asset Manager access is required to create service records.",
-          );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
         }
+      });
 
-        setBootstrap(payload);
-
-        if (!initialAssetId) {
-          setAssetId(
-            initialType === "vehicle"
-              ? payload.vehicles[0]?.id ?? ""
-              : payload.plant[0]?.id ?? "",
-          );
-        }
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Asset service setup could not be loaded.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [apiFetch, initialAssetId, initialType]);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchBootstrap]);
 
   const assetOptions = useMemo(
     () =>
@@ -272,29 +283,26 @@ export function AssetServiceForm({
     [assetType, bootstrap],
   );
 
+  const resolvedAssetId = useMemo(() => {
+    if (assetId && assetOptions.some((asset) => asset.id === assetId)) {
+      return assetId;
+    }
+
+    return assetOptions[0]?.id ?? "";
+  }, [assetId, assetOptions]);
+
   const availableFleetJobs = useMemo(() => {
     const jobs = bootstrap?.fleetJobs ?? [];
 
     return jobs.filter((job) => {
       const linked =
         assetType === "vehicle"
-          ? job.vehicle_asset_id === assetId
-          : job.plant_asset_id === assetId;
+          ? job.vehicle_asset_id === resolvedAssetId
+          : job.plant_asset_id === resolvedAssetId;
 
       return linked;
     });
-  }, [assetId, assetType, bootstrap]);
-
-  useEffect(() => {
-    if (!assetId) {
-      setAssetId(assetOptions[0]?.id ?? "");
-      return;
-    }
-
-    if (!assetOptions.some((asset) => asset.id === assetId)) {
-      setAssetId(assetOptions[0]?.id ?? "");
-    }
-  }, [assetId, assetOptions]);
+  }, [assetType, bootstrap, resolvedAssetId]);
 
   function patchIssue(uiId: string, patch: Partial<IssueRow>) {
     setIssues((current) =>
@@ -313,8 +321,20 @@ export function AssetServiceForm({
   }
 
   async function submit() {
-    if (!assetId) {
+    if (!resolvedAssetId) {
       setError("Select the asset.");
+      return;
+    }
+
+    if (providerType === "external" && !providerName.trim()) {
+      setError("Enter the external mechanic / workshop name.");
+      return;
+    }
+
+    if (providerType === "external" && !serviceFile) {
+      setError(
+        "Upload the external mechanic service report / workshop document.",
+      );
       return;
     }
 
@@ -331,7 +351,7 @@ export function AssetServiceForm({
 
       const payload = {
         assetType,
-        assetId,
+        assetId: resolvedAssetId,
         recordType,
         serviceDate,
         odometerKm: odometerKm ? Number(odometerKm) : null,
@@ -354,6 +374,11 @@ export function AssetServiceForm({
         amountExGst: amountExGst ? Number(amountExGst) : 0,
         gstAmount: gstAmount ? Number(gstAmount) : 0,
         amountIncGst: amountIncGst ? Number(amountIncGst) : 0,
+        useServiceFileAsInvoice:
+          providerType === "external" &&
+          Boolean(serviceFile) &&
+          !invoiceFile &&
+          useServiceFileAsInvoice,
         createFinanceRecord,
         items: issues
           .filter((issue) => issue.issue.trim())
@@ -370,6 +395,10 @@ export function AssetServiceForm({
       };
 
       formData.set("payload", JSON.stringify(payload));
+
+      if (serviceFile) {
+        formData.set("serviceFile", serviceFile);
+      }
 
       if (invoiceFile) {
         formData.set("invoiceFile", invoiceFile);
@@ -393,8 +422,8 @@ export function AssetServiceForm({
 
       router.push(
         assetType === "vehicle"
-          ? `/assets/vehicles/${assetId}`
-          : `/assets/plant/${assetId}`,
+          ? `/assets/vehicles/${resolvedAssetId}`
+          : `/assets/plant/${resolvedAssetId}`,
       );
       router.refresh();
     } catch (submitError) {
@@ -434,15 +463,16 @@ export function AssetServiceForm({
 
           <div>
             <div className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-              BC Contracting
+              Assets & Fleet
             </div>
             <h1 className="mt-1 text-3xl font-black tracking-tight text-slate-950">
-              Asset Service & Repair Record
+              Record Service / Repair
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              Complete the work as a structured record. TTTracker generates the
-              branded service PDF automatically and stores it in the controlled
-              Asset SharePoint folder.
+              Record BC-performed work or an external mechanic / workshop service
+              in the same searchable Asset history. Internal work generates the
+              BC service PDF; external work keeps the workshop document as the
+              controlled service evidence.
             </p>
           </div>
         </div>
@@ -477,7 +507,7 @@ export function AssetServiceForm({
 
           <Field label="Asset">
             <select
-              value={assetId}
+              value={resolvedAssetId}
               onChange={(event) => {
                 setAssetId(event.target.value);
                 setFleetJobId("");
@@ -552,7 +582,7 @@ export function AssetServiceForm({
             </select>
           </Field>
 
-          <Field label="Provider">
+          <Field label="Who completed the work?">
             <select
               value={providerType}
               onChange={(event) =>
@@ -565,14 +595,42 @@ export function AssetServiceForm({
               className="input"
             >
               <option value="internal">BC Contracting / Internal</option>
-              <option value="external">External Service Provider</option>
+              <option value="external">External Mechanic / Workshop</option>
             </select>
           </Field>
 
           {providerType === "external" ? (
-            <Field label="Provider name">
-              <Input value={providerName} onChange={setProviderName} />
-            </Field>
+            <>
+              <Field label="Mechanic / workshop name">
+                <Input
+                  value={providerName}
+                  onChange={setProviderName}
+                  placeholder="e.g. Central Coast Mechanical"
+                />
+              </Field>
+
+              <div className="lg:col-span-3 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <Field label="External service report / workshop document *">
+                  <input
+                    type="file"
+                    accept="application/pdf,image/jpeg,image/png,image/webp"
+                    onChange={(event) => {
+                      setServiceFile(event.target.files?.[0] ?? null);
+                      if (!event.target.files?.[0]) {
+                        setUseServiceFileAsInvoice(false);
+                      }
+                    }}
+                    className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm"
+                  />
+                </Field>
+                <p className="mt-2 text-xs leading-5 text-blue-800">
+                  This is the controlled evidence for the external service. TTTracker
+                  renames it using the configured Service naming convention and stores
+                  it under Service &amp; Repairs. It is not converted into a BC service
+                  report.
+                </p>
+              </div>
+            </>
           ) : null}
 
           <Field label="Work order / reference">
@@ -587,7 +645,7 @@ export function AssetServiceForm({
       <FormSection
         number="02"
         title="Service Summary"
-        description="This becomes the searchable headline in TTTracker and on the branded PDF."
+        description="This becomes the searchable headline in TTTracker and on the service record / supporting document."
       >
         <Field label="Summary">
           <Input
@@ -627,7 +685,7 @@ export function AssetServiceForm({
       <FormSection
         number="03"
         title="Issues, Findings & Fixes"
-        description="Add as many issue lines as required. These remain searchable and are printed on the service PDF."
+        description="Add as many issue lines as required. These remain searchable in TTTracker and are included on the BC PDF for internal work."
       >
         <div className="space-y-4">
           {issues.map((issue, index) => (
@@ -737,7 +795,7 @@ export function AssetServiceForm({
       <FormSection
         number="04"
         title="Next Service"
-        description="Updating these values also updates the asset register so due servicing is visible without opening the PDF."
+        description="Updating these values also updates the asset register so the next service is visible without opening any document."
       >
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Next service date">
@@ -770,8 +828,12 @@ export function AssetServiceForm({
 
       <FormSection
         number="05"
-        title="Invoice & Cost"
-        description="Optional. The invoice can be saved into the Asset SharePoint folder and linked into Finance without re-uploading it."
+        title={providerType === "external" ? "Workshop Documents & Cost" : "Invoice & Cost"}
+        description={
+          providerType === "external"
+            ? "Keep the external service evidence under Service & Repairs. If there is an invoice, TTTracker can also store it under Invoices and link the cost into Finance."
+            : "Optional. The invoice can be saved into the Asset SharePoint folder and linked into Finance without re-uploading it."
+        }
       >
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           <Field label="Supplier">
@@ -806,17 +868,43 @@ export function AssetServiceForm({
             />
           </Field>
 
-          <Field label="Invoice / service PDF">
+          <Field label="Invoice file (optional)">
             <input
               type="file"
               accept="application/pdf,image/jpeg,image/png,image/webp"
-              onChange={(event) =>
-                setInvoiceFile(event.target.files?.[0] ?? null)
-              }
+              onChange={(event) => {
+                const nextFile = event.target.files?.[0] ?? null;
+                setInvoiceFile(nextFile);
+                if (nextFile) {
+                  setUseServiceFileAsInvoice(false);
+                }
+              }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
             />
           </Field>
         </div>
+
+        {providerType === "external" && serviceFile && !invoiceFile ? (
+          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <input
+              type="checkbox"
+              checked={useServiceFileAsInvoice}
+              onChange={(event) =>
+                setUseServiceFileAsInvoice(event.target.checked)
+              }
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-sm font-black text-blue-900">
+                This workshop document is also the invoice
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-blue-800">
+                TTTracker will keep the controlled service copy under Service &amp;
+                Repairs and also place an invoice copy in the Asset Invoices folder.
+              </span>
+            </span>
+          </label>
+        ) : null}
 
         <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <input
@@ -851,9 +939,9 @@ export function AssetServiceForm({
                 Complete Service Record
               </h2>
               <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-300">
-                This creates the structured service history, generates the BC
-                branded PDF, uploads it to SharePoint and updates the next
-                service fields on the asset.
+                {providerType === "internal"
+                  ? "This creates the structured service history, generates the BC branded service PDF, uploads it to SharePoint and updates the next-service fields on the asset."
+                  : "This creates the same structured service history, stores the external mechanic document as the controlled service evidence, and updates the next-service fields on the asset."}
               </p>
             </div>
           </div>
@@ -869,7 +957,7 @@ export function AssetServiceForm({
             ) : (
               <Save size={17} />
             )}
-            Complete & Publish Service Record
+            Complete & Save Service Record
           </button>
         </div>
       </section>

@@ -87,6 +87,7 @@ export default function AssetServiceRegisterPage() {
   const [search, setSearch] = useState("");
   const [assetTypeFilter, setAssetTypeFilter] = useState("all");
   const [recordTypeFilter, setRecordTypeFilter] = useState("all");
+  const [providerFilter, setProviderFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
   const apiFetch = useCallback(
@@ -109,7 +110,7 @@ export default function AssetServiceRegisterPage() {
     [supabase],
   );
 
-  const load = useCallback(async () => {
+  const fetchRecords = useCallback(async () => {
     const response = await apiFetch("/api/assets/services?limit=500");
     const payload = (await response.json()) as ServicePayload;
 
@@ -119,24 +120,42 @@ export default function AssetServiceRegisterPage() {
       );
     }
 
-    setRecords(payload.records ?? []);
+    return payload.records ?? [];
   }, [apiFetch]);
 
+  const load = useCallback(async () => {
+    const nextRecords = await fetchRecords();
+    setRecords(nextRecords);
+  }, [fetchRecords]);
+
   useEffect(() => {
-    void (async () => {
-      try {
-        await load();
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Service register could not be loaded.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [load]);
+    let cancelled = false;
+
+    void fetchRecords()
+      .then((nextRecords) => {
+        if (!cancelled) {
+          setRecords(nextRecords);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Service register could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchRecords]);
 
   async function refresh() {
     setRefreshing(true);
@@ -174,6 +193,13 @@ export default function AssetServiceRegisterPage() {
       }
 
       if (
+        providerFilter !== "all" &&
+        record.provider_type !== providerFilter
+      ) {
+        return false;
+      }
+
+      if (
         statusFilter !== "all" &&
         record.status !== statusFilter
       ) {
@@ -200,6 +226,7 @@ export default function AssetServiceRegisterPage() {
     });
   }, [
     assetTypeFilter,
+    providerFilter,
     recordTypeFilter,
     records,
     search,
@@ -224,9 +251,9 @@ export default function AssetServiceRegisterPage() {
               Service Register
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              Search the actual service history without opening PDFs. Each
-              completed internal service also generates a branded controlled PDF
-              in the asset&apos;s SharePoint folder.
+              Search BC and external workshop service history without opening
+              PDFs. Internal services generate the BC controlled PDF; external
+              services retain the mechanic&apos;s document as the controlled evidence.
             </p>
           </div>
 
@@ -249,7 +276,7 @@ export default function AssetServiceRegisterPage() {
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white"
             >
               <Plus size={16} />
-              New Service
+              Record Service
             </Link>
           </div>
         </div>
@@ -283,7 +310,7 @@ export default function AssetServiceRegisterPage() {
       </section>
 
       <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_180px_190px_170px]">
+        <div className="grid gap-3 border-b border-slate-200 p-5 xl:grid-cols-[minmax(0,1fr)_160px_180px_170px_160px]">
           <label className="relative">
             <Search
               size={17}
@@ -318,6 +345,16 @@ export default function AssetServiceRegisterPage() {
             <option value="maintenance">Maintenance</option>
             <option value="inspection">Inspection</option>
             <option value="breakdown">Breakdown</option>
+          </select>
+
+          <select
+            value={providerFilter}
+            onChange={(event) => setProviderFilter(event.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-700"
+          >
+            <option value="all">All providers</option>
+            <option value="internal">BC Internal</option>
+            <option value="external">External Workshop</option>
           </select>
 
           <select
@@ -409,11 +446,19 @@ export default function AssetServiceRegisterPage() {
                     </td>
 
                     <td className="px-5 py-4 text-slate-600">
-                      <div>
-                        {record.mechanic_name ||
-                          record.provider_name ||
-                          record.supplier ||
-                          "—"}
+                      <div className="font-semibold text-slate-800">
+                        {record.provider_type === "external"
+                          ? record.provider_name ||
+                            record.supplier ||
+                            "External workshop"
+                          : record.mechanic_name ||
+                            record.provider_name ||
+                            "BC Contracting"}
+                      </div>
+                      <div className="mt-1 text-xs font-bold text-slate-400">
+                        {record.provider_type === "external"
+                          ? "External Service"
+                          : "BC Service"}
                       </div>
                       {record.invoice_number ? (
                         <div className="mt-1 text-xs">

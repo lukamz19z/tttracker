@@ -58,6 +58,7 @@ type ServicePayload = {
   amountExGst?: number | null;
   gstAmount?: number | null;
   amountIncGst?: number | null;
+  useServiceFileAsInvoice?: boolean;
   createFinanceRecord?: boolean;
   items?: AssetServiceItemInput[];
 };
@@ -148,20 +149,74 @@ export async function POST(request: Request) {
 
     const amountExGst = numberValue(payload.amountExGst);
     const gstAmount = numberValue(payload.gstAmount);
-    const amountIncGst = numberValue(payload.amountIncGst) || amountExGst + gstAmount;
+    const amountIncGst =
+      numberValue(payload.amountIncGst) || amountExGst + gstAmount;
 
-    const [asset, settings, branding, serviceDocumentType, invoiceDocumentType] = await Promise.all([
+    const serviceFileEntry = formData.get("serviceFile");
+    const invoiceFileEntry = formData.get("invoiceFile");
+
+    if (providerType === "external" && !clean(payload.providerName)) {
+      return NextResponse.json(
+        { error: "Enter the external mechanic / workshop name." },
+        { status: 400 },
+      );
+    }
+
+    if (
+      providerType === "external" &&
+      (!(serviceFileEntry instanceof File) || serviceFileEntry.size <= 0)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Upload the external mechanic service report / workshop document.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const [asset, settings, serviceDocumentType] = await Promise.all([
       loadAssetRecord({ service, assetType, assetId }),
       loadAssetSettings(service),
-      loadSystemPdfBranding(),
       loadSystemAssetDocumentType({ service, systemKey: "service" }),
-      loadSystemAssetDocumentType({ service, systemKey: "invoice" }),
     ]);
+
+    const maxBytes =
+      Math.max(1, Number(settings.max_file_size_mb || 50)) * 1024 * 1024;
+
+    if (
+      serviceFileEntry instanceof File &&
+      serviceFileEntry.size > 0 &&
+      serviceFileEntry.size > maxBytes
+    ) {
+      return NextResponse.json(
+        {
+          error: `The service document is larger than the configured ${settings.max_file_size_mb} MB limit.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    if (
+      invoiceFileEntry instanceof File &&
+      invoiceFileEntry.size > 0 &&
+      invoiceFileEntry.size > maxBytes
+    ) {
+      return NextResponse.json(
+        {
+          error: `The invoice is larger than the configured ${settings.max_file_size_mb} MB limit.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const branding =
+      providerType === "internal" ? await loadSystemPdfBranding() : null;
 
     const providerName =
       providerType === "internal"
-        ? clean(branding.companyName) || "BC Contracting"
-        : clean(payload.providerName) || clean(payload.supplier) || "External Provider";
+        ? clean(branding?.companyName) || "BC Contracting"
+        : clean(payload.providerName);
 
     const { data: serviceRecord, error: serviceRecordError } = await service
       .from("asset_service_records")
@@ -177,9 +232,12 @@ export async function POST(request: Request) {
         engine_hours: numberOrNull(payload.engineHours),
         provider_type: providerType,
         provider_name: providerName,
-        mechanic_employee_id: identity.employeeId,
-        mechanic_name: identity.name,
-        supplier: clean(payload.supplier) || null,
+        mechanic_employee_id:
+          providerType === "internal" ? identity.employeeId : null,
+        mechanic_name: providerType === "internal" ? identity.name : null,
+        supplier:
+          clean(payload.supplier) ||
+          (providerType === "external" ? providerName : null),
         fleet_job_id: clean(payload.fleetJobId) || null,
         work_order_reference: clean(payload.workOrderReference) || null,
         summary,
@@ -221,90 +279,166 @@ export async function POST(request: Request) {
     const completedAt = new Date().toISOString();
     const label = assetLabel(assetType, asset);
 
-    const pdf = generateAssetServicePdf({
-      serviceNumber: serviceRecord.service_number,
-      assetType,
-      assetLabel: label,
-      assetDetails: {
-        registration:
-          assetType === "vehicle"
-            ? clean(asset.vehicle_rego) || null
-            : clean(asset.rego) || null,
-        serialNumber: clean(asset.serial_number) || null,
-        vin: clean(asset.vin_number) || null,
-        project: clean(asset.project) || null,
-        crew: clean(asset.crew) || null,
-      },
-      serviceDate,
-      recordType,
-      providerType,
-      providerName,
-      mechanicName: identity.name,
-      workOrderReference: clean(payload.workOrderReference) || null,
-      odometerKm: numberOrNull(payload.odometerKm),
-      engineHours: numberOrNull(payload.engineHours),
-      summary,
-      items,
-      workCompleted: clean(payload.workCompleted) || null,
-      recommendations: clean(payload.recommendations) || null,
-      followUpActions: clean(payload.followUpActions) || null,
-      nextServiceDate: clean(payload.nextServiceDate) || null,
-      nextServiceKm: numberOrNull(payload.nextServiceKm),
-      nextServiceHours: numberOrNull(payload.nextServiceHours),
-      supplier: clean(payload.supplier) || null,
-      invoiceNumber: clean(payload.invoiceNumber) || null,
-      amountExGst,
-      gstAmount,
-      amountIncGst,
-      completedAt,
-      branding: {
-        logoDataUrl: branding.logoDataUrl,
-        companyName: branding.companyName,
-        abn: branding.abn,
-        addressLine1: branding.addressLine1,
-        addressLine2: branding.addressLine2,
-        suburb: branding.suburb,
-        state: branding.state,
-        postcode: branding.postcode,
-        phone: branding.phone,
-        email: branding.email,
-        website: branding.website,
-      },
-    });
+    let reportDocument: AssetDocumentRow;
 
-    const reportDocument = await publishAssetDocument({
-      service,
-      identity,
-      assetType,
-      assetId,
-      documentType: serviceDocumentType,
-      originalFileName: "service-record.pdf",
-      forcedExtension: ".pdf",
-      content: pdf,
-      contentType: "application/pdf",
-      title: `${serviceRecord.service_number} · ${summary}`,
-      documentDate: serviceDate,
-      supplier: clean(payload.supplier) || null,
-      invoiceNumber: clean(payload.invoiceNumber) || null,
-      amountExGst: amountExGst || null,
-      gstAmount: gstAmount || null,
-      amountIncGst: amountIncGst || null,
-      serviceRecordId: serviceRecord.id,
-      fleetJobId: clean(payload.fleetJobId) || null,
-      source: "service",
-      generatedByModule: "bc_service",
-      serviceNumber: serviceRecord.service_number,
-      createTimelineEvent: false,
-    });
+    let externalServiceContent: Uint8Array | null = null;
+    let externalServiceContentType = "";
+    let externalServiceFileName = "";
 
-    const invoiceFileEntry = formData.get("invoiceFile");
+    if (providerType === "internal") {
+      if (!branding) {
+        throw new Error("BC PDF branding could not be loaded.");
+      }
+
+      const pdf = generateAssetServicePdf({
+        serviceNumber: serviceRecord.service_number,
+        assetType,
+        assetLabel: label,
+        assetDetails: {
+          registration:
+            assetType === "vehicle"
+              ? clean(asset.vehicle_rego) || null
+              : clean(asset.rego) || null,
+          serialNumber: clean(asset.serial_number) || null,
+          vin: clean(asset.vin_number) || null,
+          project: clean(asset.project) || null,
+          crew: clean(asset.crew) || null,
+        },
+        serviceDate,
+        recordType,
+        providerType,
+        providerName,
+        mechanicName: identity.name,
+        workOrderReference: clean(payload.workOrderReference) || null,
+        odometerKm: numberOrNull(payload.odometerKm),
+        engineHours: numberOrNull(payload.engineHours),
+        summary,
+        items,
+        workCompleted: clean(payload.workCompleted) || null,
+        recommendations: clean(payload.recommendations) || null,
+        followUpActions: clean(payload.followUpActions) || null,
+        nextServiceDate: clean(payload.nextServiceDate) || null,
+        nextServiceKm: numberOrNull(payload.nextServiceKm),
+        nextServiceHours: numberOrNull(payload.nextServiceHours),
+        supplier: clean(payload.supplier) || null,
+        invoiceNumber: clean(payload.invoiceNumber) || null,
+        amountExGst,
+        gstAmount,
+        amountIncGst,
+        completedAt,
+        branding: {
+          logoDataUrl: branding.logoDataUrl,
+          companyName: branding.companyName,
+          abn: branding.abn,
+          addressLine1: branding.addressLine1,
+          addressLine2: branding.addressLine2,
+          suburb: branding.suburb,
+          state: branding.state,
+          postcode: branding.postcode,
+          phone: branding.phone,
+          email: branding.email,
+          website: branding.website,
+        },
+      });
+
+      reportDocument = await publishAssetDocument({
+        service,
+        identity,
+        assetType,
+        assetId,
+        documentType: serviceDocumentType,
+        originalFileName: "service-record.pdf",
+        forcedExtension: ".pdf",
+        content: pdf,
+        contentType: "application/pdf",
+        title: `${serviceRecord.service_number} · ${summary}`,
+        documentDate: serviceDate,
+        supplier: clean(payload.supplier) || null,
+        invoiceNumber: clean(payload.invoiceNumber) || null,
+        amountExGst: amountExGst || null,
+        gstAmount: gstAmount || null,
+        amountIncGst: amountIncGst || null,
+        serviceRecordId: serviceRecord.id,
+        fleetJobId: clean(payload.fleetJobId) || null,
+        source: "service",
+        generatedByModule: "bc_service",
+        serviceNumber: serviceRecord.service_number,
+        createTimelineEvent: false,
+      });
+    } else {
+      if (!(serviceFileEntry instanceof File) || serviceFileEntry.size <= 0) {
+        throw new Error(
+          "The external mechanic service document could not be read.",
+        );
+      }
+
+      externalServiceContent = new Uint8Array(
+        await serviceFileEntry.arrayBuffer(),
+      );
+      externalServiceContentType =
+        serviceFileEntry.type || "application/octet-stream";
+      externalServiceFileName = serviceFileEntry.name;
+
+      reportDocument = await publishAssetDocument({
+        service,
+        identity,
+        assetType,
+        assetId,
+        documentType: serviceDocumentType,
+        originalFileName: externalServiceFileName,
+        content: externalServiceContent,
+        contentType: externalServiceContentType,
+        title: `${serviceRecord.service_number} · ${providerName} · ${summary}`,
+        documentDate: serviceDate,
+        supplier: clean(payload.supplier) || providerName,
+        invoiceNumber: clean(payload.invoiceNumber) || null,
+        amountExGst: amountExGst || null,
+        gstAmount: gstAmount || null,
+        amountIncGst: amountIncGst || null,
+        serviceRecordId: serviceRecord.id,
+        fleetJobId: clean(payload.fleetJobId) || null,
+        source: "service",
+        generatedByModule: "external_service_upload",
+        serviceNumber: serviceRecord.service_number,
+        createTimelineEvent: false,
+      });
+    }
+
     let invoiceDocument: AssetDocumentRow | null = null;
 
-    if (invoiceFileEntry instanceof File && invoiceFileEntry.size > 0) {
-      const maxBytes = Math.max(1, Number(settings.max_file_size_mb || 50)) * 1024 * 1024;
-      if (invoiceFileEntry.size > maxBytes) {
-        throw new Error(`The invoice is larger than the configured ${settings.max_file_size_mb} MB limit.`);
+    const useExternalServiceFileAsInvoice =
+      providerType === "external" &&
+      payload.useServiceFileAsInvoice === true &&
+      externalServiceContent !== null &&
+      Boolean(externalServiceFileName);
+
+    if (
+      (invoiceFileEntry instanceof File && invoiceFileEntry.size > 0) ||
+      useExternalServiceFileAsInvoice
+    ) {
+      const invoiceContent =
+        invoiceFileEntry instanceof File && invoiceFileEntry.size > 0
+          ? new Uint8Array(await invoiceFileEntry.arrayBuffer())
+          : externalServiceContent;
+
+      const invoiceFileName =
+        invoiceFileEntry instanceof File && invoiceFileEntry.size > 0
+          ? invoiceFileEntry.name
+          : externalServiceFileName;
+
+      const invoiceContentType =
+        invoiceFileEntry instanceof File && invoiceFileEntry.size > 0
+          ? invoiceFileEntry.type || "application/octet-stream"
+          : externalServiceContentType || "application/octet-stream";
+
+      if (!invoiceContent || !invoiceFileName) {
+        throw new Error("The invoice document could not be read.");
       }
+
+      const invoiceDocumentType = await loadSystemAssetDocumentType({
+        service,
+        systemKey: "invoice",
+      });
 
       invoiceDocument = await publishAssetDocument({
         service,
@@ -312,9 +446,9 @@ export async function POST(request: Request) {
         assetType,
         assetId,
         documentType: invoiceDocumentType,
-        originalFileName: invoiceFileEntry.name,
-        content: new Uint8Array(await invoiceFileEntry.arrayBuffer()),
-        contentType: invoiceFileEntry.type || "application/octet-stream",
+        originalFileName: invoiceFileName,
+        content: invoiceContent,
+        contentType: invoiceContentType,
         title: clean(payload.invoiceNumber)
           ? `Invoice ${clean(payload.invoiceNumber)}`
           : `${serviceRecord.service_number} Service Invoice`,
@@ -327,7 +461,10 @@ export async function POST(request: Request) {
         serviceRecordId: serviceRecord.id,
         fleetJobId: clean(payload.fleetJobId) || null,
         source: "service",
-        generatedByModule: "bc_service_invoice",
+        generatedByModule:
+          providerType === "internal"
+            ? "bc_service_invoice"
+            : "external_service_invoice",
       });
     }
 
@@ -427,8 +564,14 @@ export async function POST(request: Request) {
       service,
       input: {
         eventType: "asset_service_completed",
-        title: `${recordTypeTitle(recordType)} completed · ${label}`,
-        message: `${identity.name} completed ${serviceRecord.service_number} (${summary}).`,
+        title:
+          providerType === "external"
+            ? `${recordTypeTitle(recordType)} recorded · ${label}`
+            : `${recordTypeTitle(recordType)} completed · ${label}`,
+        message:
+          providerType === "external"
+            ? `${identity.name} recorded ${serviceRecord.service_number} from ${providerName} (${summary}).`
+            : `${identity.name} completed ${serviceRecord.service_number} (${summary}).`,
         assetType,
         assetId,
         actionRoute: assetDetailRoute(assetType, assetId),

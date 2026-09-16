@@ -71,8 +71,9 @@ type UpdateOption = {
 const UPDATE_OPTIONS: UpdateOption[] = [
   {
     id: "service",
-    title: "BC Service",
-    description: "Complete an internal BC service and generate the branded service record.",
+    title: "Record Service",
+    description:
+      "Record a BC service or an external mechanic / workshop service in the same Asset history.",
     icon: Wrench,
     serviceRecordType: "service",
   },
@@ -208,33 +209,50 @@ export function UpdateAssetForm({
     [supabase],
   );
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const response = await apiFetch("/api/assets/bootstrap");
-        const payload = (await response.json()) as BootstrapPayload;
+  const fetchBootstrap = useCallback(async () => {
+    const response = await apiFetch("/api/assets/bootstrap");
+    const payload = (await response.json()) as BootstrapPayload;
 
-        if (!response.ok) {
-          throw new Error(payload.error || "Assets could not be loaded.");
+    if (!response.ok) {
+      throw new Error(payload.error || "Assets could not be loaded.");
+    }
+    if (!payload.canManage) {
+      throw new Error(
+        "Administrator or Asset Manager access is required to update assets.",
+      );
+    }
+
+    return payload;
+  }, [apiFetch]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetchBootstrap()
+      .then((payload) => {
+        if (!cancelled) {
+          setBootstrap(payload);
         }
-        if (!payload.canManage) {
-          throw new Error(
-            "Administrator or Asset Manager access is required to update assets.",
+      })
+      .catch((loadError: unknown) => {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Assets could not be loaded.",
           );
         }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
 
-        setBootstrap(payload);
-      } catch (loadError) {
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : "Assets could not be loaded.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [apiFetch]);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchBootstrap]);
 
   const assets = useMemo(() => {
     const rows: Array<{ type: AssetType; asset: AssetRecord; label: string }> = [

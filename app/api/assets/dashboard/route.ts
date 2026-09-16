@@ -44,12 +44,12 @@ export async function GET(request: Request) {
       service
         .from("vehicle_assets")
         .select(
-          "id,vehicle_id,vehicle_rego,make,model,status,next_service_due,next_service_km,rego_expiry,insurance_expiry",
+          "id,vehicle_id,vehicle_rego,make,model,status,next_service_due,next_service_km,next_inspection_due,rego_expiry,insurance_expiry",
         ),
       service
         .from("plant_assets")
         .select(
-          "id,asset_id,make,model,asset_status,next_service_due,next_service_hours,next_inspection_due,rego_expiry,insurance_expiry,cranesafe_expiry",
+          "id,asset_id,make,model,asset_status,next_service_due,next_service_hours,next_inspection_due,ten_year_inspection_due,rego_expiry,insurance_expiry,cranesafe_expiry",
         ),
       service
         .from("fleet_jobs")
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
       service
         .from("asset_service_records")
         .select(
-          "id,service_number,asset_type,vehicle_asset_id,plant_asset_id,record_type,service_date,summary,mechanic_name,amount_inc_gst,status,created_at",
+          "id,service_number,asset_type,vehicle_asset_id,plant_asset_id,record_type,service_date,summary,provider_type,provider_name,mechanic_name,supplier,amount_inc_gst,status,created_at",
         )
         .eq("status", "completed")
         .order("service_date", { ascending: false })
@@ -115,6 +115,7 @@ export async function GET(request: Request) {
 
       for (const [field, date] of [
         ["Service", vehicle.next_service_due],
+        ["Inspection", vehicle.next_inspection_due],
         ["Rego", vehicle.rego_expiry],
         ["Insurance", vehicle.insurance_expiry],
       ] as const) {
@@ -142,6 +143,7 @@ export async function GET(request: Request) {
       for (const [field, date] of [
         ["Service", item.next_service_due],
         ["Inspection", item.next_inspection_due],
+        ["10 Year Inspection", item.ten_year_inspection_due],
         ["Rego", item.rego_expiry],
         ["Insurance", item.insurance_expiry],
         ["CraneSafe", item.cranesafe_expiry],
