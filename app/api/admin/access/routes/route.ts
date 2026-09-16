@@ -1,481 +1,162 @@
-import {
-  NextRequest,
-  NextResponse,
-} from "next/server";
-import {
-  createClient,
-  type SupabaseClient,
-} from "@supabase/supabase-js";
+import { NextRequest, NextResponse } from "next/server";
+import { requireAccessAdmin } from "@/lib/access/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-type RouteRuleInput = {
-  id?: string;
-  name?: string;
-  route_pattern?: string;
-  match_type?: "exact" | "prefix";
-  access_area_id?: string;
-  priority?: number;
-  is_active?: boolean;
+type AccessGroupRef = {
+  id: string;
+  code: string;
+  name: string;
+  sort_order: number | null;
 };
 
-function requiredEnv(name: string) {
-  const value = process.env[name];
+type AccessAreaRef = {
+  id: string;
+  code: string;
+  name: string;
+  type: string | null;
+  permission_level: string | null;
+  group_id: string | null;
+  access_groups: AccessGroupRef | AccessGroupRef[] | null;
+};
 
-  if (!value) {
-    throw new Error(
-      `Missing environment variable: ${name}`,
-    );
-  }
+type RouteRuleRow = {
+  id: string;
+  name: string;
+  route_pattern: string;
+  match_type: string;
+  priority: number;
+  is_active: boolean;
+  access_area_id: string;
+  access_areas: AccessAreaRef | AccessAreaRef[] | null;
+};
 
-  return value;
+function firstRelated<T>(value: T | T[] | null): T | null {
+  if (!value) return null;
+  return Array.isArray(value) ? value[0] ?? null : value;
 }
 
-async function getAdminService(
-  request: NextRequest,
-): Promise<SupabaseClient> {
-  const authHeader =
-    request.headers.get("authorization") ?? "";
-
-  const token = authHeader
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-
-  if (!token) {
-    throw new Error(
-      "Missing authentication token.",
-    );
-  }
-
-  const supabaseUrl =
-    requiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-
-  const anonKey =
-    requiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-
-  const serviceKey =
-    requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
-
-  const authClient =
-    createClient(
-      supabaseUrl,
-      anonKey,
-      {
-        global: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      },
-    );
-
-  const {
-    data: { user },
-    error: userError,
-  } =
-    await authClient.auth.getUser(token);
-
-  if (
-    userError ||
-    !user
-  ) {
-    throw new Error(
-      "You must be logged in.",
-    );
-  }
-
-  /*
-   * Generic SupabaseClient is intentional here.
-   *
-   * The route/access tables were added after TTTracker's generated
-   * Supabase TypeScript definitions, so binding this client to stale
-   * generated database types can make the new tables resolve as `never`.
-   */
-  const service: SupabaseClient =
-    createClient(
-      supabaseUrl,
-      serviceKey,
-      {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      },
-    );
-
-  const {
-    data: roleRow,
-    error: roleError,
-  } =
-    await service
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-  if (roleError) {
-    throw new Error(
-      roleError.message,
-    );
-  }
-
-  if (
-    String(
-      roleRow?.role ?? "",
-    )
-      .trim()
-      .toLowerCase() !== "admin"
-  ) {
-    throw new Error(
-      "Administrator access is required.",
-    );
-  }
-
-  return service;
+function normaliseRoute(value: unknown) {
+  let route = String(value ?? "").trim();
+  if (!route) return "";
+  if (!route.startsWith("/")) route = `/${route}`;
+  if (route.length > 1) route = route.replace(/\/+$/, "");
+  return route;
 }
 
-export async function GET(
-  request: NextRequest,
-) {
+export async function GET(request: NextRequest) {
   try {
-    const service =
-      await getAdminService(request);
+    const { service } = await requireAccessAdmin(request);
 
-    const [
-      rulesResult,
-      areasResult,
-    ] =
-      await Promise.all([
-        service
-          .from("access_route_rule_details")
-          .select("*")
-          .order(
-            "priority",
-            {
-              ascending: false,
-            },
+    const [rules, areas] = await Promise.all([
+      service
+        .from("access_route_rules")
+        .select(`
+          id,name,route_pattern,match_type,priority,is_active,access_area_id,
+          access_areas!inner(
+            id,code,name,type,permission_level,group_id,
+            access_groups(id,code,name,sort_order)
           )
-          .order(
-            "route_pattern",
-            {
-              ascending: true,
-            },
-          ),
+        `)
+        .order("priority")
+        .order("route_pattern"),
+      service
+        .from("access_areas")
+        .select(`
+          id,code,name,type,permission_level,is_active,group_id,
+          access_groups(id,code,name,sort_order)
+        `)
+        .eq("is_active", true)
+        .eq("type", "tttracker")
+        .order("name"),
+    ]);
 
-        service
-          .from("access_areas")
-          .select(`
-            id,
-            code,
-            name,
-            type,
-            permission_level,
-            is_active,
-            access_groups (
-              id,
-              code,
-              name,
-              sort_order
-            )
-          `)
-          .eq(
-            "is_active",
-            true,
-          )
-          .in(
-            "type",
-            [
-              "tttracker",
-              "module",
-              "admin",
-            ],
-          )
-          .order("name"),
-      ]);
+    if (rules.error) throw new Error(rules.error.message);
+    if (areas.error) throw new Error(areas.error.message);
 
-    if (rulesResult.error) {
-      throw new Error(
-        rulesResult.error.message,
-      );
-    }
-
-    if (areasResult.error) {
-      throw new Error(
-        areasResult.error.message,
-      );
-    }
+    const ruleRows = (rules.data ?? []) as RouteRuleRow[];
 
     return NextResponse.json({
-      rules:
-        rulesResult.data ?? [],
+      rules: ruleRows.map((row) => {
+        const area = firstRelated(row.access_areas);
+        const group = firstRelated(area?.access_groups ?? null);
 
-      accessAreas:
-        areasResult.data ?? [],
+        return {
+          id: row.id,
+          name: row.name,
+          route_pattern: row.route_pattern,
+          match_type: row.match_type,
+          priority: row.priority,
+          is_active: row.is_active,
+          access_area_id: row.access_area_id,
+          access_code: area?.code ?? "",
+          access_name: area?.name ?? "",
+          access_type: area?.type ?? null,
+          permission_level: area?.permission_level ?? null,
+          group_id: group?.id ?? null,
+          group_code: group?.code ?? null,
+          group_name: group?.name ?? null,
+        };
+      }),
+      accessAreas: areas.data ?? [],
     });
   } catch (error) {
-    console.error(
-      "ROUTE RULE LOAD ERROR:",
-      error,
-    );
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not load route rules.";
-
-    const status =
-      message.includes("logged in")
-        ? 401
-        : message.includes("Administrator")
-          ? 403
-          : 500;
-
-    return NextResponse.json(
-      {
-        error: message,
-      },
-      {
-        status,
-      },
-    );
+    const message = error instanceof Error ? error.message : "Could not load route rules.";
+    return NextResponse.json({ error: message }, { status: 403 });
   }
 }
 
-export async function POST(
-  request: NextRequest,
-) {
+export async function POST(request: NextRequest) {
   try {
-    const service =
-      await getAdminService(request);
+    const { service } = await requireAccessAdmin(request);
+    const body = await request.json();
 
-    const body =
-      (await request.json()) as RouteRuleInput;
+    const id = String(body.id ?? "").trim();
+    const name = String(body.name ?? "").trim();
+    const routePattern = normaliseRoute(body.route_pattern);
+    const matchType = body.match_type === "exact" ? "exact" : "prefix";
+    const accessAreaId = String(body.access_area_id ?? "").trim();
+    const priority = Number.isFinite(Number(body.priority)) ? Number(body.priority) : 100;
+    const isActive = body.is_active !== false;
 
-    const id =
-      String(
-        body.id ?? "",
-      ).trim();
-
-    const name =
-      String(
-        body.name ?? "",
-      ).trim();
-
-    let routePattern =
-      String(
-        body.route_pattern ?? "",
-      ).trim();
-
-    const matchType =
-      body.match_type === "exact"
-        ? "exact"
-        : "prefix";
-
-    const accessAreaId =
-      String(
-        body.access_area_id ?? "",
-      ).trim();
-
-    const priority =
-      Number.isFinite(
-        Number(body.priority),
-      )
-        ? Number(body.priority)
-        : 100;
-
-    if (!name) {
-      return NextResponse.json(
-        {
-          error:
-            "Rule name is required.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
-
-    if (!routePattern) {
-      return NextResponse.json(
-        {
-          error:
-            "Route pattern is required.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
-
-    if (
-      !routePattern.startsWith("/")
-    ) {
-      routePattern =
-        `/${routePattern}`;
-    }
-
-    if (
-      routePattern.length > 1
-    ) {
-      routePattern =
-        routePattern.replace(
-          /\/+$/,
-          "",
-        );
-    }
-
-    if (!accessAreaId) {
-      return NextResponse.json(
-        {
-          error:
-            "Access area is required.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
+    if (!name) return NextResponse.json({ error: "Rule name is required." }, { status: 400 });
+    if (!routePattern) return NextResponse.json({ error: "Route is required." }, { status: 400 });
+    if (!accessAreaId) return NextResponse.json({ error: "Permission is required." }, { status: 400 });
 
     const payload = {
       name,
-      route_pattern:
-        routePattern,
-
-      match_type:
-        matchType,
-
-      access_area_id:
-        accessAreaId,
-
+      route_pattern: routePattern,
+      match_type: matchType,
+      access_area_id: accessAreaId,
       priority,
-
-      is_active:
-        body.is_active !== false,
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
     };
 
-    const query =
-      id
-        ? service
-            .from("access_route_rules")
-            .update(payload)
-            .eq("id", id)
-        : service
-            .from("access_route_rules")
-            .insert(payload);
+    const result = id
+      ? await service.from("access_route_rules").update(payload).eq("id", id).select("*").single()
+      : await service.from("access_route_rules").insert(payload).select("*").single();
 
-    const {
-      error,
-    } =
-      await query;
-
-    if (error) {
-      throw new Error(
-        error.message,
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-    });
+    if (result.error) throw new Error(result.error.message);
+    return NextResponse.json({ rule: result.data });
   } catch (error) {
-    console.error(
-      "ROUTE RULE SAVE ERROR:",
-      error,
-    );
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not save route rule.";
-
-    const status =
-      message.includes("logged in")
-        ? 401
-        : message.includes("Administrator")
-          ? 403
-          : 500;
-
-    return NextResponse.json(
-      {
-        error: message,
-      },
-      {
-        status,
-      },
-    );
+    const message = error instanceof Error ? error.message : "Could not save route rule.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-) {
+export async function DELETE(request: NextRequest) {
   try {
-    const service =
-      await getAdminService(request);
+    const { service } = await requireAccessAdmin(request);
+    const id = String(new URL(request.url).searchParams.get("id") ?? "").trim();
+    if (!id) return NextResponse.json({ error: "Rule id is required." }, { status: 400 });
 
-    const id =
-      request.nextUrl.searchParams
-        .get("id")
-        ?.trim();
-
-    if (!id) {
-      return NextResponse.json(
-        {
-          error:
-            "Rule id is required.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
-
-    const {
-      error,
-    } =
-      await service
-        .from("access_route_rules")
-        .delete()
-        .eq("id", id);
-
-    if (error) {
-      throw new Error(
-        error.message,
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-    });
+    const result = await service.from("access_route_rules").delete().eq("id", id);
+    if (result.error) throw new Error(result.error.message);
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error(
-      "ROUTE RULE DELETE ERROR:",
-      error,
-    );
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Could not delete route rule.";
-
-    const status =
-      message.includes("logged in")
-        ? 401
-        : message.includes("Administrator")
-          ? 403
-          : 500;
-
-    return NextResponse.json(
-      {
-        error: message,
-      },
-      {
-        status,
-      },
-    );
+    const message = error instanceof Error ? error.message : "Could not delete route rule.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
