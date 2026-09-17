@@ -879,6 +879,30 @@ export async function GET(request: Request) {
       };
     }
 
+    const activeCrews = (crewsResult.data ?? []).filter(
+      (row: any) => row.active !== false,
+    );
+
+    if (!clean(draft.selectedCrewId) && clean(draft.crewName)) {
+      const savedCrew = clean(draft.crewName).toLowerCase();
+      const matchedCrew = activeCrews.find((crew: any) => {
+        const number = clean(crew.crew_number).toLowerCase();
+        const name = clean(crew.crew_name).toLowerCase();
+        const label = [number, name].filter(Boolean).join(" - ");
+
+        return (
+          savedCrew === number ||
+          savedCrew === name ||
+          savedCrew === label ||
+          (number && savedCrew.startsWith(`${number} - `))
+        );
+      });
+
+      if (matchedCrew) {
+        draft.selectedCrewId = clean(matchedCrew.id);
+      }
+    }
+
     draft = {
       ...draft,
       outstandingMaterials,
@@ -896,9 +920,7 @@ export async function GET(request: Request) {
         has_body_extension:
           inferBodyExtension(row),
       })),
-      crews: (crewsResult.data ?? []).filter(
-        (row: any) => row.active !== false,
-      ),
+      crews: activeCrews,
       employees: (
         employeesResult.data ?? []
       ).filter(

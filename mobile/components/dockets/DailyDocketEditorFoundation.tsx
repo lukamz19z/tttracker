@@ -4,6 +4,8 @@ import { DailyDocketReviewSubmit } from "@/components/dockets/DailyDocketReviewS
 import { DailyDocketSiteEvents } from "@/components/dockets/DailyDocketSiteEvents";
 import { useMemo, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -30,6 +32,7 @@ import {
   docketUiId,
   type DailyDocketStep,
 } from "@/lib/dockets/constants";
+import { supabase } from "@/lib/supabase";
 import type {
   AdditionalTowerWork,
   DailyDocketDraft,
@@ -78,6 +81,187 @@ function clean(value: unknown) {
 
 function normalizedName(value: unknown) {
   return clean(value).replace(/\s+/g, " ").toLowerCase();
+}
+
+type AssetAllocationRow = Record<string, unknown>;
+
+function firstAssetString(row: AssetAllocationRow, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function normaliseAssetText(value: unknown) {
+  return clean(value).replace(/\s+/g, " ").toLowerCase();
+}
+
+function assetStatusIsUsable(row: AssetAllocationRow) {
+  const rawStatus = firstAssetString(row, [
+    "status",
+    "asset_status",
+    "availability_status",
+    "fleet_status",
+    "hire_status",
+    "current_status",
+  ]).toLowerCase();
+
+  if (!rawStatus) return true;
+
+  return ![
+    "retired",
+    "superseded",
+    "no longer hired",
+    "no_longer_hired",
+    "off hire",
+    "off hired",
+    "off-hired",
+    "inactive",
+    "sold",
+    "archived",
+    "out of service",
+    "decommissioned",
+  ].some((status) => rawStatus.includes(status));
+}
+
+function assetBelongsToCrew(
+  row: AssetAllocationRow,
+  crewId: string,
+  crewNumber: string,
+  crewName: string,
+) {
+  const accepted = [crewId, crewNumber, crewName]
+    .map(normaliseAssetText)
+    .filter(Boolean);
+
+  if (accepted.length === 0) return false;
+
+  const candidateKeys = [
+    "crew_id",
+    "assigned_crew_id",
+    "allocated_crew_id",
+    "current_crew_id",
+    "crew",
+    "crew_number",
+    "crew_name",
+    "assigned_crew",
+    "allocated_crew",
+    "current_crew",
+    "project_crew",
+  ];
+
+  return candidateKeys.some((key) => {
+    const raw = row[key];
+    if (raw === null || raw === undefined) return false;
+
+    if (Array.isArray(raw)) {
+      return raw.some((value) => {
+        const text = normaliseAssetText(value);
+        return (
+          accepted.includes(text) ||
+          accepted.some((acceptedValue) =>
+            text.includes(acceptedValue),
+          )
+        );
+      });
+    }
+
+    const text = normaliseAssetText(raw);
+    if (!text) return false;
+
+    return (
+      accepted.includes(text) ||
+      accepted.some((acceptedValue) =>
+        text.includes(acceptedValue),
+      )
+    );
+  });
+}
+
+function allocatedPlantRow(
+  row: AssetAllocationRow,
+  source: "plant" | "vehicle",
+): PlantRow | null {
+  if (!assetStatusIsUsable(row)) return null;
+
+  const assetCode = firstAssetString(row, [
+    "asset_id",
+    "asset_number",
+    "plant_id",
+    "vehicle_id",
+    "fleet_number",
+    "unit_number",
+    "rego",
+    "registration",
+    "registration_number",
+  ]);
+
+  const make = firstAssetString(row, ["make"]);
+  const model = firstAssetString(row, ["model"]);
+  const description = firstAssetString(row, [
+    "make_model",
+    "make_and_model",
+    "description",
+    "name",
+  ]);
+  const rego = firstAssetString(row, [
+    "rego",
+    "registration",
+    "registration_number",
+  ]);
+
+  const makeModel = [
+    description || [make, model].filter(Boolean).join(" "),
+    rego,
+  ]
+    .filter(Boolean)
+    .filter(
+      (value, index, values) =>
+        values.indexOf(value) === index && value !== assetCode,
+    )
+    .join(" · ");
+
+  const plantType =
+    source === "vehicle"
+      ? firstAssetString(row, [
+          "category",
+          "vehicle_type",
+          "asset_category",
+          "type",
+        ]) || "Vehicle"
+      : firstAssetString(row, [
+          "plant_type",
+          "category",
+          "plant_category",
+          "asset_category",
+          "type",
+        ]) || "Plant";
+
+  const plantName =
+    [assetCode, makeModel].filter(Boolean).join(" - ") ||
+    plantType;
+
+  if (!plantName) return null;
+
+  return {
+    ...createBlankPlantRow(),
+    plant_name: plantName,
+    plant_type: plantType,
+    asset_id: assetCode,
+    notes:
+      source === "vehicle"
+        ? "Auto-added from crew vehicle allocation"
+        : "Auto-added from crew plant allocation",
+  };
+}
+
+function plantRowKey(row: PlantRow) {
+  return normaliseAssetText(
+    row.asset_id || row.plant_name || row.plant_type,
+  );
 }
 
 
@@ -379,12 +563,8 @@ function StepStrip({
   onChange: (step: DailyDocketStep) => void;
 }) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.stepStrip}
-    >
-      {DAILY_DOCKET_STEPS.map((item, index) => {
+    <View style={styles.stepStrip}>
+      {DAILY_DOCKET_STEPS.map((item) => {
         const active = item.key === current;
 
         return (
@@ -396,22 +576,8 @@ function StepStrip({
               active && styles.stepPillActive,
             ]}
           >
-            <View
-              style={[
-                styles.stepNumber,
-                active && styles.stepNumberActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.stepNumberText,
-                  active && styles.stepNumberTextActive,
-                ]}
-              >
-                {index + 1}
-              </Text>
-            </View>
             <Text
+              numberOfLines={1}
               style={[
                 styles.stepLabel,
                 active && styles.stepLabelActive,
@@ -422,7 +588,7 @@ function StepStrip({
           </Pressable>
         );
       })}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -468,6 +634,7 @@ export function DailyDocketEditorFoundation({
   const [bulkOut, setBulkOut] = useState("");
   const [employeePickerOpen, setEmployeePickerOpen] =
     useState(false);
+  const [crewLoading, setCrewLoading] = useState(false);
   const [expandedAdditional, setExpandedAdditional] =
     useState<Set<string>>(new Set());
 
@@ -659,36 +826,175 @@ export function DailyDocketEditorFoundation({
     });
   };
 
-  const loadCrewMembers = () => {
-    if (locked || !draft.selectedCrewId) return;
+  const applyCrewSelection = async (selectedCrewId: string) => {
+    if (locked) return;
 
-    const existing = new Set(
-      draft.labourRows.map((row) =>
-        normalizedName(row.worker_name),
-      ),
+    const crew = payload.crews.find(
+      (item) => item.id === selectedCrewId,
     );
 
-    const additions = payload.employees
+    if (!crew) return;
+
+    setCrewLoading(true);
+
+    const members = payload.employees
       .filter(
         (employee) =>
           employee.active !== false &&
-          employee.crew_id === draft.selectedCrewId &&
-          !existing.has(normalizedName(employee.full_name)),
+          employee.crew_id === selectedCrewId &&
+          clean(employee.full_name),
       )
-      .map((employee) => ({
-        ...createBlankLabourRow({
-          prestartMinutes: draft.prestartMinutes,
-          lunchMinutes: draft.lunchBreakMinutes,
-          travelInMinutes: draft.travelInMinutes,
-          travelOutMinutes: draft.travelOutMinutes,
-        }),
-        worker_name: employee.full_name,
+      .sort((a, b) =>
+        a.full_name.localeCompare(b.full_name),
+      );
+
+    const labourRows = members.map((employee) => ({
+      ...createBlankLabourRow({
+        prestartMinutes: draft.prestartMinutes,
+        lunchMinutes: draft.lunchBreakMinutes,
+        travelInMinutes: draft.travelInMinutes,
+        travelOutMinutes: draft.travelOutMinutes,
+      }),
+      worker_name: employee.full_name,
+    }));
+
+    let plantRows: PlantRow[] = [];
+    let assetWarning = "";
+
+    try {
+      const [plantResult, vehicleResult] = await Promise.all([
+        supabase.from("plant_assets").select("*"),
+        supabase.from("vehicle_assets").select("*"),
+      ]);
+
+      if (plantResult.error) {
+        assetWarning = plantResult.error.message;
+      }
+      if (vehicleResult.error) {
+        assetWarning = [assetWarning, vehicleResult.error.message]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const crewNumber = clean(crew.crew_number);
+      const crewName = clean(crew.crew_name);
+
+      const allocated = [
+        ...((plantResult.data ?? []) as AssetAllocationRow[])
+          .filter((row) =>
+            assetBelongsToCrew(
+              row,
+              selectedCrewId,
+              crewNumber,
+              crewName,
+            ),
+          )
+          .map((row) => allocatedPlantRow(row, "plant")),
+        ...((vehicleResult.data ?? []) as AssetAllocationRow[])
+          .filter((row) =>
+            assetBelongsToCrew(
+              row,
+              selectedCrewId,
+              crewNumber,
+              crewName,
+            ),
+          )
+          .map((row) => allocatedPlantRow(row, "vehicle")),
+      ].filter((row): row is PlantRow => Boolean(row));
+
+      const seen = new Set<string>();
+      plantRows = allocated.filter((row) => {
+        const key = plantRowKey(row);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    } catch (error) {
+      assetWarning =
+        error instanceof Error
+          ? error.message
+          : "Crew plant and vehicles could not be loaded.";
+    }
+
+    const allowedWorkers = new Set(
+      labourRows.map((row) => normalizedName(row.worker_name)),
+    );
+    const allowedPlant = new Set(
+      plantRows.map((row, index) =>
+        normalizedName(
+          row.plant_name ||
+            row.asset_id ||
+            row.plant_type ||
+            `Plant ${index + 1}`,
+        ),
+      ),
+    );
+
+    const delayRows = draft.delayRows.map((row) => ({
+      ...row,
+      worker_names:
+        row.applies_to === "selected_workers"
+          ? row.worker_names.filter((name) =>
+              allowedWorkers.has(normalizedName(name)),
+            )
+          : [],
+      plant_names:
+        row.delay_applies_mode === "labour_and_plant"
+          ? row.plant_names.filter((name) =>
+              allowedPlant.has(normalizedName(name)),
+            )
+          : [],
+    }));
+
+    const towerRevisionAllocations =
+      draft.towerRevisionAllocations.map((row) => ({
+        ...row,
+        worker_names: row.worker_names.filter((name) =>
+          allowedWorkers.has(normalizedName(name)),
+        ),
       }));
 
-    if (additions.length > 0) {
-      setDraft({
-        labourRows: [...draft.labourRows, ...additions],
-      });
+    const materialEvents = draft.materialEvents.map((event) => ({
+      ...event,
+      people: event.people.filter((person) =>
+        allowedWorkers.has(
+          normalizedName(person.employee_name),
+        ),
+      ),
+      plant: event.plant.filter((plant) =>
+        allowedPlant.has(normalizedName(plant.plant_name)),
+      ),
+    }));
+
+    onChange({
+      ...draft,
+      selectedCrewId,
+      crewName:
+        clean(crew.crew_number) ||
+        clean(crew.crew_name),
+      leadingHand:
+        clean(crew.leading_hand) ||
+        draft.leadingHand,
+      labourRows,
+      plantRows,
+      delayRows,
+      towerRevisionAllocations,
+      materialEvents,
+      mobilisation: {
+        ...draft.mobilisation,
+        worker_names: draft.mobilisation.worker_names.filter(
+          (name) => allowedWorkers.has(normalizedName(name)),
+        ),
+      },
+    });
+
+    setCrewLoading(false);
+
+    if (assetWarning) {
+      Alert.alert(
+        "Crew selected",
+        `Crew ${clean(crew.crew_number) || clean(crew.crew_name)} workers were loaded, but one or more assigned assets could not be loaded.\n\n${assetWarning}`,
+      );
     }
   };
 
@@ -1026,25 +1332,19 @@ export function DailyDocketEditorFoundation({
           placeholder="Select crew"
           options={crewOptions}
           disabled={locked}
-          onSelect={(selectedCrewId) => {
-            const crew = payload.crews.find(
-              (item) => item.id === selectedCrewId,
-            );
-
-            setDraft({
-              selectedCrewId,
-              crewName: [
-                crew?.crew_number || "",
-                crew?.crew_name || "",
-              ]
-                .filter(Boolean)
-                .join(" - "),
-              leadingHand:
-                clean(crew?.leading_hand) ||
-                draft.leadingHand,
-            });
-          }}
+          onSelect={(selectedCrewId) =>
+            void applyCrewSelection(selectedCrewId)
+          }
         />
+
+        {crewLoading ? (
+          <View style={styles.crewLoading}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.crewLoadingText}>
+              Loading crew members and assigned plant…
+            </Text>
+          </View>
+        ) : null}
 
         <Field
           label="Leading Hand"
@@ -1215,43 +1515,26 @@ export function DailyDocketEditorFoundation({
 
       <SectionCard
         title="Crew"
-        subtitle="Worker hours feed Raw MH and Production MH automatically."
+        subtitle="Selecting a crew in Setup automatically replaces this worker list and the assigned plant/vehicles. You can still add an extra worker manually."
         action={
-          <View style={styles.actionRow}>
-            <Pressable
-              disabled={locked || !draft.selectedCrewId}
-              onPress={loadCrewMembers}
-              style={[
-                styles.iconButton,
-                (locked || !draft.selectedCrewId) &&
-                  styles.buttonDisabled,
-              ]}
-            >
-              <Ionicons
-                name="people-outline"
-                size={18}
-                color="#1d4ed8"
-              />
-            </Pressable>
-            <Pressable
-              disabled={
-                locked || availableEmployees.length === 0
-              }
-              onPress={() => setEmployeePickerOpen(true)}
-              style={[
-                styles.primaryIconButton,
-                (locked ||
-                  availableEmployees.length === 0) &&
-                  styles.buttonDisabled,
-              ]}
-            >
-              <Ionicons
-                name="add"
-                size={20}
-                color="#ffffff"
-              />
-            </Pressable>
-          </View>
+          <Pressable
+            disabled={
+              locked || availableEmployees.length === 0
+            }
+            onPress={() => setEmployeePickerOpen(true)}
+            style={[
+              styles.primaryIconButton,
+              (locked ||
+                availableEmployees.length === 0) &&
+                styles.buttonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="add"
+              size={20}
+              color="#ffffff"
+            />
+          </Pressable>
         }
       >
         <View style={styles.bulkTimeCard}>
@@ -1295,7 +1578,7 @@ export function DailyDocketEditorFoundation({
           <EmptyCard
             icon="people-outline"
             title="No workers added"
-            body="Load the selected crew or add an employee manually."
+            body="Select a crew in Setup or add an employee manually."
           />
         ) : (
           <View style={styles.stack}>
@@ -2409,54 +2692,56 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   stepStrip: {
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     backgroundColor: "#ffffff",
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#e2e8f0",
   },
   stepPill: {
-    flexDirection: "row",
+    flex: 1,
+    minHeight: 28,
     alignItems: "center",
-    gap: 7,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
+    justifyContent: "center",
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+    borderRadius: 7,
     backgroundColor: "#f8fafc",
     borderWidth: 1,
     borderColor: "#e2e8f0",
   },
   stepPillActive: {
     backgroundColor: "#eff6ff",
-    borderColor: "#93c5fd",
-  },
-  stepNumber: {
-    width: 22,
-    height: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 11,
-    backgroundColor: "#e2e8f0",
-  },
-  stepNumberActive: {
-    backgroundColor: "#2563eb",
-  },
-  stepNumberText: {
-    color: "#475569",
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  stepNumberTextActive: {
-    color: "#ffffff",
+    borderColor: "#60a5fa",
   },
   stepLabel: {
-    color: "#475569",
-    fontSize: 12,
-    fontWeight: "800",
+    color: "#64748b",
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: "900",
+    textAlign: "center",
   },
   stepLabelActive: {
     color: "#1d4ed8",
+  },
+  crewLoading: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "#eff6ff",
+  },
+  crewLoadingText: {
+    flex: 1,
+    color: "#1d4ed8",
+    fontSize: 10,
+    fontWeight: "800",
   },
   scroll: {
     flex: 1,
