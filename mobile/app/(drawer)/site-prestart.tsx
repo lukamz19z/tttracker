@@ -127,25 +127,63 @@ function localDate() {
   const now = new Date();
 
   return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
-  ].join("-");
+    String(now.getMonth() + 1).padStart(2, "0"),
+    now.getFullYear(),
+  ].join("/");
+}
+
+function formatDateInput(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) {
+    return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  }
+
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function displayDateToApiDate(value: string) {
+  const match = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const [, dayText, monthText, yearText] = match;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  const year = Number(yearText);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${yearText}-${monthText}-${dayText}`;
 }
 
 function formatDate(value: unknown) {
   const raw = clean(value);
   if (!raw) return "—";
 
-  const date = new Date(
-    raw.length <= 10 ? `${raw.slice(0, 10)}T00:00:00` : raw,
-  );
+  const isoDateMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDateMatch) {
+    const [, year, month, day] = isoDateMatch;
+    return `${day}/${month}/${year}`;
+  }
 
+  const displayDateMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (displayDateMatch) return raw;
+
+  const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return raw;
 
   return date.toLocaleDateString("en-AU", {
     day: "2-digit",
-    month: "short",
+    month: "2-digit",
     year: "numeric",
   });
 }
@@ -446,6 +484,16 @@ export default function SitePrestartScreen() {
       return;
     }
 
+    const apiPrestartDate = displayDateToApiDate(prestartDate);
+
+    if (!apiPrestartDate) {
+      Alert.alert(
+        "Invalid date",
+        "Enter the date in DD/MM/YYYY format, for example 18/09/2026.",
+      );
+      return;
+    }
+
     setBusy(true);
 
     try {
@@ -453,7 +501,7 @@ export default function SitePrestartScreen() {
         method: "POST",
         body: JSON.stringify({
           projectId,
-          prestartDate,
+          prestartDate: apiPrestartDate,
           location: location.trim(),
           discussionPoints: discussionPoints.trim(),
           adminNotes: adminNotes.trim(),
@@ -1435,10 +1483,12 @@ export default function SitePrestartScreen() {
             <Text style={styles.fieldLabel}>Date</Text>
             <TextInput
               value={prestartDate}
-              onChangeText={setPrestartDate}
+              onChangeText={(value) => setPrestartDate(formatDateInput(value))}
               style={styles.input}
-              placeholder="YYYY-MM-DD"
+              placeholder="DD/MM/YYYY"
               placeholderTextColor="#94A3B8"
+              keyboardType="number-pad"
+              maxLength={10}
             />
 
             <Text style={styles.fieldLabel}>Location</Text>

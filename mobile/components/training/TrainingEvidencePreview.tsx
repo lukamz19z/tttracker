@@ -1,7 +1,6 @@
 
 import { Image } from "expo-image";
 import * as FileSystemLegacy from "expo-file-system/legacy";
-import * as IntentLauncher from "expo-intent-launcher";
 import * as Sharing from "expo-sharing";
 import {
   FileText,
@@ -11,6 +10,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -63,32 +63,8 @@ function kindFor(
   return "other" as const;
 }
 
-function mimeFor(
-  fileName: string,
-  mimeType?: string | null,
-) {
-  const supplied = clean(mimeType);
-
-  if (supplied) return supplied;
-
-  const ext = extension(fileName);
-
-  if (ext === "pdf") {
-    return "application/pdf";
-  }
-
-  if (ext === "png") {
-    return "image/png";
-  }
-
-  if (
-    ext === "jpg" ||
-    ext === "jpeg"
-  ) {
-    return "image/jpeg";
-  }
-
-  return "*/*";
+function isRemoteUri(uri: string) {
+  return /^https?:\/\//i.test(uri);
 }
 
 export type TrainingPreviewFile = {
@@ -115,77 +91,84 @@ export function TrainingEvidencePreview({
       )
     : "other";
 
-  async function openNativeViewer() {
+  async function openViewer() {
     if (!file) return;
 
     try {
-      const mimeType = mimeFor(
-        file.name,
-        file.mimeType,
-      );
+      /*
+       * REMOTE evidence:
+       * - Supabase signed URL for staged evidence
+       * - Microsoft Graph pre-authenticated URL for approved evidence
+       *
+       * Opening the HTTPS URL directly works on both iOS and Android and
+       * gives the OS/browser its normal PDF/document viewer.
+       */
+      if (isRemoteUri(file.uri)) {
+        await Linking.openURL(file.uri);
+        return;
+      }
 
       /*
-       * On Android, expo-sharing opens the share sheet. That is NOT what
-       * "Preview PDF" should do.
+       * LOCAL evidence before submission:
        *
-       * Convert the app's file:// URI to a content:// URI and launch the
-       * standard Android ACTION_VIEW intent instead. Android will open the
-       * installed PDF/image viewer directly.
+       * Android cannot reliably expose file:// URIs to another app, so
+       * convert it to a content:// URI first. React Native Linking then asks
+       * Android to open the URI with the normal compatible viewer.
+       *
+       * This avoids expo-intent-launcher completely.
        */
       if (Platform.OS === "android") {
-        const contentUri =
+        const uri =
           file.uri.startsWith("content://")
             ? file.uri
             : await FileSystemLegacy.getContentUriAsync(
                 file.uri,
               );
 
-        await IntentLauncher.startActivityAsync(
-          "android.intent.action.VIEW",
-          {
-            data: contentUri,
-            flags: 1,
-            type: mimeType,
-          },
-        );
-
+        await Linking.openURL(uri);
         return;
       }
 
       /*
-       * iOS fallback. The current TTTracker Android build is the immediate
-       * target, but keep Sharing as a safe fallback where ACTION_VIEW does
-       * not exist.
+       * iOS can normally hand the local file URL to the system viewer.
        */
-      if (
-        await Sharing.isAvailableAsync()
-      ) {
-        await Sharing.shareAsync(
-          file.uri,
-          {
-            dialogTitle:
-              kind === "pdf"
-                ? "Open PDF"
-                : "Open Training evidence",
-            mimeType,
-            UTI:
-              kind === "pdf"
-                ? "com.adobe.pdf"
-                : undefined,
-          },
-        );
-        return;
+      await Linking.openURL(file.uri);
+    } catch (error) {
+      /*
+       * Final fallback only. Sharing is kept so the user is never trapped
+       * if a particular device has no registered viewer for a file type.
+       */
+      try {
+        if (
+          await Sharing.isAvailableAsync()
+        ) {
+          await Sharing.shareAsync(
+            file.uri,
+            {
+              dialogTitle:
+                kind === "pdf"
+                  ? "Open PDF"
+                  : "Open Training evidence",
+              mimeType:
+                clean(file.mimeType) ||
+                undefined,
+              UTI:
+                kind === "pdf"
+                  ? "com.adobe.pdf"
+                  : undefined,
+            },
+          );
+          return;
+        }
+      } catch {
+        // Use the original viewer error below.
       }
 
-      throw new Error(
-        "No document viewer is available on this device.",
-      );
-    } catch (error) {
       Alert.alert(
         "Could not open file",
         error instanceof Error
           ? error.message
-          : "Please try again.",
+          : "No compatible document viewer is available.",
       );
     }
   }
@@ -203,6 +186,7 @@ export function TrainingEvidencePreview({
             <Text style={styles.title}>
               Evidence Preview
             </Text>
+
             <Text
               numberOfLines={1}
               style={styles.fileName}
@@ -246,7 +230,7 @@ export function TrainingEvidencePreview({
 
               <Pressable
                 onPress={() =>
-                  void openNativeViewer()
+                  void openViewer()
                 }
                 style={styles.secondary}
               >
@@ -254,12 +238,13 @@ export function TrainingEvidencePreview({
                   size={17}
                   color="#334155"
                 />
+
                 <Text
                   style={
                     styles.secondaryText
                   }
                 >
-                  Open in device viewer
+                  Open externally
                 </Text>
               </Pressable>
             </>
@@ -282,15 +267,14 @@ export function TrainingEvidencePreview({
               </Text>
 
               <Text style={styles.helper}>
-                Tap View PDF to open the
-                document in the phone&apos;s PDF
-                viewer. This no longer opens
-                the Share menu.
+                View PDF opens the document
+                using the standard PDF viewer
+                available on this device.
               </Text>
 
               <Pressable
                 onPress={() =>
-                  void openNativeViewer()
+                  void openViewer()
                 }
                 style={styles.primary}
               >
@@ -327,7 +311,7 @@ export function TrainingEvidencePreview({
 
               <Pressable
                 onPress={() =>
-                  void openNativeViewer()
+                  void openViewer()
                 }
                 style={styles.primary}
               >
@@ -335,6 +319,7 @@ export function TrainingEvidencePreview({
                   size={18}
                   color="#fff"
                 />
+
                 <Text
                   style={
                     styles.primaryText

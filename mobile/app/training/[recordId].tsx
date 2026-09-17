@@ -1,5 +1,4 @@
 
-import { File, Paths } from "expo-file-system";
 import {
   Stack,
   useLocalSearchParams,
@@ -79,28 +78,6 @@ function workflowLabel(record: TrainingRecord) {
   return record.record_status || "Training Record";
 }
 
-function safeFileName(value: string) {
-  return (
-    clean(value)
-      .replace(/[^a-zA-Z0-9._-]/g, "_")
-      .slice(0, 150) || "training-document"
-  );
-}
-
-function contentTypeName(
-  response: Response,
-  document: TrainingDocument,
-) {
-  return (
-    response.headers.get("content-type") ||
-    clean(
-      (document as TrainingDocument & {
-        mime_type?: string | null;
-      }).mime_type,
-    ) ||
-    "application/octet-stream"
-  );
-}
 
 export default function TrainingRecordScreen() {
   const router = useRouter();
@@ -169,68 +146,84 @@ export default function TrainingRecordScreen() {
     setPreview(null);
 
     try {
+      /*
+       * Ask TTTracker for a short-lived secure preview URL rather than
+       * downloading the file through the API route.
+       */
       const response = await apiFetch(
         `/api/training/documents/${encodeURIComponent(
           document.id,
-        )}`,
+        )}?mode=preview&_=${Date.now()}`,
         {
           timeoutMs: 120000,
         },
       );
 
-if (!response.ok) {
-  const raw = await response.text();
+      const raw = await response.text();
 
-  let serverMessage = "";
+      let payload: {
+        url?: string;
+        fileName?: string;
+        mimeType?: string;
+        error?: string;
+      } | null = null;
 
-  try {
-    const parsed = JSON.parse(raw);
-    serverMessage = String(parsed?.error ?? "").trim();
-  } catch {
-    serverMessage = raw.trim();
-  }
+      if (raw) {
+        try {
+          payload = JSON.parse(raw) as {
+            url?: string;
+            fileName?: string;
+            mimeType?: string;
+            error?: string;
+          };
+        } catch {
+          payload = null;
+        }
+      }
 
-  console.error("Training evidence preview failed", {
-    status: response.status,
-    statusText: response.statusText,
-    url: response.url,
-    body: raw.slice(0, 1000),
-    documentId: document.id,
-  });
+      if (!response.ok) {
+        console.error(
+          "Training evidence preview failed",
+          {
+            status: response.status,
+            statusText:
+              response.statusText,
+            url: response.url,
+            body: raw.slice(0, 1000),
+            documentId: document.id,
+          },
+        );
 
-  throw new Error(
-    serverMessage ||
-      `Training evidence could not be loaded (${response.status}).`,
-  );
-}
+        throw new Error(
+          clean(payload?.error) ||
+            `Training evidence could not be loaded (${response.status}).`,
+        );
+      }
 
-      const bytes = new Uint8Array(
-        await response.arrayBuffer(),
-      );
+      const secureUrl =
+        clean(payload?.url);
 
-      const name =
-        document.generated_file_name ||
-        document.original_file_name ||
-        "training-document";
-
-      const file = new File(
-        Paths.cache,
-        `${Date.now()}-${safeFileName(name)}`,
-      );
-
-      file.create({
-        overwrite: true,
-        intermediates: true,
-      });
-      file.write(bytes);
+      if (!secureUrl) {
+        throw new Error(
+          "TTTracker did not return a secure evidence URL.",
+        );
+      }
 
       setPreview({
-        uri: file.uri,
-        name,
-        mimeType: contentTypeName(
-          response,
-          document,
-        ),
+        uri: secureUrl,
+        name:
+          clean(payload?.fileName) ||
+          document.generated_file_name ||
+          document.original_file_name ||
+          "training-document",
+        mimeType:
+          clean(payload?.mimeType) ||
+          (
+            document as TrainingDocument & {
+              mime_type?: string | null;
+            }
+          ).mime_type ||
+          null,
       });
     } catch (openError) {
       setPreviewVisible(false);
