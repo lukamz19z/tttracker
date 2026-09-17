@@ -1,105 +1,488 @@
-import { router, type Href } from "expo-router";
-import { useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
-import { QualitySelector, type QualitySelectorOption } from "@/components/quality/QualitySelector";
-import { QualityShell, qualityStyles as q } from "@/components/quality/QualityShell";
+import { router } from "expo-router";
+import { ChevronDown, Save } from "lucide-react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
+import { QualitySelector } from "@/components/quality/QualitySelector";
+import { QualityShell } from "@/components/quality/QualityShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
+import { createQualityRevision } from "@/lib/api/quality";
+import {
+  blankRevisionDraft,
+  clearRevisionWorkingDraft,
+  loadRevisionWorkingDraft,
+  saveRevisionWorkingDraft,
+  type RevisionWorkingDraft,
+} from "@/lib/offline/revision-drafts";
 import { enqueueRevisionCreate } from "@/lib/offline/quality-sync";
-import type { InspectionStage, LocalQualityPhoto } from "@/types/quality";
+import {
+  createLocalRevisionWorkspace,
+  saveRevisionWorkspace,
+} from "@/lib/offline/revision-workspaces";
 
-function today() { return new Date().toISOString().slice(0, 10); }
-
-export default function NewRevisionScreen() {
-  const { profile } = useAuth();
-  const { data, refresh } = useQuality();
-  const { online, syncNow } = useSync();
-  const [towerId, setTowerId] = useState("");
-  const [stage, setStage] = useState<InspectionStage>("Post Assembly");
-  const [inspectionDate, setInspectionDate] = useState(today());
-  const [clientInspector, setClientInspector] = useState("");
-  const [clientCompany, setClientCompany] = useState("");
-  const [clientReference, setClientReference] = useState("");
-  const [notes, setNotes] = useState("");
-  const [issueTypeId, setIssueTypeId] = useState("");
-  const [otherIssue, setOtherIssue] = useState("");
-  const [memberId, setMemberId] = useState("");
-  const [finding, setFinding] = useState("");
-  const [rectification, setRectification] = useState("");
-  const [beforePhotos, setBeforePhotos] = useState<LocalQualityPhoto[]>([]);
-  const [afterPhotos, setAfterPhotos] = useState<LocalQualityPhoto[]>([]);
-  const [selector, setSelector] = useState<"tower" | "stage" | "issue" | "member" | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const tower = data?.towers.find((row) => row.id === towerId) ?? null;
-  const issue = data?.issueTypes.find((row) => row.id === issueTypeId) ?? null;
-  const member = data?.members.find((row) => row.id === memberId) ?? null;
-  const options = useMemo<QualitySelectorOption[]>(() => {
-    if (selector === "tower") return (data?.towers ?? []).map((row) => ({ id: row.id, label: row.name || row.id }));
-    if (selector === "stage") return (data?.workflow.inspectionStages ?? []).map((value) => ({ id: value, label: value }));
-    if (selector === "issue") return [...(data?.issueTypes ?? []).filter((row) => row.active && (row.applies_to === "revision" || row.applies_to === "both")).map((row) => ({ id: row.id, label: row.name })), { id: "__other__", label: "Other / unlisted issue" }];
-    if (selector === "member") return (data?.members ?? []).filter((row) => row.tower_id === towerId).map((row) => ({ id: row.id, label: row.mark_no || "Member", subtitle: [row.tower_segment, row.drawing_number, row.bundle_reference].filter(Boolean).join(" · ") }));
-    return [];
-  }, [data, selector, towerId]);
-
-  async function save() {
-    const projectId = profile?.projectId;
-    if (!projectId) return Alert.alert("Project required", "Select your current project first.");
-    if (!towerId) return Alert.alert("Tower required", "Select the tower.");
-    if (!issueTypeId) return Alert.alert("Issue required", "Select a common issue or Other.");
-    if (issueTypeId === "__other__" && !otherIssue.trim()) return Alert.alert("Issue details required", "Enter the issue details for Other.");
-    if (!finding.trim()) return Alert.alert("Finding required", "Describe the finding / flag.");
-    if (beforePhotos.length === 0) return Alert.alert("Before photo required", "Capture the before condition before the physical flag is removed.");
-    setSaving(true);
-    try {
-      await enqueueRevisionCreate({
-        projectId, towerId, inspectionStage: stage, inspectionDate,
-        clientInspector: clientInspector.trim() || null, clientCompany: clientCompany.trim() || null,
-        clientReference: clientReference.trim() || null, notes: notes.trim() || null,
-        firstFinding: {
-          issueTypeId: issueTypeId === "__other__" ? null : issueTypeId,
-          otherIssueText: issueTypeId === "__other__" ? otherIssue.trim() : null,
-          towerSegment: member?.tower_segment ?? null, memberNumber: member?.mark_no ?? null,
-          drawingNumber: member?.drawing_number ?? null, finding: finding.trim(),
-          rectificationComment: rectification.trim() || null,
-          status: afterPhotos.length ? "Rectified" : "Open",
-          beforePhotos, afterPhotos,
-        },
-      });
-      if (online) { await syncNow(); await refresh(); }
-      Alert.alert(online ? "Revision saved" : "Saved offline", online ? "The Revision and first finding have been added." : "They will sync automatically when TTTracker reconnects.", [{ text: "OK", onPress: () => router.replace("/(drawer)/revisions" as Href) }]);
-    } catch (error) { Alert.alert("Could not save Revision", error instanceof Error ? error.message : "Please try again."); }
-    finally { setSaving(false); }
-  }
-
-  return <QualityShell permission="mobile.rectifications" title="New Revision" subtitle="Create the Revision and capture its first field finding in one workflow.">
-    <Field label="Tower" value={tower?.name || "Select tower"} onPress={() => setSelector("tower")} />
-    <Field label="Inspection Stage" value={stage} onPress={() => setSelector("stage")} />
-    <Text style={q.fieldLabel}>Inspection Date</Text><TextInput value={inspectionDate} onChangeText={setInspectionDate} style={q.input} placeholder="YYYY-MM-DD" />
-    <Text style={q.fieldLabel}>Client Inspector</Text><TextInput value={clientInspector} onChangeText={setClientInspector} style={q.input} placeholder="Optional" />
-    <Text style={q.fieldLabel}>Client Company</Text><TextInput value={clientCompany} onChangeText={setClientCompany} style={q.input} placeholder="Optional" />
-    <Text style={q.fieldLabel}>Client Reference</Text><TextInput value={clientReference} onChangeText={setClientReference} style={q.input} placeholder="Optional" />
-    <Text style={q.fieldLabel}>Revision Notes</Text><TextInput value={notes} onChangeText={setNotes} multiline style={[q.input, styles.textarea]} placeholder="Optional" />
-    <View style={styles.divider} /><Text style={styles.sectionTitle}>First Finding</Text>
-    <Field label="Common Issue" value={issueTypeId === "__other__" ? "Other / unlisted issue" : issue?.name || "Select issue"} onPress={() => setSelector("issue")} />
-    {issueTypeId === "__other__" ? <><Text style={q.fieldLabel}>Other Issue</Text><TextInput value={otherIssue} onChangeText={setOtherIssue} style={q.input} /></> : null}
-    {towerId ? <Field label="Member (optional)" value={member ? [member.mark_no, member.tower_segment, member.drawing_number].filter(Boolean).join(" · ") : "Select member"} onPress={() => setSelector("member")} /> : null}
-    <Text style={q.fieldLabel}>Finding *</Text><TextInput value={finding} onChangeText={setFinding} multiline style={[q.input, styles.textarea]} placeholder="Describe the condition / flag…" />
-    <QualityPhotoPicker label="Before photos" required photos={beforePhotos} onChange={setBeforePhotos} prefix="revision-before" />
-    <Text style={q.fieldLabel}>Rectification Comment</Text><TextInput value={rectification} onChangeText={setRectification} multiline style={[q.input, styles.textarea]} placeholder="Leave blank if not yet rectified" />
-    <QualityPhotoPicker label="After photos (if already rectified)" photos={afterPhotos} onChange={setAfterPhotos} prefix="revision-after" />
-    <Pressable disabled={saving} style={q.primary} onPress={() => void save()}><Text style={q.primaryText}>{saving ? "Saving…" : online ? "Save Revision" : "Save Revision Offline"}</Text></Pressable>
-    <QualitySelector visible={selector !== null} title={`Select ${selector ?? "option"}`} options={options} onClose={() => setSelector(null)} onSelect={(option) => {
-      if (selector === "tower") { setTowerId(option.id); setMemberId(""); }
-      if (selector === "stage") setStage(option.id as InspectionStage);
-      if (selector === "issue") setIssueTypeId(option.id);
-      if (selector === "member") setMemberId(option.id);
-    }} />
-  </QualityShell>;
+function clean(value: unknown) {
+  return String(value ?? "").trim();
 }
 
-function Field({ label, value, onPress }: { label: string; value: string; onPress: () => void }) { return <View style={{ gap: 6 }}><Text style={q.fieldLabel}>{label}</Text><Pressable style={q.select} onPress={onPress}><Text style={q.selectText}>{value}</Text></Pressable></View>; }
-const styles = StyleSheet.create({ textarea: { minHeight: 90, textAlignVertical: "top", paddingTop: 12 }, divider: { height: 1, backgroundColor: "#cbd5e1", marginVertical: 4 }, sectionTitle: { fontSize: 18, fontWeight: "900", color: "#0f172a" } });
+function isoToAustralianDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function formatAustralianDateInput(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) {
+    return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  }
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+}
+
+function australianDateToIso(value: string) {
+  const match = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!match) return "";
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return "";
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export default function NewRevisionScreen() {
+  const { data } = useQuality();
+  const { profile } = useAuth();
+  const { online } = useSync();
+
+  const projectId = clean(profile?.projectId);
+  const [draft, setDraft] = useState<RevisionWorkingDraft | null>(null);
+  const [inspectionDateInput, setInspectionDateInput] = useState("");
+  const [towerPickerOpen, setTowerPickerOpen] = useState(false);
+  const [stagePickerOpen, setStagePickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState("Saved locally");
+  const hydrated = useRef(false);
+
+  const towers = useMemo(
+    () => (Array.isArray(data?.towers) ? data.towers : []),
+    [data?.towers],
+  );
+
+  const towerOptions = useMemo(
+    () =>
+      towers.map((tower) => ({
+        id: tower.id,
+        label: clean(tower.name) || tower.id,
+        subtitle: [clean(tower.line), clean(tower.status)]
+          .filter(Boolean)
+          .join(" · "),
+      })),
+    [towers],
+  );
+
+  const stageOptions = useMemo(
+    () =>
+      (data?.workflow?.inspectionStages ?? [
+        "Post Assembly",
+        "Post Erection",
+        "Other",
+      ]).map((value) => ({
+        id: value,
+        label: value,
+      })),
+    [data?.workflow?.inspectionStages],
+  );
+
+  const selectedTower = towers.find(
+    (tower) => tower.id === draft?.towerId,
+  );
+
+  useEffect(() => {
+    if (!projectId) return;
+
+    void (async () => {
+      const cached = await loadRevisionWorkingDraft(projectId);
+      const next = cached?.value ?? blankRevisionDraft(projectId);
+
+      // Findings belong to the Revision detail screen now.
+      next.findings = [];
+
+      setDraft(next);
+      setInspectionDateInput(
+        isoToAustralianDate(next.inspectionDate),
+      );
+      hydrated.current = true;
+    })();
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!draft || !hydrated.current) return;
+
+    setSaveState("Saving…");
+
+    const timer = setTimeout(() => {
+      void saveRevisionWorkingDraft({
+        ...draft,
+        findings: [],
+      })
+        .then(() => setSaveState("Saved locally"))
+        .catch(() => setSaveState("Local save failed"));
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [draft]);
+
+  if (!draft) {
+    return (
+      <QualityShell
+        permission="mobile.rectifications"
+        title="New Revision"
+      >
+        <ActivityIndicator />
+      </QualityShell>
+    );
+  }
+
+  async function createRevision() {
+    const current = draft;
+    if (!current) return;
+
+    if (!current.towerId) {
+      Alert.alert(
+        "Tower required",
+        "Select the tower for this Revision.",
+      );
+      return;
+    }
+
+    if (!current.inspectionDate) {
+      Alert.alert(
+        "Inspection date required",
+        "Enter the date as DD-MM-YYYY.",
+      );
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const clientMutationId = `revision-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+
+      const payload = {
+        projectId: current.projectId,
+        towerId: current.towerId,
+        inspectionStage: current.inspectionStage,
+        inspectionDate: current.inspectionDate,
+        clientInspector: clean(current.clientInspector) || null,
+        clientCompany: clean(current.clientCompany) || null,
+        clientReference: clean(current.clientReference) || null,
+        notes: clean(current.notes) || null,
+        clientMutationId,
+      };
+
+      if (online) {
+        try {
+          const result = await createQualityRevision(payload);
+
+          await clearRevisionWorkingDraft(projectId);
+
+          router.replace(
+            `/revisions/${encodeURIComponent(result.revision.id)}`,
+          );
+          return;
+        } catch {
+          // Fall through to offline queue. The user can continue
+          // working on the Revision immediately.
+        }
+      }
+
+      const workspace = createLocalRevisionWorkspace({
+        ...payload,
+      });
+
+      await saveRevisionWorkspace(workspace);
+
+      await enqueueRevisionCreate({
+        ...payload,
+        findings: [],
+      });
+
+      await clearRevisionWorkingDraft(projectId);
+
+      router.replace(
+        `/revisions/${encodeURIComponent(workspace.routeKey)}`,
+      );
+    } catch (error) {
+      Alert.alert(
+        "Revision could not be created",
+        error instanceof Error
+          ? error.message
+          : "Please try again.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <QualityShell
+      permission="mobile.rectifications"
+      title="New Revision"
+      subtitle={`Create the RECT record first. ${saveState}. Findings are added from the Revision after it is created.`}
+    >
+      <View style={styles.card}>
+        <Text style={styles.label}>Tower *</Text>
+        <Pressable
+          style={styles.selector}
+          onPress={() => setTowerPickerOpen(true)}
+        >
+          <View style={styles.selectorTextWrap}>
+            <Text style={styles.selectorTitle}>
+              {clean(selectedTower?.name) || "Search / select tower"}
+            </Text>
+            {selectedTower ? (
+              <Text style={styles.selectorSub}>
+                {[clean(selectedTower.line), clean(selectedTower.status)]
+                  .filter(Boolean)
+                  .join(" · ") || selectedTower.id}
+              </Text>
+            ) : null}
+          </View>
+          <ChevronDown size={18} color="#64748b" />
+        </Pressable>
+
+        <Text style={styles.label}>Inspection stage *</Text>
+        <Pressable
+          style={styles.selector}
+          onPress={() => setStagePickerOpen(true)}
+        >
+          <Text style={styles.selectorTitle}>
+            {currentLabel(currentStage(draft.inspectionStage))}
+          </Text>
+          <ChevronDown size={18} color="#64748b" />
+        </Pressable>
+
+        <Text style={styles.label}>Inspection date *</Text>
+        <TextInput
+          value={inspectionDateInput}
+          onChangeText={(value) => {
+            const formatted = formatAustralianDateInput(value);
+            setInspectionDateInput(formatted);
+
+            setDraft((current) =>
+              current
+                ? {
+                    ...current,
+                    inspectionDate:
+                      australianDateToIso(formatted),
+                  }
+                : current,
+            );
+          }}
+          placeholder="DD-MM-YYYY"
+          keyboardType="number-pad"
+          maxLength={10}
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Client inspector</Text>
+        <TextInput
+          value={draft.clientInspector}
+          onChangeText={(clientInspector) =>
+            setDraft({ ...draft, clientInspector })
+          }
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Client / company</Text>
+        <TextInput
+          value={draft.clientCompany}
+          onChangeText={(clientCompany) =>
+            setDraft({ ...draft, clientCompany })
+          }
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Client reference</Text>
+        <TextInput
+          value={draft.clientReference}
+          onChangeText={(clientReference) =>
+            setDraft({ ...draft, clientReference })
+          }
+          style={styles.input}
+        />
+
+        <Text style={styles.label}>Revision notes</Text>
+        <TextInput
+          multiline
+          value={draft.notes}
+          onChangeText={(notes) =>
+            setDraft({ ...draft, notes })
+          }
+          style={[styles.input, styles.multiline]}
+        />
+      </View>
+
+      <Pressable
+        style={[styles.primary, saving && styles.disabled]}
+        disabled={saving}
+        onPress={() => void createRevision()}
+      >
+        {saving ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Save size={18} color="#fff" />
+        )}
+        <Text style={styles.primaryText}>
+          Create Revision
+        </Text>
+      </Pressable>
+
+      <Text style={styles.help}>
+        No tower list is rendered on this page. Tap the Tower field and
+        search by tower name/number. Once created, the Revision opens and
+        you can add FLIs, photos and rectifications over multiple visits.
+      </Text>
+
+      <QualitySelector
+        visible={towerPickerOpen}
+        title="Select Tower"
+        options={towerOptions}
+        onClose={() => setTowerPickerOpen(false)}
+        onSelect={(option) =>
+          setDraft((current) =>
+            current
+              ? { ...current, towerId: option.id }
+              : current,
+          )
+        }
+      />
+
+      <QualitySelector
+        visible={stagePickerOpen}
+        title="Inspection Stage"
+        options={stageOptions}
+        onClose={() => setStagePickerOpen(false)}
+        onSelect={(option) =>
+          setDraft((current) =>
+            current
+              ? {
+                  ...current,
+                  inspectionStage:
+                    option.id as RevisionWorkingDraft["inspectionStage"],
+                }
+              : current,
+          )
+        }
+      />
+    </QualityShell>
+  );
+}
+
+function currentStage(value: string) {
+  return value || "Post Erection";
+}
+
+function currentLabel(value: string) {
+  return value;
+}
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 16,
+    padding: 15,
+    gap: 8,
+  },
+  label: {
+    color: "#334155",
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginTop: 4,
+  },
+  selector: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  selectorTextWrap: { flex: 1 },
+  selectorTitle: {
+    flex: 1,
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  selectorSub: {
+    color: "#64748b",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  input: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 12,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    color: "#0f172a",
+  },
+  multiline: {
+    minHeight: 90,
+    paddingTop: 12,
+    textAlignVertical: "top",
+  },
+  primary: {
+    minHeight: 48,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#2563eb",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+  },
+  primaryText: {
+    color: "#fff",
+    fontWeight: "900",
+  },
+  disabled: { opacity: 0.5 },
+  help: {
+    color: "#64748b",
+    fontSize: 11,
+    lineHeight: 17,
+    textAlign: "center",
+  },
+});

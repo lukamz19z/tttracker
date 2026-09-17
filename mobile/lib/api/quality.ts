@@ -235,3 +235,116 @@ export async function shareQualityFile(
 
   return file.uri;
 }
+
+
+export async function submitRevisionForReview(revisionId: string) {
+  return apiJson<{
+    revision: QualityRevision;
+    notification?: {
+      recipients?: number;
+      inApp?: number;
+      email?: number;
+      push?: number;
+      warning?: string | null;
+    };
+  }>(
+    `/api/quality/revisions/${encodeURIComponent(revisionId)}/submit-review`,
+    { method: "POST", timeoutMs: 120000 },
+  );
+}
+
+export async function downloadQualityFile(
+  fileId: string,
+  fileName: string,
+) {
+  const response = await apiFetch(
+    `/api/quality/files/${encodeURIComponent(fileId)}/content`,
+    { timeoutMs: 120000 },
+  );
+
+  if (!response.ok) {
+    throw new Error("Quality evidence could not be opened.");
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const safe = (fileName || "quality-evidence").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const file = new File(Paths.cache, `${Date.now()}-${safe}`);
+  file.create({ overwrite: true, intermediates: true });
+  file.write(bytes);
+  return file.uri;
+}
+
+
+export type QualityMemberCatalogRow = {
+  id: string;
+  towerId: string;
+  bundleReference: string | null;
+  drawingNumber: string | null;
+  memberNumber: string;
+  alternateMemberNumber: string | null;
+  qtyPerTower: number | null;
+  section: string | null;
+  towerSegment: string | null;
+};
+
+const qualityMemberCacheKey = (
+  projectId: string,
+  towerId: string,
+) => `quality:members:${projectId}:${towerId}`;
+
+export async function cachedQualityMemberCatalog(
+  projectId: string,
+  towerId: string,
+) {
+  return getCache<QualityMemberCatalogRow[]>(
+    qualityMemberCacheKey(projectId, towerId),
+  );
+}
+
+export async function refreshQualityMemberCatalog(
+  projectId: string,
+  towerId: string,
+) {
+  const payload = await apiJson<{
+    members?: QualityMemberCatalogRow[];
+  }>(
+    `/api/mobile/quality/members?projectId=${encodeURIComponent(projectId)}&towerId=${encodeURIComponent(towerId)}`,
+    { timeoutMs: 120000 },
+  );
+
+  const members = payload.members ?? [];
+
+  await setCache(
+    qualityMemberCacheKey(projectId, towerId),
+    members,
+  );
+
+  return members;
+}
+
+export async function createQualityRevision(input: {
+  projectId: string;
+  towerId: string;
+  inspectionStage: string;
+  inspectionDate: string;
+  clientInspector?: string | null;
+  clientCompany?: string | null;
+  clientReference?: string | null;
+  notes?: string | null;
+  clientMutationId?: string | null;
+}) {
+  return apiJson<{
+    revision: QualityRevision;
+    notification?: {
+      recipients?: number;
+      inApp?: number;
+      email?: number;
+      push?: number;
+      warning?: string | null;
+    };
+  }>("/api/mobile/quality/revisions", {
+    method: "POST",
+    body: JSON.stringify(input),
+    timeoutMs: 120000,
+  });
+}

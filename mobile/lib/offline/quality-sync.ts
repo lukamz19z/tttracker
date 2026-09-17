@@ -39,7 +39,21 @@ export type OfflineRevisionCreate = {
   clientCompany: string | null;
   clientReference: string | null;
   notes: string | null;
-  firstFinding: null | {
+  findings: Array<{
+    clientMutationId: string;
+    issueTypeId: string | null;
+    otherIssueText: string | null;
+    towerSegment: string | null;
+    memberNumber: string | null;
+    drawingNumber: string | null;
+    finding: string;
+    rectificationComment: string | null;
+    status: RevisionItemStatus;
+    beforePhotos: LocalQualityPhoto[];
+    afterPhotos: LocalQualityPhoto[];
+  }>;
+  /** Backward-compatible with queue records created before the RECT/FLI upgrade. */
+  firstFinding?: null | {
     clientMutationId: string;
     issueTypeId: string | null;
     otherIssueText: string | null;
@@ -99,33 +113,31 @@ export async function enqueueDefectCreate(
 export async function enqueueRevisionCreate(
   input: Omit<
     OfflineRevisionCreate,
-    "clientMutationId" | "firstFinding"
+    "clientMutationId" | "findings" | "firstFinding"
   > & {
-    firstFinding:
-      | null
-      | Omit<
-          NonNullable<
-            OfflineRevisionCreate["firstFinding"]
-          >,
-          "clientMutationId"
-        >;
+    clientMutationId?: string;
+    findings?: Array<
+      Omit<OfflineRevisionCreate["findings"][number], "clientMutationId"> & {
+        clientMutationId?: string;
+      }
+    >;
   },
 ) {
-  const clientMutationId = mutationId("revision");
+  const clientMutationId =
+    input.clientMutationId || mutationId("revision");
 
-  const firstFinding = input.firstFinding
-    ? {
-        ...input.firstFinding,
-        clientMutationId: mutationId("revision-item"),
-      }
-    : null;
+  const findings = (input.findings ?? []).map((finding) => ({
+    ...finding,
+    clientMutationId:
+      finding.clientMutationId || mutationId("revision-item"),
+  }));
 
   await enqueue(
     "quality_revision_create",
     {
       ...input,
       clientMutationId,
-      firstFinding,
+      findings,
     },
     clientMutationId,
   );
@@ -137,9 +149,12 @@ export async function enqueueRevisionItemCreate(
   input: Omit<
     OfflineRevisionItemCreate,
     "clientMutationId"
-  >,
+  > & {
+    clientMutationId?: string;
+  },
 ) {
-  const clientMutationId = mutationId("revision-item");
+  const clientMutationId =
+    input.clientMutationId || mutationId("revision-item");
 
   await enqueue(
     "quality_revision_item_create",
@@ -293,14 +308,22 @@ async function syncRevision(
       method: "POST",
       body: JSON.stringify({
         ...payload,
+        findings: undefined,
         firstFinding: undefined,
       }),
     },
   );
 
-  if (payload.firstFinding) {
+  const findings =
+    payload.findings?.length
+      ? payload.findings
+      : payload.firstFinding
+        ? [payload.firstFinding]
+        : [];
+
+  for (const finding of findings) {
     await createRevisionItem({
-      ...payload.firstFinding,
+      ...finding,
       revisionId: result.revision.id,
       projectId: payload.projectId,
       towerId: payload.towerId,

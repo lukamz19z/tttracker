@@ -1,7 +1,8 @@
 
 import { router, type Href } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { ClipboardCheck, Plus, Search } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -14,6 +15,10 @@ import {
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { QualityProvider, useQuality } from "@/contexts/QualityContext";
+import {
+  listRevisionWorkspaces,
+  type RevisionWorkspace,
+} from "@/lib/offline/revision-workspaces";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -42,10 +47,24 @@ function RevisionsScreenContent() {
   const { data, loading } = useQuality();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
+  const [localRevisions, setLocalRevisions] = useState<RevisionWorkspace[]>([]);
 
-  const towers = Array.isArray(data?.towers) ? data.towers : [];
-  const revisions = Array.isArray(data?.revisions) ? data.revisions : [];
-  const items = Array.isArray(data?.items) ? data.items : [];
+  const towers = useMemo(
+    () => (Array.isArray(data?.towers) ? data.towers : []),
+    [data?.towers],
+  );
+  const revisions = useMemo(
+    () => (Array.isArray(data?.revisions) ? data.revisions : []),
+    [data?.revisions],
+  );
+  const items = useMemo(
+    () => (Array.isArray(data?.items) ? data.items : []),
+    [data?.items],
+  );
+  const projectCode =
+    clean((data as Record<string, unknown> | null)?.project && (data as any).project.project_number) ||
+    clean((data as Record<string, unknown> | null)?.project && (data as any).project.name) ||
+    "";
 
   const revisionStatuses = Array.isArray(data?.workflow?.revisionStatuses)
     ? data.workflow.revisionStatuses.filter(
@@ -93,6 +112,7 @@ function RevisionsScreenContent() {
       if (!q) return true;
 
       return [
+        row.revision_number,
         row.fli_number,
         row.inspection_stage,
         row.client_inspector,
@@ -109,12 +129,45 @@ function RevisionsScreenContent() {
     });
   }, [query, revisions, status, towerById]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!data?.projectId) {
+        setLocalRevisions([]);
+        return;
+      }
+
+      let active = true;
+
+      void listRevisionWorkspaces(data.projectId).then((rows) => {
+        if (!active) return;
+
+        const serverMutationIds = new Set(
+          revisions
+            .map((row) => clean(row.mobile_client_mutation_id))
+            .filter(Boolean),
+        );
+
+        setLocalRevisions(
+          rows.filter(
+            (row) =>
+              row.clientMutationId &&
+              !serverMutationIds.has(row.clientMutationId),
+          ),
+        );
+      });
+
+      return () => {
+        active = false;
+      };
+    }, [data?.projectId, revisions]),
+  );
+
   return (
     <QualityShell
       permission="mobile.rectifications"
       root
       title="Revisions / Rectifications"
-      subtitle="Capture flags, before evidence and rectification evidence against the same Revision register used on the website."
+      subtitle="Each tower Revision is a RECT record. Every flagged issue inside it receives its own FLI number."
     >
       <View style={styles.topRow}>
         <View style={styles.search}>
@@ -161,12 +214,46 @@ function RevisionsScreenContent() {
 
       {loading && !data ? <ActivityIndicator /> : null}
 
-      {!loading && rows.length === 0 ? (
+      {!loading && rows.length === 0 && localRevisions.length === 0 ? (
         <View style={styles.empty}>
           <ClipboardCheck size={30} color="#94a3b8" />
           <Text style={styles.emptyTitle}>No matching Revisions</Text>
         </View>
       ) : null}
+
+      {localRevisions.map((revision) => (
+        <Pressable
+          key={revision.routeKey}
+          style={styles.card}
+          onPress={() =>
+            router.push(
+              `/revisions/${encodeURIComponent(revision.routeKey)}` as Href,
+            )
+          }
+        >
+          <View style={styles.cardHead}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.number}>
+                {[
+                  projectCode,
+                  towerById.get(revision.towerId) || "Tower",
+                  "RECT · Pending sync",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              </Text>
+              <Text style={styles.tower}>
+                {revision.inspectionStage} · Saved offline
+              </Text>
+            </View>
+            <QualityStatusPill value="Draft" />
+          </View>
+          <Text style={styles.meta}>
+            {formatDate(revision.inspectionDate)} · {revision.findings.length} pending FLI
+            {revision.findings.length === 1 ? "" : "s"}
+          </Text>
+        </Pressable>
+      ))}
 
       {rows.map((row) => {
         const rowId = clean(row.id);
@@ -187,7 +274,7 @@ function RevisionsScreenContent() {
             <View style={styles.cardHead}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.number}>
-                  {clean(row.fli_number) || "Revision"}
+                  {[projectCode, towerById.get(clean(row.tower_id)), clean(row.revision_number) || `RECT-${String(Number(row.sequence_no ?? 1)).padStart(2, "0")}`].filter(Boolean).join(" ")}
                 </Text>
 
                 <Text style={styles.tower}>
