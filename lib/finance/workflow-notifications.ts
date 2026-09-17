@@ -1,5 +1,6 @@
-
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
 
 import {
   docketEmailShell,
@@ -268,7 +269,12 @@ async function createInAppNotifications({
   actionRoute: string;
   actionParams: Record<string, unknown>;
 }) {
-  const recipients = unique(userIds);
+  const recipients = await filterAppNotificationUserIds(
+    service,
+    unique(userIds),
+    eventType,
+    actionRoute,
+  );
 
   if (!recipients.length) return 0;
 
@@ -304,6 +310,7 @@ async function createInAppNotifications({
 async function sendExpoPush({
   service,
   userIds,
+  eventType,
   title,
   message,
   actionRoute,
@@ -311,12 +318,23 @@ async function sendExpoPush({
 }: {
   service: SupabaseClient;
   userIds: string[];
+  eventType: string;
   title: string;
   message: string;
   actionRoute: string;
   actionParams: Record<string, unknown>;
 }) {
-  const tokens = await pushTokensForUsers(service, userIds);
+  const recipients = await filterAppNotificationUserIds(
+    service,
+    unique(userIds),
+    eventType,
+    actionRoute,
+  );
+
+  const tokens = await pushTokensForUsers(
+    service,
+    recipients,
+  );
 
   if (!tokens.length) {
     return { attempted: 0, tokenCount: 0 };
@@ -430,6 +448,7 @@ export async function notifyFinanceUsers({
       const push = await sendExpoPush({
         service,
         userIds: recipients,
+        eventType,
         title,
         message,
         actionRoute,
@@ -508,6 +527,11 @@ export async function notifyFinanceReviewers({
     submission_type: submissionType,
   };
 
+  const approvalEventType =
+    submissionType === "invoice"
+      ? "finance_invoice_submitted"
+      : "finance_expense_submitted";
+
   const inAppIds =
     settings.approval_in_app_enabled === false
       ? []
@@ -539,10 +563,7 @@ export async function notifyFinanceReviewers({
       inAppCreated = await createInAppNotifications({
         service,
         userIds: inAppIds,
-        eventType:
-          submissionType === "invoice"
-            ? "finance_invoice_submitted"
-            : "finance_expense_submitted",
+        eventType: approvalEventType,
         title,
         message,
         actionRoute,
@@ -603,6 +624,7 @@ export async function notifyFinanceReviewers({
       const push = await sendExpoPush({
         service,
         userIds: pushIds,
+        eventType: approvalEventType,
         title,
         message,
         actionRoute,
