@@ -93,6 +93,9 @@ type VehicleAsset = {
   notes: string | null;
   created_at: string | null;
   updated_at?: string | null;
+  current_odometer_km?: number | string | null;
+  risk_assessment_date?: string | null;
+  sharepoint_web_url?: string | null;
 };
 
 type PlantAsset = {
@@ -131,6 +134,12 @@ type PlantAsset = {
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  current_engine_hours?: number | string | null;
+  current_hours?: number | string | null;
+  cab_hours?: number | string | null;
+  ten_year_inspection_due?: string | null;
+  risk_assessment_date?: string | null;
+  sharepoint_web_url?: string | null;
 };
 
 type Prestart = {
@@ -361,8 +370,67 @@ function errorMessage(error: unknown): string {
   return clean(error) || "Unknown error";
 }
 
+function parseDateValue(value?: string | null): Date | null {
+  const raw = clean(value);
+  if (!raw) return null;
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    const date = new Date(year, month - 1, day);
+    return date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+      ? date
+      : null;
+  }
+
+  const displayMatch = raw.match(/^(\d{1,2})[\/\-\s](\d{1,2})[\/\-\s](\d{4})$/);
+  if (displayMatch) {
+    const day = Number(displayMatch[1]);
+    const month = Number(displayMatch[2]);
+    const year = Number(displayMatch[3]);
+    const date = new Date(year, month - 1, day);
+    return date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+      ? date
+      : null;
+  }
+
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
+function formatDate(value?: string | null): string {
+  const date = parseDateValue(value);
+  if (!date) return "Not recorded";
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getFullYear()),
+  ].join("/");
+}
+
 function dateInput(value?: string | null): string {
-  return value ? value.slice(0, 10) : "";
+  if (!clean(value)) return "";
+  const formatted = formatDate(value);
+  return formatted === "Not recorded" ? "" : formatted;
+}
+
+function dateForDb(value: string, label: string): string | null {
+  if (!value.trim()) return null;
+  const date = parseDateValue(value);
+  if (!date) {
+    throw new Error(`${label} must use DD/MM/YYYY.`);
+  }
+  return [
+    String(date.getFullYear()),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 function toNumber(value: string): number | null {
@@ -370,21 +438,10 @@ function toNumber(value: string): number | null {
   return value.trim() && Number.isFinite(parsed) ? parsed : null;
 }
 
-function formatDate(value?: string | null): string {
-  if (!value) return "Not recorded";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not recorded";
-  return date.toLocaleDateString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
 function daysUntil(value?: string | null): number | null {
-  if (!value) return null;
-  const due = new Date(`${value.slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(due.getTime())) return null;
+  const due = parseDateValue(value);
+  if (!due) return null;
+  due.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.ceil((due.getTime() - today.getTime()) / 86_400_000);
@@ -735,6 +792,12 @@ export default function AssetsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selectedGearIds, setSelectedGearIds] = useState<Set<string>>(new Set());
+  const [bulkTagVisible, setBulkTagVisible] = useState(false);
+  const [bulkTag, setBulkTag] = useState("");
+  const [bulkInspectedOn, setBulkInspectedOn] = useState("");
+  const [bulkNextInspectionDue, setBulkNextInspectionDue] = useState("");
+  const [bulkTagSaving, setBulkTagSaving] = useState(false);
 
   const [addVisible, setAddVisible] = useState(false);
   const [addKind, setAddKind] = useState<AssetKind | null>(null);
@@ -1055,16 +1118,16 @@ export default function AssetsScreen() {
         style: trailer ? null : editVehicle.style.trim() || null,
         owner: editVehicle.owner.trim() || null,
         vin_number: editVehicle.vin_number.trim() || null,
-        company_onboard_date: editVehicle.company_onboard_date || null,
-        last_service: trailer ? null : editVehicle.last_service || null,
-        rego_expiry: editVehicle.rego_expiry || null,
-        insurance_expiry: trailer ? null : editVehicle.insurance_expiry || null,
-        next_service_due: trailer ? null : editVehicle.next_service_due || null,
+        company_onboard_date: dateForDb(editVehicle.company_onboard_date, "Company Onboard Date"),
+        last_service: trailer ? null : dateForDb(editVehicle.last_service, "Last Service Date"),
+        rego_expiry: dateForDb(editVehicle.rego_expiry, "Rego Expiry"),
+        insurance_expiry: trailer ? null : dateForDb(editVehicle.insurance_expiry, "Insurance Expiry"),
+        next_service_due: trailer ? null : dateForDb(editVehicle.next_service_due, "Next Service Date"),
         next_service_km: trailer ? null : toNumber(editVehicle.next_service_km),
         service_interval_km: trailer
           ? null
           : toNumber(editVehicle.service_interval_km),
-        next_inspection_due: editVehicle.next_inspection_due || null,
+        next_inspection_due: dateForDb(editVehicle.next_inspection_due, "Next Inspection Due"),
         hired: editVehicle.hired,
         hired_from: editVehicle.hired
           ? editVehicle.hired_from.trim() || null
@@ -1074,7 +1137,7 @@ export default function AssetsScreen() {
           : null,
         off_hire_date:
           editVehicle.status === "Off Hire"
-            ? editVehicle.off_hire_date || null
+            ? dateForDb(editVehicle.off_hire_date, "Off Hire Date")
             : null,
         inactive_reason: ["Off Hire", "Inactive"].includes(editVehicle.status)
           ? editVehicle.inactive_reason.trim() || null
@@ -1141,15 +1204,15 @@ export default function AssetsScreen() {
         crew: editPlant.crew.trim() || null,
         project: editPlant.project.trim() || null,
         asset_status: editPlant.asset_status || "Available",
-        insurance_expiry: editPlant.insurance_expiry || null,
-        rego_expiry: telehandler ? null : editPlant.rego_expiry || null,
-        cranesafe_expiry: crane ? editPlant.cranesafe_expiry || null : null,
-        last_service_date: editPlant.last_service_date || null,
+        insurance_expiry: dateForDb(editPlant.insurance_expiry, "Insurance Expiry"),
+        rego_expiry: telehandler ? null : dateForDb(editPlant.rego_expiry, "Rego Expiry"),
+        cranesafe_expiry: crane ? dateForDb(editPlant.cranesafe_expiry, "CraneSafe Expiry") : null,
+        last_service_date: dateForDb(editPlant.last_service_date, "Last Service Date"),
         last_service_hours: toNumber(editPlant.last_service_hours),
         service_interval_hours: toNumber(editPlant.service_interval_hours),
-        next_service_due: editPlant.next_service_due || null,
+        next_service_due: dateForDb(editPlant.next_service_due, "Next Service Date"),
         next_service_hours: toNumber(editPlant.next_service_hours),
-        next_inspection_due: editPlant.next_inspection_due || null,
+        next_inspection_due: dateForDb(editPlant.next_inspection_due, "Next Inspection Due"),
         hired: editPlant.hired,
         hired_from: editPlant.hired
           ? editPlant.hired_from.trim() || null
@@ -1159,7 +1222,7 @@ export default function AssetsScreen() {
           : null,
         off_hire_date:
           editPlant.asset_status === "Off Hire"
-            ? editPlant.off_hire_date || null
+            ? dateForDb(editPlant.off_hire_date, "Off Hire Date")
             : null,
         inactive_reason: ["Off Hire", "Inactive"].includes(editPlant.asset_status)
           ? editPlant.inactive_reason.trim() || null
@@ -1213,7 +1276,7 @@ export default function AssetsScreen() {
         const payload = {
           torque_wrench_number: editEquipment.asset_number,
           serial_number: editEquipment.serial_number.trim() || null,
-          expiry_date: editEquipment.expiry_date || null,
+          expiry_date: dateForDb(editEquipment.expiry_date, "Calibration Expiry"),
           crew_id: editEquipment.crew_id || null,
           status: editEquipment.status || "Active",
           notes: editEquipment.notes.trim() || null,
@@ -1247,7 +1310,7 @@ export default function AssetsScreen() {
           crew_id: editEquipment.crew_id || null,
           status: editEquipment.status || "Active",
           last_internal_inspection:
-            editEquipment.last_internal_inspection || null,
+            dateForDb(editEquipment.last_internal_inspection, "Last Internal Inspection"),
           notes: editEquipment.notes.trim() || null,
           updated_at: new Date().toISOString(),
         };
@@ -1282,8 +1345,8 @@ export default function AssetsScreen() {
           serial_id: editEquipment.asset_number.trim(),
           equipment_type: editEquipment.equipment_type || null,
           description: editEquipment.description.trim() || null,
-          inspected_on: editEquipment.inspected_on || null,
-          next_inspection_due: editEquipment.next_inspection_due || null,
+          inspected_on: dateForDb(editEquipment.inspected_on, "Inspected On"),
+          next_inspection_due: dateForDb(editEquipment.next_inspection_due, "Next Inspection Due"),
           event_type: editEquipment.event_type || "Visual Inspection",
           comment: editEquipment.notes.trim() || null,
           status: editEquipment.status || "Passed",
@@ -1327,9 +1390,107 @@ export default function AssetsScreen() {
     }
   }
 
+  function toggleGearSelection(id: string) {
+    setSelectedGearIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisibleGear() {
+    setSelectedGearIds((current) => {
+      const visibleIds = visibleGear.map((row) => row.id);
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => current.has(id));
+      if (allSelected) return new Set();
+      return new Set(visibleIds);
+    });
+  }
+
+  async function saveBulkTag() {
+    const ids = Array.from(selectedGearIds);
+    if (!ids.length) {
+      Alert.alert("Select lifting gear", "Select at least one lifting gear item first.");
+      return;
+    }
+
+    const updatePayload: Record<string, string> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (bulkTag) {
+      updatePayload.tag = bulkTag;
+    }
+
+    if (bulkInspectedOn.trim()) {
+      updatePayload.inspected_on =
+        dateForDb(bulkInspectedOn, "Inspected On") ?? "";
+    }
+
+    if (bulkNextInspectionDue.trim()) {
+      updatePayload.next_inspection_due =
+        dateForDb(bulkNextInspectionDue, "Next Inspection Due") ?? "";
+    }
+
+    if (
+      !bulkTag &&
+      !bulkInspectedOn.trim() &&
+      !bulkNextInspectionDue.trim()
+    ) {
+      Alert.alert(
+        "Nothing to update",
+        "Choose a tag colour and/or enter an inspection date.",
+      );
+      return;
+    }
+
+    setBulkTagSaving(true);
+    try {
+      const { error } = await supabase
+        .from("equipment_lifting_gear")
+        .update(updatePayload)
+        .in("id", ids);
+      if (error) throw error;
+
+      setLiftingGear((current) =>
+        current.map((row) =>
+          selectedGearIds.has(row.id)
+            ? {
+                ...row,
+                ...(bulkTag ? { tag: bulkTag } : {}),
+                ...(bulkInspectedOn.trim()
+                  ? { inspected_on: updatePayload.inspected_on }
+                  : {}),
+                ...(bulkNextInspectionDue.trim()
+                  ? { next_inspection_due: updatePayload.next_inspection_due }
+                  : {}),
+                updated_at: updatePayload.updated_at,
+              }
+            : row,
+        ),
+      );
+
+      setSelectedGearIds(new Set());
+      setBulkTag("");
+      setBulkInspectedOn("");
+      setBulkNextInspectionDue("");
+      setBulkTagVisible(false);
+      Alert.alert(
+        "Lifting gear updated",
+        `${ids.length} lifting gear item${ids.length === 1 ? "" : "s"} updated.`,
+      );
+    } catch (error) {
+      Alert.alert("Could not update lifting gear", errorMessage(error));
+    } finally {
+      setBulkTagSaving(false);
+    }
+  }
+
   function renderVehicle({ item }: { item: VehicleAsset }) {
     const latest = latestPrestart(prestarts, "Vehicle", item.id);
-    const currentKm = latest?.kilometres ?? null;
+    const masterKm = item.current_odometer_km == null ? null : Number(item.current_odometer_km);
+    const currentKm = latest?.kilometres ?? (Number.isFinite(masterKm) ? masterKm : null);
     const remainingKm =
       currentKm != null && item.next_service_km != null
         ? item.next_service_km - currentKm
@@ -1377,7 +1538,9 @@ export default function AssetsScreen() {
 
   function renderPlant({ item }: { item: PlantAsset }) {
     const latest = latestPrestart(prestarts, "Plant", item.id);
-    const currentHours = plantHours(latest);
+    const masterHoursRaw = item.current_engine_hours ?? item.current_hours ?? item.cab_hours ?? null;
+    const masterHours = masterHoursRaw == null ? null : Number(masterHoursRaw);
+    const currentHours = plantHours(latest) ?? (Number.isFinite(masterHours) ? masterHours : null);
     const remaining =
       currentHours != null && item.next_service_hours != null
         ? item.next_service_hours - currentHours
@@ -1465,6 +1628,22 @@ export default function AssetsScreen() {
         status={clean(item.status) || "Passed"}
         onPress={() => openDetail({ kind: "Lifting Gear", id: item.id })}
       >
+        <Pressable
+          style={styles.gearSelectRow}
+          onPress={(event) => {
+            event.stopPropagation();
+            toggleGearSelection(item.id);
+          }}
+        >
+          <Ionicons
+            name={selectedGearIds.has(item.id) ? "checkbox" : "square-outline"}
+            size={21}
+            color={selectedGearIds.has(item.id) ? "#2563EB" : "#64748B"}
+          />
+          <Text style={styles.gearSelectText}>
+            {selectedGearIds.has(item.id) ? "Selected for bulk update" : "Select for bulk inspection / tag update"}
+          </Text>
+        </Pressable>
         <View style={styles.metricGrid}>
           <MiniMetric label="Inspection" value={due.label} tone={due.tone} />
           <MiniMetric label="Tag" value={clean(item.tag) || "Not set"} tone="blue" />
@@ -1664,6 +1843,29 @@ export default function AssetsScreen() {
                 ))}
               </ScrollView>
 
+              {register === "Lifting Gear" ? (
+                <View style={styles.bulkBar}>
+                  <Pressable style={styles.bulkSecondaryButton} onPress={selectAllVisibleGear}>
+                    <Ionicons name="checkmark-done-outline" size={18} color="#334155" />
+                    <Text style={styles.bulkSecondaryText}>
+                      {visibleGear.length > 0 && visibleGear.every((row) => selectedGearIds.has(row.id))
+                        ? "Clear selection"
+                        : "Select shown"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.bulkPrimaryButton, selectedGearIds.size === 0 && styles.disabled]}
+                    disabled={selectedGearIds.size === 0}
+                    onPress={() => setBulkTagVisible(true)}
+                  >
+                    <Ionicons name="pricetags-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.bulkPrimaryText}>
+                      Bulk inspection / tag ({selectedGearIds.size})
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
               <View style={styles.searchBox}>
                 <Ionicons name="search" size={19} color="#64748B" />
                 <TextInput
@@ -1754,6 +1956,20 @@ export default function AssetsScreen() {
           onChange={setEditEquipment}
           onClose={closeEditors}
           onSave={() => void saveEquipment()}
+        />
+
+        <BulkTagModal
+          visible={bulkTagVisible}
+          selectedCount={selectedGearIds.size}
+          tag={bulkTag}
+          inspectedOn={bulkInspectedOn}
+          nextInspectionDue={bulkNextInspectionDue}
+          saving={bulkTagSaving}
+          onChangeTag={setBulkTag}
+          onChangeInspectedOn={setBulkInspectedOn}
+          onChangeNextInspectionDue={setBulkNextInspectionDue}
+          onClose={() => !bulkTagSaving && setBulkTagVisible(false)}
+          onSave={() => void saveBulkTag()}
         />
       </View>
     </SafeAreaView>
@@ -1975,7 +2191,8 @@ function VehicleDetail({
   onEdit: () => void;
 }) {
   const latest = latestPrestart(prestarts, "Vehicle", row.id);
-  const currentKm = latest?.kilometres ?? null;
+  const masterKm = row.current_odometer_km == null ? null : Number(row.current_odometer_km);
+  const currentKm = latest?.kilometres ?? (Number.isFinite(masterKm) ? masterKm : null);
   const remaining =
     currentKm != null && row.next_service_km != null
       ? row.next_service_km - currentKm
@@ -2050,6 +2267,8 @@ function VehicleDetail({
             ["Owner", clean(row.owner) || "Not recorded"],
             ["Project", clean(row.project) || "Unallocated"],
             ["Crew", clean(row.crew) || "Unallocated"],
+            ["Risk Assessment", formatDate(row.risk_assessment_date)],
+            ["SharePoint", clean(row.sharepoint_web_url) ? "Folder linked" : "Not linked"],
           ]}
         />
       </DetailSection>
@@ -2069,7 +2288,9 @@ function PlantDetail({
   onEdit: () => void;
 }) {
   const latest = latestPrestart(prestarts, "Plant", row.id);
-  const currentHours = plantHours(latest);
+  const masterHoursRaw = row.current_engine_hours ?? row.current_hours ?? row.cab_hours ?? null;
+  const masterHours = masterHoursRaw == null ? null : Number(masterHoursRaw);
+  const currentHours = plantHours(latest) ?? (Number.isFinite(masterHours) ? masterHours : null);
   const remaining =
     currentHours != null && row.next_service_hours != null
       ? row.next_service_hours - currentHours
@@ -2150,6 +2371,9 @@ function PlantDetail({
             ["Rego", clean(row.rego) || "Not applicable"],
             ["Project", clean(row.project) || "Unallocated"],
             ["Crew", clean(row.crew) || "Unallocated"],
+            ["10 Year Inspection", formatDate(row.ten_year_inspection_due)],
+            ["Risk Assessment", formatDate(row.risk_assessment_date)],
+            ["SharePoint", clean(row.sharepoint_web_url) ? "Folder linked" : "Not linked"],
           ]}
         />
       </DetailSection>
@@ -2192,6 +2416,129 @@ function EquipmentDetail({
         <DetailRows rows={fields} />
       </DetailSection>
     </>
+  );
+}
+
+function BulkTagModal({
+  visible,
+  selectedCount,
+  tag,
+  inspectedOn,
+  nextInspectionDue,
+  saving,
+  onChangeTag,
+  onChangeInspectedOn,
+  onChangeNextInspectionDue,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  selectedCount: number;
+  tag: string;
+  inspectedOn: string;
+  nextInspectionDue: string;
+  saving: boolean;
+  onChangeTag: (value: string) => void;
+  onChangeInspectedOn: (value: string) => void;
+  onChangeNextInspectionDue: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <View style={styles.bulkModal}>
+          <View style={styles.chooserHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.chooserTitle}>Bulk Lifting Gear Update</Text>
+              <Text style={styles.chooserSubtitle}>
+                {selectedCount} lifting gear item{selectedCount === 1 ? "" : "s"} selected
+              </Text>
+            </View>
+            <Pressable style={styles.closeButton} onPress={onClose} disabled={saving}>
+              <Ionicons name="close" size={21} color="#334155" />
+            </Pressable>
+          </View>
+
+          <Text style={styles.bulkHelp}>
+            Change the colour tag, inspection date, next inspection due date, or any combination. Blank fields are left unchanged.
+          </Text>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Inspection Date</Text>
+            <TextInput
+              value={inspectedOn}
+              onChangeText={onChangeInspectedOn}
+              style={styles.input}
+              placeholder="DD/MM/YYYY"
+              placeholderTextColor="#94A3B8"
+              editable={!saving}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Next Inspection Due</Text>
+            <TextInput
+              value={nextInspectionDue}
+              onChangeText={onChangeNextInspectionDue}
+              style={styles.input}
+              placeholder="DD/MM/YYYY"
+              placeholderTextColor="#94A3B8"
+              editable={!saving}
+            />
+          </View>
+
+          <Text style={styles.fieldLabel}>Colour Tag</Text>
+          <View style={styles.bulkTagOptions}>
+            <Pressable
+              style={[styles.bulkTagOption, !tag && styles.bulkTagOptionActive]}
+              onPress={() => onChangeTag("")}
+              disabled={saving}
+            >
+              <Ionicons
+                name={!tag ? "radio-button-on" : "radio-button-off"}
+                size={19}
+                color={!tag ? "#2563EB" : "#64748B"}
+              />
+              <Text style={[styles.bulkTagOptionText, !tag && styles.bulkTagOptionTextActive]}>
+                Leave unchanged
+              </Text>
+            </Pressable>
+
+            {tagOptions.map((option) => (
+              <Pressable
+                key={option}
+                style={[styles.bulkTagOption, tag === option && styles.bulkTagOptionActive]}
+                onPress={() => onChangeTag(option)}
+                disabled={saving}
+              >
+                <Ionicons
+                  name={tag === option ? "radio-button-on" : "radio-button-off"}
+                  size={19}
+                  color={tag === option ? "#2563EB" : "#64748B"}
+                />
+                <Text style={[styles.bulkTagOptionText, tag === option && styles.bulkTagOptionTextActive]}>
+                  {option}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <Pressable style={[styles.saveButton, saving && styles.disabled]} onPress={onSave} disabled={saving}>
+            {saving ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-done-outline" size={20} color="#FFFFFF" />
+                <Text style={styles.saveButtonText}>
+                  Update {selectedCount} item{selectedCount === 1 ? "" : "s"}
+                </Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2257,7 +2604,7 @@ function VehicleEditor({
         />
         <Choice label="Status" options={vehicleStatuses} value={form.status} onChange={(v) => update("status", v)} />
         {form.status === "Off Hire" ? (
-          <Field label="Off Hire Date" value={form.off_hire_date} onChangeText={(v) => update("off_hire_date", v)} placeholder="YYYY-MM-DD" />
+          <Field label="Off Hire Date" value={form.off_hire_date} onChangeText={(v) => update("off_hire_date", v)} placeholder="DD/MM/YYYY" />
         ) : null}
         {["Off Hire", "Inactive"].includes(form.status) ? (
           <TextArea label="Reason" value={form.inactive_reason} onChangeText={(v) => update("inactive_reason", v)} />
@@ -2265,19 +2612,19 @@ function VehicleEditor({
       </FormSection>
 
       <FormSection title="Compliance & Service">
-        <Field label="Rego Expiry" value={form.rego_expiry} onChangeText={(v) => update("rego_expiry", v)} placeholder="YYYY-MM-DD" />
+        <Field label="Rego Expiry" value={form.rego_expiry} onChangeText={(v) => update("rego_expiry", v)} placeholder="DD/MM/YYYY" />
         {!trailer ? (
-          <Field label="Insurance Expiry" value={form.insurance_expiry} onChangeText={(v) => update("insurance_expiry", v)} placeholder="YYYY-MM-DD" />
+          <Field label="Insurance Expiry" value={form.insurance_expiry} onChangeText={(v) => update("insurance_expiry", v)} placeholder="DD/MM/YYYY" />
         ) : null}
         {!trailer ? (
           <>
-            <Field label="Last Service Date" value={form.last_service} onChangeText={(v) => update("last_service", v)} placeholder="YYYY-MM-DD" />
-            <Field label="Next Service Date" value={form.next_service_due} onChangeText={(v) => update("next_service_due", v)} placeholder="YYYY-MM-DD" />
+            <Field label="Last Service Date" value={form.last_service} onChangeText={(v) => update("last_service", v)} placeholder="DD/MM/YYYY" />
+            <Field label="Next Service Date" value={form.next_service_due} onChangeText={(v) => update("next_service_due", v)} placeholder="DD/MM/YYYY" />
             <Field label="Next Service KM" value={form.next_service_km} onChangeText={(v) => update("next_service_km", v)} keyboardType="number-pad" />
             <Field label="Service Interval KM" value={form.service_interval_km} onChangeText={(v) => update("service_interval_km", v)} keyboardType="number-pad" />
           </>
         ) : null}
-        <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="YYYY-MM-DD" />
+        <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="DD/MM/YYYY" />
       </FormSection>
 
       <FormSection title="Hire & Other">
@@ -2346,7 +2693,7 @@ function PlantEditor({
         <SelectButtons label="Crew" options={crews.map(crewLabel)} value={form.crew} onChange={(v) => update("crew", v)} allowEmpty />
         <Choice label="Status" options={plantStatuses} value={form.asset_status} onChange={(v) => update("asset_status", v)} />
         {form.asset_status === "Off Hire" ? (
-          <Field label="Off Hire Date" value={form.off_hire_date} onChangeText={(v) => update("off_hire_date", v)} placeholder="YYYY-MM-DD" />
+          <Field label="Off Hire Date" value={form.off_hire_date} onChangeText={(v) => update("off_hire_date", v)} placeholder="DD/MM/YYYY" />
         ) : null}
         {["Off Hire", "Inactive"].includes(form.asset_status) ? (
           <TextArea label="Reason" value={form.inactive_reason} onChangeText={(v) => update("inactive_reason", v)} />
@@ -2354,15 +2701,15 @@ function PlantEditor({
       </FormSection>
 
       <FormSection title="Compliance & Service">
-        <Field label="Insurance Expiry" value={form.insurance_expiry} onChangeText={(v) => update("insurance_expiry", v)} placeholder="YYYY-MM-DD" />
-        {!telehandler ? <Field label="Rego Expiry" value={form.rego_expiry} onChangeText={(v) => update("rego_expiry", v)} placeholder="YYYY-MM-DD" /> : null}
-        {crane ? <Field label="CraneSafe Expiry" value={form.cranesafe_expiry} onChangeText={(v) => update("cranesafe_expiry", v)} placeholder="YYYY-MM-DD" /> : null}
-        <Field label="Last Service Date" value={form.last_service_date} onChangeText={(v) => update("last_service_date", v)} placeholder="YYYY-MM-DD" />
+        <Field label="Insurance Expiry" value={form.insurance_expiry} onChangeText={(v) => update("insurance_expiry", v)} placeholder="DD/MM/YYYY" />
+        {!telehandler ? <Field label="Rego Expiry" value={form.rego_expiry} onChangeText={(v) => update("rego_expiry", v)} placeholder="DD/MM/YYYY" /> : null}
+        {crane ? <Field label="CraneSafe Expiry" value={form.cranesafe_expiry} onChangeText={(v) => update("cranesafe_expiry", v)} placeholder="DD/MM/YYYY" /> : null}
+        <Field label="Last Service Date" value={form.last_service_date} onChangeText={(v) => update("last_service_date", v)} placeholder="DD/MM/YYYY" />
         <Field label="Last Service Hours" value={form.last_service_hours} onChangeText={(v) => update("last_service_hours", v)} keyboardType="number-pad" />
         <Field label="Service Interval Hours" value={form.service_interval_hours} onChangeText={(v) => update("service_interval_hours", v)} keyboardType="number-pad" />
-        <Field label="Next Service Date" value={form.next_service_due} onChangeText={(v) => update("next_service_due", v)} placeholder="YYYY-MM-DD" />
+        <Field label="Next Service Date" value={form.next_service_due} onChangeText={(v) => update("next_service_due", v)} placeholder="DD/MM/YYYY" />
         <Field label="Next Service Hours" value={form.next_service_hours} onChangeText={(v) => update("next_service_hours", v)} keyboardType="number-pad" />
-        <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="YYYY-MM-DD" />
+        <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="DD/MM/YYYY" />
       </FormSection>
 
       <FormSection title="Required Setup">
@@ -2439,7 +2786,7 @@ function EquipmentEditor({
         {form.kind === "Torque Wrench" ? (
           <>
             <Field label="Serial Number" value={form.serial_number} onChangeText={(v) => update("serial_number", v)} />
-            <Field label="Calibration Expiry" value={form.expiry_date} onChangeText={(v) => update("expiry_date", v)} placeholder="YYYY-MM-DD" />
+            <Field label="Calibration Expiry" value={form.expiry_date} onChangeText={(v) => update("expiry_date", v)} placeholder="DD/MM/YYYY" />
             <Choice label="Status" options={torqueStatuses} value={form.status} onChange={(v) => update("status", v)} />
           </>
         ) : null}
@@ -2448,8 +2795,8 @@ function EquipmentEditor({
           <>
             <Choice label="Equipment Type" options={liftingTypes} value={form.equipment_type} onChange={(v) => update("equipment_type", v)} />
             <TextArea label="Description" value={form.description} onChangeText={(v) => update("description", v)} />
-            <Field label="Inspected On" value={form.inspected_on} onChangeText={(v) => update("inspected_on", v)} placeholder="YYYY-MM-DD" />
-            <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="YYYY-MM-DD" />
+            <Field label="Inspected On" value={form.inspected_on} onChangeText={(v) => update("inspected_on", v)} placeholder="DD/MM/YYYY" />
+            <Field label="Next Inspection Due" value={form.next_inspection_due} onChangeText={(v) => update("next_inspection_due", v)} placeholder="DD/MM/YYYY" />
             <Choice label="Status" options={gearStatuses} value={form.status} onChange={(v) => update("status", v)} />
             <Choice label="Tag" options={tagOptions} value={form.tag} onChange={(v) => update("tag", v)} />
           </>
@@ -2460,7 +2807,7 @@ function EquipmentEditor({
             <Field label="Make" value={form.make} onChangeText={(v) => update("make", v)} />
             <Choice label="Ladder Type" options={ladderTypes} value={form.equipment_type} onChange={(v) => update("equipment_type", v)} />
             <Field label="Height" value={form.height} onChangeText={(v) => update("height", v)} />
-            <Field label="Last Internal Inspection" value={form.last_internal_inspection} onChangeText={(v) => update("last_internal_inspection", v)} placeholder="YYYY-MM-DD" />
+            <Field label="Last Internal Inspection" value={form.last_internal_inspection} onChangeText={(v) => update("last_internal_inspection", v)} placeholder="DD/MM/YYYY" />
             <Choice label="Status" options={ladderStatuses} value={form.status} onChange={(v) => update("status", v)} />
           </>
         ) : null}
@@ -3039,6 +3386,21 @@ function Empty({ title, text }: { title: string; text: string }) {
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  bulkBar: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  bulkSecondaryButton: { flexDirection: "row", alignItems: "center", gap: 7, borderWidth: 1, borderColor: "#CBD5E1", backgroundColor: "#FFFFFF", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
+  bulkSecondaryText: { color: "#334155", fontSize: 12, fontWeight: "800" },
+  bulkPrimaryButton: { flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: "#2563EB", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
+  bulkPrimaryText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
+  gearSelectRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingTop: 10, paddingBottom: 4 },
+  gearSelectText: { color: "#475569", fontSize: 11, fontWeight: "800" },
+  bulkModal: { width: "92%", maxWidth: 520, alignSelf: "center", borderRadius: 22, backgroundColor: "#FFFFFF", padding: 20 },
+  bulkHelp: { color: "#64748B", fontSize: 12, lineHeight: 18, marginTop: 12 },
+  bulkTagOptions: { gap: 8, marginTop: 16, marginBottom: 8 },
+  bulkTagOption: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 12, paddingHorizontal: 13, paddingVertical: 12 },
+  bulkTagOptionActive: { borderColor: "#93C5FD", backgroundColor: "#EFF6FF" },
+  bulkTagOptionText: { color: "#475569", fontWeight: "800" },
+  bulkTagOptionTextActive: { color: "#1D4ED8" },
   safeArea: { flex: 1, backgroundColor: "#F8FAFC" },
   screen: { flex: 1, backgroundColor: "#F8FAFC" },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },

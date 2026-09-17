@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 };
 
 const SUPPORT_EMAIL = "lmzetovic@gmail.com";
+const OPERATOR_NAME = "LMZ Contracting";
 
 export default function SupportPage() {
   return (
@@ -46,6 +47,10 @@ export default function SupportPage() {
           <p className="mt-5 max-w-3xl text-base leading-7 text-slate-300 sm:text-lg">
             Send us details about your account, access issue, project or
             technical problem and we will help you resolve it.
+          </p>
+
+          <p className="mt-4 text-sm font-semibold text-slate-400">
+            TTTracker is owned and operated by {OPERATOR_NAME}.
           </p>
         </div>
       </section>
@@ -94,16 +99,24 @@ export default function SupportPage() {
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-5xl flex-col gap-3 px-5 py-8 text-sm text-slate-500 sm:px-8 md:flex-row md:items-center md:justify-between">
           <p>
-            © {new Date().getFullYear()} BC Contracting Australia. All rights
-            reserved.
+            © {new Date().getFullYear()} {OPERATOR_NAME}. All rights reserved.
           </p>
 
-          <Link
-            href="/privacy"
-            className="font-semibold text-slate-600 hover:text-blue-600"
-          >
-            Privacy Policy
-          </Link>
+          <div className="flex gap-5">
+            <Link
+              href="/privacy"
+              className="font-semibold text-slate-600 hover:text-blue-600"
+            >
+              Privacy Policy
+            </Link>
+
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="font-semibold text-slate-600 hover:text-blue-600"
+            >
+              Contact
+            </a>
+          </div>
         </div>
       </footer>
     </main>

@@ -51,6 +51,7 @@ export default function SupportContactForm({
 
     const body = [
       "TTTracker Support Request",
+      "Operated by LMZ Contracting",
       "",
       `Name: ${form.name}`,
       `Email: ${form.email}`,
@@ -91,7 +92,7 @@ export default function SupportContactForm({
 
           <p className="mt-2 text-sm leading-6 text-slate-600">
             Complete the form below and your email application will open with
-            the request prepared.
+            the request prepared for TTTracker support.
           </p>
         </div>
       </div>
@@ -146,11 +147,20 @@ export default function SupportContactForm({
             </option>
             <option value="Project access">Project access</option>
             <option value="Fleet jobs">Fleet jobs</option>
+            <option value="Assets">Assets</option>
             <option value="Prestarts">Prestarts</option>
             <option value="Daily dockets">Daily dockets</option>
             <option value="Materials or deliveries">
               Materials or deliveries
             </option>
+            <option value="Defects or rectifications">
+              Defects or rectifications
+            </option>
+            <option value="Training">Training</option>
+            <option value="Expenses or invoices">
+              Expenses or invoices
+            </option>
+            <option value="Approvals">Approvals</option>
             <option value="Notifications">Notifications</option>
             <option value="App error or crash">App error or crash</option>
             <option value="Other">Other</option>
@@ -174,7 +184,7 @@ export default function SupportContactForm({
             type="text"
             value={form.device}
             onChange={(event) => updateField("device", event.target.value)}
-            placeholder="e.g. iPhone 17 or Samsung S23"
+            placeholder="e.g. iPhone or Samsung S23"
             className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
           />
         </label>
@@ -195,8 +205,9 @@ export default function SupportContactForm({
       </label>
 
       <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
-        Clicking the button will open your device’s default email application.
-        You will still need to press <strong>Send</strong> from the email app.
+        Clicking the button will open your device&apos;s default email
+        application. You will still need to press <strong>Send</strong> from
+        the email app.
       </div>
 
       <button

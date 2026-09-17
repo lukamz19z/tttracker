@@ -22,16 +22,13 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-if (!loading && session) {
-  return <Redirect href="/(drawer)" />;
-}
+  if (!loading && session) {
+    return <Redirect href="/(drawer)" />;
+  }
 
   async function handleSignIn() {
     if (!email.trim() || !password) {
-      Alert.alert(
-        "Login required",
-        "Enter your email address and password.",
-      );
+      Alert.alert("Login required", "Enter your email address and password.");
       return;
     }
 
@@ -62,17 +59,13 @@ if (!loading && session) {
           </View>
 
           <Text style={styles.title}>TTTracker</Text>
-
-          <Text style={styles.subtitle}>
-            BC Contracting field operations
-          </Text>
+          <Text style={styles.subtitle}>Field operations & asset management</Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Sign in</Text>
 
           <Text style={styles.label}>Email address</Text>
-
           <TextInput
             value={email}
             onChangeText={setEmail}
@@ -85,7 +78,6 @@ if (!loading && session) {
           />
 
           <Text style={styles.label}>Password</Text>
-
           <TextInput
             value={password}
             onChangeText={setPassword}
@@ -113,28 +105,20 @@ if (!loading && session) {
           </Pressable>
         </View>
 
-        <Text style={styles.footer}>
-          Authorised BC Contracting users only
-        </Text>
+        <View style={styles.footerWrap}>
+          <Text style={styles.footer}>TTTracker</Text>
+          <Text style={styles.footerSecondary}>Owned and operated by LMZ Contracting</Text>
+          <Text style={styles.footerTertiary}>Authorised users only</Text>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 24,
-  },
-  brand: {
-    alignItems: "center",
-    marginBottom: 30,
-  },
+  safeArea: { flex: 1, backgroundColor: "#f8fafc" },
+  container: { flex: 1, justifyContent: "center", padding: 24 },
+  brand: { alignItems: "center", marginBottom: 30 },
   logo: {
     width: 72,
     height: 72,
@@ -144,21 +128,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#0f172a",
     marginBottom: 15,
   },
-  logoText: {
-    color: "#ffffff",
-    fontSize: 25,
-    fontWeight: "900",
-  },
-  title: {
-    color: "#0f172a",
-    fontSize: 30,
-    fontWeight: "900",
-  },
-  subtitle: {
-    color: "#64748b",
-    fontSize: 14,
-    marginTop: 5,
-  },
+  logoText: { color: "#ffffff", fontSize: 25, fontWeight: "900" },
+  title: { color: "#0f172a", fontSize: 30, fontWeight: "900" },
+  subtitle: { color: "#64748b", fontSize: 14, marginTop: 5, textAlign: "center" },
   card: {
     borderRadius: 22,
     borderWidth: 1,
@@ -166,18 +138,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     padding: 20,
   },
-  cardTitle: {
-    color: "#0f172a",
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 20,
-  },
-  label: {
-    color: "#334155",
-    fontSize: 13,
-    fontWeight: "700",
-    marginBottom: 7,
-  },
+  cardTitle: { color: "#0f172a", fontSize: 21, fontWeight: "800", marginBottom: 20 },
+  label: { color: "#334155", fontSize: 13, fontWeight: "700", marginBottom: 7 },
   input: {
     minHeight: 52,
     borderWidth: 1,
@@ -197,21 +159,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#0f172a",
     marginTop: 4,
   },
-  buttonPressed: {
-    opacity: 0.86,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  footer: {
-    color: "#94a3b8",
-    textAlign: "center",
-    fontSize: 12,
-    marginTop: 22,
-  },
+  buttonPressed: { opacity: 0.86 },
+  buttonDisabled: { opacity: 0.6 },
+  buttonText: { color: "#ffffff", fontSize: 16, fontWeight: "800" },
+  footerWrap: { alignItems: "center", marginTop: 22, gap: 3 },
+  footer: { color: "#334155", textAlign: "center", fontSize: 12, fontWeight: "900" },
+  footerSecondary: { color: "#64748b", textAlign: "center", fontSize: 11, fontWeight: "700" },
+  footerTertiary: { color: "#94a3b8", textAlign: "center", fontSize: 11 },
 });

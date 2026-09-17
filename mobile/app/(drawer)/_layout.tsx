@@ -172,17 +172,46 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
   const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
   const unreadCount = useUnreadNotificationCount("drawer");
 
-  const visibleItems = useMemo(
-    () =>
-      navigation.filter(
-        (item) =>
-          item.active !== false &&
-          can(item.permission_code) &&
-          hasCapability(item.capability_key) &&
-          (!item.requires_project || Boolean(profile?.projectId)),
-      ),
-    [navigation, can, hasCapability, profile?.projectId],
-  );
+  const visibleItems = useMemo(() => {
+    const permitted = navigation.filter(
+      (item) =>
+        item.active !== false &&
+        can(item.permission_code) &&
+        hasCapability(item.capability_key) &&
+        (!item.requires_project || Boolean(profile?.projectId)),
+    );
+
+    const vehiclePrestart = permitted.find(
+      (item) => item.code === "vehicle-prestart",
+    );
+    const plantPrestart = permitted.find(
+      (item) => item.code === "plant-prestart",
+    );
+
+    const withoutSeparatePrestarts = permitted.filter(
+      (item) =>
+        item.code !== "vehicle-prestart" &&
+        item.code !== "plant-prestart",
+    );
+
+    const prestartBase = vehiclePrestart ?? plantPrestart;
+    if (!prestartBase) return withoutSeparatePrestarts;
+
+    return [
+      ...withoutSeparatePrestarts,
+      {
+        ...prestartBase,
+        code: "prestarts",
+        label: "Prestarts",
+        route: "/(drawer)/prestarts",
+        icon_key: "clipboard-check",
+        sort_order: Math.min(
+          vehiclePrestart?.sort_order ?? prestartBase.sort_order,
+          plantPrestart?.sort_order ?? prestartBase.sort_order,
+        ),
+      },
+    ];
+  }, [navigation, can, hasCapability, profile?.projectId]);
 
   const sections = useMemo(() => {
     const map = new Map<
@@ -223,20 +252,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       <View style={styles.profileHeader}>
         <View style={styles.profileTopRow}>
           <View style={styles.logo}><Text style={styles.logoText}>TT</Text></View>
-          <Pressable
-            onPress={() => {
-              router.push("/(drawer)/notifications" as Href);
-              props.navigation.closeDrawer();
-            }}
-            style={[styles.profileNotificationButton, unreadCount > 0 && styles.profileNotificationButtonActive]}
-          >
-            <Bell size={21} color={unreadCount > 0 ? "#fff" : "#334155"} />
-            {unreadCount > 0 ? (
-              <View style={styles.profileNotificationBadge}>
-                <Text style={styles.profileNotificationBadgeText}>{formatUnreadCount(unreadCount)}</Text>
-              </View>
-            ) : null}
-          </Pressable>
+
         </View>
 
         <Text style={styles.product}>{appConfig.product_name || "TTTracker"}</Text>
@@ -340,8 +356,9 @@ export default function DrawerLayout() {
       <Drawer.Screen name="training" options={{ headerTitle: () => <DynamicTitle code="training" fallback="License and Certificates" /> }} />
       <Drawer.Screen name="expenses" options={{ headerTitle: () => <DynamicTitle code="expenses" fallback="Expense Claims" /> }} />
       <Drawer.Screen name="materials" options={{ headerTitle: () => <DynamicTitle code="materials" fallback="Materials" /> }} />
-      <Drawer.Screen name="vehicle-prestart" options={{ headerTitle: () => <DynamicTitle code="vehicle-prestart" fallback="Vehicle Prestart" /> }} />
-      <Drawer.Screen name="plant-prestart" options={{ headerTitle: () => <DynamicTitle code="plant-prestart" fallback="Plant Prestart" /> }} />
+      <Drawer.Screen name="prestarts" options={{ headerTitle: () => <DynamicTitle code="prestarts" fallback="Prestarts" /> }} />
+      <Drawer.Screen name="vehicle-prestart" options={{ headerTitle: "Vehicle Prestart" }} />
+      <Drawer.Screen name="plant-prestart" options={{ headerTitle: "Plant Prestart" }} />
       <Drawer.Screen name="site-prestart" options={{ headerTitle: () => <DynamicTitle code="site-prestart" fallback="Site Prestart" /> }} />
       <Drawer.Screen name="truck-delivery" options={{ headerTitle: () => <DynamicTitle code="deliveries" fallback="Deliveries" /> }} />
       <Drawer.Screen name="revisions" options={{ headerTitle: () => <DynamicTitle code="revisions" fallback="Revisions / Rectifications" /> }} />
@@ -359,16 +376,12 @@ export default function DrawerLayout() {
 const styles = StyleSheet.create({
   drawer: { flex: 1, backgroundColor: "#fff" },
   profileHeader: { paddingHorizontal: 20, paddingTop: 52, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
-  profileTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  profileTopRow: { flexDirection: "row", alignItems: "flex-start" },
   logo: { width: 50, height: 50, borderRadius: 16, backgroundColor: "#0f172a", alignItems: "center", justifyContent: "center" },
   logoText: { color: "#fff", fontWeight: "900", fontSize: 19 },
   product: { marginTop: 10, color: "#64748b", fontSize: 10, fontWeight: "900", letterSpacing: 1.2, textTransform: "uppercase" },
   userName: { color: "#0f172a", fontWeight: "900", fontSize: 19, marginTop: 2 },
   userRole: { color: "#2563eb", fontSize: 11, fontWeight: "800", marginTop: 4 },
-  profileNotificationButton: { width: 43, height: 43, borderRadius: 14, borderWidth: 1, borderColor: "#cbd5e1", alignItems: "center", justifyContent: "center" },
-  profileNotificationButtonActive: { backgroundColor: "#2563eb", borderColor: "#2563eb" },
-  profileNotificationBadge: { position: "absolute", top: -7, right: -7, minWidth: 22, height: 22, borderRadius: 11, backgroundColor: "#dc2626", borderWidth: 2, borderColor: "#fff", alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
-  profileNotificationBadgeText: { color: "#fff", fontSize: 8, fontWeight: "900" },
   contextCard: { borderWidth: 1, borderColor: "#dbeafe", backgroundColor: "#eff6ff", borderRadius: 16, padding: 13, marginTop: 15 },
   contextLabel: { color: "#2563eb", fontSize: 9, fontWeight: "900", letterSpacing: 1 },
   contextValue: { color: "#0f172a", fontSize: 13, fontWeight: "800", lineHeight: 18, marginTop: 5 },

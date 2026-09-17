@@ -7,13 +7,12 @@ export const metadata: Metadata = {
     "Privacy Policy explaining how TTTracker collects, uses, stores and protects information.",
 };
 
-const LAST_UPDATED = "26 July 2026";
+const LAST_UPDATED = "18 September 2026";
 
-// Change these details before publishing if required.
 const APP_NAME = "TTTracker";
-const OPERATOR_NAME = "BC Contracting Australia";
-const CONTACT_EMAIL = "support@tttracker.com.au";
-const WEBSITE_URL = "https://tttracker.com.au";
+const OPERATOR_NAME = "LMZ Contracting";
+const CONTACT_EMAIL = "lmzetovic@gmail.com";
+const WEBSITE_URL = "https://www.tttracker.com.au";
 
 type PolicySectionProps = {
   id: string;
@@ -21,7 +20,11 @@ type PolicySectionProps = {
   children: React.ReactNode;
 };
 
-function PolicySection({ id, title, children }: PolicySectionProps) {
+function PolicySection({
+  id,
+  title,
+  children,
+}: PolicySectionProps) {
   return (
     <section
       id={id}
@@ -74,6 +77,10 @@ export default function PrivacyPolicyPage() {
             protects personal and operational information.
           </p>
 
+          <p className="mt-4 text-sm font-semibold text-slate-400">
+            {APP_NAME} is owned and operated by {OPERATOR_NAME}.
+          </p>
+
           <p className="mt-6 text-sm font-semibold text-slate-400">
             Last updated: {LAST_UPDATED}
           </p>
@@ -124,9 +131,10 @@ export default function PrivacyPolicyPage() {
           <PolicySection id="overview" title="1. Overview">
             <p>
               {APP_NAME} is a construction operations and project-management
-              platform operated by {OPERATOR_NAME}. It is intended for
+              platform owned and operated by {OPERATOR_NAME}. It is intended for
               authorised employees, contractors, supervisors, mechanics,
-              administrators and other approved users.
+              administrators and other approved users of organisations and
+              projects that use the platform.
             </p>
 
             <p>
@@ -171,6 +179,8 @@ export default function PrivacyPolicyPage() {
               <li>Vehicle, plant, equipment and maintenance records</li>
               <li>Vehicle and plant prestart inspection information</li>
               <li>Safety, compliance and risk-assessment records</li>
+              <li>Training, licence and competency records</li>
+              <li>Expense claims, invoices and approval records</li>
               <li>Notifications, acknowledgements and activity records</li>
             </ul>
 
@@ -179,10 +189,10 @@ export default function PrivacyPolicyPage() {
             </h3>
 
             <p>
-              Users may upload photographs, documents, certificates, inspection
-              records, supporting evidence and other project-related files.
-              Users should only upload information they are authorised to
-              provide.
+              Users may upload photographs, documents, certificates, licences,
+              receipts, invoices, inspection records, supporting evidence and
+              other project-related or business-related files. Users should only
+              upload information they are authorised to provide.
             </p>
 
             <h3 className="font-bold text-slate-900">
@@ -199,8 +209,8 @@ export default function PrivacyPolicyPage() {
 
             <p>
               {APP_NAME} does not intentionally collect precise location data
-              unless a future feature clearly requests permission and the user
-              or organisation enables that feature.
+              unless a feature clearly requests permission and the user or
+              organisation enables that feature.
             </p>
           </PolicySection>
 
@@ -213,6 +223,8 @@ export default function PrivacyPolicyPage() {
               <li>Record and manage construction activity</li>
               <li>Track project, tower, delivery and materials progress</li>
               <li>Manage fleet jobs, inspections and maintenance</li>
+              <li>Manage training, competency and compliance records</li>
+              <li>Manage expenses, invoices and approval workflows</li>
               <li>Provide safety and compliance functionality</li>
               <li>Send operational alerts and push notifications</li>
               <li>Investigate defects, incidents and technical problems</li>
@@ -222,7 +234,10 @@ export default function PrivacyPolicyPage() {
             </ul>
           </PolicySection>
 
-          <PolicySection id="sharing" title="4. How information may be shared">
+          <PolicySection
+            id="sharing"
+            title="4. How information may be shared"
+          >
             <p>
               Information may be visible to authorised users within the
               relevant organisation or project according to their assigned
@@ -230,8 +245,8 @@ export default function PrivacyPolicyPage() {
             </p>
 
             <p>
-              We may also use service providers that support the operation of
-              {` ${APP_NAME}`}, including:
+              We may also use service providers that support the operation of{" "}
+              {APP_NAME}, including:
             </p>
 
             <ul className="list-disc space-y-2 pl-6">
@@ -241,6 +256,7 @@ export default function PrivacyPolicyPage() {
               <li>Push-notification services</li>
               <li>Application monitoring and diagnostic providers</li>
               <li>Website hosting and deployment services</li>
+              <li>Business document and collaboration platforms</li>
             </ul>
 
             <p>
@@ -252,8 +268,8 @@ export default function PrivacyPolicyPage() {
             <p>
               We may disclose information where reasonably required by law, a
               court order, a regulator, workplace safety obligations or to
-              protect the rights, safety and security of users, the organisation
-              or other parties.
+              protect the rights, safety and security of users, participating
+              organisations or other parties.
             </p>
 
             <p>
@@ -292,13 +308,16 @@ export default function PrivacyPolicyPage() {
             </p>
 
             <p>
-              Some project, safety, asset, maintenance or employment-related
-              records may need to be retained after a user account is disabled
-              or a project is completed.
+              Some project, safety, financial, training, asset, maintenance or
+              employment-related records may need to be retained after a user
+              account is disabled or a project is completed.
             </p>
           </PolicySection>
 
-          <PolicySection id="rights" title="7. Access, correction and deletion">
+          <PolicySection
+            id="rights"
+            title="7. Access, correction and deletion"
+          >
             <p>
               Subject to applicable law and organisational record-keeping
               requirements, users may request:
@@ -314,8 +333,8 @@ export default function PrivacyPolicyPage() {
 
             <p>
               Some information cannot be deleted immediately where it forms part
-              of a required project, safety, legal, financial, maintenance or
-              audit record.
+              of a required project, safety, legal, financial, training,
+              maintenance or audit record.
             </p>
 
             <p>
@@ -406,6 +425,13 @@ export default function PrivacyPolicyPage() {
           <div className="flex gap-5">
             <Link href="/" className="font-semibold hover:text-blue-600">
               TTTracker
+            </Link>
+
+            <Link
+              href="/support"
+              className="font-semibold hover:text-blue-600"
+            >
+              Support
             </Link>
 
             <a

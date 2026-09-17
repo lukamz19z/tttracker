@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
-  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -12,125 +10,140 @@ import {
   TextInput,
   View,
 } from "react-native";
-import * as Sharing from "expo-sharing";
 import { File, Paths } from "expo-file-system";
+import {
+  FileImage,
+  FileText,
+  Paperclip,
+} from "lucide-react-native";
 
+import {
+  FinanceAttachmentPreview,
+  type FinancePreviewFile,
+} from "@/components/finance/FinanceAttachmentPreview";
 import { apiFetch } from "@/lib/api/client";
 import {
   getApprovalDetail,
   reviewExpense,
   reviewInvoice,
 } from "@/lib/api/approvals";
-import { getMyFinanceDetail } from "@/lib/api/finance";
-import type { FinanceDetailPayload, FinanceKind } from "@/types/finance";
 
-const clean = (value: unknown) => String(value ?? "").trim();
+type Kind = "expense" | "invoice";
 
-const money = (value: unknown) =>
-  new Intl.NumberFormat("en-AU", {
+type Detail = {
+  kind: Kind;
+  capability: {
+    canReviewEdit?: boolean;
+    canApprove?: boolean;
+    canMarkPaid?: boolean;
+  };
+  submission: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+  attachments: Array<Record<string, unknown>>;
+  categories: Array<{ id: string; name: string }>;
+  project: {
+    id: string;
+    name: string;
+    project_number: string | null;
+  } | null;
+};
+
+function clean(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function money(value: unknown) {
+  const number = Number(value ?? 0);
+  return new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency: "AUD",
-  }).format(Number(value ?? 0) || 0);
+  }).format(Number.isFinite(number) ? number : 0);
+}
 
-const date = (value: unknown) => {
+function dateLabel(value: unknown) {
   const raw = clean(value);
   if (!raw) return "—";
 
-  const parsed = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw);
-  return Number.isNaN(parsed.getTime())
-    ? raw
-    : parsed.toLocaleDateString("en-AU");
-};
+  const date = new Date(
+    raw.length === 10 ? `${raw}T00:00:00` : raw,
+  );
 
-type ImagePreview = {
-  uri: string;
-  name: string;
-};
+  if (Number.isNaN(date.getTime())) return raw;
 
-function attachmentLooksLikeImage(row: Record<string, unknown>) {
-  const contentType = clean(row.content_type).toLowerCase();
-  const fileName = clean(row.file_name).toLowerCase();
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getFullYear()),
+  ].join("/");
+}
 
+function fileExtension(fileName: string) {
   return (
-    contentType.startsWith("image/") ||
-    /\.(jpe?g|png|webp|heic|heif)$/i.test(fileName)
+    clean(fileName)
+      .toLowerCase()
+      .match(/\.([a-z0-9]+)$/)?.[1] ?? ""
   );
 }
 
-function attachmentMeta(row: Record<string, unknown>) {
-  const type = clean(row.content_type);
-  const bytes = Number(row.file_size_bytes ?? 0);
-
-  const size =
-    Number.isFinite(bytes) && bytes > 0
-      ? bytes >= 1024 * 1024
-        ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-        : `${Math.max(1, Math.round(bytes / 1024))} KB`
-      : "";
-
-  return [type, size].filter(Boolean).join(" · ");
+function attachmentMime(row: Record<string, unknown>) {
+  return (
+    clean(row.mime_type) ||
+    clean(row.mimeType) ||
+    clean(row.content_type) ||
+    clean(row.file_type) ||
+    null
+  );
 }
 
-function isReviewerAccessError(error: unknown) {
-  const message =
-    error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
+function isImageAttachment(row: Record<string, unknown>) {
+  const mime = clean(attachmentMime(row)).toLowerCase();
+  const ext = fileExtension(clean(row.file_name));
 
   return (
-    message.includes("not configured to review") ||
-    message.includes("not configured for this finance workflow") ||
-    message.includes("finance workflow")
+    mime.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "webp", "heic", "heif"].includes(ext)
   );
+}
+
+function isPdfAttachment(row: Record<string, unknown>) {
+  const mime = clean(attachmentMime(row)).toLowerCase();
+  return mime.includes("pdf") || fileExtension(clean(row.file_name)) === "pdf";
+}
+
+function safeFileName(value: unknown) {
+  const original = clean(value) || "attachment";
+  return original.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 export function FinanceApprovalScreen({
   kind,
   id,
 }: {
-  kind: FinanceKind;
+  kind: Kind;
   id: string;
 }) {
-  const [detail, setDetail] = useState<FinanceDetailPayload | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [comments, setComments] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewFile, setPreviewFile] =
+    useState<FinancePreviewFile | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
     try {
-      const approvalDetail = await getApprovalDetail<FinanceDetailPayload>(
-        kind,
-        id,
+      setError(null);
+      setDetail(await getApprovalDetail<Detail>(kind, id));
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load Finance record.",
       );
-      setDetail(approvalDetail);
-      return;
-    } catch (approvalError) {
-      if (!isReviewerAccessError(approvalError)) {
-        setDetail(null);
-        setError(
-          approvalError instanceof Error
-            ? approvalError.message
-            : "Could not load Finance record.",
-        );
-        return;
-      }
-
-      try {
-        const ownDetail = await getMyFinanceDetail(kind, id);
-        setDetail(ownDetail);
-        return;
-      } catch (ownerError) {
-        setDetail(null);
-        setError(
-          ownerError instanceof Error
-            ? ownerError.message
-            : "Could not load Finance record.",
-        );
-      }
     } finally {
       setLoading(false);
     }
@@ -151,61 +164,10 @@ export function FinanceApprovalScreen({
     [detail?.categories],
   );
 
-  const vehicleById = useMemo(
-    () =>
-      new Map(
-        (detail?.vehicleAssets ?? []).map((asset) => [
-          asset.id,
-          [
-            asset.vehicle_id,
-            asset.vehicle_rego || asset.rego,
-            [asset.make, asset.model].filter(Boolean).join(" "),
-          ]
-            .map(clean)
-            .filter(Boolean)
-            .join(" · ") || "Vehicle",
-        ]),
-      ),
-    [detail?.vehicleAssets],
-  );
-
-  const plantById = useMemo(
-    () =>
-      new Map(
-        (detail?.plantAssets ?? []).map((asset) => [
-          asset.id,
-          [
-            asset.asset_id,
-            asset.rego,
-            asset.plant_type,
-            [asset.make, asset.model].filter(Boolean).join(" "),
-          ]
-            .map(clean)
-            .filter(Boolean)
-            .join(" · ") || "Plant",
-        ]),
-      ),
-    [detail?.plantAssets],
-  );
-
-  const fleetJobById = useMemo(
-    () =>
-      new Map(
-        (detail?.fleetJobs ?? []).map((job) => [
-          job.id,
-          [job.job_number, job.asset_label]
-            .map(clean)
-            .filter(Boolean)
-            .join(" · ") || "Fleet Job",
-        ]),
-      ),
-    [detail?.fleetJobs],
-  );
-
-  async function runAction(
+  async function action(
     next: "request_changes" | "deny" | "approve" | "mark_paid",
   ) {
-    if (!detail || busy) return;
+    if (!detail) return;
 
     if (
       (next === "request_changes" || next === "deny") &&
@@ -220,82 +182,37 @@ export function FinanceApprovalScreen({
       return;
     }
 
-    const prompt =
-      next === "approve"
-        ? [
-            "Approve submission?",
-            "This records your approval in the same Finance workflow used by the website.",
-            "Approve",
-          ]
-        : next === "request_changes"
-          ? [
-              "Request changes?",
-              "The submitter will be sent back the required changes.",
-              "Send Back",
-            ]
-          : next === "deny"
-            ? [
-                "Deny submission?",
-                "This will reject the submitted Finance record.",
-                "Deny",
-              ]
-            : [
-                "Mark as paid?",
-                "This records payment against the approved Finance record.",
-                "Mark Paid",
-              ];
-
-    Alert.alert(prompt[0], prompt[1], [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: prompt[2],
-        style: next === "deny" ? "destructive" : "default",
-        onPress: () => void executeAction(next),
-      },
-    ]);
-  }
-
-  async function executeAction(
-    next: "request_changes" | "deny" | "approve" | "mark_paid",
-  ) {
     setBusy(next);
     setError(null);
 
     try {
-      const result =
-        kind === "expense"
-          ? await reviewExpense(
-              id,
-              next,
-              comments.trim(),
-              paymentReference.trim(),
-            )
-          : await reviewInvoice(
-              id,
-              next,
-              comments.trim(),
-              paymentReference.trim(),
-            );
-
-      const value = (result ?? {}) as { warning?: string | null };
+      if (kind === "expense") {
+        await reviewExpense(
+          id,
+          next,
+          comments.trim(),
+          paymentReference.trim(),
+        );
+      } else {
+        await reviewInvoice(
+          id,
+          next,
+          comments.trim(),
+          paymentReference.trim(),
+        );
+      }
 
       Alert.alert(
-        value.warning ? "Saved with warning" : "Saved",
-        [
-          next === "approve"
-            ? "Approved successfully."
-            : next === "request_changes"
-              ? "Changes requested."
-              : next === "deny"
-                ? "Submission denied."
-                : "Marked as paid.",
-          value.warning ?? "",
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
+        "Saved",
+        next === "approve"
+          ? "Approved successfully."
+          : next === "request_changes"
+            ? "Changes requested."
+            : next === "deny"
+              ? "Submission denied."
+              : "Marked as paid.",
       );
 
-      setComments("");
       await load();
     } catch (actionError) {
       setError(
@@ -308,94 +225,99 @@ export function FinanceApprovalScreen({
     }
   }
 
+  function closePreview() {
+    if (previewLoading) return;
+    setPreviewVisible(false);
+    setPreviewFile(null);
+  }
+
   async function openAttachment(row: Record<string, unknown>) {
     const attachmentId = clean(row.id);
     if (!attachmentId) return;
 
+    const fileName = safeFileName(row.file_name);
+    const rowMime = attachmentMime(row);
+
     setBusy(`file-${attachmentId}`);
+    setPreviewFile({
+      uri: "",
+      name: fileName,
+      mimeType: rowMime,
+    });
+    setPreviewVisible(true);
+    setPreviewLoading(true);
 
     try {
       const response = await apiFetch(
-        `/api/expenses/attachments/${encodeURIComponent(attachmentId)}/content`,
-        { timeoutMs: 120_000 },
+        `/api/expenses/attachments/${encodeURIComponent(
+          attachmentId,
+        )}/content`,
+        {
+          timeoutMs: 120_000,
+        },
       );
 
       if (!response.ok) {
-        const raw = await response.text();
         let message = "Attachment could not be opened.";
 
-        if (raw.trim()) {
-          try {
-            const payload = JSON.parse(raw) as { error?: unknown };
-            message = clean(payload.error) || message;
-          } catch {
-            message = raw.trim();
+        try {
+          const payload = (await response.json()) as {
+            error?: string;
+          };
+          if (clean(payload.error)) {
+            message = clean(payload.error);
           }
+        } catch {
+          // Response was not JSON. Use the default message.
         }
 
         throw new Error(message);
       }
 
+      const responseMime =
+        clean(response.headers.get("content-type")) || rowMime || undefined;
+
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const fileName = (clean(row.file_name) || "attachment").replace(
-        /[^a-zA-Z0-9._-]/g,
-        "_",
+      const file = new File(
+        Paths.cache,
+        `${Date.now()}-${fileName}`,
       );
 
-      const file = new File(Paths.cache, `${Date.now()}-${fileName}`);
-      file.create({ overwrite: true, intermediates: true });
+      file.create({
+        overwrite: true,
+        intermediates: true,
+      });
       file.write(bytes);
 
-      if (attachmentLooksLikeImage(row)) {
-        setImagePreview({
-          uri: file.uri,
-          name: clean(row.file_name) || "Attachment",
-        });
-        return;
-      }
+      setPreviewFile({
+        uri: file.uri,
+        name: fileName,
+        mimeType: responseMime,
+      });
+    } catch (attachmentError) {
+      setPreviewVisible(false);
+      setPreviewFile(null);
 
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(file.uri);
-      } else {
-        Alert.alert(
-          "File ready",
-          "The attachment was downloaded but this device cannot open it.",
-        );
-      }
-    } catch (fileError) {
       Alert.alert(
         "Could not open file",
-        fileError instanceof Error ? fileError.message : "Please try again.",
+        attachmentError instanceof Error
+          ? attachmentError.message
+          : "Please try again.",
       );
     } finally {
+      setPreviewLoading(false);
       setBusy(null);
-    }
-  }
-
-  async function sharePreview() {
-    if (!imagePreview) return;
-
-    try {
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(imagePreview.uri);
-      } else {
-        Alert.alert(
-          "Sharing unavailable",
-          "This device does not provide a share/save action for the image.",
-        );
-      }
-    } catch (shareError) {
-      Alert.alert(
-        "Could not share image",
-        shareError instanceof Error ? shareError.message : "Please try again.",
-      );
     }
   }
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <ActivityIndicator style={{ marginTop: 80 }} />
+        <ActivityIndicator
+          size="large"
+          color="#2563eb"
+          style={{ marginTop: 80 }}
+        />
       </SafeAreaView>
     );
   }
@@ -403,51 +325,50 @@ export function FinanceApprovalScreen({
   if (!detail) {
     return (
       <SafeAreaView style={styles.safe}>
-        <Text style={styles.error}>{error || "Finance record not found."}</Text>
+        <Text style={styles.error}>
+          {error || "Finance record not found."}
+        </Text>
       </SafeAreaView>
     );
   }
 
   const submission = detail.submission;
-  const status = clean(submission.status);
   const title =
     clean(submission.submission_number) ||
     (kind === "invoice" ? "Invoice" : "Expense Claim");
 
-  const canReviewSubmitted =
-    status === "submitted" &&
-    (detail.capability.canReviewEdit || detail.capability.canApprove);
+  const canReview =
+    Boolean(detail.capability.canReviewEdit) ||
+    Boolean(detail.capability.canApprove);
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.eyebrow}>
-          {detail.readOnly
+          {detail.capability.canApprove || detail.capability.canReviewEdit
             ? kind === "invoice"
-              ? "MY INVOICE"
-              : "MY EXPENSE CLAIM"
-            : kind === "invoice"
               ? "INVOICE APPROVAL"
-              : "EXPENSE APPROVAL"}
+              : "EXPENSE APPROVAL"
+            : kind === "invoice"
+              ? "INVOICE"
+              : "EXPENSE CLAIM"}
         </Text>
+
         <Text style={styles.heading}>{title}</Text>
 
-        {detail.readOnly ? (
-          <View style={styles.readOnlyBanner}>
-            <Text style={styles.readOnlyTitle}>Read-only view</Text>
-            <Text style={styles.readOnlyText}>
-              You can view your own Finance submission here. Approval actions
-              are only shown to users configured in Finance Settings.
-            </Text>
-          </View>
-        ) : null}
-
         <View style={styles.card}>
-          <Info label="Status" value={status || "—"} />
+          <Info
+            label="Status"
+            value={clean(submission.status) || "—"}
+          />
+
           <Info
             label="Project"
             value={
-              [detail.project?.project_number, detail.project?.name]
+              [
+                detail.project?.project_number,
+                detail.project?.name,
+              ]
                 .filter(Boolean)
                 .join(" · ") || "General"
             }
@@ -463,7 +384,14 @@ export function FinanceApprovalScreen({
                 label="Invoice"
                 value={clean(submission.invoice_number) || "—"}
               />
-              <Info label="Due" value={date(submission.due_date)} />
+              <Info
+                label="Invoice Date"
+                value={dateLabel(submission.invoice_date)}
+              />
+              <Info
+                label="Due"
+                value={dateLabel(submission.due_date)}
+              />
             </>
           ) : (
             <Info
@@ -472,94 +400,128 @@ export function FinanceApprovalScreen({
             />
           )}
 
-          <Info label="Total" value={money(submission.total_amount)} />
+          <Info
+            label="Total"
+            value={money(submission.total_amount)}
+          />
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Cost Items</Text>
 
-          {detail.items.map((row, index) => {
-            const vehicleId = clean(row.vehicle_asset_id);
-            const plantId = clean(row.plant_asset_id);
-            const fleetJobId = clean(row.fleet_job_id);
-            const projectId = clean(row.project_id);
-
-            const allocation = fleetJobId
-              ? `Fleet Job · ${fleetJobById.get(fleetJobId) || fleetJobId}`
-              : vehicleId
-                ? `Vehicle · ${vehicleById.get(vehicleId) || vehicleId}`
-                : plantId
-                  ? `Plant · ${plantById.get(plantId) || plantId}`
-                  : projectId
-                    ? `Project · ${
-                        detail.project?.id === projectId
-                          ? [
-                              detail.project.project_number,
-                              detail.project.name,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")
-                          : projectId
-                      }`
-                    : "General";
-
-            return (
-              <View key={clean(row.id) || String(index)} style={styles.item}>
+          {detail.items.length === 0 ? (
+            <Text style={styles.muted}>No cost items.</Text>
+          ) : (
+            detail.items.map((row, index) => (
+              <View
+                key={clean(row.id) || String(index)}
+                style={styles.item}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemTitle}>
                     {clean(row.description) || `Item ${index + 1}`}
                   </Text>
+
                   <Text style={styles.muted}>
-                    {categoryById.get(clean(row.category_id)) ||
-                      "Company / General"}
+                    {[
+                      dateLabel(row.expense_date),
+                      categoryById.get(clean(row.category_id)) ||
+                        "Uncategorised",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </Text>
-                  <Text style={styles.allocationText}>{allocation}</Text>
                 </View>
-                <Text style={styles.amount}>{money(row.amount_inc_gst)}</Text>
+
+                <Text style={styles.amount}>
+                  {money(row.amount_inc_gst)}
+                </Text>
               </View>
-            );
-          })}
+            ))
+          )}
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Attachments</Text>
+          <View style={styles.cardTitleRow}>
+            <Paperclip size={19} color="#0f172a" />
+            <Text style={styles.cardTitle}>Attachments</Text>
+            <View style={styles.attachmentCount}>
+              <Text style={styles.attachmentCountText}>
+                {detail.attachments.length}
+              </Text>
+            </View>
+          </View>
+
           {detail.attachments.length === 0 ? (
             <Text style={styles.muted}>No attachments.</Text>
           ) : (
             detail.attachments.map((row) => {
               const attachmentId = clean(row.id);
-              const meta = attachmentMeta(row);
+              const fileName =
+                clean(row.file_name) || "Attachment";
+              const opening =
+                busy === `file-${attachmentId}`;
+              const pdf = isPdfAttachment(row);
+              const image = isImageAttachment(row);
 
               return (
                 <Pressable
                   key={attachmentId}
-                  style={styles.file}
+                  style={({ pressed }) => [
+                    styles.file,
+                    pressed && styles.filePressed,
+                  ]}
+                  disabled={opening}
                   onPress={() => void openAttachment(row)}
                 >
-                  <View style={styles.fileText}>
-                    <Text
-                      style={styles.fileName}
-                      numberOfLines={2}
-                      ellipsizeMode="tail"
-                    >
-                      {clean(row.file_name) || "Attachment"}
-                    </Text>
-                    {meta ? (
-                      <Text style={styles.fileMeta} numberOfLines={1}>
-                        {meta}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.openButton}>
-                    {busy === `file-${attachmentId}` ? (
-                      <ActivityIndicator size="small" color="#2563eb" />
+                  <View
+                    style={[
+                      styles.fileIcon,
+                      pdf && styles.fileIconPdf,
+                      image && styles.fileIconImage,
+                    ]}
+                  >
+                    {image ? (
+                      <FileImage size={21} color="#2563eb" />
                     ) : (
-                      <Text style={styles.link}>
-                        {attachmentLooksLikeImage(row) ? "View" : "Open"}
-                      </Text>
+                      <FileText
+                        size={21}
+                        color={pdf ? "#dc2626" : "#475569"}
+                      />
                     )}
                   </View>
+
+                  <View style={styles.fileCopy}>
+                    <Text
+                      numberOfLines={2}
+                      style={styles.fileName}
+                    >
+                      {fileName}
+                    </Text>
+
+                    <Text style={styles.fileMeta}>
+                      {pdf
+                        ? "PDF document"
+                        : image
+                          ? "Image attachment"
+                          : clean(row.attachment_type) ||
+                            clean(row.document_type) ||
+                            "Supporting document"}
+                    </Text>
+                  </View>
+
+                  {opening ? (
+                    <ActivityIndicator
+                      size="small"
+                      color="#2563eb"
+                    />
+                  ) : (
+                    <View style={styles.viewButton}>
+                      <Text style={styles.viewButtonText}>
+                        {pdf ? "View PDF" : "View"}
+                      </Text>
+                    </View>
+                  )}
                 </Pressable>
               );
             })
@@ -568,7 +530,7 @@ export function FinanceApprovalScreen({
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {canReviewSubmitted ? (
+        {canReview ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Review</Text>
 
@@ -576,29 +538,45 @@ export function FinanceApprovalScreen({
               value={comments}
               onChangeText={setComments}
               placeholder="Comment / requested changes"
+              placeholderTextColor="#94a3b8"
               multiline
               style={[
                 styles.input,
-                { minHeight: 100, textAlignVertical: "top" },
+                {
+                  minHeight: 100,
+                  textAlignVertical: "top",
+                },
               ]}
             />
+
+            {detail.capability.canMarkPaid ? (
+              <TextInput
+                value={paymentReference}
+                onChangeText={setPaymentReference}
+                placeholder="Payment reference (for Mark Paid)"
+                placeholderTextColor="#94a3b8"
+                style={styles.input}
+              />
+            ) : null}
 
             <View style={styles.actions}>
               {detail.capability.canReviewEdit ? (
                 <Pressable
-                  disabled={!!busy}
+                  disabled={Boolean(busy)}
                   style={[styles.button, styles.warn]}
-                  onPress={() => void runAction("request_changes")}
+                  onPress={() => void action("request_changes")}
                 >
-                  <Text style={styles.buttonText}>Request Changes</Text>
+                  <Text style={styles.buttonText}>
+                    Request Changes
+                  </Text>
                 </Pressable>
               ) : null}
 
               {detail.capability.canApprove ? (
                 <Pressable
-                  disabled={!!busy}
+                  disabled={Boolean(busy)}
                   style={[styles.button, styles.danger]}
-                  onPress={() => void runAction("deny")}
+                  onPress={() => void action("deny")}
                 >
                   <Text style={styles.buttonText}>Deny</Text>
                 </Pressable>
@@ -606,82 +584,41 @@ export function FinanceApprovalScreen({
 
               {detail.capability.canApprove ? (
                 <Pressable
-                  disabled={!!busy}
+                  disabled={Boolean(busy)}
                   style={[styles.button, styles.good]}
-                  onPress={() => void runAction("approve")}
+                  onPress={() => void action("approve")}
                 >
                   <Text style={styles.buttonText}>Approve</Text>
                 </Pressable>
               ) : null}
+
+              {detail.capability.canMarkPaid &&
+              clean(submission.status) === "approved" ? (
+                <Pressable
+                  disabled={Boolean(busy)}
+                  style={[styles.button, styles.dark]}
+                  onPress={() => void action("mark_paid")}
+                >
+                  <Text style={styles.buttonText}>
+                    Mark Paid
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
 
-            {busy ? <ActivityIndicator /> : null}
-          </View>
-        ) : null}
-
-        {detail.capability.canMarkPaid && status === "approved" ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Payment</Text>
-            <TextInput
-              value={paymentReference}
-              onChangeText={setPaymentReference}
-              placeholder="Payment reference (optional)"
-              style={styles.input}
-            />
-            <Pressable
-              disabled={!!busy}
-              style={[styles.button, styles.dark]}
-              onPress={() => void runAction("mark_paid")}
-            >
-              <Text style={styles.buttonText}>Mark Paid</Text>
-            </Pressable>
-            {busy ? <ActivityIndicator /> : null}
+            {busy && !busy.startsWith("file-") ? (
+              <ActivityIndicator color="#2563eb" />
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
 
-      <Modal
-        visible={Boolean(imagePreview)}
-        transparent={false}
-        animationType="fade"
-        onRequestClose={() => setImagePreview(null)}
-      >
-        <SafeAreaView style={styles.imagePreviewSafe}>
-          <View style={styles.imagePreviewHeader}>
-            <Pressable
-              style={styles.imagePreviewHeaderButton}
-              onPress={() => setImagePreview(null)}
-            >
-              <Text style={styles.imagePreviewHeaderButtonText}>Close</Text>
-            </Pressable>
-
-            <Text
-              style={styles.imagePreviewTitle}
-              numberOfLines={1}
-              ellipsizeMode="middle"
-            >
-              {imagePreview?.name || "Attachment"}
-            </Text>
-
-            <Pressable
-              style={styles.imagePreviewHeaderButton}
-              onPress={() => void sharePreview()}
-            >
-              <Text style={styles.imagePreviewHeaderButtonText}>
-                Share / Save
-              </Text>
-            </Pressable>
-          </View>
-
-          {imagePreview ? (
-            <Image
-              source={{ uri: imagePreview.uri }}
-              style={styles.imagePreview}
-              resizeMode="contain"
-            />
-          ) : null}
-        </SafeAreaView>
-      </Modal>
+      <FinanceAttachmentPreview
+        visible={previewVisible}
+        loading={previewLoading}
+        file={previewFile}
+        onClose={closePreview}
+      />
     </SafeAreaView>
   );
 }
@@ -702,50 +639,71 @@ function Info({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#f8fafc" },
-  content: { padding: 18, gap: 14, paddingBottom: 40 },
+  safe: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+  },
+  content: {
+    padding: 18,
+    paddingBottom: 40,
+    gap: 14,
+  },
   eyebrow: {
     fontSize: 12,
     fontWeight: "900",
     color: "#2563eb",
     letterSpacing: 1.2,
   },
-  heading: { fontSize: 28, fontWeight: "900", color: "#0f172a" },
-  readOnlyBanner: {
-    padding: 13,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#eff6ff",
-  },
-  readOnlyTitle: {
-    color: "#1d4ed8",
+  heading: {
+    fontSize: 28,
     fontWeight: "900",
-  },
-  readOnlyText: {
-    marginTop: 3,
-    color: "#475569",
-    fontSize: 11,
-    lineHeight: 16,
+    color: "#0f172a",
   },
   card: {
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
     padding: 16,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "#e2e8f0",
     gap: 10,
   },
-  cardTitle: { fontSize: 17, fontWeight: "900", color: "#0f172a" },
+  cardTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: "900",
+    color: "#0f172a",
+  },
+  attachmentCount: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 7,
+    backgroundColor: "#eff6ff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachmentCountText: {
+    color: "#1d4ed8",
+    fontSize: 11,
+    fontWeight: "900",
+  },
   info: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "flex-start",
     gap: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
     paddingVertical: 8,
   },
-  label: { color: "#64748b", fontWeight: "700" },
+  label: {
+    color: "#64748b",
+    fontWeight: "700",
+  },
   value: {
     flex: 1,
     textAlign: "right",
@@ -754,109 +712,114 @@ const styles = StyleSheet.create({
   },
   item: {
     flexDirection: "row",
-    gap: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-  },
-  itemTitle: { fontWeight: "800", color: "#0f172a" },
-  muted: { color: "#64748b", fontSize: 12, marginTop: 3 },
-  allocationText: {
-    color: "#2563eb",
-    fontSize: 11,
-    marginTop: 4,
-    fontWeight: "700",
-  },
-  amount: { fontWeight: "900", color: "#0f172a" },
-  file: {
-    minHeight: 62,
-    flexDirection: "row",
     alignItems: "center",
     gap: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
-  fileText: {
+  itemTitle: {
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  muted: {
+    color: "#64748b",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  amount: {
+    fontWeight: "900",
+    color: "#0f172a",
+  },
+  file: {
+    minHeight: 70,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 14,
+    backgroundColor: "#f8fafc",
+  },
+  filePressed: {
+    opacity: 0.78,
+  },
+  fileIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f1f5f9",
+  },
+  fileIconPdf: {
+    backgroundColor: "#fef2f2",
+  },
+  fileIconImage: {
+    backgroundColor: "#eff6ff",
+  },
+  fileCopy: {
     flex: 1,
-    minWidth: 0,
   },
   fileName: {
     color: "#0f172a",
+    fontSize: 13,
     fontWeight: "800",
-    lineHeight: 18,
   },
   fileMeta: {
-    color: "#94a3b8",
-    fontSize: 10,
+    color: "#64748b",
+    fontSize: 11,
     marginTop: 4,
   },
-  openButton: {
-    minWidth: 68,
-    minHeight: 38,
-    paddingHorizontal: 12,
+  viewButton: {
+    minHeight: 36,
     borderRadius: 11,
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#eff6ff",
+    backgroundColor: "#2563eb",
+    paddingHorizontal: 11,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
   },
-  link: { color: "#2563eb", fontWeight: "900" },
-  imagePreviewSafe: {
-    flex: 1,
-    backgroundColor: "#020617",
-  },
-  imagePreviewHeader: {
-    minHeight: 58,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1e293b",
-  },
-  imagePreviewTitle: {
-    flex: 1,
-    textAlign: "center",
-    color: "#e2e8f0",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  imagePreviewHeaderButton: {
-    minHeight: 38,
-    minWidth: 58,
-    justifyContent: "center",
-  },
-  imagePreviewHeaderButtonText: {
-    color: "#93c5fd",
-    fontSize: 12,
+  viewButtonText: {
+    color: "#ffffff",
+    fontSize: 11,
     fontWeight: "900",
-  },
-  imagePreview: {
-    flex: 1,
-    width: "100%",
-    height: "100%",
   },
   input: {
     borderWidth: 1,
     borderColor: "#cbd5e1",
     borderRadius: 12,
     padding: 12,
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
   },
-  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  actions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
   button: {
     paddingHorizontal: 13,
     paddingVertical: 11,
     borderRadius: 11,
   },
-  buttonText: { color: "#fff", fontWeight: "900" },
-  warn: { backgroundColor: "#d97706" },
-  danger: { backgroundColor: "#be123c" },
-  good: { backgroundColor: "#047857" },
-  dark: { backgroundColor: "#0f172a" },
+  buttonText: {
+    color: "#ffffff",
+    fontWeight: "900",
+  },
+  warn: {
+    backgroundColor: "#d97706",
+  },
+  danger: {
+    backgroundColor: "#be123c",
+  },
+  good: {
+    backgroundColor: "#047857",
+  },
+  dark: {
+    backgroundColor: "#0f172a",
+  },
   error: {
     margin: 18,
     padding: 12,
