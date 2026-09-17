@@ -178,16 +178,31 @@ export default function TrainingRecordScreen() {
         },
       );
 
-      if (!response.ok) {
-        const payload = await response
-          .json()
-          .catch(() => null);
+if (!response.ok) {
+  const raw = await response.text();
 
-        throw new Error(
-          payload?.error ||
-            "Training evidence could not be loaded.",
-        );
-      }
+  let serverMessage = "";
+
+  try {
+    const parsed = JSON.parse(raw);
+    serverMessage = String(parsed?.error ?? "").trim();
+  } catch {
+    serverMessage = raw.trim();
+  }
+
+  console.error("Training evidence preview failed", {
+    status: response.status,
+    statusText: response.statusText,
+    url: response.url,
+    body: raw.slice(0, 1000),
+    documentId: document.id,
+  });
+
+  throw new Error(
+    serverMessage ||
+      `Training evidence could not be loaded (${response.status}).`,
+  );
+}
 
       const bytes = new Uint8Array(
         await response.arrayBuffer(),
