@@ -4,6 +4,8 @@ import {
   canManageSitePrestarts,
   canViewSitePrestarts,
   clean,
+  permittedSitePrestartProjectIds,
+  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
 } from "@/lib/site-prestarts/server";
@@ -53,11 +55,21 @@ export async function GET(request: Request) {
       throw new Error("VIEW_FORBIDDEN");
     }
 
+    const permittedProjectIds = await permittedSitePrestartProjectIds(
+      service,
+      identity.userId,
+    );
+
+    if (permittedProjectIds.length === 0) {
+      return NextResponse.json({ prestarts: [] });
+    }
+
     const { data: prestarts, error: prestartError } = await service
       .from("site_prestarts")
       .select(
         "id,prestart_number,project_id,prestart_date,location,conducted_by_user_id,conducted_by_name,current_revision,admin_notes,status,completed_at,completed_by_name,pdf_file_name,sharepoint_web_url,sharepoint_sync_status,sharepoint_sync_error,created_at,updated_at",
       )
+      .in("project_id", permittedProjectIds)
       .order("prestart_date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(500);
@@ -201,6 +213,12 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      projectId,
+    );
 
     const { data: project, error: projectError } = await service
       .from("projects")

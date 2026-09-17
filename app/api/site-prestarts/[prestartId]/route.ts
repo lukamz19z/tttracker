@@ -4,6 +4,7 @@ import {
   canManageSitePrestarts,
   canViewSitePrestarts,
   clean,
+  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
 } from "@/lib/site-prestarts/server";
@@ -38,6 +39,12 @@ export async function GET(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      prestart.project_id,
+    );
 
     const [projectResult, revisionsResult, attendeesResult] = await Promise.all([
       service
@@ -96,7 +103,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const { data: existing, error: existingError } = await service
       .from("site_prestarts")
-      .select("id,status")
+      .select("id,status,project_id")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -108,6 +115,12 @@ export async function PATCH(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      existing.project_id,
+    );
 
     if (existing.status !== "draft") {
       return NextResponse.json(

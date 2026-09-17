@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
-  canManageSitePrestarts,
+  permittedSitePrestartProjectIds,
   requireSitePrestartUser,
   sitePrestartApiError,
   SITE_PRESTART_DECLARATION,
@@ -13,18 +13,21 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     const { service, identity } = await requireSitePrestartUser(request);
+    const projectIds = await permittedSitePrestartProjectIds(
+      service,
+      identity.userId,
+    );
 
-    if (!canManageSitePrestarts(identity.role)) {
-      throw new Error("MANAGE_FORBIDDEN");
-    }
-
-    const [projectsResult, employeesResult] = await Promise.all([
-      service
-        .from("projects")
-        .select(
-          "id,name,project_number,status,sharepoint_site_id,sharepoint_drive_id,sharepoint_folder_id",
-        )
-        .order("project_number"),
+    const [projectResult, employeeResult] = await Promise.all([
+      projectIds.length
+        ? service
+            .from("projects")
+            .select(
+              "id,name,project_number,status,sharepoint_drive_id,sharepoint_folder_id",
+            )
+            .in("id", projectIds)
+            .order("name")
+        : Promise.resolve({ data: [], error: null }),
       service
         .from("employees")
         .select("id,payroll_id,full_name,role,crew_id,active")
@@ -32,18 +35,16 @@ export async function GET(request: Request) {
         .order("full_name"),
     ]);
 
-    if (projectsResult.error) throw new Error(projectsResult.error.message);
-    if (employeesResult.error) throw new Error(employeesResult.error.message);
+    if (projectResult.error) throw new Error(projectResult.error.message);
+    if (employeeResult.error) throw new Error(employeeResult.error.message);
 
     return NextResponse.json({
-      projects: projectsResult.data ?? [],
-      employees: employeesResult.data ?? [],
+      projects: projectResult.data ?? [],
+      employees: employeeResult.data ?? [],
       declaration: SITE_PRESTART_DECLARATION,
-      identity,
     });
   } catch (error) {
     const apiError = sitePrestartApiError(error);
-
     return NextResponse.json(
       { error: apiError.message },
       { status: apiError.status },

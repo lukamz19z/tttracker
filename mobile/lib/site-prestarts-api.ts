@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 
 const WEB_BASE_URL = (
   process.env.EXPO_PUBLIC_TTTRACKER_WEB_URL ||
-  "https://tttracker.com.au"
+  "https://www.tttracker.com.au"
 ).replace(/\/+$/, "");
 
 export async function sitePrestartApi(
@@ -31,6 +31,7 @@ export async function sitePrestartApi(
   return fetch(`${WEB_BASE_URL}${path}`, {
     ...init,
     headers,
+    cache: "no-store",
   });
 }
 

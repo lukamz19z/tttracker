@@ -5,6 +5,7 @@ import { generateSitePrestartPdf } from "@/lib/site-prestarts/pdf";
 import {
   canManageSitePrestarts,
   clean,
+  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
 } from "@/lib/site-prestarts/server";
@@ -125,6 +126,12 @@ export async function POST(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      prestart.project_id,
+    );
 
     if (prestart.status === "completed") {
       return NextResponse.json({

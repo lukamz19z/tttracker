@@ -90,6 +90,8 @@ type AccessState = {
   loading: boolean;
   error: string | null;
   roles: DynamicRole[];
+  roleCodes: Set<string>;
+  roleLabel: string;
   projectIds: string[];
   permissions: Set<string>;
   navigation: DynamicNavigationItem[];
@@ -98,6 +100,7 @@ type AccessState = {
   approvalCounts: ApprovalCounts;
   refresh: () => Promise<void>;
   can: (permissionCode: string | null | undefined) => boolean;
+  hasRole: (roleCode: string | null | undefined) => boolean;
   hasCapability: (capabilityKey: string | null | undefined) => boolean;
 };
 
@@ -159,31 +162,49 @@ export function AccessProvider({ children }: PropsWithChildren) {
 
     try {
       const { data } = await supabase.auth.getSession();
+
+      if (__DEV__) {
+        console.log(
+          "TTTracker RBAC session:",
+          data.session ? data.session.user.email ?? data.session.user.id : "NO SESSION",
+        );
+      }
+
       if (!data.session) {
         clear();
         return;
       }
 
       /*
-       * RBAC authority:
-       *   /api/access/me -> roles, project membership, effective mobile permissions
-       *
-       * Mobile UI/config authority:
-       *   /api/mobile/bootstrap -> dynamic navigation, LMZ branding, workflow
-       *   capabilities and approval badges.
-       *
-       * Keeping these responsibilities separate means an Admin permission change
-       * takes effect without an Expo rebuild, while the existing bootstrap features
-       * continue working exactly as they do today.
+       * RBAC is deliberately loaded separately from the mobile bootstrap.
+       * A bootstrap/config failure must never wipe the user's roles and
+       * effective mobile permissions.
        */
-      const [access, bootstrap] = await Promise.all([
-        apiJson<AccessMePayload>("/api/access/me"),
-        apiJson<BootstrapPayload>("/api/mobile/bootstrap"),
-      ]);
+      let access: AccessMePayload;
+
+      try {
+        access = await apiJson<AccessMePayload>("/api/access/me");
+
+        if (__DEV__) {
+          console.log("TTTracker RBAC roles:", access.roles ?? []);
+          console.log(
+            "TTTracker mobile permissions:",
+            access.permissions?.mobile ??
+              (access.permissions?.all ?? []).filter((code) =>
+                String(code).startsWith("mobile."),
+              ),
+          );
+        }
+      } catch (accessError) {
+        console.error("TTTracker /api/access/me failed:", accessError);
+        throw accessError;
+      }
 
       const nextProjectIds =
         access.project_ids ??
-        access.projects?.map((project) => project.project_id ?? project.id ?? "") ??
+        access.projects?.map(
+          (project) => project.project_id ?? project.id ?? "",
+        ) ??
         [];
 
       const nextMobilePermissions =
@@ -197,16 +218,45 @@ export function AccessProvider({ children }: PropsWithChildren) {
         Array.from(new Set(nextProjectIds.map(String).filter(Boolean))),
       );
       setPermissions(new Set(nextMobilePermissions));
-      setNavigation(bootstrap.navigation ?? []);
-      setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
-      setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
-      setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
+
+      /*
+       * Bootstrap is supplementary. If it fails, preserve RBAC and use
+       * safe defaults for navigation/config/workflow extras.
+       */
+      try {
+        const bootstrap =
+          await apiJson<BootstrapPayload>("/api/mobile/bootstrap");
+
+        setNavigation(bootstrap.navigation ?? []);
+        setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
+        setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
+        setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
+
+        if (__DEV__) {
+          console.log(
+            "TTTracker mobile bootstrap:",
+            `${bootstrap.navigation?.length ?? 0} navigation items`,
+          );
+        }
+      } catch (bootstrapError) {
+        console.warn(
+          "TTTracker /api/mobile/bootstrap failed; RBAC remains active:",
+          bootstrapError,
+        );
+
+        setNavigation([]);
+        setAppConfig(DEFAULT_APP_CONFIG);
+        setCapabilities(EMPTY_CAPABILITIES);
+        setApprovalCounts(EMPTY_COUNTS);
+      }
     } catch (refreshError) {
-      setError(
+      const message =
         refreshError instanceof Error
           ? refreshError.message
-          : "Could not load mobile configuration.",
-      );
+          : "Could not load mobile access.";
+
+      console.error("TTTracker access refresh failed:", refreshError);
+      setError(message);
     } finally {
       loadedRef.current = true;
       setLoading(false);
@@ -217,9 +267,11 @@ export function AccessProvider({ children }: PropsWithChildren) {
     void refresh();
 
     const authListener = supabase.auth.onAuthStateChange(() => void refresh());
+
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") void refresh();
     });
+
     const interval = setInterval(() => {
       if (AppState.currentState === "active") void refresh();
     }, ACCESS_REFRESH_INTERVAL_MS);
@@ -231,11 +283,31 @@ export function AccessProvider({ children }: PropsWithChildren) {
     };
   }, [refresh]);
 
+  const roleCodes = useMemo(
+    () =>
+      new Set(
+        roles
+          .map((role) => String(role.code ?? "").trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [roles],
+  );
+
+  const roleLabel = useMemo(
+    () =>
+      roles.length > 0
+        ? roles.map((role) => role.name).filter(Boolean).join(", ")
+        : "No access role",
+    [roles],
+  );
+
   const value = useMemo<AccessState>(
     () => ({
       loading,
       error,
       roles,
+      roleCodes,
+      roleLabel,
       projectIds,
       permissions,
       navigation,
@@ -245,6 +317,9 @@ export function AccessProvider({ children }: PropsWithChildren) {
       refresh,
       can: (permissionCode) =>
         !permissionCode || permissions.has(permissionCode),
+      hasRole: (roleCode) =>
+        !roleCode ||
+        roleCodes.has(String(roleCode).trim().toLowerCase()),
       hasCapability: (capabilityKey) => {
         if (!capabilityKey) return true;
         if (capabilityKey === "has_approvals") return capabilities.hasApprovals;
@@ -255,6 +330,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
       loading,
       error,
       roles,
+      roleCodes,
+      roleLabel,
       projectIds,
       permissions,
       navigation,
@@ -266,12 +343,18 @@ export function AccessProvider({ children }: PropsWithChildren) {
   );
 
   return (
-    <AccessContext.Provider value={value}>{children}</AccessContext.Provider>
+    <AccessContext.Provider value={value}>
+      {children}
+    </AccessContext.Provider>
   );
 }
 
 export function useAccess() {
   const value = useContext(AccessContext);
-  if (!value) throw new Error("useAccess must be used inside AccessProvider.");
+
+  if (!value) {
+    throw new Error("useAccess must be used inside AccessProvider.");
+  }
+
   return value;
 }

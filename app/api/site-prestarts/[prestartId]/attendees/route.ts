@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   canManageSitePrestarts,
   clean,
+  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
   SITE_PRESTART_DECLARATION,
@@ -105,7 +106,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     const { data: prestart, error: prestartError } = await service
       .from("site_prestarts")
-      .select("id,status,current_revision")
+      .select("id,status,current_revision,project_id")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -117,6 +118,12 @@ export async function POST(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      prestart.project_id,
+    );
 
     if (prestart.status !== "draft") {
       return NextResponse.json(
@@ -221,7 +228,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const { data: prestart, error: prestartError } = await service
       .from("site_prestarts")
-      .select("status")
+      .select("status,project_id")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -233,6 +240,12 @@ export async function DELETE(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      prestart.project_id,
+    );
 
     if (prestart.status !== "draft") {
       return NextResponse.json(

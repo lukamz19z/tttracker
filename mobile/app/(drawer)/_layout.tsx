@@ -64,13 +64,16 @@ function formatUnreadCount(count: number) {
   return count > 99 ? "99+" : String(count);
 }
 
-function useUnreadNotificationCount(channelScope: string) {
+function useUnreadNotificationCount(_channelScope: string) {
   const [count, setCount] = useState(0);
 
   const loadUnreadCount = useCallback(async () => {
-    const { data: userResult } = await supabase.auth.getUser();
+    const { data: userResult, error: userError } =
+      await supabase.auth.getUser();
+
     const user = userResult.user;
-    if (!user) {
+
+    if (userError || !user) {
       setCount(0);
       return;
     }
@@ -82,44 +85,45 @@ function useUnreadNotificationCount(channelScope: string) {
       .is("read_at", null)
       .is("archived_at", null);
 
-    if (!error) setCount(unreadCount ?? 0);
+    if (error) {
+      console.warn(
+        "Unable to load unread notification count:",
+        error.message,
+      );
+      return;
+    }
+
+    setCount(unreadCount ?? 0);
   }, []);
 
   useEffect(() => {
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let mounted = true;
+    let active = true;
 
-    void (async () => {
-      const { data: userResult } = await supabase.auth.getUser();
-      if (!mounted) return;
+    async function refresh() {
+      if (!active) return;
       await loadUnreadCount();
-      if (!userResult.user) return;
+    }
 
-      channel = supabase
-        .channel(`mobile-notifications-${channelScope}-${userResult.user.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "user_notifications",
-            filter: `user_id=eq.${userResult.user.id}`,
-          },
-          () => void loadUnreadCount(),
-        )
-        .subscribe();
-    })();
+    void refresh();
 
     const appListener = AppState.addEventListener("change", (state) => {
-      if (state === "active") void loadUnreadCount();
+      if (state === "active") {
+        void refresh();
+      }
     });
 
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") {
+        void refresh();
+      }
+    }, 30_000);
+
     return () => {
-      mounted = false;
+      active = false;
       appListener.remove();
-      if (channel) void supabase.removeChannel(channel);
+      clearInterval(interval);
     };
-  }, [channelScope, loadUnreadCount]);
+  }, [loadUnreadCount]);
 
   return count;
 }

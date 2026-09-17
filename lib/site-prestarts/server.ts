@@ -1,4 +1,4 @@
-import { createClient, type User } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -19,12 +19,10 @@ export function createSitePrestartServiceClient() {
   );
 }
 
+export type SitePrestartServiceClient = SupabaseClient;
+
 export function clean(value: unknown) {
   return String(value ?? "").trim();
-}
-
-export function normaliseRole(value: unknown) {
-  return clean(value).toLowerCase().replace(/\s+/g, "_");
 }
 
 export const SITE_PRESTART_DECLARATION =
@@ -35,25 +33,20 @@ export type SitePrestartIdentity = {
   employeeId: string | null;
   name: string;
   email: string;
-  role: string;
+  role: "site_prestart_permitted";
 };
 
 async function identityForUser(
-  service: ReturnType<typeof createSitePrestartServiceClient>,
+  service: SitePrestartServiceClient,
   user: User,
 ): Promise<SitePrestartIdentity> {
-  const [{ data: employee }, { data: roleRow }] = await Promise.all([
-    service
-      .from("employees")
-      .select("id,full_name,user_id,active")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    service
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-  ]);
+  const { data: employee, error: employeeError } = await service
+    .from("employees")
+    .select("id,full_name,user_id,active")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (employeeError) throw new Error(employeeError.message);
 
   const email = clean(user.email).toLowerCase();
   const metadataName = clean(
@@ -69,8 +62,23 @@ async function identityForUser(
       email ||
       "TTTracker User",
     email,
-    role: normaliseRole(roleRow?.role || "user"),
+    role: "site_prestart_permitted",
   };
+}
+
+async function requirePermission(
+  service: SitePrestartServiceClient,
+  userId: string,
+) {
+  const { data, error } = await service
+    .from("effective_user_permissions")
+    .select("allowed")
+    .eq("user_id", userId)
+    .eq("code", "mobile.site_prestarts")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (data?.allowed !== true) throw new Error("SITE_PRESTART_FORBIDDEN");
 }
 
 export async function requireSitePrestartUser(request: Request) {
@@ -88,6 +96,7 @@ export async function requireSitePrestartUser(request: Request) {
 
   if (error || !user) throw new Error("AUTH_REQUIRED");
 
+  await requirePermission(service, user.id);
   const identity = await identityForUser(service, user);
 
   return {
@@ -98,21 +107,50 @@ export async function requireSitePrestartUser(request: Request) {
 }
 
 export function canViewSitePrestarts(role: string) {
-  return [
-    "admin",
-    "administrator",
-    "site_admin",
-    "hseq",
-    "safety",
-    "safety_manager",
-    "safety_officer",
-  ].includes(normaliseRole(role));
+  return role === "site_prestart_permitted";
 }
 
 export function canManageSitePrestarts(role: string) {
-  return ["admin", "administrator", "site_admin"].includes(
-    normaliseRole(role),
+  return role === "site_prestart_permitted";
+}
+
+export async function permittedSitePrestartProjectIds(
+  service: SitePrestartServiceClient,
+  userId: string,
+) {
+  const { data, error } = await service
+    .from("project_access")
+    .select("project_id")
+    .eq("user_id", userId);
+
+  if (error) throw new Error(error.message);
+
+  return Array.from(
+    new Set(
+      (data ?? [])
+        .map((row) => clean(row.project_id))
+        .filter(Boolean),
+    ),
   );
+}
+
+export async function requireSitePrestartProjectAccess(
+  service: SitePrestartServiceClient,
+  userId: string,
+  projectId: string,
+) {
+  const id = clean(projectId);
+  if (!id) throw new Error("PROJECT_ACCESS_FORBIDDEN");
+
+  const { data, error } = await service
+    .from("project_access")
+    .select("project_id")
+    .eq("project_id", id)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("PROJECT_ACCESS_FORBIDDEN");
 }
 
 export function sitePrestartApiError(error: unknown) {
@@ -126,17 +164,22 @@ export function sitePrestartApiError(error: unknown) {
     };
   }
 
-  if (message === "VIEW_FORBIDDEN") {
+  if (
+    message === "SITE_PRESTART_FORBIDDEN" ||
+    message === "VIEW_FORBIDDEN" ||
+    message === "MANAGE_FORBIDDEN"
+  ) {
     return {
       status: 403,
-      message: "You do not have access to the Site Prestart register.",
+      message:
+        "Your account does not have Site Prestart access. An administrator can grant the mobile.site_prestarts permission in TTTracker Admin.",
     };
   }
 
-  if (message === "MANAGE_FORBIDDEN") {
+  if (message === "PROJECT_ACCESS_FORBIDDEN") {
     return {
       status: 403,
-      message: "Administrator access is required for Site Prestarts.",
+      message: "You do not have access to this project.",
     };
   }
 

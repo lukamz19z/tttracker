@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   canManageSitePrestarts,
   clean,
+  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
 } from "@/lib/site-prestarts/server";
@@ -41,7 +42,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     const { data: prestart, error: prestartError } = await service
       .from("site_prestarts")
-      .select("id,status,current_revision,admin_notes")
+      .select("id,status,current_revision,admin_notes,project_id")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -53,6 +54,12 @@ export async function POST(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
+
+    await requireSitePrestartProjectAccess(
+      service,
+      identity.userId,
+      prestart.project_id,
+    );
 
     if (prestart.status !== "draft") {
       return NextResponse.json(

@@ -205,6 +205,7 @@ export default function SitePrestartScreen() {
   const [busy, setBusy] = useState(false);
 
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
   const [projectId, setProjectId] = useState(profile?.projectId ?? "");
   const [prestartDate, setPrestartDate] = useState(localDate());
   const [location, setLocation] = useState("");
@@ -224,6 +225,26 @@ export default function SitePrestartScreen() {
   const [signatureStrokes, setSignatureStrokes] = useState<
     SignatureStroke[]
   >([]);
+
+  const filteredProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+
+    const rows = !query
+      ? projects
+      : projects.filter((project) =>
+          [
+            project.project_number,
+            project.name,
+            project.status,
+          ]
+            .map(clean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query),
+        );
+
+    return rows.slice(0, 8);
+  }, [projectSearch, projects]);
 
   const selectedProject = projects.find(
     (project) => project.id === projectId,
@@ -854,12 +875,12 @@ export default function SitePrestartScreen() {
             color="#B45309"
           />
           <Text style={styles.accessTitle}>
-            Administrator access required
+            Site Prestart access required
           </Text>
           <Text style={styles.accessText}>
-            Site Prestart capture is restricted to TTTracker mobile
-            administrators. The website register remains controlled
-            separately for authorised HSEQ / admin users.
+            Your account does not currently have the mobile.site_prestarts
+            permission. Access is controlled dynamically in TTTracker Admin,
+            not by a hard-coded mobile role.
           </Text>
         </View>
       </SafeAreaView>
@@ -1532,7 +1553,10 @@ export default function SitePrestartScreen() {
           visible={projectPickerOpen}
           animationType="slide"
           presentationStyle="pageSheet"
-          onRequestClose={() => setProjectPickerOpen(false)}
+          onRequestClose={() => {
+            setProjectSearch("");
+            setProjectPickerOpen(false);
+          }}
         >
           <SafeAreaView style={styles.modalSafe}>
             <View style={styles.modalHeader}>
@@ -1545,7 +1569,10 @@ export default function SitePrestartScreen() {
 
               <Pressable
                 style={styles.iconButton}
-                onPress={() => setProjectPickerOpen(false)}
+                onPress={() => {
+                  setProjectSearch("");
+                  setProjectPickerOpen(false);
+                }}
               >
                 <Ionicons
                   name="close"
@@ -1555,8 +1582,25 @@ export default function SitePrestartScreen() {
               </Pressable>
             </View>
 
-            <ScrollView contentContainerStyle={styles.modalContent}>
-              {projects.map((project) => {
+            <View style={styles.modalContent}>
+              <View style={styles.searchWrap}>
+                <Ionicons
+                  name="search-outline"
+                  size={18}
+                  color="#64748B"
+                />
+                <TextInput
+                  value={projectSearch}
+                  onChangeText={setProjectSearch}
+                  style={styles.searchInput}
+                  placeholder="Search project number or name…"
+                  placeholderTextColor="#94A3B8"
+                  autoCapitalize="none"
+                  autoFocus
+                />
+              </View>
+
+              {filteredProjects.map((project) => {
                 const sharePointReady = Boolean(
                   project.sharepoint_drive_id &&
                     project.sharepoint_folder_id,
@@ -1572,6 +1616,7 @@ export default function SitePrestartScreen() {
                     ]}
                     onPress={() => {
                       setProjectId(project.id);
+                      setProjectSearch("");
                       setProjectPickerOpen(false);
                     }}
                   >
@@ -1601,7 +1646,17 @@ export default function SitePrestartScreen() {
                   </Pressable>
                 );
               })}
-            </ScrollView>
+
+              {filteredProjects.length === 0 ? (
+                <Text style={styles.emptyText}>
+                  No permitted projects match that search.
+                </Text>
+              ) : projects.length > filteredProjects.length ? (
+                <Text style={styles.projectSearchHint}>
+                  Search by project number or name to narrow the list.
+                </Text>
+              ) : null}
+            </View>
           </SafeAreaView>
         </Modal>
       </KeyboardAvoidingView>
@@ -2257,6 +2312,12 @@ const styles = StyleSheet.create({
   projectRowSelected: {
     borderColor: "#93C5FD",
     backgroundColor: "#EFF6FF",
+  },
+  projectSearchHint: {
+    color: "#64748B",
+    fontSize: 11,
+    textAlign: "center",
+    paddingVertical: 4,
   },
   emptyText: {
     color: "#94A3B8",
