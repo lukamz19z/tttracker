@@ -6,6 +6,7 @@ import {
   sendDailyDocketEmail,
 } from "@/lib/email/daily-dockets";
 import { publishApprovedExpenseClaim } from "@/lib/finance/archive-expense-claim";
+import { notifyFinanceUsers } from "@/lib/finance/workflow-notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,23 +74,9 @@ function escapeHtml(value: unknown) {
     .replaceAll("'", "&#039;");
 }
 
-async function roleFor(
-  service: ReturnType<typeof serviceClient>,
-  userId: string,
-) {
-  const { data } = await service
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  return String(data?.role ?? "").trim().toLowerCase();
-}
-
 async function permissionsFor(
   service: ReturnType<typeof serviceClient>,
   userId: string,
-  role: string,
 ) {
   const { data: rules, error } = await service
     .from("financial_access_rules")
@@ -101,15 +88,10 @@ async function permissionsFor(
 
   if (error) throw new Error(error.message);
 
-  const admin = ["admin", "administrator", "site_admin"].includes(role);
-
   return {
-    canReviewEdit:
-      admin || (rules ?? []).some((rule) => Boolean(rule.can_review_edit)),
-    canApprove:
-      admin || (rules ?? []).some((rule) => Boolean(rule.can_approve)),
-    canMarkPaid:
-      admin || (rules ?? []).some((rule) => Boolean(rule.can_mark_paid)),
+    canReviewEdit: (rules ?? []).some((rule) => Boolean(rule.can_review_edit)),
+    canApprove: (rules ?? []).some((rule) => Boolean(rule.can_approve)),
+    canMarkPaid: (rules ?? []).some((rule) => Boolean(rule.can_mark_paid)),
   };
 }
 
@@ -185,33 +167,18 @@ async function notifySubmitter({
 }) {
   const recipients = await submissionRecipients(service, submission);
 
-  const rows = recipients.map((recipient) => ({
-    user_id: recipient.id,
-    event_type: eventType,
+  const notification = await notifyFinanceUsers({
+    service,
+    userIds: recipients.map((recipient) => recipient.id),
+    eventType,
     title,
     message,
-    severity: "info",
-    read_at: null,
-    archived_at: null,
-    project_id: submission.project_id ?? null,
-    fleet_job_id: null,
-    asset_type: null,
-    asset_id: null,
-    docket_id: null,
-    action_route: "/expenses/claims",
-    action_params: {
-      submission_id: submission.id,
-      open: submission.id,
-      submission_type: "expense_claim",
-    },
-    source_table: "financial_submissions",
-    source_record_id: submission.id,
-    created_at: new Date().toISOString(),
-  }));
+    submissionType: "expense_claim",
+    submissionId: submission.id,
+  });
 
-  if (rows.length) {
-    const { error } = await service.from("user_notifications").insert(rows);
-    if (error) console.error("Expense Claim notification failed", error);
+  if (notification.warning) {
+    console.warn("Expense Claim submitter notification:", notification.warning);
   }
 
   return recipients;
@@ -240,9 +207,7 @@ async function sendSubmitterEmail({
 
   if (!emails.length) return;
 
-  const url = `${appUrl()}/expenses/claims?open=${encodeURIComponent(
-    submissionId,
-  )}`;
+  const url = `${appUrl()}/open/approvals/expense/${encodeURIComponent(submissionId)}`;
 
   await sendDailyDocketEmail({
     to: emails,
@@ -323,8 +288,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const role = await roleFor(service, user.id);
-    const permissions = await permissionsFor(service, user.id, role);
+    const permissions = await permissionsFor(service, user.id);
     const reviewer = await userIdentity(service, user.id);
     const revision = Math.max(0, Number(submission.revision ?? 0) || 0);
     const now = new Date().toISOString();

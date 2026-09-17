@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "au.com.tttracker.app",
       "associatedDomains": [
-        "applinks:tttracker.com.au"
+        "applinks:tttracker.com.au",
+        "applinks:www.tttracker.com.au"
       ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -37,6 +38,31 @@
               "scheme": "https",
               "host": "tttracker.com.au",
               "pathPrefix": "/project"
+            },
+            {
+              "scheme": "https",
+              "host": "www.tttracker.com.au",
+              "pathPrefix": "/project"
+            },
+            {
+              "scheme": "https",
+              "host": "tttracker.com.au",
+              "pathPrefix": "/approvals"
+            },
+            {
+              "scheme": "https",
+              "host": "www.tttracker.com.au",
+              "pathPrefix": "/approvals"
+            },
+            {
+              "scheme": "https",
+              "host": "tttracker.com.au",
+              "pathPrefix": "/open/approvals"
+            },
+            {
+              "scheme": "https",
+              "host": "www.tttracker.com.au",
+              "pathPrefix": "/open/approvals"
             }
           ],
           "category": [

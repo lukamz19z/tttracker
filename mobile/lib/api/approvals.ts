@@ -1,14 +1,31 @@
-import { apiJson, jsonBody } from "@/lib/api/client";
-import { reviewFinance } from "@/lib/api/finance";
+import { apiJson } from "@/lib/api/client";
 
 export type ApprovalKind = "docket" | "expense" | "invoice";
 
-export type ApprovalListPayload = {
-  dockets: Array<Record<string, unknown>>;
-  expenses: Array<Record<string, unknown>>;
-  invoices: Array<Record<string, unknown>>;
-  capabilities: Record<string, unknown>;
+export type FinanceApprovalCapability = {
+  canReviewEdit: boolean;
+  canApprove: boolean;
+  canMarkPaid: boolean;
 };
+
+export type ApprovalListPayload = {
+  dailyDockets: Record<string, unknown>[];
+  expenseClaims: Record<string, unknown>[];
+  invoices: Record<string, unknown>[];
+  capabilities: {
+    dailyDockets: {
+      projectIds: string[];
+    };
+    expense: FinanceApprovalCapability;
+    invoice: FinanceApprovalCapability;
+  };
+};
+
+type FinanceReviewAction =
+  | "request_changes"
+  | "deny"
+  | "approve"
+  | "mark_paid";
 
 export function getMyApprovals() {
   return apiJson<ApprovalListPayload>("/api/mobile/approvals");
@@ -27,7 +44,7 @@ export function reviewDocket(input: {
   docketId: string;
   action: "approve" | "request_changes";
   comments?: string;
-  changeRequests?: Array<{ category: string; detail: string }>;
+  changeRequests?: { category: string; detail: string }[];
   reviewerSignatureDataUrl?: string;
   reviewerMadeChanges?: boolean;
   clientContentKeys?: string[];
@@ -36,26 +53,60 @@ export function reviewDocket(input: {
     `/api/daily-dockets/${encodeURIComponent(input.docketId)}/bc-review`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: jsonBody({
+      body: JSON.stringify({
         action: input.action,
         comments: input.comments || undefined,
         change_requests:
-          input.action === "request_changes" ? input.changeRequests ?? [] : undefined,
+          input.action === "request_changes"
+            ? input.changeRequests ?? []
+            : undefined,
         reviewer_signature_data_url:
-          input.action === "approve" ? input.reviewerSignatureDataUrl : undefined,
+          input.action === "approve"
+            ? input.reviewerSignatureDataUrl
+            : undefined,
         reviewer_made_changes:
-          input.action === "approve" ? Boolean(input.reviewerMadeChanges) : undefined,
+          input.action === "approve"
+            ? Boolean(input.reviewerMadeChanges)
+            : undefined,
         client_content_keys:
-          input.action === "approve" ? input.clientContentKeys ?? [] : undefined,
+          input.action === "approve"
+            ? input.clientContentKeys ?? []
+            : undefined,
       }),
     },
   );
 }
 
+function reviewFinance(input: {
+  kind: "expense" | "invoice";
+  submissionId: string;
+  action: FinanceReviewAction;
+  comments?: string;
+  paymentReference?: string;
+}) {
+  const endpoint =
+    input.kind === "expense"
+      ? "/api/expenses/claims/review"
+      : "/api/expenses/invoices/review";
+
+  return apiJson<Record<string, unknown>>(endpoint, {
+    method: "POST",
+    body: JSON.stringify({
+      submissionId: input.submissionId,
+      action: input.action,
+      comments: input.comments?.trim() || undefined,
+      paymentReference:
+        input.action === "mark_paid"
+          ? input.paymentReference?.trim() || undefined
+          : undefined,
+    }),
+    timeoutMs: 120_000,
+  });
+}
+
 export function reviewExpense(
   submissionId: string,
-  action: "request_changes" | "deny" | "approve" | "mark_paid",
+  action: FinanceReviewAction,
   comments = "",
   paymentReference = "",
 ) {
@@ -70,7 +121,7 @@ export function reviewExpense(
 
 export function reviewInvoice(
   submissionId: string,
-  action: "request_changes" | "deny" | "approve" | "mark_paid",
+  action: FinanceReviewAction,
   comments = "",
   paymentReference = "",
 ) {

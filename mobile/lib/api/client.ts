@@ -36,7 +36,7 @@ export function apiUrl(input: string) {
 export async function apiFetch(
   input: string,
   init: ApiRequestInit = {},
-) {
+): Promise<Response> {
   const {
     timeoutMs = 30_000,
     signal: externalSignal,
@@ -96,43 +96,117 @@ export async function apiFetch(
   }
 }
 
+function isResponseLike(value: unknown): value is Response {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as {
+    text?: unknown;
+    ok?: unknown;
+    status?: unknown;
+  };
+
+  return (
+    typeof candidate.text === "function" &&
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.status === "number"
+  );
+}
+
+function payloadError(value: unknown) {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "error" in value
+  ) {
+    return String(
+      (value as { error?: unknown }).error ?? "",
+    ).trim();
+  }
+
+  return "";
+}
+
+/**
+ * Finance, Approvals and some older TTTracker modules historically call
+ * jsonBody() with either a fetch Response OR an already-parsed object.
+ *
+ * Accept both shapes so a harmless refactor in one API module cannot crash
+ * another module with `response.text is not a function`.
+ */
+export async function jsonBody<T>(
+  responseOrPayload:
+    | Response
+    | Promise<Response>
+    | T
+    | Promise<T>
+    | string
+    | null
+    | undefined,
+  fallback = "TTTracker request failed.",
+): Promise<T> {
+  const value = await Promise.resolve(responseOrPayload);
+
+  if (isResponseLike(value)) {
+    const text = await value.text();
+    let payload: unknown = {};
+
+    if (text.trim()) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        if (!value.ok) {
+          throw new Error(
+            text.trim() || `${fallback} (${value.status}).`,
+          );
+        }
+
+        throw new Error(
+          `TTTracker returned invalid JSON (${value.status}).`,
+        );
+      }
+    }
+
+    if (!value.ok) {
+      throw new Error(
+        payloadError(payload) ||
+          (text.trim()
+            ? text.trim()
+            : `${fallback} (${value.status}).`),
+      );
+    }
+
+    return payload as T;
+  }
+
+  if (typeof value === "string") {
+    if (!value.trim()) return {} as T;
+
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      throw new Error(fallback);
+    }
+  }
+
+  if (value === null || value === undefined) {
+    return {} as T;
+  }
+
+  const error = payloadError(value);
+  if (error) {
+    throw new Error(error);
+  }
+
+  return value as T;
+}
+
 export async function apiJson<T>(
   input: string,
   init: ApiRequestInit = {},
 ): Promise<T> {
-  const response = await apiFetch(input, init);
-  const text = await response.text();
-
-  let payload: unknown = {};
-
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      if (!response.ok) {
-        throw new Error(
-          text || `TTTracker request failed (${response.status}).`,
-        );
-      }
-
-      throw new Error("TTTracker returned an invalid JSON response.");
-    }
-  }
-
-  if (!response.ok) {
-    const message =
-      typeof payload === "object" &&
-      payload !== null &&
-      "error" in payload
-        ? String(
-            (payload as { error?: unknown }).error ?? "",
-          ).trim()
-        : "";
-
-    throw new Error(
-      message || `TTTracker request failed (${response.status}).`,
-    );
-  }
-
-  return payload as T;
+  return jsonBody<T>(
+    apiFetch(input, init),
+    "TTTracker request failed.",
+  );
 }
