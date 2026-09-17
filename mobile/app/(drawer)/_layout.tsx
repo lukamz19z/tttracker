@@ -155,40 +155,33 @@ function HeaderNotifications() {
   );
 }
 
+function navigationDisplayLabel(code: string, label: string) {
+  return code === "training" ? "License and Certificates" : label;
+}
+
 function DynamicTitle({ code, fallback }: { code: string; fallback: string }) {
   const { navigation } = useAccess();
   const item = navigation.find((row) => row.code === code);
-  return <Text style={styles.headerTitle}>{item?.label ?? fallback}</Text>;
+  const label = navigationDisplayLabel(code, item?.label ?? fallback);
+  return <Text style={styles.headerTitle}>{label}</Text>;
 }
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
   const router = useRouter();
   const { profile, signOut } = useAuth();
-  const { navigation, roles, can, hasCapability, appConfig, approvalCounts, capabilities } = useAccess();
+  const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
   const unreadCount = useUnreadNotificationCount("drawer");
 
   const visibleItems = useMemo(
     () =>
-      navigation.filter((item) => {
-        if (item.active === false) return false;
-        if (item.requires_project && !profile?.projectId) return false;
-
-        // My Approvals is an aggregate workflow inbox, not a normal RBAC module.
-        // Its visibility comes from independent workflow authority:
-        // Daily Docket reviewer OR Expense reviewer OR Invoice reviewer.
-        if (item.code === "approvals") {
-          return capabilities.hasApprovals;
-        }
-
-        return can(item.permission_code) && hasCapability(item.capability_key);
-      }),
-    [
-      navigation,
-      can,
-      hasCapability,
-      profile?.projectId,
-      capabilities.hasApprovals,
-    ],
+      navigation.filter(
+        (item) =>
+          item.active !== false &&
+          can(item.permission_code) &&
+          hasCapability(item.capability_key) &&
+          (!item.requires_project || Boolean(profile?.projectId)),
+      ),
+    [navigation, can, hasCapability, profile?.projectId],
   );
 
   const sections = useMemo(() => {
@@ -286,7 +279,9 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
                   focused={focused}
                   label={({ color }) => (
                     <View style={styles.drawerLabelRow}>
-                      <Text style={[styles.drawerLabel, { color }]}>{item.label}</Text>
+                      <Text style={[styles.drawerLabel, { color }]}>
+                        {navigationDisplayLabel(item.code, item.label)}
+                      </Text>
                       {badgeCount > 0 ? (
                         <View style={styles.drawerBadge}>
                           <Text style={styles.drawerBadgeText}>{formatUnreadCount(badgeCount)}</Text>
@@ -342,7 +337,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="notifications" options={{ headerTitle: () => <DynamicTitle code="notifications" fallback="Notifications" />, headerRight: () => null }} />
       <Drawer.Screen name="approvals" options={{ headerTitle: () => <DynamicTitle code="approvals" fallback="My Approvals" /> }} />
       <Drawer.Screen name="project-progress" options={{ headerTitle: () => <DynamicTitle code="project-progress" fallback="Project Progress" /> }} />
-      <Drawer.Screen name="training" options={{ headerTitle: () => <DynamicTitle code="training" fallback="My Training" /> }} />
+      <Drawer.Screen name="training" options={{ headerTitle: () => <DynamicTitle code="training" fallback="License and Certificates" /> }} />
       <Drawer.Screen name="expenses" options={{ headerTitle: () => <DynamicTitle code="expenses" fallback="Expense Claims" /> }} />
       <Drawer.Screen name="materials" options={{ headerTitle: () => <DynamicTitle code="materials" fallback="Materials" /> }} />
       <Drawer.Screen name="vehicle-prestart" options={{ headerTitle: () => <DynamicTitle code="vehicle-prestart" fallback="Vehicle Prestart" /> }} />

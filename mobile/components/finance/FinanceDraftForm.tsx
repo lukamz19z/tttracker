@@ -71,7 +71,7 @@ const emptyLine = (): Line => ({
   amountIncGst: "",
   gstAmount: "",
   notes: "",
-  allocationType: "project",
+  allocationType: "general",
   projectId: "",
   vehicleAssetId: "",
   plantAssetId: "",
@@ -268,10 +268,6 @@ export function FinanceDraftForm({ kind }: { kind: Kind }) {
 
       if (!(Number(row.amountIncGst) > 0)) {
         return `${item} ${index + 1}: enter an amount greater than $0.`;
-      }
-
-      if (!row.categoryId) {
-        return `${item} ${index + 1}: select a category.`;
       }
 
       if (
@@ -632,15 +628,16 @@ export function FinanceDraftForm({ kind }: { kind: Kind }) {
                 onChange={(value) =>
                   patchLine(index, { categoryId: value })
                 }
-                allowNone={false}
-                placeholder="Select category"
+                allowNone
+                noneLabel="Company / General"
+                placeholder="Company / General"
               />
 
               <Text style={styles.fieldLabel}>Allocation Type</Text>
               <View style={styles.allocationTypes}>
                 {(
                   [
-                    ["general", "General"],
+                    ["general", "Company / General"],
                     ["project", "Project"],
                     ["vehicle", "Vehicle"],
                     ["plant", "Plant"],

@@ -32,7 +32,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleUserRound,
-  FileBadge,
   HardHat,
   LogOut,
   Mail,
@@ -698,31 +697,6 @@ export default function ProfileScreen() {
           </Pressable>
 
           <SectionHeader
-            title="Certificates and competency"
-            subtitle="This area is ready for the future training module."
-          />
-
-          <View style={styles.comingSoonCard}>
-            <View style={styles.comingSoonIcon}>
-              <FileBadge size={26} color="#6d28d9" strokeWidth={2.2} />
-            </View>
-
-            <View style={styles.comingSoonContent}>
-              <View style={styles.comingSoonTopRow}>
-                <Text style={styles.comingSoonTitle}>My Certificates</Text>
-                <View style={styles.comingSoonBadge}>
-                  <Text style={styles.comingSoonBadgeText}>COMING SOON</Text>
-                </View>
-              </View>
-
-              <Text style={styles.comingSoonText}>
-                Licences, VOCs, competencies and expiry reminders will appear
-                here from the same live records used by the website.
-              </Text>
-            </View>
-          </View>
-
-          <SectionHeader
             title="Account options"
             subtitle="Manage notifications and review app information."
           />
@@ -1239,49 +1213,6 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: { backgroundColor: "#94a3b8" },
   saveButtonText: { color: "#ffffff", fontSize: 13, fontWeight: "900" },
-  comingSoonCard: {
-    borderWidth: 1,
-    borderColor: "#ddd6fe",
-    borderRadius: 19,
-    backgroundColor: "#f5f3ff",
-    flexDirection: "row",
-    padding: 16,
-    marginBottom: 22,
-  },
-  comingSoonIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 15,
-    backgroundColor: "#ede9fe",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  comingSoonContent: { flex: 1, marginLeft: 12 },
-  comingSoonTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  comingSoonTitle: { color: "#4c1d95", fontSize: 15, fontWeight: "900" },
-  comingSoonBadge: {
-    borderRadius: 8,
-    backgroundColor: "#7c3aed",
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-  },
-  comingSoonBadgeText: {
-    color: "#ffffff",
-    fontSize: 7,
-    fontWeight: "900",
-    letterSpacing: 0.6,
-  },
-  comingSoonText: {
-    color: "#6d28d9",
-    fontSize: 11,
-    lineHeight: 17,
-    marginTop: 7,
-  },
   optionCard: {
     borderWidth: 1,
     borderColor: "#e2e8f0",

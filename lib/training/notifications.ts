@@ -245,7 +245,13 @@ function appUrl() {
     value = `https://${value}`;
   }
 
-  return value.replace(/\/$/, "");
+  const url = new URL(value);
+
+  if (url.hostname.toLowerCase() === "tttracker.com.au") {
+    url.hostname = "www.tttracker.com.au";
+  }
+
+  return url.toString().replace(/\/$/, "");
 }
 
 function buildActionUrl(

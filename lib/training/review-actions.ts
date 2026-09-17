@@ -86,45 +86,28 @@ function outcomeRecipients({
   submittedByUserId?: string | null;
   submittedByEmail?: string | null;
 }) {
+  // Review authority and outcome confirmation are separate concerns.
+  // The employee and submitter should receive the result even when one of
+  // them is also the reviewer who just performed the action.
+  void reviewerUserId;
+
   const employeeId = clean(employeeUserId);
   const submitterId = clean(submittedByUserId);
-  const reviewerId = clean(reviewerUserId);
 
-  const userIds: string[] = [];
+  const userIds = unique([
+    employeeId,
+    submitterId,
+  ]);
 
-  // The employee should receive the outcome, unless the employee is the
-  // person who just performed the review themselves.
-  if (employeeId && employeeId !== reviewerId) {
-    userIds.push(employeeId);
-  }
-
-  // A person who submitted on behalf of the employee only needs an outcome
-  // when somebody else reviewed it. Do not send duplicate notifications when
-  // submitter and employee are the same TTTracker user.
-  if (
-    submitterId &&
-    submitterId !== reviewerId &&
-    submitterId !== employeeId
-  ) {
-    userIds.push(submitterId);
-  }
-
-  const directEmails: string[] = [];
-
-  // submitted_by_email belongs to the submitter. Only include it when that
-  // submitter is genuinely an outcome recipient.
-  if (
-    clean(submittedByEmail) &&
-    submitterId &&
-    submitterId !== reviewerId &&
-    submitterId !== employeeId
-  ) {
-    directEmails.push(clean(submittedByEmail).toLowerCase());
-  }
+  // Keep the captured submitter email as a direct fallback. The notification
+  // helper deduplicates it against the auth email resolved from userIds.
+  const directEmails = unique([
+    clean(submittedByEmail).toLowerCase(),
+  ]);
 
   return {
-    userIds: unique(userIds),
-    directEmails: unique(directEmails),
+    userIds,
+    directEmails,
   };
 }
 
@@ -158,7 +141,8 @@ async function sendOutcome({
     submittedByEmail: record.submitted_by_email,
   });
 
-  // No self-notification noise. This is expected, not a warning.
+  // If neither the employee nor submitter can be resolved there is nobody
+  // to notify. Self-review is NOT excluded: confirmation is still sent.
   if (
     recipients.userIds.length === 0 &&
     recipients.directEmails.length === 0

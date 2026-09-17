@@ -219,10 +219,6 @@ function validateAllocation(
     throw new Error(`Item ${index + 1}: enter an amount greater than $0.`);
   }
 
-  if (!clean(row.categoryId)) {
-    throw new Error(`Item ${index + 1}: select a category.`);
-  }
-
   if (
     type === "expense_claim" &&
     row.allocationType === "project" &&

@@ -35,7 +35,7 @@ export async function POST(request:Request){
   const {data:items,error:itemsError}=await service.from("financial_submission_items").select("id,category_id,expense_date,description,amount_inc_gst,sort_order").eq("submission_id",claim.id).order("sort_order");
   if(itemsError)throw new Error(itemsError.message);
   if(!items?.length)return NextResponse.json({error:"Add at least one expense item."},{status:400});
-  if(items.some(i=>!i.category_id||!i.expense_date||!clean(i.description)||Number(i.amount_inc_gst??0)<=0))return NextResponse.json({error:"Complete the date, category, description and amount for every expense item."},{status:400});
+  if(items.some(i=>!i.expense_date||!clean(i.description)||Number(i.amount_inc_gst??0)<=0))return NextResponse.json({error:"Complete the date, description and amount for every expense item."},{status:400});
 
   const {data:receipts,error:receiptError}=await service.from("financial_attachments").select("item_id").eq("submission_id",claim.id).eq("attachment_type","receipt");
   if(receiptError)throw new Error(receiptError.message);

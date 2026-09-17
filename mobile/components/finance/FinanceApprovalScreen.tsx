@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -40,6 +42,35 @@ const date = (value: unknown) => {
     : parsed.toLocaleDateString("en-AU");
 };
 
+type ImagePreview = {
+  uri: string;
+  name: string;
+};
+
+function attachmentLooksLikeImage(row: Record<string, unknown>) {
+  const contentType = clean(row.content_type).toLowerCase();
+  const fileName = clean(row.file_name).toLowerCase();
+
+  return (
+    contentType.startsWith("image/") ||
+    /\.(jpe?g|png|webp|heic|heif)$/i.test(fileName)
+  );
+}
+
+function attachmentMeta(row: Record<string, unknown>) {
+  const type = clean(row.content_type);
+  const bytes = Number(row.file_size_bytes ?? 0);
+
+  const size =
+    Number.isFinite(bytes) && bytes > 0
+      ? bytes >= 1024 * 1024
+        ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(bytes / 1024))} KB`
+      : "";
+
+  return [type, size].filter(Boolean).join(" · ");
+}
+
 function isReviewerAccessError(error: unknown) {
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
@@ -64,6 +95,7 @@ export function FinanceApprovalScreen({
   const [comments, setComments] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -314,12 +346,20 @@ export function FinanceApprovalScreen({
       file.create({ overwrite: true, intermediates: true });
       file.write(bytes);
 
+      if (attachmentLooksLikeImage(row)) {
+        setImagePreview({
+          uri: file.uri,
+          name: clean(row.file_name) || "Attachment",
+        });
+        return;
+      }
+
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(file.uri);
       } else {
         Alert.alert(
           "File ready",
-          "The attachment was downloaded but this device cannot open the share sheet.",
+          "The attachment was downloaded but this device cannot open it.",
         );
       }
     } catch (fileError) {
@@ -329,6 +369,26 @@ export function FinanceApprovalScreen({
       );
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function sharePreview() {
+    if (!imagePreview) return;
+
+    try {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(imagePreview.uri);
+      } else {
+        Alert.alert(
+          "Sharing unavailable",
+          "This device does not provide a share/save action for the image.",
+        );
+      }
+    } catch (shareError) {
+      Alert.alert(
+        "Could not share image",
+        shareError instanceof Error ? shareError.message : "Please try again.",
+      );
     }
   }
 
@@ -451,7 +511,7 @@ export function FinanceApprovalScreen({
                   </Text>
                   <Text style={styles.muted}>
                     {categoryById.get(clean(row.category_id)) ||
-                      "Uncategorised"}
+                      "Company / General"}
                   </Text>
                   <Text style={styles.allocationText}>{allocation}</Text>
                 </View>
@@ -466,20 +526,43 @@ export function FinanceApprovalScreen({
           {detail.attachments.length === 0 ? (
             <Text style={styles.muted}>No attachments.</Text>
           ) : (
-            detail.attachments.map((row) => (
-              <Pressable
-                key={clean(row.id)}
-                style={styles.file}
-                onPress={() => void openAttachment(row)}
-              >
-                <Text style={styles.itemTitle}>
-                  {clean(row.file_name) || "Attachment"}
-                </Text>
-                <Text style={styles.link}>
-                  {busy === `file-${clean(row.id)}` ? "Opening…" : "Open"}
-                </Text>
-              </Pressable>
-            ))
+            detail.attachments.map((row) => {
+              const attachmentId = clean(row.id);
+              const meta = attachmentMeta(row);
+
+              return (
+                <Pressable
+                  key={attachmentId}
+                  style={styles.file}
+                  onPress={() => void openAttachment(row)}
+                >
+                  <View style={styles.fileText}>
+                    <Text
+                      style={styles.fileName}
+                      numberOfLines={2}
+                      ellipsizeMode="tail"
+                    >
+                      {clean(row.file_name) || "Attachment"}
+                    </Text>
+                    {meta ? (
+                      <Text style={styles.fileMeta} numberOfLines={1}>
+                        {meta}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  <View style={styles.openButton}>
+                    {busy === `file-${attachmentId}` ? (
+                      <ActivityIndicator size="small" color="#2563eb" />
+                    ) : (
+                      <Text style={styles.link}>
+                        {attachmentLooksLikeImage(row) ? "View" : "Open"}
+                      </Text>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            })
           )}
         </View>
 
@@ -556,6 +639,49 @@ export function FinanceApprovalScreen({
           </View>
         ) : null}
       </ScrollView>
+
+      <Modal
+        visible={Boolean(imagePreview)}
+        transparent={false}
+        animationType="fade"
+        onRequestClose={() => setImagePreview(null)}
+      >
+        <SafeAreaView style={styles.imagePreviewSafe}>
+          <View style={styles.imagePreviewHeader}>
+            <Pressable
+              style={styles.imagePreviewHeaderButton}
+              onPress={() => setImagePreview(null)}
+            >
+              <Text style={styles.imagePreviewHeaderButtonText}>Close</Text>
+            </Pressable>
+
+            <Text
+              style={styles.imagePreviewTitle}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            >
+              {imagePreview?.name || "Attachment"}
+            </Text>
+
+            <Pressable
+              style={styles.imagePreviewHeaderButton}
+              onPress={() => void sharePreview()}
+            >
+              <Text style={styles.imagePreviewHeaderButtonText}>
+                Share / Save
+              </Text>
+            </Pressable>
+          </View>
+
+          {imagePreview ? (
+            <Image
+              source={{ uri: imagePreview.uri }}
+              style={styles.imagePreview}
+              resizeMode="contain"
+            />
+          ) : null}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -643,11 +769,76 @@ const styles = StyleSheet.create({
   },
   amount: { fontWeight: "900", color: "#0f172a" },
   file: {
+    minHeight: 62,
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
     paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  fileText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  fileName: {
+    color: "#0f172a",
+    fontWeight: "800",
+    lineHeight: 18,
+  },
+  fileMeta: {
+    color: "#94a3b8",
+    fontSize: 10,
+    marginTop: 4,
+  },
+  openButton: {
+    minWidth: 68,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    backgroundColor: "#eff6ff",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
   },
   link: { color: "#2563eb", fontWeight: "900" },
+  imagePreviewSafe: {
+    flex: 1,
+    backgroundColor: "#020617",
+  },
+  imagePreviewHeader: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1e293b",
+  },
+  imagePreviewTitle: {
+    flex: 1,
+    textAlign: "center",
+    color: "#e2e8f0",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  imagePreviewHeaderButton: {
+    minHeight: 38,
+    minWidth: 58,
+    justifyContent: "center",
+  },
+  imagePreviewHeaderButtonText: {
+    color: "#93c5fd",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  imagePreview: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
   input: {
     borderWidth: 1,
     borderColor: "#cbd5e1",

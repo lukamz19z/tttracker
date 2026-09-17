@@ -119,27 +119,7 @@ export async function POST(
       );
     }
 
-    // The submitter can still be a valid reviewer and can still approve the
-    // record, but they do not need a notification about their own submission.
-    // Other matching reviewers are still notified normally.
-    const notificationRecipients = recipients.filter(
-      (recipient) =>
-        recipient.userId !== clean(record.submitted_by_user_id),
-    );
-
-    if (notificationRecipients.length === 0) {
-      return NextResponse.json({
-        success: true,
-        notified: 0,
-        alreadyNotified: 0,
-        pushAttempted: 0,
-        emailSent: 0,
-        message:
-          "The submitter is the only matching reviewer, so no self-notification was sent. The record remains available in the Verification Queue.",
-      });
-    }
-
-    const recipientIds = notificationRecipients.map(
+    const recipientIds = recipients.map(
       (recipient) => recipient.userId,
     );
 
@@ -167,7 +147,7 @@ export async function POST(
         .filter(Boolean),
     );
 
-    const missingInAppRecipients = notificationRecipients.filter(
+    const missingInAppRecipients = recipients.filter(
       (recipient) =>
         recipient.receivesInApp &&
         !alreadyNotified.has(recipient.userId),
@@ -179,10 +159,10 @@ export async function POST(
     const inAppIds = missingInAppRecipients.map(
       (recipient) => recipient.userId,
     );
-    const pushIds = notificationRecipients
+    const pushIds = recipients
       .filter((recipient) => recipient.receivesPush)
       .map((recipient) => recipient.userId);
-    const emailIds = notificationRecipients
+    const emailIds = recipients
       .filter((recipient) => recipient.receivesEmail)
       .map((recipient) => recipient.userId);
 
