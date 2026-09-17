@@ -102,7 +102,8 @@ export async function GET(request: NextRequest) {
       accessAreas: areas.data ?? [],
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not load route rules.";
+    const message =
+      error instanceof Error ? error.message : "Could not load route rules.";
     return NextResponse.json({ error: message }, { status: 403 });
   }
 }
@@ -117,12 +118,20 @@ export async function POST(request: NextRequest) {
     const routePattern = normaliseRoute(body.route_pattern);
     const matchType = body.match_type === "exact" ? "exact" : "prefix";
     const accessAreaId = String(body.access_area_id ?? "").trim();
-    const priority = Number.isFinite(Number(body.priority)) ? Number(body.priority) : 100;
+    const priority = Number.isFinite(Number(body.priority))
+      ? Number(body.priority)
+      : 100;
     const isActive = body.is_active !== false;
 
-    if (!name) return NextResponse.json({ error: "Rule name is required." }, { status: 400 });
-    if (!routePattern) return NextResponse.json({ error: "Route is required." }, { status: 400 });
-    if (!accessAreaId) return NextResponse.json({ error: "Permission is required." }, { status: 400 });
+    if (!name) {
+      return NextResponse.json({ error: "Rule name is required." }, { status: 400 });
+    }
+    if (!routePattern) {
+      return NextResponse.json({ error: "Route is required." }, { status: 400 });
+    }
+    if (!accessAreaId) {
+      return NextResponse.json({ error: "Permission is required." }, { status: 400 });
+    }
 
     const payload = {
       name,
@@ -135,13 +144,23 @@ export async function POST(request: NextRequest) {
     };
 
     const result = id
-      ? await service.from("access_route_rules").update(payload).eq("id", id).select("*").single()
-      : await service.from("access_route_rules").insert(payload).select("*").single();
+      ? await service
+          .from("access_route_rules")
+          .update(payload)
+          .eq("id", id)
+          .select("*")
+          .single()
+      : await service
+          .from("access_route_rules")
+          .insert(payload)
+          .select("*")
+          .single();
 
     if (result.error) throw new Error(result.error.message);
     return NextResponse.json({ rule: result.data });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not save route rule.";
+    const message =
+      error instanceof Error ? error.message : "Could not save route rule.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -150,13 +169,16 @@ export async function DELETE(request: NextRequest) {
   try {
     const { service } = await requireAccessAdmin(request);
     const id = String(new URL(request.url).searchParams.get("id") ?? "").trim();
-    if (!id) return NextResponse.json({ error: "Rule id is required." }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: "Rule id is required." }, { status: 400 });
+    }
 
     const result = await service.from("access_route_rules").delete().eq("id", id);
     if (result.error) throw new Error(result.error.message);
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not delete route rule.";
+    const message =
+      error instanceof Error ? error.message : "Could not delete route rule.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

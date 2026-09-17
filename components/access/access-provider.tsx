@@ -6,12 +6,14 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
 type Role = { id: string; code: string; name: string };
 type ProjectAccess = { project_id: string };
+
 type AccessPayload = {
   error?: string;
   roles?: Role[];
@@ -35,9 +37,11 @@ type AccessContextValue = {
 };
 
 const AccessContext = createContext<AccessContextValue | null>(null);
+const REFRESH_MS = 60_000;
 
 export function AccessProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const loadedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [roles, setRoles] = useState<Role[]>([]);
   const [projectIds, setProjectIds] = useState<string[]>([]);
@@ -49,19 +53,25 @@ export function AccessProvider({ children }: { children: React.ReactNode }) {
     new Set(),
   );
 
+  const clear = useCallback(() => {
+    setRoles([]);
+    setProjectIds([]);
+    setWebPermissions(new Set());
+    setMobilePermissions(new Set());
+    setSharePointPermissions(new Set());
+    loadedRef.current = false;
+  }, []);
+
   const refresh = useCallback(async () => {
-    setLoading(true);
+    if (!loadedRef.current) setLoading(true);
+
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
       if (!session?.access_token) {
-        setRoles([]);
-        setProjectIds([]);
-        setWebPermissions(new Set());
-        setMobilePermissions(new Set());
-        setSharePointPermissions(new Set());
+        clear();
         return;
       }
 
@@ -80,13 +90,25 @@ export function AccessProvider({ children }: { children: React.ReactNode }) {
       setMobilePermissions(new Set(payload.permissions?.mobile ?? []));
       setSharePointPermissions(new Set(payload.permissions?.sharepoint ?? []));
     } finally {
+      loadedRef.current = true;
       setLoading(false);
     }
-  }, [supabase]);
+  }, [clear, supabase]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+
+    const auth = supabase.auth.onAuthStateChange(() => void refresh());
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(() => void refresh(), REFRESH_MS);
+
+    return () => {
+      auth.data.subscription.unsubscribe();
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+  }, [refresh, supabase]);
 
   const value = useMemo<AccessContextValue>(
     () => ({

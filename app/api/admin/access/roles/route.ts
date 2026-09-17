@@ -16,7 +16,9 @@ export async function GET(request: NextRequest) {
     const { service } = await requireAccessAdmin(request);
     const { data, error } = await service
       .from("roles")
-      .select("id,code,name,description,is_active,is_system,grants_all,sort_order")
+      .select(
+        "id,code,name,description,is_active,is_system,grants_all,sort_order",
+      )
       .order("is_active", { ascending: false })
       .order("sort_order")
       .order("name");
@@ -39,8 +41,12 @@ export async function POST(request: NextRequest) {
     const requestedCode = String(body.code ?? "").trim();
     const code = slug(requestedCode || name);
 
-    if (!name) return NextResponse.json({ error: "Role name is required." }, { status: 400 });
-    if (!code) return NextResponse.json({ error: "Role code is required." }, { status: 400 });
+    if (!name) {
+      return NextResponse.json({ error: "Role name is required." }, { status: 400 });
+    }
+    if (!code) {
+      return NextResponse.json({ error: "Role code is required." }, { status: 400 });
+    }
 
     const { data, error } = await service
       .from("roles")
@@ -53,12 +59,13 @@ export async function POST(request: NextRequest) {
         grants_all: false,
         sort_order: Number(body.sort_order ?? 100),
       })
-      .select("id,code,name,description,is_active,is_system,grants_all,sort_order")
+      .select(
+        "id,code,name,description,is_active,is_system,grants_all,sort_order",
+      )
       .single();
 
     if (error) throw new Error(error.message);
 
-    // Optional clone: copy permissions from another role.
     const cloneFromRoleId = String(body.clone_from_role_id ?? "").trim();
     if (cloneFromRoleId) {
       const source = await service
@@ -67,12 +74,9 @@ export async function POST(request: NextRequest) {
         .eq("role_id", cloneFromRoleId);
 
       if (source.error) throw new Error(source.error.message);
+
       if ((source.data ?? []).length) {
-        const sourceRows = (source.data ?? []) as Array<{
-          access_area_id: string;
-          allowed: boolean;
-        }>;
-        const copy = sourceRows.map((row) => ({
+        const copy = (source.data ?? []).map((row) => ({
           role_id: data.id,
           access_area_id: row.access_area_id,
           allowed: row.allowed,

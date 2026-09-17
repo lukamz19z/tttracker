@@ -1,51 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
-import {
-  requireAccessAdmin,
-  type AccessService,
-} from "@/lib/access/server";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
+
+import { requireAccessAdmin } from "@/lib/access/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type EmployeeRow = {
-  id: string;
-  full_name: string;
-  role: string | null;
-  user_id: string | null;
-  active: boolean | null;
-};
-
-type MappingRow = {
-  user_id: string;
-  microsoft_email: string | null;
-  is_enabled: boolean;
-};
-
-type AssignmentRow = {
-  user_id: string;
-  role_id: string;
-};
-
-type ProjectAccessRow = {
-  user_id: string;
-  project_id: string;
-  role: string | null;
-};
-
-async function listAllAuthUsers(service: AccessService): Promise<User[]> {
+async function listAllUsers(service: SupabaseClient): Promise<User[]> {
   const users: User[] = [];
   let page = 1;
 
   while (true) {
-    const result = await service.auth.admin.listUsers({ page, perPage: 1000 });
-    if (result.error) throw new Error(result.error.message);
-    users.push(...result.data.users);
-    if (result.data.users.length < 1000) break;
+    const { data, error } = await service.auth.admin.listUsers({
+      page,
+      perPage: 1000,
+    });
+
+    if (error) throw new Error(error.message);
+
+    const current = data.users ?? [];
+    users.push(...current);
+    if (current.length < 1000) break;
     page += 1;
   }
 
   return users;
+}
+
+function isActive(user: User) {
+  const bannedUntil = (user as User & { banned_until?: string | null }).banned_until;
+  if (!bannedUntil) return true;
+  const time = new Date(bannedUntil).getTime();
+  return !Number.isFinite(time) || time <= Date.now();
 }
 
 export async function GET(request: NextRequest) {
@@ -54,14 +40,14 @@ export async function GET(request: NextRequest) {
 
     const [
       authUsers,
-      roles,
-      assignments,
-      employees,
-      projects,
-      projectAccess,
-      mappings,
+      rolesResult,
+      projectsResult,
+      assignmentsResult,
+      projectAccessResult,
+      employeesResult,
+      mappingsResult,
     ] = await Promise.all([
-      listAllAuthUsers(service),
+      listAllUsers(service),
       service
         .from("roles")
         .select(
@@ -70,78 +56,83 @@ export async function GET(request: NextRequest) {
         .eq("is_active", true)
         .order("sort_order")
         .order("name"),
-      service.from("user_role_assignments").select("user_id,role_id"),
-      service
-        .from("employees")
-        .select("id,full_name,role,user_id,active")
-        .not("user_id", "is", null),
       service
         .from("projects")
-        .select("id,name,project_number,location,status")
+        .select("id,name,project_number,status")
         .order("name"),
-      service.from("project_access").select("user_id,project_id,role"),
+      service.from("user_role_assignments").select("user_id,role_id"),
+      service.from("project_access").select("user_id,project_id"),
+      service
+        .from("employees")
+        .select("id,user_id,full_name,role,active")
+        .not("user_id", "is", null),
       service
         .from("sharepoint_user_mappings")
         .select("user_id,microsoft_email,is_enabled"),
     ]);
 
-    for (const result of [
-      roles,
-      assignments,
-      employees,
-      projects,
-      projectAccess,
-      mappings,
-    ]) {
-      if (result.error) throw new Error(result.error.message);
-    }
+    const failures = [
+      rolesResult.error,
+      projectsResult.error,
+      assignmentsResult.error,
+      projectAccessResult.error,
+      employeesResult.error,
+      mappingsResult.error,
+    ].filter(Boolean);
 
-    const employeeRows = (employees.data ?? []) as EmployeeRow[];
-    const assignmentRows = (assignments.data ?? []) as AssignmentRow[];
-    const projectAccessRows = (projectAccess.data ?? []) as ProjectAccessRow[];
-    const mappingRows = (mappings.data ?? []) as MappingRow[];
-
-    const employeeByUser = new Map<string, EmployeeRow>();
-    for (const row of employeeRows) {
-      if (row.user_id) employeeByUser.set(row.user_id, row);
-    }
+    if (failures.length) throw new Error(failures[0]?.message ?? "Could not load users.");
 
     const roleIdsByUser = new Map<string, string[]>();
+    for (const row of assignmentsResult.data ?? []) {
+      const userId = String(row.user_id ?? "");
+      const roleId = String(row.role_id ?? "");
+      if (!userId || !roleId) continue;
+      roleIdsByUser.set(userId, [...(roleIdsByUser.get(userId) ?? []), roleId]);
+    }
+
     const projectIdsByUser = new Map<string, string[]>();
-    const mappingByUser = new Map<string, MappingRow>();
-
-    for (const row of assignmentRows) {
-      const current = roleIdsByUser.get(row.user_id) ?? [];
-      current.push(row.role_id);
-      roleIdsByUser.set(row.user_id, current);
+    for (const row of projectAccessResult.data ?? []) {
+      const userId = String(row.user_id ?? "");
+      const projectId = String(row.project_id ?? "");
+      if (!userId || !projectId) continue;
+      projectIdsByUser.set(userId, [
+        ...(projectIdsByUser.get(userId) ?? []),
+        projectId,
+      ]);
     }
 
-    for (const row of projectAccessRows) {
-      const current = projectIdsByUser.get(row.user_id) ?? [];
-      current.push(row.project_id);
-      projectIdsByUser.set(row.user_id, current);
-    }
+    const employeeByUser = new Map(
+      (employeesResult.data ?? [])
+        .filter((row) => row.user_id)
+        .map((row) => [String(row.user_id), row]),
+    );
 
-    for (const row of mappingRows) {
-      mappingByUser.set(row.user_id, row);
-    }
+    const mappingByUser = new Map(
+      (mappingsResult.data ?? []).map((row) => [String(row.user_id), row]),
+    );
+
+    const users = authUsers
+      .map((authUser) => ({
+        user_id: authUser.id,
+        email: authUser.email ?? null,
+        created_at: authUser.created_at ?? null,
+        last_sign_in_at: authUser.last_sign_in_at ?? null,
+        is_active: isActive(authUser),
+        employee: employeeByUser.get(authUser.id) ?? null,
+        role_ids: Array.from(new Set(roleIdsByUser.get(authUser.id) ?? [])),
+        project_ids: Array.from(new Set(projectIdsByUser.get(authUser.id) ?? [])),
+        sharepoint: mappingByUser.get(authUser.id) ?? null,
+      }))
+      .sort((a, b) => {
+        const aName = a.employee?.full_name || a.email || "";
+        const bName = b.employee?.full_name || b.email || "";
+        return String(aName).localeCompare(String(bName));
+      });
 
     return NextResponse.json({
-      roles: roles.data ?? [],
-      projects: projects.data ?? [],
-      users: authUsers.map((user) => ({
-        user_id: user.id,
-        email: user.email ?? null,
-        created_at: user.created_at,
-        last_sign_in_at: user.last_sign_in_at ?? null,
-        is_active: user.banned_until
-          ? new Date(user.banned_until) <= new Date()
-          : true,
-        employee: employeeByUser.get(user.id) ?? null,
-        role_ids: roleIdsByUser.get(user.id) ?? [],
-        project_ids: projectIdsByUser.get(user.id) ?? [],
-        sharepoint: mappingByUser.get(user.id) ?? null,
-      })),
+      users,
+      roles: rolesResult.data ?? [],
+      projects: projectsResult.data ?? [],
     });
   } catch (error) {
     const message =

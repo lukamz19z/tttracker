@@ -68,15 +68,16 @@ export async function requireAccess(
   const service = createServiceClient();
 
   const allowed = await userHasAccess(service, user.id, accessCode);
-  if (!allowed) throw new Error("You do not have permission to perform this action.");
+  if (!allowed) {
+    throw new Error("You do not have permission to perform this action.");
+  }
 
   return { user, service };
 }
 
 /**
- * Access-control administration is intentionally based on a permission code,
- * not a role name. This means an access-admin role can be created later without
- * changing this file.
+ * Access administration is permission-driven, not role-name driven.
+ * Any dynamic role can be granted tt.admin.access.
  */
 export async function requireAccessAdmin(request: NextRequest) {
   return requireAccess(request, "tt.admin.access");

@@ -1,31 +1,78 @@
 import { NextRequest, NextResponse } from "next/server";
+
 import { requireAccessAdmin } from "@/lib/access/server";
-import { reconcileSharePointPermissions } from "@/lib/sharepoint/reconcile-permissions";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.map((item) => String(item ?? "").trim()).filter(Boolean)),
+  );
+}
 
 export async function POST(request: NextRequest) {
   let createdUserId: string | null = null;
+  let serviceForRollback: Awaited<ReturnType<typeof requireAccessAdmin>>["service"] | null = null;
 
   try {
-    const { service, user: actor } = await requireAccessAdmin(request);
-    const body = await request.json();
+    const { user: administrator, service } = await requireAccessAdmin(request);
+    serviceForRollback = service;
 
+    const body = await request.json();
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
-    const roleIds = Array.from(new Set(
-      (Array.isArray(body.role_ids) ? body.role_ids : [])
-        .map((value: unknown) => String(value ?? "").trim())
-        .filter(Boolean),
-    ));
-    const projectIds = Array.from(new Set(
-      (Array.isArray(body.project_ids) ? body.project_ids : [])
-        .map((value: unknown) => String(value ?? "").trim())
-        .filter(Boolean),
-    ));
+    const roleIds = stringArray(body.role_ids);
+    const projectIds = stringArray(body.project_ids);
+    const microsoftEmail =
+      String(body.microsoft_email ?? email).trim().toLowerCase() || null;
+    const sharepointEnabled = body.sharepoint_enabled !== false;
 
-    if (!email) return NextResponse.json({ error: "Email is required." }, { status: 400 });
-    if (password.length < 8) return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+    if (!email || !email.includes("@")) {
+      return NextResponse.json(
+        { error: "A valid email address is required." },
+        { status: 400 },
+      );
+    }
+
+    if (password.length < 8) {
+      return NextResponse.json(
+        { error: "The temporary password must be at least 8 characters." },
+        { status: 400 },
+      );
+    }
+
+    if (!roleIds.length) {
+      return NextResponse.json(
+        { error: "Assign at least one dynamic role to the new account." },
+        { status: 400 },
+      );
+    }
+
+    const [rolesResult, projectsResult] = await Promise.all([
+      service.from("roles").select("id").in("id", roleIds).eq("is_active", true),
+      projectIds.length
+        ? service.from("projects").select("id").in("id", projectIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (rolesResult.error) throw new Error(rolesResult.error.message);
+    if (projectsResult.error) throw new Error(projectsResult.error.message);
+
+    if ((rolesResult.data ?? []).length !== roleIds.length) {
+      return NextResponse.json(
+        { error: "One or more selected roles are invalid." },
+        { status: 400 },
+      );
+    }
+
+    if ((projectsResult.data ?? []).length !== projectIds.length) {
+      return NextResponse.json(
+        { error: "One or more selected projects are invalid." },
+        { status: 400 },
+      );
+    }
 
     const created = await service.auth.admin.createUser({
       email,
@@ -34,65 +81,60 @@ export async function POST(request: NextRequest) {
     });
 
     if (created.error || !created.data.user) {
-      throw new Error(created.error?.message ?? "Could not create login account.");
+      throw new Error(created.error?.message ?? "Could not create the login account.");
     }
 
     createdUserId = created.data.user.id;
 
-    if (roleIds.length) {
-      const result = await service.from("user_role_assignments").insert(
-        roleIds.map((roleId) => ({
-          user_id: createdUserId,
-          role_id: roleId,
-          assigned_by: actor.id,
-        })),
-      );
-      if (result.error) throw new Error(result.error.message);
-    }
+    const roleInsert = await service.from("user_role_assignments").insert(
+      roleIds.map((roleId) => ({
+        user_id: createdUserId,
+        role_id: roleId,
+        assigned_by: administrator.id,
+      })),
+    );
+    if (roleInsert.error) throw new Error(roleInsert.error.message);
 
     if (projectIds.length) {
-      const result = await service.from("project_access").insert(
+      const projectInsert = await service.from("project_access").insert(
         projectIds.map((projectId) => ({
           user_id: createdUserId,
           project_id: projectId,
-          role: "viewer",
         })),
       );
-      if (result.error) throw new Error(result.error.message);
+      if (projectInsert.error) throw new Error(projectInsert.error.message);
     }
 
-    const microsoftEmail = String(body.microsoft_email ?? email).trim().toLowerCase();
     const mapping = await service.from("sharepoint_user_mappings").upsert(
       {
         user_id: createdUserId,
-        microsoft_email: microsoftEmail || null,
-        is_enabled: body.sharepoint_enabled !== false,
+        microsoft_email: microsoftEmail,
+        is_enabled: sharepointEnabled,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" },
     );
     if (mapping.error) throw new Error(mapping.error.message);
 
-    const sharepointSync = await reconcileSharePointPermissions(service);
-
     return NextResponse.json({
       success: true,
       user_id: createdUserId,
-      sharepoint_sync: sharepointSync,
+      email,
+      role_ids: roleIds,
+      project_ids: projectIds,
     });
   } catch (error) {
-    // If auth creation succeeded but a later database step failed, remove the
-    // half-created account so Admin can retry cleanly.
-    if (createdUserId) {
+    console.error("CREATE USER ERROR:", error);
+
+    if (createdUserId && serviceForRollback) {
       try {
-        const { service } = await requireAccessAdmin(request);
-        await service.auth.admin.deleteUser(createdUserId);
-      } catch {
-        // Best-effort rollback only.
+        await serviceForRollback.auth.admin.deleteUser(createdUserId);
+      } catch (rollbackError) {
+        console.error("CREATE USER ROLLBACK ERROR:", rollbackError);
       }
     }
 
     const message = error instanceof Error ? error.message : "Could not create user.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

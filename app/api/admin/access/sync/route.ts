@@ -12,8 +12,17 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type GroupRow = { id: string; code: string; name: string };
-type DriveList = { value?: Array<{ id: string; name: string; webUrl?: string }> };
-type DriveItemList = { value?: Array<{ id: string; name: string; webUrl?: string; folder?: unknown }> };
+type DriveList = {
+  value?: Array<{ id: string; name: string; webUrl?: string }>;
+};
+type DriveItemList = {
+  value?: Array<{
+    id: string;
+    name: string;
+    webUrl?: string;
+    folder?: unknown;
+  }>;
+};
 
 function slug(value: string) {
   return value
@@ -23,7 +32,12 @@ function slug(value: string) {
     .replace(/^_+|_+$/g, "");
 }
 
-async function ensureGroup(service: AccessService, code: string, name: string, sortOrder: number): Promise<GroupRow> {
+async function ensureGroup(
+  service: AccessService,
+  code: string,
+  name: string,
+  sortOrder: number,
+): Promise<GroupRow> {
   const { data, error } = await service
     .from("access_groups")
     .upsert(
@@ -39,7 +53,9 @@ async function ensureGroup(service: AccessService, code: string, name: string, s
     .select("id,code,name")
     .single();
 
-  if (error || !data) throw new Error(error?.message ?? `Could not create access group ${name}.`);
+  if (error || !data) {
+    throw new Error(error?.message ?? `Could not create access group ${name}.`);
+  }
   return data as GroupRow;
 }
 
@@ -57,8 +73,12 @@ export async function POST(request: NextRequest) {
     const existingResult = await service.from("access_areas").select("id,code");
     if (existingResult.error) throw new Error(existingResult.error.message);
 
-    const existingRows = (existingResult.data ?? []) as Array<{ code: string | null }>
-    const existingCodes = new Set<string>(existingRows.map((row) => String(row.code ?? "")));
+    const existingRows = (existingResult.data ?? []) as Array<{
+      code: string | null;
+    }>;
+    const existingCodes = new Set(
+      existingRows.map((row) => String(row.code ?? "")),
+    );
     const groupCache = new Map<string, GroupRow>();
     let groupSort = 100;
 
@@ -67,7 +87,12 @@ export async function POST(request: NextRequest) {
       const groupCode = `tt_${slug(groupName)}`;
       let group = groupCache.get(groupCode);
       if (!group) {
-        group = await ensureGroup(service, groupCode, `TTTracker · ${groupName}`, groupSort);
+        group = await ensureGroup(
+          service,
+          groupCode,
+          `TTTracker · ${groupName}`,
+          groupSort,
+        );
         groupSort += 10;
         groupCache.set(groupCode, group);
       }
@@ -96,7 +121,12 @@ export async function POST(request: NextRequest) {
       existingCodes.add(page.code);
     }
 
-    const sharePointGroup = await ensureGroup(service, "sharepoint", "SharePoint", 1000);
+    const sharePointGroup = await ensureGroup(
+      service,
+      "sharepoint",
+      "SharePoint",
+      1000,
+    );
     const site = await getBCContractingSite();
     const drives = (await getSiteDrives(site.id)) as DriveList;
     let librarySort = 10;
@@ -127,8 +157,6 @@ export async function POST(request: NextRequest) {
       existingCodes.add(libraryCode);
       librarySort += 10;
 
-      // Intentionally only discover top-level folders. This preserves the
-      // existing TTTracker design and avoids generating thousands of rows.
       const children = await graphRequest<DriveItemList>(
         `/drives/${encodeURIComponent(drive.id)}/root/children?$select=id,name,webUrl,folder`,
       );
@@ -169,12 +197,21 @@ export async function POST(request: NextRequest) {
         tttrackerPages: GENERATED_ACCESS_PAGES.length,
         sharepointLibraries: drives.value?.length ?? 0,
       },
-      created: { pages: pagesCreated, libraries: librariesCreated, folders: foldersCreated },
-      updated: { pages: pagesUpdated, libraries: librariesUpdated, folders: foldersUpdated },
+      created: {
+        pages: pagesCreated,
+        libraries: librariesCreated,
+        folders: foldersCreated,
+      },
+      updated: {
+        pages: pagesUpdated,
+        libraries: librariesUpdated,
+        folders: foldersUpdated,
+      },
     });
   } catch (error) {
     console.error("ACCESS DISCOVERY ERROR:", error);
-    const message = error instanceof Error ? error.message : "Could not discover access areas.";
+    const message =
+      error instanceof Error ? error.message : "Could not discover access areas.";
     return NextResponse.json({ error: message }, { status: 403 });
   }
 }

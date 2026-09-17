@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
 } from "react";
@@ -64,11 +65,21 @@ export type ApprovalCounts = {
   invoices: number;
 };
 
-type BootstrapPayload = {
+type AccessMePayload = {
   error?: string;
   roles?: DynamicRole[];
-  projects?: Array<{ id: string }>;
-  permissions?: string[];
+  projects?: Array<{ project_id?: string; id?: string }>;
+  project_ids?: string[];
+  permissions?: {
+    all?: string[];
+    web?: string[];
+    mobile?: string[];
+    sharepoint?: string[];
+  };
+};
+
+type BootstrapPayload = {
+  error?: string;
   navigation?: DynamicNavigationItem[];
   app?: AppConfig;
   capabilities?: MobileCapabilities;
@@ -113,9 +124,11 @@ const EMPTY_COUNTS: ApprovalCounts = {
   invoices: 0,
 };
 
+const ACCESS_REFRESH_INTERVAL_MS = 60_000;
 const AccessContext = createContext<AccessState | null>(null);
 
 export function AccessProvider({ children }: PropsWithChildren) {
+  const loadedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [roles, setRoles] = useState<DynamicRole[]>([]);
@@ -123,21 +136,25 @@ export function AccessProvider({ children }: PropsWithChildren) {
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [navigation, setNavigation] = useState<DynamicNavigationItem[]>([]);
   const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG);
-  const [capabilities, setCapabilities] = useState<MobileCapabilities>(EMPTY_CAPABILITIES);
-  const [approvalCounts, setApprovalCounts] = useState<ApprovalCounts>(EMPTY_COUNTS);
+  const [capabilities, setCapabilities] =
+    useState<MobileCapabilities>(EMPTY_CAPABILITIES);
+  const [approvalCounts, setApprovalCounts] =
+    useState<ApprovalCounts>(EMPTY_COUNTS);
 
   const clear = useCallback(() => {
     setRoles([]);
     setProjectIds([]);
     setPermissions(new Set());
     setNavigation([]);
+    setAppConfig(DEFAULT_APP_CONFIG);
     setCapabilities(EMPTY_CAPABILITIES);
     setApprovalCounts(EMPTY_COUNTS);
     setError(null);
+    loadedRef.current = false;
   }, []);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    if (!loadedRef.current) setLoading(true);
     setError(null);
 
     try {
@@ -147,31 +164,70 @@ export function AccessProvider({ children }: PropsWithChildren) {
         return;
       }
 
-      const payload = await apiJson<BootstrapPayload>("/api/mobile/bootstrap");
-      setRoles(payload.roles ?? []);
-      setProjectIds((payload.projects ?? []).map((project) => project.id));
-      setPermissions(new Set(payload.permissions ?? []));
-      setNavigation(payload.navigation ?? []);
-      setAppConfig(payload.app ?? DEFAULT_APP_CONFIG);
-      setCapabilities(payload.capabilities ?? EMPTY_CAPABILITIES);
-      setApprovalCounts(payload.approvalCounts ?? EMPTY_COUNTS);
+      /*
+       * RBAC authority:
+       *   /api/access/me -> roles, project membership, effective mobile permissions
+       *
+       * Mobile UI/config authority:
+       *   /api/mobile/bootstrap -> dynamic navigation, LMZ branding, workflow
+       *   capabilities and approval badges.
+       *
+       * Keeping these responsibilities separate means an Admin permission change
+       * takes effect without an Expo rebuild, while the existing bootstrap features
+       * continue working exactly as they do today.
+       */
+      const [access, bootstrap] = await Promise.all([
+        apiJson<AccessMePayload>("/api/access/me"),
+        apiJson<BootstrapPayload>("/api/mobile/bootstrap"),
+      ]);
+
+      const nextProjectIds =
+        access.project_ids ??
+        access.projects?.map((project) => project.project_id ?? project.id ?? "") ??
+        [];
+
+      const nextMobilePermissions =
+        access.permissions?.mobile ??
+        (access.permissions?.all ?? []).filter((code) =>
+          String(code).startsWith("mobile."),
+        );
+
+      setRoles(access.roles ?? []);
+      setProjectIds(
+        Array.from(new Set(nextProjectIds.map(String).filter(Boolean))),
+      );
+      setPermissions(new Set(nextMobilePermissions));
+      setNavigation(bootstrap.navigation ?? []);
+      setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
+      setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
+      setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "Could not load mobile configuration.");
+      setError(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Could not load mobile configuration.",
+      );
     } finally {
+      loadedRef.current = true;
       setLoading(false);
     }
   }, [clear]);
 
   useEffect(() => {
     void refresh();
+
     const authListener = supabase.auth.onAuthStateChange(() => void refresh());
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") void refresh();
     });
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void refresh();
+    }, ACCESS_REFRESH_INTERVAL_MS);
 
     return () => {
       authListener.data.subscription.unsubscribe();
       appListener.remove();
+      clearInterval(interval);
     };
   }, [refresh]);
 
@@ -187,17 +243,31 @@ export function AccessProvider({ children }: PropsWithChildren) {
       capabilities,
       approvalCounts,
       refresh,
-      can: (permissionCode) => !permissionCode || permissions.has(permissionCode),
+      can: (permissionCode) =>
+        !permissionCode || permissions.has(permissionCode),
       hasCapability: (capabilityKey) => {
         if (!capabilityKey) return true;
         if (capabilityKey === "has_approvals") return capabilities.hasApprovals;
         return false;
       },
     }),
-    [loading, error, roles, projectIds, permissions, navigation, appConfig, capabilities, approvalCounts, refresh],
+    [
+      loading,
+      error,
+      roles,
+      projectIds,
+      permissions,
+      navigation,
+      appConfig,
+      capabilities,
+      approvalCounts,
+      refresh,
+    ],
   );
 
-  return <AccessContext.Provider value={value}>{children}</AccessContext.Provider>;
+  return (
+    <AccessContext.Provider value={value}>{children}</AccessContext.Provider>
+  );
 }
 
 export function useAccess() {

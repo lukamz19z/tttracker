@@ -11,7 +11,9 @@ export async function GET(request: NextRequest) {
     const [rolesResult, matrixResult, groupsResult] = await Promise.all([
       service
         .from("roles")
-        .select("id,code,name,description,is_active,is_system,grants_all,sort_order")
+        .select(
+          "id,code,name,description,is_active,is_system,grants_all,sort_order",
+        )
         .eq("is_active", true)
         .order("sort_order")
         .order("name"),
@@ -37,7 +39,8 @@ export async function GET(request: NextRequest) {
       groups: groupsResult.data ?? [],
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not load access control.";
+    const message =
+      error instanceof Error ? error.message : "Could not load access control.";
     return NextResponse.json({ error: message }, { status: 403 });
   }
 }

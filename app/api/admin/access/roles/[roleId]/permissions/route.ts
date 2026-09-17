@@ -70,14 +70,27 @@ export async function PUT(
       if (inserted.error) throw new Error(inserted.error.message);
     }
 
-    const sharepointSync = await reconcileSharePointPermissions(service);
+    let sharepointSync: unknown = null;
+    let sharepointWarning: string | null = null;
 
-    return NextResponse.json({ success: true, sharepoint_sync: sharepointSync });
+    try {
+      sharepointSync = await reconcileSharePointPermissions(service);
+    } catch (error) {
+      // A Graph/SharePoint outage must not roll back a valid Website/Mobile
+      // permission change. The next manual/automatic reconcile can catch up.
+      sharepointWarning =
+        error instanceof Error ? error.message : "SharePoint reconciliation failed.";
+      console.error("SHAREPOINT ROLE PERMISSION RECONCILE WARNING:", error);
+    }
+
+    return NextResponse.json({
+      success: true,
+      sharepoint_sync: sharepointSync,
+      sharepoint_warning: sharepointWarning,
+    });
   } catch (error) {
     const message =
-      error instanceof Error
-        ? error.message
-        : "Could not save role permissions.";
+      error instanceof Error ? error.message : "Could not save role permissions.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

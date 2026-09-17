@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+
 import {
   createServiceClient,
   effectivePermissionsForUser,
@@ -7,11 +8,6 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type PermissionRow = {
-  code: string;
-  type: string | null;
-};
 
 type RoleSummary = {
   id: string;
@@ -31,9 +27,23 @@ type ProjectAccessRow = {
   role: string | null;
 };
 
+type PermissionRow = {
+  access_area_id: string;
+  code: string;
+  name: string;
+  type: string | null;
+  permission_level: string | null;
+  allowed: boolean;
+  source: string | null;
+};
+
 function firstRole(value: RoleAssignmentRow["roles"]): RoleSummary | null {
   if (!value) return null;
   return Array.isArray(value) ? value[0] ?? null : value;
+}
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean))).sort();
 }
 
 export async function GET(request: NextRequest) {
@@ -56,34 +66,64 @@ export async function GET(request: NextRequest) {
     if (roleRows.error) throw new Error(roleRows.error.message);
     if (projectRows.error) throw new Error(projectRows.error.message);
 
-    const permissions = permissionRows as PermissionRow[];
+    const permissions = (permissionRows ?? []) as PermissionRow[];
     const roleAssignments = (roleRows.data ?? []) as RoleAssignmentRow[];
     const projects = (projectRows.data ?? []) as ProjectAccessRow[];
 
     const grouped = {
-      web: permissions
-        .filter((row) => row.type === "tttracker")
-        .map((row) => row.code),
-      mobile: permissions
-        .filter((row) => row.type === "mobile")
-        .map((row) => row.code),
-      sharepoint: permissions
-        .filter((row) => row.type === "sharepoint")
-        .map((row) => row.code),
+      web: unique(
+        permissions
+          .filter((row) => row.type === "tttracker")
+          .map((row) => row.code),
+      ),
+      mobile: unique(
+        permissions
+          .filter((row) => row.type === "mobile")
+          .map((row) => row.code),
+      ),
+      sharepoint: unique(
+        permissions
+          .filter((row) => row.type === "sharepoint")
+          .map((row) => row.code),
+      ),
     };
 
-    return NextResponse.json({
-      user: { id: user.id, email: user.email ?? null },
-      roles: roleAssignments
-        .map((row) => firstRole(row.roles))
-        .filter((role): role is RoleSummary => role !== null),
-      projects,
-      permissions: grouped,
-      allPermissions: permissionRows,
-    });
+    const all = unique(permissions.map((row) => row.code));
+
+    return NextResponse.json(
+      {
+        user: { id: user.id, email: user.email ?? null },
+        roles: roleAssignments
+          .map((row) => firstRole(row.roles))
+          .filter((role): role is RoleSummary => role !== null),
+        projects,
+        project_ids: unique(projects.map((row) => row.project_id)),
+        is_admin: all.includes("tt.admin.access"),
+        permissions: {
+          all,
+          ...grouped,
+        },
+        allPermissions: permissions,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+          Pragma: "no-cache",
+        },
+      },
+    );
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not load access.";
-    return NextResponse.json({ error: message }, { status: 403 });
+
+    const status = /logged in|authentication token/i.test(message) ? 401 : 403;
+
+    return NextResponse.json(
+      { error: message },
+      {
+        status,
+        headers: { "Cache-Control": "no-store, max-age=0" },
+      },
+    );
   }
 }
