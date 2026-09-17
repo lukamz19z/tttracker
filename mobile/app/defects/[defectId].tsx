@@ -4,10 +4,12 @@ import {
 } from "expo-router";
 import {
   Camera,
+  CheckCircle2,
   ChevronDown,
   MessageSquareText,
   Pencil,
   Plus,
+  RotateCcw,
   Save,
   X,
 } from "lucide-react-native";
@@ -35,10 +37,7 @@ import { QualitySelector } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
-import {
-  QualityProvider,
-  useQuality,
-} from "@/contexts/QualityContext";
+import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityMemberCatalog,
@@ -81,7 +80,6 @@ type EditState = {
   responsibility: string;
   clientReference: string;
   severity: MobileDefectSeverity;
-  status: MobileDefectStatus;
   resolutionNotes: string;
   assignedToUserId: string | null;
 };
@@ -90,6 +88,8 @@ type Preview = {
   uri: string;
   name: string;
 };
+
+type LifecycleMode = "fixed" | "close" | "reopen";
 
 function DefectDetailContent() {
   const params = useLocalSearchParams<{
@@ -136,6 +136,16 @@ function DefectDetailContent() {
   const [actionSaving, setActionSaving] =
     useState(false);
 
+  const [lifecycleMode, setLifecycleMode] =
+    useState<LifecycleMode | null>(null);
+  const [lifecycleComment, setLifecycleComment] =
+    useState("");
+  const [lifecyclePhotos, setLifecyclePhotos] = useState<
+    LocalQualityPhoto[]
+  >([]);
+  const [lifecycleSaving, setLifecycleSaving] =
+    useState(false);
+
   const [edit, setEdit] =
     useState<EditState | null>(null);
   const [editSaving, setEditSaving] =
@@ -143,8 +153,6 @@ function DefectDetailContent() {
   const [issuePickerOpen, setIssuePickerOpen] =
     useState(false);
   const [severityPickerOpen, setSeverityPickerOpen] =
-    useState(false);
-  const [statusPickerOpen, setStatusPickerOpen] =
     useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] =
     useState(false);
@@ -218,13 +226,6 @@ function DefectDetailContent() {
     { id: "Critical", label: "Critical" },
   ];
 
-  const statusOptions = [
-    { id: "Open", label: "Open" },
-    { id: "In Progress", label: "In Progress" },
-    { id: "Fixed", label: "Fixed" },
-    { id: "Closed", label: "Closed" },
-  ];
-
   const assigneeOptions = useMemo(
     () => [
       { id: "", label: "Unassigned" },
@@ -257,34 +258,42 @@ function DefectDetailContent() {
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId || !towerId) return;
+    if (!projectId || !towerId) {
+      setMembers([]);
+      return;
+    }
 
     let active = true;
+    setMembers([]);
 
-    void (async () => {
-      try {
-        const cached =
-          await cachedQualityMemberCatalog(
-            projectId,
-            towerId,
-          );
-        if (active) setMembers(cached?.value ?? []);
-
-        if (online) {
-          const live =
-            await refreshQualityMemberCatalog(
-              projectId,
-              towerId,
-            );
-          if (active) setMembers(live ?? []);
+    // Cache is optional. A cache/SQLite failure must not block the live request.
+    void cachedQualityMemberCatalog(projectId, towerId)
+      .then((cached) => {
+        if (active && cached?.value?.length) {
+          setMembers(cached.value);
         }
-      } catch (error) {
+      })
+      .catch((cacheError) => {
         console.warn(
-          "Defect member catalogue could not be loaded",
-          error,
+          "Defect cached member catalogue could not be loaded; using live data",
+          cacheError,
         );
-      }
-    })();
+      });
+
+    if (online) {
+      void refreshQualityMemberCatalog(projectId, towerId)
+        .then((live) => {
+          if (active) {
+            setMembers(Array.isArray(live) ? live : []);
+          }
+        })
+        .catch((liveError) => {
+          console.warn(
+            "Defect live member catalogue could not be loaded; cached data retained",
+            liveError,
+          );
+        });
+    }
 
     return () => {
       active = false;
@@ -348,9 +357,6 @@ function DefectDetailContent() {
       severity:
         (clean(defect.severity) ||
           "Minor") as MobileDefectSeverity,
-      status:
-        (clean(defect.status) ||
-          "Open") as MobileDefectStatus,
       resolutionNotes: clean(
         defect.resolution_notes,
       ),
@@ -397,7 +403,6 @@ function DefectDetailContent() {
           clientReference:
             clean(edit.clientReference) || null,
           severity: edit.severity,
-          status: edit.status,
           resolutionNotes:
             clean(edit.resolutionNotes) || null,
           assignedToUserId:
@@ -462,6 +467,159 @@ function DefectDetailContent() {
       );
     } finally {
       setActionSaving(false);
+    }
+  }
+
+  function openLifecycle(mode: LifecycleMode) {
+    if (!defect) return;
+
+    if (!online) {
+      Alert.alert(
+        "Connection required",
+        "Defect workflow changes are saved through the controlled Quality API so the website, mobile app and notifications stay synchronised.",
+      );
+      return;
+    }
+
+    setLifecycleMode(mode);
+    setLifecyclePhotos([]);
+    setLifecycleComment(
+      mode === "close" ? clean(defect.resolution_notes) : "",
+    );
+  }
+
+  function closeLifecycle() {
+    if (lifecycleSaving) return;
+    setLifecycleMode(null);
+    setLifecycleComment("");
+    setLifecyclePhotos([]);
+  }
+
+  async function saveLifecycle() {
+    if (!lifecycleMode || !defectId || !defect) return;
+
+    const mode = lifecycleMode;
+    const comment = lifecycleComment.trim();
+    if (!comment) {
+      Alert.alert(
+        "Comment required",
+        mode === "fixed"
+          ? "Enter the rectification / fixed comment before marking this Defect as Fixed."
+          : mode === "close"
+            ? "Enter the close-out comment before closing this Defect."
+            : "Enter the reason this Defect is being reopened.",
+      );
+      return;
+    }
+
+    if (!online) {
+      Alert.alert(
+        "Connection required",
+        "Reconnect before changing the controlled Defect status.",
+      );
+      return;
+    }
+
+    const targetStatus: MobileDefectStatus =
+      mode === "fixed"
+        ? "Fixed"
+        : mode === "close"
+          ? "Closed"
+          : "In Progress";
+
+    const actionText =
+      mode === "fixed"
+        ? `Marked Fixed — ${comment}`
+        : mode === "close"
+          ? `Closed — ${comment}`
+          : `Reopened — ${comment}`;
+
+    setLifecycleSaving(true);
+
+    const warnings: string[] = [];
+
+    try {
+      const patchPayload = await patchDefect(defectId, {
+        status: targetStatus,
+        ...(mode === "fixed" || mode === "close"
+          ? { resolutionNotes: comment }
+          : {}),
+      });
+
+      if (patchPayload.warning) {
+        warnings.push(patchPayload.warning);
+      }
+
+      try {
+        const actionPayload = await addDefectAction(
+          defectId,
+          actionText,
+        );
+        if (actionPayload.warning) {
+          warnings.push(actionPayload.warning);
+        }
+      } catch (actionError) {
+        console.warn(
+          "Defect status changed but lifecycle action comment could not be saved",
+          actionError,
+        );
+        warnings.push(
+          "The status changed, but the lifecycle comment could not be added to the action history.",
+        );
+      }
+
+      if (
+        mode !== "reopen" &&
+        lifecyclePhotos.length > 0 &&
+        projectId &&
+        towerId
+      ) {
+        try {
+          for (const photo of lifecyclePhotos) {
+            await uploadDefectPhoto({
+              projectId,
+              towerId,
+              defectId,
+              photo,
+            });
+          }
+        } catch (photoError) {
+          console.warn(
+            "Defect status changed but close-out evidence could not be uploaded",
+            photoError,
+          );
+          warnings.push(
+            "The status changed, but one or more close-out photos could not be uploaded.",
+          );
+        }
+      }
+
+      await Promise.all([refresh(), loadActions()]);
+      setLifecycleMode(null);
+      setLifecycleComment("");
+      setLifecyclePhotos([]);
+
+      const title =
+        mode === "fixed"
+          ? "Defect marked Fixed"
+          : mode === "close"
+            ? "Defect closed"
+            : "Defect reopened";
+
+      if (warnings.length > 0) {
+        Alert.alert(title, warnings.join("\n\n"));
+      }
+    } catch (error) {
+      Alert.alert(
+        mode === "fixed"
+          ? "Could not mark Defect Fixed"
+          : mode === "close"
+            ? "Could not close Defect"
+            : "Could not reopen Defect",
+        error instanceof Error ? error.message : "Unknown error.",
+      );
+    } finally {
+      setLifecycleSaving(false);
     }
   }
 
@@ -629,6 +787,63 @@ function DefectDetailContent() {
           </Text>
         </View>
       ) : null}
+
+      <View style={styles.workflowCard}>
+        <View style={styles.workflowHeader}>
+          <View style={styles.grow}>
+            <Text style={styles.sectionTitle}>
+              Workflow / close-out
+            </Text>
+            <Text style={styles.helper}>
+              Status changes require a traceable comment and are written to the same controlled record used by the website.
+            </Text>
+          </View>
+        </View>
+
+        {clean(defect.status) === "Closed" ? (
+          <Pressable
+            style={[styles.workflowButton, styles.reopenButton]}
+            onPress={() => openLifecycle("reopen")}
+          >
+            <RotateCcw size={17} color="#7c2d12" />
+            <Text style={styles.reopenButtonText}>
+              Reopen Defect
+            </Text>
+          </Pressable>
+        ) : clean(defect.status) === "Fixed" ? (
+          <View style={styles.workflowButtons}>
+            <Pressable
+              style={[styles.workflowButton, styles.reopenButton, styles.workflowHalf]}
+              onPress={() => openLifecycle("reopen")}
+            >
+              <RotateCcw size={17} color="#7c2d12" />
+              <Text style={styles.reopenButtonText}>
+                Continue Work
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.workflowButton, styles.closeDefectButton, styles.workflowHalf]}
+              onPress={() => openLifecycle("close")}
+            >
+              <CheckCircle2 size={17} color="#fff" />
+              <Text style={styles.workflowButtonText}>
+                Close Defect
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable
+            style={[styles.workflowButton, styles.fixedButton]}
+            onPress={() => openLifecycle("fixed")}
+          >
+            <CheckCircle2 size={17} color="#fff" />
+            <Text style={styles.workflowButtonText}>
+              Mark Fixed
+            </Text>
+          </Pressable>
+        )}
+      </View>
 
       <View style={styles.sectionHead}>
         <View>
@@ -870,22 +1085,6 @@ function DefectDetailContent() {
                 />
               </Pressable>
 
-              <FieldLabel text="Status" />
-              <Pressable
-                style={styles.selector}
-                onPress={() =>
-                  setStatusPickerOpen(true)
-                }
-              >
-                <Text style={styles.selectorText}>
-                  {edit.status}
-                </Text>
-                <ChevronDown
-                  size={18}
-                  color="#64748b"
-                />
-              </Pressable>
-
               <FieldLabel text="Assigned to" />
               <Pressable
                 style={styles.selector}
@@ -1040,27 +1239,6 @@ function DefectDetailContent() {
             />
 
             <QualitySelector
-              visible={statusPickerOpen}
-              title="Status"
-              options={statusOptions}
-              onClose={() =>
-                setStatusPickerOpen(false)
-              }
-              onSelect={(option) => {
-                setEdit((current) =>
-                  current
-                    ? {
-                        ...current,
-                        status:
-                          option.id as MobileDefectStatus,
-                      }
-                    : current,
-                );
-                setStatusPickerOpen(false);
-              }}
-            />
-
-            <QualitySelector
               visible={assigneePickerOpen}
               title="Assigned to"
               options={assigneeOptions}
@@ -1083,6 +1261,112 @@ function DefectDetailContent() {
           </SafeAreaView>
         </Modal>
       ) : null}
+
+      <Modal
+        visible={Boolean(lifecycleMode)}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closeLifecycle}
+      >
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <View style={styles.grow}>
+              <Text style={styles.modalTitle}>
+                {lifecycleMode === "fixed"
+                  ? "Mark Defect Fixed"
+                  : lifecycleMode === "close"
+                    ? "Close Defect"
+                    : "Reopen Defect"}
+              </Text>
+              <Text style={styles.helper}>
+                {lifecycleMode === "fixed"
+                  ? "Record what was rectified. This comment is saved as the resolution note and added to the action history."
+                  : lifecycleMode === "close"
+                    ? "Confirm the final close-out comment. Closing is deliberately separate from normal editing."
+                    : "Record why the Defect needs more work. The existing close-out history is preserved."}
+              </Text>
+            </View>
+            <Pressable
+              style={styles.close}
+              onPress={closeLifecycle}
+              disabled={lifecycleSaving}
+            >
+              <X size={20} color="#334155" />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.modalContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <FieldLabel
+              text={
+                lifecycleMode === "fixed"
+                  ? "Rectification / fixed comment *"
+                  : lifecycleMode === "close"
+                    ? "Close-out comment *"
+                    : "Reason for reopening *"
+              }
+            />
+            <TextInput
+              multiline
+              value={lifecycleComment}
+              onChangeText={setLifecycleComment}
+              placeholder={
+                lifecycleMode === "fixed"
+                  ? "Describe what was repaired, replaced or corrected…"
+                  : lifecycleMode === "close"
+                    ? "Confirm the final resolution and close-out details…"
+                    : "Explain why further work is required…"
+              }
+              style={[styles.input, styles.lifecycleComment]}
+            />
+
+            {lifecycleMode !== "reopen" ? (
+              <>
+                <QualityPhotoPicker
+                  label="Close-out / rectification photos (optional)"
+                  photos={lifecyclePhotos}
+                  onChange={setLifecyclePhotos}
+                  prefix={
+                    lifecycleMode === "close"
+                      ? "defect-closeout"
+                      : "defect-fixed"
+                  }
+                />
+                <Text style={styles.helper}>
+                  These photos are attached to the same Defect evidence record visible on the website.
+                </Text>
+              </>
+            ) : null}
+
+            <Pressable
+              style={[
+                styles.saveButton,
+                lifecycleMode === "reopen" && styles.reopenConfirmButton,
+                (!lifecycleComment.trim() || lifecycleSaving) && styles.disabled,
+              ]}
+              disabled={!lifecycleComment.trim() || lifecycleSaving}
+              onPress={() => void saveLifecycle()}
+            >
+              {lifecycleSaving ? (
+                <ActivityIndicator color="#fff" />
+              ) : lifecycleMode === "reopen" ? (
+                <RotateCcw size={18} color="#fff" />
+              ) : (
+                <CheckCircle2 size={18} color="#fff" />
+              )}
+              <Text style={styles.saveButtonText}>
+                {lifecycleMode === "fixed"
+                  ? "Confirm Fixed"
+                  : lifecycleMode === "close"
+                    ? "Close Defect"
+                    : "Reopen Defect"}
+              </Text>
+            </Pressable>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       <Modal
         visible={photoModalOpen}
@@ -1189,11 +1473,7 @@ function DefectDetailContent() {
 }
 
 export default function DefectDetailScreen() {
-  return (
-    <QualityProvider>
-      <DefectDetailContent />
-    </QualityProvider>
-  );
+  return <DefectDetailContent />;
 }
 
 function FieldLabel({ text }: { text: string }) {
@@ -1315,6 +1595,56 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "900",
     fontSize: 11,
+  },
+  workflowCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#fff",
+    padding: 14,
+    gap: 12,
+  },
+  workflowHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  workflowButtons: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  workflowHalf: {
+    flex: 1,
+  },
+  workflowButton: {
+    minHeight: 46,
+    borderRadius: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    paddingHorizontal: 12,
+  },
+  fixedButton: {
+    backgroundColor: "#166534",
+  },
+  closeDefectButton: {
+    backgroundColor: "#0f172a",
+  },
+  workflowButtonText: {
+    color: "#fff",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  reopenButton: {
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#fed7aa",
+  },
+  reopenButtonText: {
+    color: "#7c2d12",
+    fontWeight: "900",
+    fontSize: 12,
   },
   photoGrid: {
     flexDirection: "row",
@@ -1464,6 +1794,14 @@ const styles = StyleSheet.create({
     minHeight: 100,
     paddingTop: 11,
     textAlignVertical: "top",
+  },
+  lifecycleComment: {
+    minHeight: 140,
+    paddingTop: 11,
+    textAlignVertical: "top",
+  },
+  reopenConfirmButton: {
+    backgroundColor: "#9a3412",
   },
   saveButton: {
     minHeight: 50,

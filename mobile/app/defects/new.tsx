@@ -23,10 +23,7 @@ import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
 import { QualitySelector } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
-import {
-  QualityProvider,
-  useQuality,
-} from "@/contexts/QualityContext";
+import { useQuality } from "@/contexts/QualityContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
@@ -265,42 +262,77 @@ function NewDefectContent() {
   useEffect(() => {
     if (!projectId || !form.towerId) {
       setMembers([]);
+      setMemberLoading(false);
       return;
     }
 
     let active = true;
+    const towerId = form.towerId;
+    let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Never show member data from the previously selected tower.
+    setMembers([]);
+
+    /*
+     * Cache and live refresh deliberately run independently.
+     * A SQLite/cache problem must never prevent TTTracker from requesting the
+     * current tower member register from the server.
+     */
+    void cachedQualityMemberCatalog(projectId, towerId)
+      .then((cached) => {
+        if (active && cached?.value?.length) {
+          setMembers(cached.value);
+        }
+      })
+      .catch((cacheError) => {
+        console.warn(
+          "Defect cached member catalogue could not be loaded; using live data",
+          cacheError,
+        );
+      });
+
+    if (!online) {
+      setMemberLoading(false);
+
+      return () => {
+        active = false;
+      };
+    }
+
     setMemberLoading(true);
 
-    void (async () => {
-      try {
-        const cached =
-          await cachedQualityMemberCatalog(
-            projectId,
-            form.towerId,
-          );
-
-        if (active) setMembers(cached?.value ?? []);
-
-        if (online) {
-          const live =
-            await refreshQualityMemberCatalog(
-              projectId,
-              form.towerId,
-            );
-          if (active) setMembers(live ?? []);
-        }
-      } catch (error) {
+    // Do not leave the field showing an endless spinner on a slow connection.
+    // The request itself is allowed to finish and can still populate the list.
+    loadingTimer = setTimeout(() => {
+      if (active) {
+        setMemberLoading(false);
         console.warn(
-          "Defect member catalogue could not be loaded",
-          error,
+          "Defect live member catalogue is taking longer than 12 seconds",
+          { projectId, towerId },
         );
-      } finally {
-        if (active) setMemberLoading(false);
       }
-    })();
+    }, 12_000);
+
+    void refreshQualityMemberCatalog(projectId, towerId)
+      .then((live) => {
+        if (active) {
+          setMembers(Array.isArray(live) ? live : []);
+        }
+      })
+      .catch((liveError) => {
+        console.warn(
+          "Defect live member catalogue could not be loaded; cached data retained",
+          liveError,
+        );
+      })
+      .finally(() => {
+        if (loadingTimer) clearTimeout(loadingTimer);
+        if (active) setMemberLoading(false);
+      });
 
     return () => {
       active = false;
+      if (loadingTimer) clearTimeout(loadingTimer);
     };
   }, [form.towerId, online, projectId]);
 
@@ -720,11 +752,7 @@ function NewDefectContent() {
 }
 
 export default function NewDefectScreen() {
-  return (
-    <QualityProvider>
-      <NewDefectContent />
-    </QualityProvider>
-  );
+  return <NewDefectContent />;
 }
 
 const styles = StyleSheet.create({

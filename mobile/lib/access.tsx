@@ -132,6 +132,9 @@ const AccessContext = createContext<AccessState | null>(null);
 
 export function AccessProvider({ children }: PropsWithChildren) {
   const loadedRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const mountedRef = useRef(true);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [roles, setRoles] = useState<DynamicRole[]>([]);
@@ -145,6 +148,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
     useState<ApprovalCounts>(EMPTY_COUNTS);
 
   const clear = useCallback(() => {
+    if (!mountedRef.current) return;
+
     setRoles([]);
     setProjectIds([]);
     setPermissions(new Set());
@@ -153,27 +158,35 @@ export function AccessProvider({ children }: PropsWithChildren) {
     setCapabilities(EMPTY_CAPABILITIES);
     setApprovalCounts(EMPTY_COUNTS);
     setError(null);
-    loadedRef.current = false;
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (!loadedRef.current) setLoading(true);
-    setError(null);
+  const runRefresh = useCallback(async () => {
+    if (!loadedRef.current && mountedRef.current) {
+      setLoading(true);
+    }
+
+    if (mountedRef.current) {
+      setError(null);
+    }
 
     try {
-      const { data } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
       if (__DEV__) {
         console.log(
           "TTTracker RBAC session:",
-          data.session ? data.session.user.email ?? data.session.user.id : "NO SESSION",
+          session ? session.user.email ?? session.user.id : "NO SESSION",
         );
       }
 
-      if (!data.session) {
+      if (!session) {
         clear();
         return;
       }
+
+      const sessionUserId = session.user.id;
 
       /*
        * RBAC is deliberately loaded separately from the mobile bootstrap.
@@ -200,6 +213,19 @@ export function AccessProvider({ children }: PropsWithChildren) {
         throw accessError;
       }
 
+      /*
+       * The user may have signed out or switched accounts while the request
+       * was in flight. Never apply access returned for a stale session.
+       */
+      const {
+        data: { session: currentSession },
+      } = await supabase.auth.getSession();
+
+      if (!currentSession || currentSession.user.id !== sessionUserId) {
+        clear();
+        return;
+      }
+
       const nextProjectIds =
         access.project_ids ??
         access.projects?.map(
@@ -213,6 +239,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
           String(code).startsWith("mobile."),
         );
 
+      if (!mountedRef.current) return;
+
       setRoles(access.roles ?? []);
       setProjectIds(
         Array.from(new Set(nextProjectIds.map(String).filter(Boolean))),
@@ -220,12 +248,14 @@ export function AccessProvider({ children }: PropsWithChildren) {
       setPermissions(new Set(nextMobilePermissions));
 
       /*
-       * Bootstrap is supplementary. If it fails, preserve RBAC and use
-       * safe defaults for navigation/config/workflow extras.
+       * Bootstrap is supplementary. If it fails, preserve the last known
+       * navigation/config/capability data instead of blanking the app.
        */
       try {
         const bootstrap =
           await apiJson<BootstrapPayload>("/api/mobile/bootstrap");
+
+        if (!mountedRef.current) return;
 
         setNavigation(bootstrap.navigation ?? []);
         setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
@@ -240,14 +270,9 @@ export function AccessProvider({ children }: PropsWithChildren) {
         }
       } catch (bootstrapError) {
         console.warn(
-          "TTTracker /api/mobile/bootstrap failed; RBAC remains active:",
+          "TTTracker /api/mobile/bootstrap failed; keeping last known mobile config:",
           bootstrapError,
         );
-
-        setNavigation([]);
-        setAppConfig(DEFAULT_APP_CONFIG);
-        setCapabilities(EMPTY_CAPABILITIES);
-        setApprovalCounts(EMPTY_COUNTS);
       }
     } catch (refreshError) {
       const message =
@@ -256,27 +281,87 @@ export function AccessProvider({ children }: PropsWithChildren) {
           : "Could not load mobile access.";
 
       console.error("TTTracker access refresh failed:", refreshError);
-      setError(message);
+
+      if (mountedRef.current) {
+        setError(message);
+      }
     } finally {
       loadedRef.current = true;
-      setLoading(false);
+
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [clear]);
 
+  /*
+   * Deduplicate refreshes.
+   *
+   * Expo/Supabase startup can trigger refresh from several places at nearly
+   * the same time:
+   *   - the provider's initial useEffect
+   *   - Supabase INITIAL_SESSION / SIGNED_IN events
+   *   - AppState returning to active
+   *   - the one-minute background access refresh
+   *
+   * All callers now share one in-flight Promise rather than launching
+   * multiple /api/access/me + /api/mobile/bootstrap request pairs.
+   */
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshPromiseRef.current) {
+      if (__DEV__) {
+        console.log("TTTracker access refresh already in progress; reusing request.");
+      }
+
+      return refreshPromiseRef.current;
+    }
+
+    const task = runRefresh();
+
+    const trackedTask = task.finally(() => {
+      if (refreshPromiseRef.current === trackedTask) {
+        refreshPromiseRef.current = null;
+      }
+    });
+
+    refreshPromiseRef.current = trackedTask;
+    return trackedTask;
+  }, [runRefresh]);
+
   useEffect(() => {
+    mountedRef.current = true;
+
     void refresh();
 
-    const authListener = supabase.auth.onAuthStateChange(() => void refresh());
+    const authListener = supabase.auth.onAuthStateChange((event) => {
+      if (__DEV__) {
+        console.log("TTTracker auth state change:", event);
+      }
+
+      /*
+       * TOKEN_REFRESHED only replaces the JWT. Permissions are refreshed by
+       * the normal one-minute timer, and launching another RBAC request here
+       * creates unnecessary traffic.
+       */
+      if (event === "TOKEN_REFRESHED") return;
+
+      void refresh();
+    });
 
     const appListener = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refresh();
+      if (state === "active") {
+        void refresh();
+      }
     });
 
     const interval = setInterval(() => {
-      if (AppState.currentState === "active") void refresh();
+      if (AppState.currentState === "active") {
+        void refresh();
+      }
     }, ACCESS_REFRESH_INTERVAL_MS);
 
     return () => {
+      mountedRef.current = false;
       authListener.data.subscription.unsubscribe();
       appListener.remove();
       clearInterval(interval);

@@ -9,6 +9,7 @@ import {
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -32,15 +33,64 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+const DEFECTS_FOCUS_REFRESH_COOLDOWN_MS = 3_000;
+let defectsFocusRefreshInFlight: Promise<void> | null = null;
+let defectsFocusRefreshCompletedAt = 0;
+
+function guardedDefectsFocusRefresh(refresh: () => Promise<void>) {
+  const now = Date.now();
+
+  if (defectsFocusRefreshInFlight) {
+    return defectsFocusRefreshInFlight;
+  }
+
+  if (now - defectsFocusRefreshCompletedAt < DEFECTS_FOCUS_REFRESH_COOLDOWN_MS) {
+    return Promise.resolve();
+  }
+
+  const task = Promise.resolve()
+    .then(refresh)
+    .finally(() => {
+      defectsFocusRefreshCompletedAt = Date.now();
+      if (defectsFocusRefreshInFlight === task) {
+        defectsFocusRefreshInFlight = null;
+      }
+    });
+
+  defectsFocusRefreshInFlight = task;
+  return task;
+}
+
 function DefectsScreenContent() {
   const { data, loading, refresh } = useQuality();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
 
+  /*
+   * Keep the latest QualityContext refresh function in a ref so the focus
+   * callback itself stays stable. If QualityContext recreates `refresh` after
+   * a state update, React Navigation must NOT treat that as a new focus effect
+   * and immediately fire another quality bootstrap request.
+   */
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  /*
+   * QualityProvider performs the initial load when this screen mounts, so the
+   * first focus does not need another request. Subsequent focuses (for example
+   * returning from New Defect or Defect Detail) refresh once.
+   */
+  const hasFocusedOnceRef = useRef(false);
+
   useFocusEffect(
     useCallback(() => {
-      void refresh();
-    }, [refresh]),
+      if (!hasFocusedOnceRef.current) {
+        hasFocusedOnceRef.current = true;
+        return;
+      }
+
+      void guardedDefectsFocusRefresh(() => refreshRef.current());
+    }, []),
   );
 
   const towers = useMemo(

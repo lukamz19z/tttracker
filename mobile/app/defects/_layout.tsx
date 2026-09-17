@@ -1,15 +1,11 @@
-import { Stack } from "expo-router";
+import { Slot } from "expo-router";
 
 import { QualityProvider } from "@/contexts/QualityContext";
 
-export default function QualityRouteLayout() {
+export default function DefectsLayout() {
   return (
     <QualityProvider>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-        }}
-      />
+      <Slot />
     </QualityProvider>
   );
 }
