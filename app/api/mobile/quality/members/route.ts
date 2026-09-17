@@ -54,7 +54,7 @@ export async function GET(request: Request) {
     const { data, error } = await service
       .from("tower_material_members")
       .select(
-        "id,tower_id,bundle_reference,drawing_number,mark_no,pn_final,qty_per_tower,section,tower_segment",
+        "id,tower_id,bundle_reference,drawing_number,mark_no,qty_per_tower,section,tower_segment",
       )
       .eq("tower_id", towerId)
       .order("tower_segment", { ascending: true })
@@ -69,8 +69,8 @@ export async function GET(request: Request) {
         towerId: row.tower_id,
         bundleReference: row.bundle_reference,
         drawingNumber: row.drawing_number,
-        memberNumber: row.mark_no || row.pn_final || "",
-        alternateMemberNumber: row.pn_final,
+        memberNumber: row.mark_no || "",
+        alternateMemberNumber: null,
         qtyPerTower: row.qty_per_tower,
         section: row.section,
         towerSegment: row.tower_segment,

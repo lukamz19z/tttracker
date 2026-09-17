@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ExternalLink,
   Plus,
-  Search,
   Send,
   Wrench,
   X,
@@ -31,6 +30,7 @@ import {
 } from "react-native";
 
 import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
+import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
 import { QualitySelector } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
@@ -125,9 +125,6 @@ export default function RevisionDetailScreen() {
 
   const [memberCatalog, setMemberCatalog] =
     useState<QualityMemberCatalogRow[]>([]);
-  const [memberSearch, setMemberSearch] = useState("");
-  const [memberPickerOpen, setMemberPickerOpen] =
-    useState(false);
   const [issuePickerOpen, setIssuePickerOpen] =
     useState(false);
 
@@ -168,6 +165,7 @@ export default function RevisionDetailScreen() {
     [data?.towers],
   );
 
+
   const localClientMutationId =
     clientMutationIdFromRouteKey(routeRevisionId);
 
@@ -201,6 +199,66 @@ export default function RevisionDetailScreen() {
   const towerId =
     clean(serverRevision?.tower_id) ||
     clean(workspace?.towerId);
+
+  const qualityTowerMembers = useMemo<QualityMemberCatalogRow[]>(
+    () =>
+      (Array.isArray(data?.members) ? data.members : [])
+        .filter(
+          (member) =>
+            clean(member.tower_id) === towerId,
+        )
+        .map((member) => ({
+          id:
+            clean(member.id) ||
+            [
+              clean(member.tower_id),
+              clean(member.mark_no),
+              clean(member.drawing_number),
+              clean(member.tower_segment),
+            ].join("::"),
+          towerId: clean(member.tower_id),
+          bundleReference:
+            clean(member.bundle_reference) || null,
+          drawingNumber:
+            clean(member.drawing_number) || null,
+          memberNumber: clean(member.mark_no),
+          alternateMemberNumber: null,
+          qtyPerTower:
+            member.qty_per_tower === null ||
+            member.qty_per_tower === undefined
+              ? null
+              : Number(member.qty_per_tower),
+          section: clean(member.section) || null,
+          towerSegment:
+            clean(member.tower_segment) || null,
+        }))
+        .filter((member) => member.memberNumber),
+    [data?.members, towerId],
+  );
+
+  const availableMembers = useMemo(() => {
+    const rows = new Map<string, QualityMemberCatalogRow>();
+
+    for (const member of [
+      ...qualityTowerMembers,
+      ...memberCatalog,
+    ]) {
+      const key =
+        clean(member.id) ||
+        [
+          clean(member.memberNumber),
+          clean(member.towerSegment),
+          clean(member.drawingNumber),
+          clean(member.bundleReference),
+        ].join("::");
+
+      if (!rows.has(key)) {
+        rows.set(key, member);
+      }
+    }
+
+    return Array.from(rows.values());
+  }, [memberCatalog, qualityTowerMembers]);
 
   const tower = towers.find(
     (row) => clean(row.id) === towerId,
@@ -542,27 +600,6 @@ export default function RevisionDetailScreen() {
     workspace,
   ]);
 
-  const memberResults = useMemo(() => {
-    const q = memberSearch.trim().toLowerCase();
-    if (q.length < 2) return [];
-
-    return memberCatalog
-      .filter((member) =>
-        [
-          member.memberNumber,
-          member.alternateMemberNumber,
-          member.drawingNumber,
-          member.bundleReference,
-          member.section,
-          member.towerSegment,
-        ]
-          .map(clean)
-          .join(" ")
-          .toLowerCase()
-          .includes(q),
-      )
-      .slice(0, 50);
-  }, [memberCatalog, memberSearch]);
 
   function issueName(item: QualityRevisionItem) {
     return (
@@ -578,7 +615,6 @@ export default function RevisionDetailScreen() {
 
   function openAddFinding() {
     setFindingForm(BLANK_FINDING);
-    setMemberSearch("");
     setFindingModalOpen(true);
   }
 
@@ -656,8 +692,7 @@ export default function RevisionDetailScreen() {
 
       setFindingModalOpen(false);
       setFindingForm(BLANK_FINDING);
-      setMemberSearch("");
-
+  
       // The queuing effect above will immediately queue this
       // if the parent RECT already exists server-side.
     } catch (error) {
@@ -1320,52 +1355,39 @@ export default function RevisionDetailScreen() {
               </>
             ) : null}
 
-            <Text style={styles.label}>
-              Member
-            </Text>
-            <View style={styles.search}>
-              <Search
-                size={17}
-                color="#64748b"
-              />
-              <TextInput
-                value={memberSearch}
-                onChangeText={(value) => {
-                  setMemberSearch(value);
-                  if (
-                    value.trim().length >= 2
-                  ) {
-                    setMemberPickerOpen(true);
-                  }
-                }}
-                placeholder="Search member, drawing, bundle, segment…"
-                placeholderTextColor="#94a3b8"
-                style={styles.searchInput}
-              />
-            </View>
-
-            {findingForm.memberNumber ? (
-              <View style={styles.selectedMember}>
-                <Text
-                  style={styles.selectedMemberTitle}
-                >
-                  Member{" "}
-                  {findingForm.memberNumber}
-                </Text>
-                <Text
-                  style={styles.selectedMemberSub}
-                >
-                  {[
-                    findingForm.towerSegment,
-                    findingForm.drawingNumber
-                      ? `Drawing ${findingForm.drawingNumber}`
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Text>
-              </View>
-            ) : null}
+            <RevisionMemberFields
+              members={availableMembers}
+              segment={findingForm.towerSegment}
+              memberNumber={findingForm.memberNumber}
+              drawingNumber={findingForm.drawingNumber}
+              onSegmentChange={(
+                towerSegment,
+                keepCurrentMember,
+              ) =>
+                setFindingForm((current) => ({
+                  ...current,
+                  towerSegment,
+                  memberNumber: keepCurrentMember
+                    ? current.memberNumber
+                    : "",
+                  drawingNumber: keepCurrentMember
+                    ? current.drawingNumber
+                    : "",
+                }))
+              }
+              onSelectMember={(member) =>
+                setFindingForm((current) => ({
+                  ...current,
+                  memberNumber:
+                    clean(member.memberNumber),
+                  towerSegment:
+                    clean(member.towerSegment) ||
+                    current.towerSegment,
+                  drawingNumber:
+                    clean(member.drawingNumber),
+                }))
+              }
+            />
 
             <Text style={styles.label}>
               Finding details
@@ -1484,59 +1506,6 @@ export default function RevisionDetailScreen() {
             }
           />
 
-          <QualitySelector
-            visible={memberPickerOpen}
-            title="Select Member"
-            options={memberResults.map(
-              (member) => ({
-                id: member.id,
-                label:
-                  member.memberNumber ||
-                  "Member",
-                subtitle: [
-                  member.towerSegment,
-                  member.drawingNumber
-                    ? `Drawing ${member.drawingNumber}`
-                    : "",
-                  member.bundleReference
-                    ? `Bundle ${member.bundleReference}`
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · "),
-              }),
-            )}
-            onClose={() =>
-              setMemberPickerOpen(false)
-            }
-            onSelect={(option) => {
-              const member =
-                memberCatalog.find(
-                  (row) => row.id === option.id,
-                );
-
-              if (!member) return;
-
-              setFindingForm(
-                (current) => ({
-                  ...current,
-                  memberNumber:
-                    member.memberNumber,
-                  drawingNumber:
-                    clean(
-                      member.drawingNumber,
-                    ),
-                  towerSegment:
-                    clean(
-                      member.towerSegment,
-                    ),
-                }),
-              );
-              setMemberSearch(
-                member.memberNumber,
-              );
-            }}
-          />
         </SafeAreaView>
       </Modal>
 
@@ -1943,36 +1912,6 @@ const styles = StyleSheet.create({
     minHeight: 90,
     paddingTop: 12,
     textAlignVertical: "top",
-  },
-  search: {
-    minHeight: 46,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 12,
-    backgroundColor: "#fff",
-    paddingHorizontal: 12,
-  },
-  searchInput: {
-    flex: 1,
-    color: "#0f172a",
-  },
-  selectedMember: {
-    backgroundColor: "#eff6ff",
-    borderRadius: 11,
-    padding: 11,
-  },
-  selectedMemberTitle: {
-    color: "#1d4ed8",
-    fontWeight: "900",
-    fontSize: 12,
-  },
-  selectedMemberSub: {
-    color: "#3b82f6",
-    fontSize: 11,
-    marginTop: 2,
   },
   previewModal: {
     flex: 1,
