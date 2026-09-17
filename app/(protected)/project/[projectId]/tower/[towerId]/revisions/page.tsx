@@ -20,6 +20,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
+import RevisionNotificationManager from "@/components/quality/RevisionNotificationManager";
 import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
 import TowerHeader from "@/components/towers/TowerHeader";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -28,6 +29,12 @@ type TowerRow = {
   id: string;
   name?: string | null;
   [key: string]: unknown;
+};
+
+type ProjectRow = {
+  id: string;
+  name?: string | null;
+  project_number?: string | null;
 };
 
 type IssueType = {
@@ -44,6 +51,7 @@ type RevisionRow = {
   tower_id: string;
   sequence_no: number | null;
   fli_number: string;
+  revision_number?: string | null;
   inspection_stage: "Post Assembly" | "Post Erection" | "Other";
   inspection_date: string;
   client_inspector: string | null;
@@ -66,6 +74,7 @@ type RevisionItem = {
   project_id: string;
   tower_id: string;
   item_number: number;
+  fli_number?: string | null;
   issue_type_id: string | null;
   other_issue_text: string | null;
   tower_segment: string | null;
@@ -139,7 +148,21 @@ type EvidenceView = {
 };
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const value = new Date();
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function rectCode(revision: RevisionRow) {
+  return revision.revision_number?.trim() ||
+    `RECT-${String(Number(revision.sequence_no ?? 1)).padStart(2, "0")}`;
+}
+
+function fliCode(item: RevisionItem) {
+  return item.fli_number?.trim() ||
+    `FLI-${String(Number(item.item_number ?? 1)).padStart(3, "0")}`;
 }
 
 const BLANK_REVISION: RevisionDraft = {
@@ -196,6 +219,7 @@ export default function TowerRevisionsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [tower, setTower] = useState<TowerRow | null>(null);
+  const [project, setProject] = useState<ProjectRow | null>(null);
   const [latestDate, setLatestDate] = useState<string | null>(null);
   const [revisions, setRevisions] = useState<RevisionRow[]>([]);
   const [items, setItems] = useState<RevisionItem[]>([]);
@@ -214,6 +238,7 @@ export default function TowerRevisionsPage() {
   const [revisionDraft, setRevisionDraft] = useState<RevisionDraft>(BLANK_REVISION);
   const [revisionSaving, setRevisionSaving] = useState(false);
   const [issueManagerOpen, setIssueManagerOpen] = useState(false);
+  const [notificationManagerOpen, setNotificationManagerOpen] = useState(false);
 
   const [findingDraft, setFindingDraft] = useState<FindingDraft | null>(null);
   const [findingSaving, setFindingSaving] = useState(false);
@@ -241,7 +266,8 @@ export default function TowerRevisionsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [towerRes, docketRes, revisionRes, itemRes, fileRes, issueRes, memberRes] = await Promise.all([
+    const [projectRes, towerRes, docketRes, revisionRes, itemRes, fileRes, issueRes, memberRes] = await Promise.all([
+      supabase.from("projects").select("id,name,project_number").eq("id", projectId).single(),
       supabase.from("towers").select("*").eq("id", towerId).single(),
       supabase
         .from("tower_daily_dockets")
@@ -289,6 +315,7 @@ export default function TowerRevisionsPage() {
     if (issueRes.error) console.error(issueRes.error);
     if (memberRes.error) console.error("Tower member load error", memberRes.error);
 
+    setProject((projectRes.data as ProjectRow | null) ?? null);
     setTower((towerRes.data as TowerRow | null) ?? null);
     setLatestDate(docketRes.data?.[0]?.docket_date ?? null);
     setRevisions((revisionRes.data ?? []) as RevisionRow[]);
@@ -413,28 +440,29 @@ export default function TowerRevisionsPage() {
         data: { user },
       } = await supabase.auth.getUser();
       const label = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || "Unknown User";
-      const { data, error } = await supabase
-        .from("tower_revisions")
-        .insert({
-          project_id: projectId,
-          tower_id: towerId,
-          inspection_stage: revisionDraft.inspection_stage,
-          inspection_date: revisionDraft.inspection_date || today(),
-          client_inspector: revisionDraft.client_inspector.trim() || null,
-          client_company: revisionDraft.client_company.trim() || null,
-          client_reference: revisionDraft.client_reference.trim() || null,
+      void user;
+      void label;
+      const response = await apiFetch("/api/quality/revisions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          towerId,
+          inspectionStage: revisionDraft.inspection_stage,
+          inspectionDate: revisionDraft.inspection_date || today(),
+          clientInspector: revisionDraft.client_inspector.trim() || null,
+          clientCompany: revisionDraft.client_company.trim() || null,
+          clientReference: revisionDraft.client_reference.trim() || null,
           notes: revisionDraft.notes.trim() || null,
-          status: "Draft",
-          created_by: user?.id ?? null,
-          created_by_label: label,
-        })
-        .select("*")
-        .single();
-      if (error || !data) throw new Error(error?.message || "Revision could not be created.");
+        }),
+      });
+      const payload = (await response.json()) as { revision?: RevisionRow; error?: string };
+      if (!response.ok || !payload.revision) throw new Error(payload.error || "Revision could not be created.");
+      const data = payload.revision;
       setRevisionDraft(BLANK_REVISION);
       setRevisionModalOpen(false);
       setExpanded((current) => new Set(current).add(data.id));
-      setMessage({ tone: "success", text: `${data.fli_number || "Revision"} created.` });
+      setMessage({ tone: "success", text: `${rectCode(data)} created.` });
       await load();
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Revision could not be created." });
@@ -517,7 +545,7 @@ export default function TowerRevisionsPage() {
         .eq("status", "Draft");
 
       setFindingDraft(null);
-      setMessage({ tone: "success", text: `Finding ${String(data.item_number).padStart(3, "0")} added.` });
+      setMessage({ tone: "success", text: `${fliCode(data as RevisionItem)} added.` });
       await load();
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Finding could not be saved." });
@@ -606,14 +634,47 @@ export default function TowerRevisionsPage() {
     setBusyId(null);
   }
 
+  async function submitRevisionForReview(revision: RevisionRow) {
+    setBusyId(`submit-${revision.id}`);
+    setMessage(null);
+    try {
+      const response = await apiFetch(
+        `/api/quality/revisions/${encodeURIComponent(revision.id)}/submit-review`,
+        { method: "POST" },
+      );
+      const payload = (await response.json()) as {
+        revision?: RevisionRow;
+        notification?: { recipients?: number; warning?: string | null };
+        error?: string;
+      };
+      if (!response.ok || !payload.revision) {
+        throw new Error(payload.error || "Revision could not be submitted for review.");
+      }
+
+      const recipients = Number(payload.notification?.recipients ?? 0);
+      setMessage({
+        tone: payload.notification?.warning ? "error" : "success",
+        text: `${rectCode(payload.revision)} submitted for review. ${recipients} configured recipient${recipients === 1 ? "" : "s"} notified.${payload.notification?.warning ? ` ${payload.notification.warning}` : ""}`,
+      });
+      await load();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Revision could not be submitted for review.",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function deleteRevision(revision: RevisionRow) {
     const confirmation = window.prompt(
-      `Delete ${revision.fli_number}?\n\nThis permanently removes the Revision, all findings, SharePoint evidence and generated PDFs.\n\nType the full Revision number to confirm:`,
+      `Delete ${rectCode(revision)}?\n\nThis permanently removes the Revision, all findings, SharePoint evidence and generated PDFs.\n\nType the full Revision number to confirm:`,
     );
 
     if (confirmation === null) return;
 
-    if (confirmation.trim() !== revision.fli_number) {
+    if (confirmation.trim() !== rectCode(revision)) {
       setMessage({
         tone: "error",
         text: "Revision was not deleted because the confirmation did not match.",
@@ -631,7 +692,7 @@ export default function TowerRevisionsPage() {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            confirm: revision.fli_number,
+            confirm: revision.fli_number || rectCode(revision),
             projectId,
             towerId,
           }),
@@ -657,8 +718,8 @@ export default function TowerRevisionsPage() {
       setMessage({
         tone: "success",
         text: payload.warning
-          ? `${revision.fli_number} deleted. ${payload.warning}`
-          : `${revision.fli_number} deleted successfully.`,
+          ? `${rectCode(revision)} deleted. ${payload.warning}`
+          : `${rectCode(revision)} deleted successfully.`,
       });
 
       await load();
@@ -718,7 +779,7 @@ export default function TowerRevisionsPage() {
       await load();
       setMessage({
         tone: "success",
-        text: `${revision.fli_number}-R${String(payload.report_revision ?? 1).padStart(2, "0")} created and saved to SharePoint.`,
+        text: `${rectCode(revision)}-R${String(payload.report_revision ?? 1).padStart(2, "0")} created and saved to SharePoint.`,
       });
       await openFile(payload.file.id, popup);
     } catch (error) {
@@ -830,20 +891,21 @@ export default function TowerRevisionsPage() {
               <div>
                 <h1 className="text-2xl font-black tracking-tight text-slate-950">Revisions</h1>
                 <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-                  Post-assembly and post-erection client inspection findings. Review what was flagged, monitor rectification, compare before/after evidence and generate the controlled FLI PDF.
+                  Create a Revision (RECT) for the tower, add each flagged issue as its own FLI, track rectification evidence, then submit the Revision for review.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => setIssueManagerOpen(true)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"><Settings2 size={16} /> Common Issues</button>
+              <button type="button" onClick={() => setNotificationManagerOpen(true)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"><Settings2 size={16} /> Revision Notifications</button>
               <button type="button" onClick={() => void load()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"><RefreshCw size={16} /> Refresh</button>
               <button type="button" onClick={() => setRevisionModalOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"><Plus size={16} /> New Revision</button>
             </div>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-4">
-            <Stat label="FLI Records" value={stats.revisions} />
+            <Stat label="Revisions" value={stats.revisions} />
             <Stat label="Open Findings" value={stats.openFindings} tone="rose" />
             <Stat label="Rectified" value={stats.rectified} tone="blue" />
             <Stat label="Closed Reports" value={stats.closed} tone="green" />
@@ -856,8 +918,8 @@ export default function TowerRevisionsPage() {
           {revisions.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
               <FileCheck2 className="mx-auto text-slate-300" size={30} />
-              <div className="mt-3 font-bold text-slate-700">No Revisions / FLI records yet</div>
-              <p className="mt-1 text-sm text-slate-500">Create the first record after a client inspection.</p>
+              <div className="mt-3 font-bold text-slate-700">No Revisions yet</div>
+              <p className="mt-1 text-sm text-slate-500">Create the first RECT record, then add one or more FLIs.</p>
             </div>
           ) : null}
 
@@ -877,7 +939,7 @@ export default function TowerRevisionsPage() {
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                     <button type="button" onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(revision.id)) next.delete(revision.id); else next.add(revision.id); return next; })} className="min-w-0 flex-1 text-left">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-black text-blue-700">{revision.fli_number}</span>
+                        <span className="font-black text-blue-700">{[project?.project_number || project?.name, tower?.name, rectCode(revision)].filter(Boolean).join(" ")}</span>
                         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${revisionStatusClasses(revision.status)}`}>{revision.status}</span>
                         {revision.pdf_revision > 0 ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">PDF R{String(revision.pdf_revision).padStart(2, "0")}</span> : null}
                       </div>
@@ -899,7 +961,7 @@ export default function TowerRevisionsPage() {
                         onClick={() => void deleteRevision(revision)}
                         disabled={busyId === `delete-${revision.id}`}
                         className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-                        title={`Delete ${revision.fli_number}`}
+                        title={`Delete ${rectCode(revision)}`}
                       >
                         {busyId === `delete-${revision.id}` ? (
                           <Loader2 size={14} className="animate-spin" />
@@ -920,7 +982,7 @@ export default function TowerRevisionsPage() {
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-sm font-black text-slate-800">Inspection Findings</div>
                       <div className="flex flex-wrap gap-2">
-                        {revision.status !== "Ready for Review" && revision.status !== "Closed" ? <button type="button" onClick={() => void updateRevisionStatus(revision, "Ready for Review")} disabled={busyId === revision.id} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">Ready for Review</button> : null}
+                        {revision.status !== "Ready for Review" && revision.status !== "Closed" ? <button type="button" onClick={() => void submitRevisionForReview(revision)} disabled={busyId === `submit-${revision.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">{busyId === `submit-${revision.id}` ? "Submitting…" : "Submit for Review"}</button> : null}
                         {revision.status === "Closed" ? <button type="button" onClick={() => void updateRevisionStatus(revision, "In Progress")} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Reopen</button> : null}
                       </div>
                     </div>
@@ -935,7 +997,7 @@ export default function TowerRevisionsPage() {
                           <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                               <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">ITEM {String(item.item_number).padStart(3, "0")}</span><span className="font-bold text-slate-900">{issueName(item.issue_type_id, item.other_issue_text)}</span><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{complete.complete ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Evidence Complete</span> : <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Evidence Incomplete</span>}</div>
+                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span><span className="font-bold text-slate-900">{issueName(item.issue_type_id, item.other_issue_text)}</span><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{complete.complete ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Evidence Complete</span> : <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Evidence Incomplete</span>}</div>
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3"><span>Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
                                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.finding || "No additional client comment."}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
                                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]"><span className={`rounded-lg px-2 py-1 ${beforeCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Before {beforeCount ? `✓ (${beforeCount})` : "missing"}</span><span className={`rounded-lg px-2 py-1 ${item.rectification_comment?.trim() ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Comment {item.rectification_comment?.trim() ? "✓" : "missing"}</span><span className={`rounded-lg px-2 py-1 ${afterCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>After {afterCount ? `✓ (${afterCount})` : "missing"}</span></div>
@@ -959,8 +1021,10 @@ export default function TowerRevisionsPage() {
 
       <IssueTypeManager open={issueManagerOpen} onClose={() => setIssueManagerOpen(false)} projectId={projectId} defaultScope="revision" onChanged={load} />
 
+      {notificationManagerOpen ? <RevisionNotificationManager projectId={projectId} apiFetch={apiFetch} onClose={() => setNotificationManagerOpen(false)} /> : null}
+
       {revisionModalOpen ? (
-        <Modal title="New Revision / FLI" subtitle="Create an inspection rectification record for this tower." onClose={() => setRevisionModalOpen(false)}>
+        <Modal title="New Revision" subtitle="Creates the parent RECT record. Add each flagged issue as an FLI after creation." onClose={() => setRevisionModalOpen(false)}>
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Inspection stage"><select value={revisionDraft.inspection_stage} onChange={(event) => setRevisionDraft((current) => ({ ...current, inspection_stage: event.target.value as RevisionRow["inspection_stage"] }))} className="input"><option>Post Assembly</option><option>Post Erection</option><option>Other</option></select></Field>
             <Field label="Inspection date"><input type="date" value={revisionDraft.inspection_date} onChange={(event) => setRevisionDraft((current) => ({ ...current, inspection_date: event.target.value }))} className="input" /></Field>
@@ -974,7 +1038,7 @@ export default function TowerRevisionsPage() {
       ) : null}
 
       {findingDraft ? (
-        <Modal title="Add Inspection Finding" subtitle={revisions.find((revision) => revision.id === findingDraft.revision_id)?.fli_number} onClose={() => setFindingDraft(null)} wide>
+        <Modal title="Add Flagged Issue" subtitle={revisions.find((revision) => revision.id === findingDraft.revision_id)?.fli_number} onClose={() => setFindingDraft(null)} wide>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Field label="Common issue"><select value={findingDraft.issue_type_id} onChange={(event) => setFindingDraft((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
             {findingDraft.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingDraft.other_issue_text} onChange={(event) => setFindingDraft((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
@@ -1034,7 +1098,7 @@ export default function TowerRevisionsPage() {
       ) : null}
 
       {findingEdit ? (
-        <Modal title="Edit Finding" subtitle={`Item ${String(items.find((item) => item.id === findingEdit.id)?.item_number || 0).padStart(3, "0")}`} onClose={() => setFindingEdit(null)}>
+        <Modal title="Edit Flagged Issue" subtitle={fliCode(items.find((item) => item.id === findingEdit.id) ?? ({ item_number: 0 } as RevisionItem))} onClose={() => setFindingEdit(null)}>
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Common issue"><select value={findingEdit.issue_type_id} onChange={(event) => setFindingEdit((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
             {findingEdit.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingEdit.other_issue_text} onChange={(event) => setFindingEdit((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
@@ -1095,7 +1159,7 @@ export default function TowerRevisionsPage() {
       ) : null}
 
       {evidenceItem ? (
-        <Modal title="Before / After Evidence" subtitle={`Item ${String(evidenceItem.item_number).padStart(3, "0")} · ${issueName(evidenceItem.issue_type_id)}`} onClose={() => { clearEvidence(); setEvidenceItem(null); }} wide>
+        <Modal title="Before / After Evidence" subtitle={`${fliCode(evidenceItem)} · ${issueName(evidenceItem.issue_type_id)}`} onClose={() => { clearEvidence(); setEvidenceItem(null); }} wide>
           <div className="grid gap-4 lg:grid-cols-2">
             {(["before_photo", "after_photo"] as const).map((role) => {
               const roleViews = evidenceViews.filter((view) => view.role === role);

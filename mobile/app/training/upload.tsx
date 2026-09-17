@@ -22,10 +22,42 @@ import {
   uploadTraining,
   type PickedTrainingFile,
 } from "@/lib/api/training";
-import { PermissionScreen } from "@/components/common/PermissionScreen";
 import type { TrainingField, TrainingPayload, TrainingType } from "@/types/training";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
+
+function isoToAustralianDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function formatAustralianDateInput(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+}
+
+function australianDateToIso(value: string) {
+  const match = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!match) return "";
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return "";
+  }
+
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
 
 function addInterval(issueDate: string, value: number | null, unit: string | null) {
   if (!issueDate || !value || !unit) return "";
@@ -132,8 +164,8 @@ export default function TrainingUploadScreen() {
     if (type.requires_project && !projectId) return "Select the project.";
     if (type.requires_issuer && !issuer.trim()) return "Enter the provider / issuing organisation.";
     if (type.requires_certificate_number && !certificateNumber.trim()) return "Enter the certificate or licence number.";
-    if (type.requires_issue_date && !issueDate) return "Enter the issue date.";
-    if (type.validity_mode !== "never" && type.requires_expiry_date && !expiryDate) return "Enter the expiry date.";
+    if (type.requires_issue_date && !issueDate) return "Enter the issue date as DD-MM-YYYY.";
+    if (type.validity_mode !== "never" && type.requires_expiry_date && !expiryDate) return "Enter the expiry date as DD-MM-YYYY.";
     for (const field of typeFields) {
       const value = metadata[field.field_key];
       if (field.required && (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0) || (field.field_type === "checkbox" && value !== true))) return `Enter ${field.label}.`;
@@ -192,11 +224,10 @@ export default function TrainingUploadScreen() {
     }
   }
 
-  if (loading) return <PermissionScreen permission="mobile.training"><View style={styles.center}><ActivityIndicator size="large" color="#2563eb" /></View></PermissionScreen>;
+  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#2563eb" /></View>;
 
   return (
-    <PermissionScreen permission="mobile.training">
-      <>
+    <>
       <Stack.Screen options={{ headerShown: true, title: changesRecordId ? "Fix Training Submission" : "Upload Training" }} />
       <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {message ? <Text style={styles.error}>{message}</Text> : null}
@@ -235,8 +266,21 @@ export default function TrainingUploadScreen() {
               {selectedType.requires_project ? <PickerField label="Project" value={data?.projects.find((p) => p.id === projectId)?.name ?? "Select project"} options={(data?.projects ?? []).map((p) => ({ id: p.id, label: `${p.projectNumber ? `${p.projectNumber} — ` : ""}${p.name}` }))} onSelect={setProjectId} /> : null}
               {selectedType.requires_issuer ? <TextField label="Provider / Issuer" value={issuer} onChangeText={setIssuer} /> : null}
               {selectedType.requires_certificate_number ? <TextField label="Certificate / Licence Number" value={certificateNumber} onChangeText={setCertificateNumber} /> : null}
-              {(selectedType.requires_issue_date || selectedType.validity_mode === "automatic") ? <TextField label="Issue Date (YYYY-MM-DD)" value={issueDate} onChangeText={setIssueDate} keyboardType="numbers-and-punctuation" /> : null}
-              {selectedType.validity_mode !== "never" && selectedType.requires_expiry_date ? <TextField label={selectedType.validity_mode === "automatic" ? "Expiry Date (automatic)" : "Expiry Date (YYYY-MM-DD)"} value={expiryDate} onChangeText={setExpiryDate} editable={selectedType.validity_mode !== "automatic"} /> : null}
+              {(selectedType.requires_issue_date || selectedType.validity_mode === "automatic") ? (
+                <DateField
+                  label="Issue Date (DD-MM-YYYY)"
+                  value={issueDate}
+                  onChange={setIssueDate}
+                />
+              ) : null}
+              {selectedType.validity_mode !== "never" && selectedType.requires_expiry_date ? (
+                <DateField
+                  label={selectedType.validity_mode === "automatic" ? "Expiry Date (automatic)" : "Expiry Date (DD-MM-YYYY)"}
+                  value={expiryDate}
+                  onChange={setExpiryDate}
+                  editable={selectedType.validity_mode !== "automatic"}
+                />
+              ) : null}
               {selectedType.validity_mode === "never" ? <Text style={styles.helper}>This Training type is configured to not expire.</Text> : null}
               {typeFields.map((field) => <DynamicField key={field.id} field={field} value={metadata[field.field_key]} onChange={(value) => setMetadata((current) => ({ ...current, [field.field_key]: value }))} />)}
               <TextField label="Notes" value={notes} onChangeText={setNotes} multiline />
@@ -280,14 +324,60 @@ export default function TrainingUploadScreen() {
           ))}
         </ScrollView>
       </Modal>
-      </>
-    </PermissionScreen>
+    </>
   );
 }
 
 function Card({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return <View style={styles.card}><Text style={styles.cardTitle}>{title}</Text>{hint ? <Text style={styles.helper}>{hint}</Text> : null}<View style={{ gap: 13, marginTop: 12 }}>{children}</View></View>;
 }
+function DateField({
+  label,
+  value,
+  onChange,
+  editable = true,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  editable?: boolean;
+}) {
+  const [displayValue, setDisplayValue] = useState(() =>
+    isoToAustralianDate(value),
+  );
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDisplayValue(isoToAustralianDate(value));
+    }
+  }, [editing, value]);
+
+  function handleChange(text: string) {
+    const formatted = formatAustralianDateInput(text);
+    setDisplayValue(formatted);
+    onChange(australianDateToIso(formatted));
+  }
+
+  return (
+    <View>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={displayValue}
+        onChangeText={handleChange}
+        onFocus={() => setEditing(true)}
+        onBlur={() => setEditing(false)}
+        editable={editable}
+        keyboardType="number-pad"
+        maxLength={10}
+        placeholder="DD-MM-YYYY"
+        placeholderTextColor="#94a3b8"
+      />
+    </View>
+  );
+}
+
 function TextField(props: { label: string; value: string; onChangeText: (value: string) => void; multiline?: boolean; editable?: boolean; keyboardType?: "default" | "numbers-and-punctuation" }) {
   return <View><Text style={styles.label}>{props.label}</Text><TextInput style={[styles.input, props.multiline && { minHeight: 90, textAlignVertical: "top" }]} value={props.value} onChangeText={props.onChangeText} multiline={props.multiline} editable={props.editable !== false} keyboardType={props.keyboardType ?? "default"} placeholderTextColor="#94a3b8" /></View>;
 }
@@ -299,6 +389,7 @@ function DynamicField({ field, value, onChange }: { field: TrainingField; value:
   const options = fieldOptions(field.options);
   if (field.field_type === "checkbox") return <View style={styles.switchRow}><View style={{ flex: 1 }}><Text style={styles.label}>{field.label}{field.required ? " *" : ""}</Text>{field.help_text ? <Text style={styles.helper}>{field.help_text}</Text> : null}</View><Switch value={Boolean(value)} onValueChange={onChange} /></View>;
   if (["select", "dropdown"].includes(field.field_type) && options.length) return <PickerField label={`${field.label}${field.required ? " *" : ""}`} value={clean(value) || field.placeholder || "Select"} options={options.map((option) => ({ id: option, label: option }))} onSelect={onChange} />;
+  if (field.field_type === "date") return <DateField label={`${field.label}${field.required ? " *" : ""} (DD-MM-YYYY)`} value={clean(value)} onChange={onChange} />;
   return <TextField label={`${field.label}${field.required ? " *" : ""}`} value={clean(value)} onChangeText={onChange} multiline={field.field_type === "textarea"} keyboardType={field.field_type === "number" ? "numbers-and-punctuation" : "default"} />;
 }
 function FileField({ label, value, onChange }: { label: string; value: PickedTrainingFile | null; onChange: (value: PickedTrainingFile | null) => void }) {
