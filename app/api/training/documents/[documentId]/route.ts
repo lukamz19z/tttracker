@@ -1,7 +1,7 @@
 
 import { NextResponse } from "next/server";
 
-import { downloadDriveItemContent } from "@/lib/sharepoint/graph";
+import { graphRequest } from "@/lib/sharepoint/graph";
 import {
   requireTrainingUser,
   trainingApiError,
@@ -15,21 +15,37 @@ type RouteContext = {
   params: Promise<{ documentId: string }>;
 };
 
+type GraphDriveItemWithDownloadUrl = {
+  id?: string;
+  name?: string;
+  "@microsoft.graph.downloadUrl"?: string;
+};
+
 function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function contentDisposition(fileName: string) {
-  const safe = fileName.replace(/["\r\n]/g, "_");
-  return `inline; filename="${safe}"`;
-}
+async function retry<T>(
+  operation: () => Promise<T>,
+  attempts = 2,
+): Promise<T> {
+  let lastError: unknown;
 
-function evidenceName(document: Record<string, unknown>) {
-  return (
-    clean(document.generated_file_name) ||
-    clean(document.original_file_name) ||
-    "training-document"
-  );
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < attempts) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 150 * attempt),
+        );
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 export async function GET(
@@ -38,6 +54,7 @@ export async function GET(
 ) {
   try {
     const { documentId } = await context.params;
+
     const { service, identity } =
       await requireTrainingUser(request);
 
@@ -88,11 +105,12 @@ export async function GET(
       identity.employeeId === record.employee_id;
 
     if (!allowed) {
-      const { data: type } = await service
-        .from("training_types")
-        .select("category_id")
-        .eq("id", record.training_type_id)
-        .maybeSingle();
+      const { data: trainingType } =
+        await service
+          .from("training_types")
+          .select("category_id")
+          .eq("id", record.training_type_id)
+          .maybeSingle();
 
       allowed = await userCanReviewTraining({
         service,
@@ -100,7 +118,7 @@ export async function GET(
         trainingTypeId:
           clean(record.training_type_id) || null,
         categoryId:
-          clean(type?.category_id) || null,
+          clean(trainingType?.category_id) || null,
       });
     }
 
@@ -114,80 +132,113 @@ export async function GET(
       );
     }
 
-    const fileName = evidenceName(
-      document as Record<string, unknown>,
-    );
+    /*
+     * IMPORTANT:
+     * Do not proxy the actual evidence bytes through this Next.js route.
+     *
+     * The old implementation downloaded the file inside the server route.
+     * For SharePoint that means Microsoft Graph returns a temporary download
+     * target and the Node/serverless fetch then has to follow that large-file
+     * redirect. That is the path which can surface the generic:
+     *
+     *   { "error": "fetch failed" }
+     *
+     * Instead:
+     *   - TTTracker authenticates + authorises here.
+     *   - Supabase staging gets a 5-minute signed URL.
+     *   - SharePoint gets Microsoft's short-lived pre-authenticated
+     *     @microsoft.graph.downloadUrl.
+     *   - The client follows that URL directly.
+     *
+     * Browser fetch() and the mobile apiFetch() both follow redirects, so the
+     * existing website Training verification viewer remains compatible.
+     */
 
-    // Pending / changes-required files remain private in staging.
     if (clean(document.staging_path)) {
       const bucket =
         clean(document.staging_bucket) ||
         "training-staging";
 
-      const {
-        data: file,
-        error: downloadError,
-      } = await service.storage
-        .from(bucket)
-        .download(document.staging_path);
+      const signed = await retry(async () => {
+        const { data, error } = await service.storage
+          .from(bucket)
+          .createSignedUrl(
+            clean(document.staging_path),
+            300,
+            {
+              download:
+                clean(document.generated_file_name) ||
+                clean(document.original_file_name) ||
+                "training-document",
+            },
+          );
 
-      if (downloadError || !file) {
-        throw new Error(
-          downloadError?.message ||
-            "The staged document could not be loaded.",
-        );
-      }
+        if (error || !data?.signedUrl) {
+          throw new Error(
+            error?.message ||
+              "Could not create a secure Training evidence link.",
+          );
+        }
 
-      return new Response(await file.arrayBuffer(), {
-        status: 200,
+        return data.signedUrl;
+      });
+
+      return NextResponse.redirect(signed, {
+        status: 307,
         headers: {
-          "Content-Type":
-            clean(document.mime_type) ||
-            file.type ||
-            "application/octet-stream",
-          "Content-Disposition":
-            contentDisposition(fileName),
           "Cache-Control": "private, no-store",
-          "X-Content-Type-Options": "nosniff",
         },
       });
     }
 
-    // Approved files are streamed back through TTTracker as bytes.
-    // Do not redirect the mobile client to SharePoint, because the
-    // app's Supabase session is not a Microsoft browser session.
     const driveId =
       clean(document.sharepoint_drive_id);
     const itemId =
       clean(document.sharepoint_item_id);
 
     if (driveId && itemId) {
-      const downloaded =
-        await downloadDriveItemContent({
-          driveId,
-          itemId,
-        });
+      const driveItem = await retry(() =>
+        graphRequest<GraphDriveItemWithDownloadUrl>(
+          `/drives/${encodeURIComponent(
+            driveId,
+          )}/items/${encodeURIComponent(itemId)}`,
+          {
+            method: "GET",
+          },
+        ),
+      );
 
-      return new Response(downloaded.content, {
-        status: 200,
+      const downloadUrl = clean(
+        driveItem["@microsoft.graph.downloadUrl"],
+      );
+
+      if (!downloadUrl) {
+        throw new Error(
+          "SharePoint did not return a temporary download URL for this Training document.",
+        );
+      }
+
+      return NextResponse.redirect(downloadUrl, {
+        status: 307,
         headers: {
-          "Content-Type":
-            clean(document.mime_type) ||
-            downloaded.contentType ||
-            "application/octet-stream",
-          "Content-Disposition":
-            contentDisposition(fileName),
           "Cache-Control": "private, no-store",
-          "X-Content-Type-Options": "nosniff",
         },
       });
     }
 
-    // Legacy fallback only. Current controlled records should have
-    // SharePoint drive/item ids after publication.
+    /*
+     * Very old records may only have a web URL. Keep this fallback, but
+     * current controlled Training records should always have drive + item IDs.
+     */
     if (clean(document.sharepoint_web_url)) {
       return NextResponse.redirect(
-        document.sharepoint_web_url,
+        clean(document.sharepoint_web_url),
+        {
+          status: 307,
+          headers: {
+            "Cache-Control": "private, no-store",
+          },
+        },
       );
     }
 
@@ -199,11 +250,20 @@ export async function GET(
       { status: 404 },
     );
   } catch (error) {
+    console.error(
+      "Training document delivery failed:",
+      error,
+    );
+
     const apiError = trainingApiError(error);
 
     return NextResponse.json(
-      { error: apiError.message },
-      { status: apiError.status },
+      {
+        error: apiError.message,
+      },
+      {
+        status: apiError.status,
+      },
     );
   }
 }

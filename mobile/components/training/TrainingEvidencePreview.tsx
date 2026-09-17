@@ -1,11 +1,18 @@
 
 import { Image } from "expo-image";
+import * as FileSystemLegacy from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
 import * as Sharing from "expo-sharing";
-import { FileText, Share2, X } from "lucide-react-native";
+import {
+  FileText,
+  Share2,
+  X,
+} from "lucide-react-native";
 import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -18,26 +25,70 @@ function clean(value: unknown) {
 }
 
 function extension(fileName: string) {
-  const match = clean(fileName).toLowerCase().match(/\.([a-z0-9]+)$/);
+  const match = clean(fileName)
+    .toLowerCase()
+    .match(/\.([a-z0-9]+)$/);
+
   return match?.[1] ?? "";
 }
 
-function kindFor(fileName: string, mimeType?: string | null) {
+function kindFor(
+  fileName: string,
+  mimeType?: string | null,
+) {
   const mime = clean(mimeType).toLowerCase();
   const ext = extension(fileName);
 
   if (
     mime.startsWith("image/") ||
-    ["jpg", "jpeg", "png", "webp", "heic", "heif"].includes(ext)
+    [
+      "jpg",
+      "jpeg",
+      "png",
+      "webp",
+      "heic",
+      "heif",
+    ].includes(ext)
   ) {
     return "image" as const;
   }
 
-  if (mime === "application/pdf" || ext === "pdf") {
+  if (
+    mime === "application/pdf" ||
+    ext === "pdf"
+  ) {
     return "pdf" as const;
   }
 
   return "other" as const;
+}
+
+function mimeFor(
+  fileName: string,
+  mimeType?: string | null,
+) {
+  const supplied = clean(mimeType);
+
+  if (supplied) return supplied;
+
+  const ext = extension(fileName);
+
+  if (ext === "pdf") {
+    return "application/pdf";
+  }
+
+  if (ext === "png") {
+    return "image/png";
+  }
+
+  if (
+    ext === "jpg" ||
+    ext === "jpeg"
+  ) {
+    return "image/jpeg";
+  }
+
+  return "*/*";
 }
 
 export type TrainingPreviewFile = {
@@ -57,33 +108,78 @@ export function TrainingEvidencePreview({
   loading?: boolean;
   onClose: () => void;
 }) {
-  const kind = file ? kindFor(file.name, file.mimeType) : "other";
+  const kind = file
+    ? kindFor(
+        file.name,
+        file.mimeType,
+      )
+    : "other";
 
-  async function openWithDevice() {
+  async function openNativeViewer() {
     if (!file) return;
 
     try {
-      if (!(await Sharing.isAvailableAsync())) {
-        throw new Error(
-          "The device document viewer is not available.",
+      const mimeType = mimeFor(
+        file.name,
+        file.mimeType,
+      );
+
+      /*
+       * On Android, expo-sharing opens the share sheet. That is NOT what
+       * "Preview PDF" should do.
+       *
+       * Convert the app's file:// URI to a content:// URI and launch the
+       * standard Android ACTION_VIEW intent instead. Android will open the
+       * installed PDF/image viewer directly.
+       */
+      if (Platform.OS === "android") {
+        const contentUri =
+          file.uri.startsWith("content://")
+            ? file.uri
+            : await FileSystemLegacy.getContentUriAsync(
+                file.uri,
+              );
+
+        await IntentLauncher.startActivityAsync(
+          "android.intent.action.VIEW",
+          {
+            data: contentUri,
+            flags: 1,
+            type: mimeType,
+          },
         );
+
+        return;
       }
 
-      await Sharing.shareAsync(file.uri, {
-        dialogTitle:
-          kind === "pdf"
-            ? "Open PDF"
-            : "Open Training evidence",
-        mimeType:
-          clean(file.mimeType) ||
-          (kind === "pdf"
-            ? "application/pdf"
-            : undefined),
-        UTI:
-          kind === "pdf"
-            ? "com.adobe.pdf"
-            : undefined,
-      });
+      /*
+       * iOS fallback. The current TTTracker Android build is the immediate
+       * target, but keep Sharing as a safe fallback where ACTION_VIEW does
+       * not exist.
+       */
+      if (
+        await Sharing.isAvailableAsync()
+      ) {
+        await Sharing.shareAsync(
+          file.uri,
+          {
+            dialogTitle:
+              kind === "pdf"
+                ? "Open PDF"
+                : "Open Training evidence",
+            mimeType,
+            UTI:
+              kind === "pdf"
+                ? "com.adobe.pdf"
+                : undefined,
+          },
+        );
+        return;
+      }
+
+      throw new Error(
+        "No document viewer is available on this device.",
+      );
     } catch (error) {
       Alert.alert(
         "Could not open file",
@@ -104,12 +200,15 @@ export function TrainingEvidencePreview({
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <View style={styles.headerCopy}>
-            <Text style={styles.title}>Evidence Preview</Text>
+            <Text style={styles.title}>
+              Evidence Preview
+            </Text>
             <Text
               numberOfLines={1}
               style={styles.fileName}
             >
-              {file?.name || "Training evidence"}
+              {file?.name ||
+                "Training evidence"}
             </Text>
           </View>
 
@@ -117,7 +216,10 @@ export function TrainingEvidencePreview({
             onPress={onClose}
             style={styles.close}
           >
-            <X size={22} color="#334155" />
+            <X
+              size={22}
+              color="#334155"
+            />
           </Pressable>
         </View>
 
@@ -132,7 +234,8 @@ export function TrainingEvidencePreview({
                 Loading evidence…
               </Text>
             </View>
-          ) : file && kind === "image" ? (
+          ) : file &&
+            kind === "image" ? (
             <>
               <Image
                 source={{ uri: file.uri }}
@@ -142,39 +245,65 @@ export function TrainingEvidencePreview({
               />
 
               <Pressable
-                onPress={() => void openWithDevice()}
+                onPress={() =>
+                  void openNativeViewer()
+                }
                 style={styles.secondary}
               >
-                <Share2 size={17} color="#334155" />
-                <Text style={styles.secondaryText}>
-                  Open / Share
+                <Share2
+                  size={17}
+                  color="#334155"
+                />
+                <Text
+                  style={
+                    styles.secondaryText
+                  }
+                >
+                  Open in device viewer
                 </Text>
               </Pressable>
             </>
-          ) : file && kind === "pdf" ? (
+          ) : file &&
+            kind === "pdf" ? (
             <View style={styles.pdfCard}>
-              <View style={styles.pdfIcon}>
+              <View
+                style={styles.pdfIcon}
+              >
                 <FileText
                   size={48}
                   color="#dc2626"
                 />
               </View>
 
-              <Text style={styles.pdfTitle}>
+              <Text
+                style={styles.pdfTitle}
+              >
                 PDF ready to view
               </Text>
+
               <Text style={styles.helper}>
-                TTTracker has loaded the PDF securely. Tap below to
-                open it in the device PDF viewer.
+                Tap View PDF to open the
+                document in the phone&apos;s PDF
+                viewer. This no longer opens
+                the Share menu.
               </Text>
 
               <Pressable
-                onPress={() => void openWithDevice()}
+                onPress={() =>
+                  void openNativeViewer()
+                }
                 style={styles.primary}
               >
-                <FileText size={18} color="#fff" />
-                <Text style={styles.primaryText}>
-                  Open PDF
+                <FileText
+                  size={18}
+                  color="#fff"
+                />
+                <Text
+                  style={
+                    styles.primaryText
+                  }
+                >
+                  View PDF
                 </Text>
               </Pressable>
             </View>
@@ -184,18 +313,33 @@ export function TrainingEvidencePreview({
                 size={48}
                 color="#64748b"
               />
-              <Text style={styles.pdfTitle}>
+
+              <Text
+                style={styles.pdfTitle}
+              >
                 File ready to open
               </Text>
+
               <Text style={styles.helper}>
-                This file type does not have an inline image preview.
+                This file type does not have
+                an inline image preview.
               </Text>
+
               <Pressable
-                onPress={() => void openWithDevice()}
+                onPress={() =>
+                  void openNativeViewer()
+                }
                 style={styles.primary}
               >
-                <Share2 size={18} color="#fff" />
-                <Text style={styles.primaryText}>
+                <FileText
+                  size={18}
+                  color="#fff"
+                />
+                <Text
+                  style={
+                    styles.primaryText
+                  }
+                >
                   Open File
                 </Text>
               </Pressable>
