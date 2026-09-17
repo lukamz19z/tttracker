@@ -1,7 +1,5 @@
 import { apiJson } from "@/lib/api/client";
 
-export type ApprovalKind = "docket" | "expense" | "invoice";
-
 export type FinanceApprovalCapability = {
   canReviewEdit: boolean;
   canApprove: boolean;
@@ -9,9 +7,6 @@ export type FinanceApprovalCapability = {
 };
 
 export type ApprovalListPayload = {
-  dailyDockets: Record<string, unknown>[];
-  expenseClaims: Record<string, unknown>[];
-  invoices: Record<string, unknown>[];
   capabilities: {
     dailyDockets: {
       projectIds: string[];
@@ -19,36 +14,71 @@ export type ApprovalListPayload = {
     expense: FinanceApprovalCapability;
     invoice: FinanceApprovalCapability;
   };
+  dailyDockets: Array<Record<string, unknown>>;
+  expenseClaims: Array<Record<string, unknown>>;
+  invoices: Array<Record<string, unknown>>;
 };
 
-type FinanceReviewAction =
-  | "request_changes"
-  | "deny"
-  | "approve"
-  | "mark_paid";
+export type DocketReviewerCorrectionInput = {
+  docketId: string;
+  docket?: Record<string, unknown>;
+  progress?: Array<Record<string, unknown>>;
+  labour?: Array<Record<string, unknown>>;
+  delays?: Array<Record<string, unknown>>;
+};
 
-export function getMyApprovals() {
+export type ReviewDocketInput = {
+  docketId: string;
+  action: "approve" | "request_changes";
+  comments?: string;
+  changeRequests?: Array<{
+    category: string;
+    detail: string;
+  }>;
+  reviewerSignatureDataUrl?: string;
+  reviewerMadeChanges?: boolean;
+  clientContentKeys?: string[];
+};
+
+export async function getMyApprovals(): Promise<ApprovalListPayload> {
   return apiJson<ApprovalListPayload>("/api/mobile/approvals");
 }
 
-export function getApprovalDetail<T = Record<string, unknown>>(
-  kind: ApprovalKind,
+export async function getApprovalDetail<T>(
+  kind: "docket" | "expense" | "invoice",
   id: string,
-) {
+): Promise<T> {
   return apiJson<T>(
     `/api/mobile/approvals/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`,
   );
 }
 
-export function reviewDocket(input: {
-  docketId: string;
-  action: "approve" | "request_changes";
-  comments?: string;
-  changeRequests?: { category: string; detail: string }[];
-  reviewerSignatureDataUrl?: string;
-  reviewerMadeChanges?: boolean;
-  clientContentKeys?: string[];
-}) {
+/**
+ * Saves the same reviewer correction fields that are editable from the website
+ * BC review page. Authority is re-checked server-side against the project's
+ * configured BC reviewers before any row is changed.
+ */
+export async function saveDocketReviewerCorrections(
+  input: DocketReviewerCorrectionInput,
+) {
+  const { docketId, ...body } = input;
+
+  return apiJson<{ success: boolean; reviewerMadeChanges: boolean }>(
+    `/api/mobile/approvals/docket/${encodeURIComponent(docketId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+      timeoutMs: 120_000,
+    },
+  );
+}
+
+/**
+ * IMPORTANT: final BC review is intentionally sent to the exact same website
+ * route used by the browser review page. This keeps PDF generation, SharePoint,
+ * revisioning, client approval links, emails and workflow events canonical.
+ */
+export async function reviewDocket(input: ReviewDocketInput) {
   return apiJson<Record<string, unknown>>(
     `/api/daily-dockets/${encodeURIComponent(input.docketId)}/bc-review`,
     {
@@ -73,63 +103,43 @@ export function reviewDocket(input: {
             ? input.clientContentKeys ?? []
             : undefined,
       }),
+      timeoutMs: 120_000,
     },
   );
 }
 
-function reviewFinance(input: {
-  kind: "expense" | "invoice";
-  submissionId: string;
-  action: FinanceReviewAction;
-  comments?: string;
-  paymentReference?: string;
-}) {
-  const endpoint =
-    input.kind === "expense"
-      ? "/api/expenses/claims/review"
-      : "/api/expenses/invoices/review";
-
-  return apiJson<Record<string, unknown>>(endpoint, {
+export async function reviewExpense(
+  submissionId: string,
+  action: "request_changes" | "deny" | "approve" | "mark_paid",
+  comments = "",
+  paymentReference = "",
+) {
+  return apiJson<Record<string, unknown>>("/api/expenses/claims/review", {
     method: "POST",
     body: JSON.stringify({
-      submissionId: input.submissionId,
-      action: input.action,
-      comments: input.comments?.trim() || undefined,
-      paymentReference:
-        input.action === "mark_paid"
-          ? input.paymentReference?.trim() || undefined
-          : undefined,
+      submissionId,
+      action,
+      comments,
+      paymentReference,
     }),
     timeoutMs: 120_000,
   });
 }
 
-export function reviewExpense(
+export async function reviewInvoice(
   submissionId: string,
-  action: FinanceReviewAction,
+  action: "request_changes" | "deny" | "approve" | "mark_paid",
   comments = "",
   paymentReference = "",
 ) {
-  return reviewFinance({
-    kind: "expense",
-    submissionId,
-    action,
-    comments,
-    paymentReference,
-  });
-}
-
-export function reviewInvoice(
-  submissionId: string,
-  action: FinanceReviewAction,
-  comments = "",
-  paymentReference = "",
-) {
-  return reviewFinance({
-    kind: "invoice",
-    submissionId,
-    action,
-    comments,
-    paymentReference,
+  return apiJson<Record<string, unknown>>("/api/expenses/invoices/review", {
+    method: "POST",
+    body: JSON.stringify({
+      submissionId,
+      action,
+      comments,
+      paymentReference,
+    }),
+    timeoutMs: 120_000,
   });
 }

@@ -263,6 +263,11 @@ export type BundleTransferReplacementStatus = {
   last_delivery_at: string | null;
 };
 
+export type BundleTransferReplacementDraft = {
+  quantity: string;
+  occurred_time: string;
+};
+
 export type BundleTransferDraft = {
   ui_id: string;
   source_tower_id: string;
@@ -418,6 +423,10 @@ export type DailyDocketDraft = {
   bundleTransfers: BundleTransferDraft[];
   activeBundleTransfers: BundleTransferRecord[];
   bundleReplacementStatus: BundleTransferReplacementStatus[];
+  bundleReplacementDrafts: Record<
+    string,
+    BundleTransferReplacementDraft
+  >;
 
   mobilisationHours: string;
   mobilisation: MobilisationDraft;

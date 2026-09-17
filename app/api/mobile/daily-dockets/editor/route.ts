@@ -8,6 +8,12 @@ import {
   SECTION_PROGRESS_WEIGHTS,
 } from "@/lib/dockets/calculations";
 import {
+  loadOutstandingMobileMaterialIssues,
+} from "@/lib/dockets/mobile-docket-materials";
+import {
+  loadMobileBundleTransferContext,
+} from "@/lib/dockets/mobile-docket-transfers";
+import {
   blankSectionV2Rows,
   clean,
   inferBodyExtension,
@@ -542,6 +548,7 @@ async function loadDocketData(
     bundleTransfers: [],
     activeBundleTransfers: [],
     bundleReplacementStatus: [],
+    bundleReplacementDrafts: {},
 
     mobilisationHours:
       docket.mobilisation_hours == null
@@ -620,6 +627,7 @@ function blankDraft(args: {
     bundleTransfers: [],
     activeBundleTransfers: [],
     bundleReplacementStatus: [],
+    bundleReplacementDrafts: {},
 
     mobilisationHours: "",
     mobilisation: {
@@ -769,6 +777,23 @@ export async function GET(request: Request) {
       );
     }
 
+    const [
+      outstandingMaterials,
+      bundleTransferContext,
+    ] = await Promise.all([
+      loadOutstandingMobileMaterialIssues(
+        service,
+        towerId,
+      ),
+      loadMobileBundleTransferContext({
+        service,
+        projectId,
+        towerId,
+        docketId: docketId || null,
+        docketDate,
+      }),
+    ]);
+
     let sourceDocket: any = null;
 
     if (docketId) {
@@ -854,6 +879,16 @@ export async function GET(request: Request) {
       };
     }
 
+    draft = {
+      ...draft,
+      outstandingMaterials,
+      activeBundleTransfers:
+        bundleTransferContext.activeBundleTransfers,
+      bundleReplacementStatus:
+        bundleTransferContext.bundleReplacementStatus,
+      bundleReplacementDrafts: {},
+    };
+
     return NextResponse.json({
       project: projectResult.data,
       towers: towers.map((row: any) => ({
@@ -882,9 +917,11 @@ export async function GET(request: Request) {
           ? []
           : defectsResult.data ?? [],
 
-      outstandingMaterials: [],
-      activeBundleTransfers: [],
-      bundleReplacementStatus: [],
+      outstandingMaterials,
+      activeBundleTransfers:
+        bundleTransferContext.activeBundleTransfers,
+      bundleReplacementStatus:
+        bundleTransferContext.bundleReplacementStatus,
     });
   } catch (error) {
     const apiError = mobileDocketApiError(error);

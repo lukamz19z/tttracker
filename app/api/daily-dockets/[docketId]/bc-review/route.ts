@@ -25,6 +25,10 @@ import {
   ensureDriveFolder,
   uploadDriveItemContent,
 } from "@/lib/sharepoint/graph";
+import {
+  archiveDailyDocketBcReviewNotifications,
+  createDailyDocketNotification,
+} from "@/lib/notifications/daily-dockets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -1294,6 +1298,31 @@ export async function POST(request: Request, context: RouteContext) {
         },
       ]);
 
+      await archiveDailyDocketBcReviewNotifications(
+        admin,
+        docketId,
+        reviewedAt,
+      );
+
+      if (docket.bc_submitted_by && docket.bc_submitted_by !== user.id) {
+        await createDailyDocketNotification(admin, {
+          userId: docket.bc_submitted_by,
+          eventType: "daily_docket_bc_changes_requested",
+          title: "Daily Docket changes requested",
+          message: `Your ${docket.docket_date || "Daily Docket"} submission was returned by the BC reviewer for changes.`,
+          projectId: docket.project_id,
+          docketId,
+          actionRoute: "/daily-dockets",
+          actionParams: {
+            docketId,
+            projectId: docket.project_id,
+            towerId: docket.tower_id,
+            approvalStatus: "bc_changes_requested",
+          },
+          severity: "warning",
+        });
+      }
+
       if (docket.bc_submitted_by) {
         const submitter = await resolveSystemUserIdentityById(
           admin,
@@ -1791,6 +1820,32 @@ export async function POST(request: Request, context: RouteContext) {
         },
       ]);
 
+
+    await archiveDailyDocketBcReviewNotifications(
+      admin,
+      docketId,
+      reviewedAt,
+    );
+
+    if (docket.bc_submitted_by && docket.bc_submitted_by !== user.id) {
+      await createDailyDocketNotification(admin, {
+        userId: docket.bc_submitted_by,
+        eventType: "daily_docket_bc_approved",
+        title: "Daily Docket approved by BC reviewer",
+        message: `${published.towerName} · ${published.docketDate} · R${String(approvalRevision).padStart(2, "0")} has been approved and sent for client approval.`,
+        projectId: docket.project_id,
+        docketId,
+        actionRoute: "/daily-dockets",
+        actionParams: {
+          docketId,
+          projectId: docket.project_id,
+          towerId: docket.tower_id,
+          approvalStatus: "client_pending",
+          revision: approvalRevision,
+        },
+        severity: "info",
+      });
+    }
 
     const origin =
       process.env.NEXT_PUBLIC_APP_URL ||

@@ -101,6 +101,10 @@ export const MATERIAL_EVENT_OPTIONS = [
     label: "Sent to Tower",
   },
   {
+    value: "excess",
+    label: "Excess",
+  },
+  {
     value: "damaged_incorrect",
     label: "Damaged / Incorrect",
   },
@@ -338,6 +342,7 @@ export function createBlankDailyDocketDraft(args: {
     bundleTransfers: [],
     activeBundleTransfers: [],
     bundleReplacementStatus: [],
+    bundleReplacementDrafts: {},
 
     mobilisationHours: "",
     mobilisation:

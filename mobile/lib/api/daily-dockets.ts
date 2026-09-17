@@ -1,9 +1,11 @@
 // mobile/lib/api/daily-dockets.ts
 //
-// Batch 2A API wrapper.
+// Batch 1 API contract for the rebuilt Daily Docket editor.
 //
-// The current Daily Dockets screen still does NOT import this file.
-// Batch 2B will wire the new mobile editor into these calls.
+// IMPORTANT:
+// These API endpoints are installed in Batch 2.
+// Nothing in the current Daily Dockets screen imports this file yet, so adding
+// Batch 1 does not change the existing app behaviour.
 
 import { apiFetch } from "@/lib/api/client";
 import type {
@@ -143,11 +145,6 @@ export async function submitDailyDocketForBc(
     );
   }
 
-  /*
-   * Reuse the website's existing, proven submit-bc route directly.
-   * This keeps reviewer configuration, revisioning, notification/email,
-   * signature validation and workflow transitions identical to web.
-   */
   const response = await apiFetch(
     `/api/daily-dockets/${encodeURIComponent(
       id,

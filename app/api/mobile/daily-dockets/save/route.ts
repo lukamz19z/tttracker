@@ -12,13 +12,14 @@
 // - revision/rectification allocations
 // - tower progress recalculation
 //
-// Batch 2B extends this same route with:
-// - materials / outstanding materials
-// - bundle transfers
+// Batch 2B-2 completes backend parity with:
+// - Material Events / outstanding material
+// - Bundle transfers / source replacement tracking
 // - linked Dayworks
-// - controlled Defect linking/creation
+// - controlled Defect link reconciliation
 //
-// The mobile UI is NOT switched to this route until Batch 2B.
+// New Defects are still created through the existing Quality API so DEF
+// numbering, photos, notifications and SharePoint remain centralised.
 
 import { NextResponse } from "next/server";
 
@@ -39,6 +40,16 @@ import {
   requireMobileDocketUser,
   uniqueStrings,
 } from "@/lib/dockets/mobile-docket-server";
+import {
+  syncMobileDocketDelayDayworks,
+  syncMobileDocketMaterialEvents,
+} from "@/lib/dockets/mobile-docket-materials";
+import {
+  syncMobileBundleTransfers,
+} from "@/lib/dockets/mobile-docket-transfers";
+import {
+  syncMobileDocketDefectLinks,
+} from "@/lib/dockets/mobile-docket-defects";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -553,109 +564,12 @@ function allocationPayload(
 
   const workerCount = workers.length;
 
-  const additional = (
-    draft.additionalTowerWork ?? []
-  )
-    .filter(
-      (row: any) =>
-        clean(row.target_tower_id) &&
-        clean(row.target_tower_id) !==
-          sourceTowerId &&
-        num(row.allocation_percent) > 0,
-    )
-    .map((row: any) => {
-      const allocatedMh =
-        productionManhours *
-        (Math.max(
-          0,
-          Math.min(
-            100,
-            num(row.allocation_percent),
-          ),
-        ) /
-          100);
-
-      return {
-        docket_id: docketId,
-        project_id: clean(
-          draft.projectId,
-        ),
-        source_tower_id: sourceTowerId,
-        target_tower_id: clean(
-          row.target_tower_id,
-        ),
-        allocation_type: "production",
-        activity:
-          clean(row.activity) || "mixed",
-        hours:
-          workerCount > 0
-            ? allocatedMh / workerCount
-            : 0,
-        worker_names: workers,
-        reason: clean(row.notes) || null,
-      };
-    });
-
-  const additionalPercent = (
-    draft.additionalTowerWork ?? []
-  ).reduce(
-    (sum: number, row: any) =>
-      sum +
-      Math.max(
-        0,
-        Math.min(
-          100,
-          num(row.allocation_percent),
-        ),
-      ),
-    0,
-  );
-
-  if (additionalPercent > 100.0001) {
-    throw new Error(
-      "Additional tower work allocation cannot exceed 100%.",
-    );
-  }
-
-  const primaryPercent = Math.max(
-    0,
-    100 - additionalPercent,
-  );
-
-  const primary = workerCount
-    ? [
-        {
-          docket_id: docketId,
-          project_id: clean(
-            draft.projectId,
-          ),
-          source_tower_id: sourceTowerId,
-          target_tower_id: sourceTowerId,
-          allocation_type: "production",
-          activity:
-            clean(
-              draft.primaryWorkActivity,
-            ) || "mixed",
-          hours:
-            (productionManhours *
-              (primaryPercent / 100)) /
-            workerCount,
-          worker_names: workers,
-          reason:
-            clean(draft.primaryWorkNotes) ||
-            null,
-        },
-      ]
-    : [];
-
   const revision = (
     draft.towerRevisionAllocations ?? []
   )
     .filter(
       (row: any) =>
         clean(row.target_tower_id) &&
-        clean(row.target_tower_id) !==
-          sourceTowerId &&
         num(row.hours) > 0 &&
         uniqueStrings(row.worker_names)
           .length > 0,
@@ -692,6 +606,126 @@ function allocationPayload(
       "Revision / rectification allocation cannot exceed Production MH.",
     );
   }
+
+  // Website parity: revision / rectification MH is removed FIRST.
+  // Only the remaining production pool is split between primary and
+  // additional towers by percentage.
+  const productionPool = Math.max(
+    0,
+    productionManhours - revisionMh,
+  );
+
+  const additionalRows = (
+    draft.additionalTowerWork ?? []
+  ).filter(
+    (row: any) =>
+      clean(row.target_tower_id) &&
+      clean(row.target_tower_id) !==
+        sourceTowerId &&
+      num(row.allocation_percent) > 0,
+  );
+
+  const seenTargetTowers = new Set<string>();
+
+  for (const row of additionalRows) {
+    const targetTowerId = clean(
+      row.target_tower_id,
+    );
+
+    if (seenTargetTowers.has(targetTowerId)) {
+      throw new Error(
+        "The same additional tower cannot be allocated more than once.",
+      );
+    }
+
+    seenTargetTowers.add(targetTowerId);
+  }
+
+  const additionalPercent =
+    additionalRows.reduce(
+      (sum: number, row: any) =>
+        sum +
+        Math.max(
+          0,
+          Math.min(
+            100,
+            num(row.allocation_percent),
+          ),
+        ),
+      0,
+    );
+
+  if (additionalPercent > 100.0001) {
+    throw new Error(
+      "Additional tower work allocation cannot exceed 100%.",
+    );
+  }
+
+  const additional = additionalRows.map(
+    (row: any) => {
+      const allocatedMh =
+        productionPool *
+        (Math.max(
+          0,
+          Math.min(
+            100,
+            num(row.allocation_percent),
+          ),
+        ) /
+          100);
+
+      return {
+        docket_id: docketId,
+        project_id: clean(
+          draft.projectId,
+        ),
+        source_tower_id: sourceTowerId,
+        target_tower_id: clean(
+          row.target_tower_id,
+        ),
+        allocation_type: "production",
+        activity:
+          clean(row.activity) || "mixed",
+        hours:
+          workerCount > 0
+            ? allocatedMh / workerCount
+            : 0,
+        worker_names: workers,
+        reason: clean(row.notes) || null,
+      };
+    },
+  );
+
+  const primaryPercent = Math.max(
+    0,
+    100 - additionalPercent,
+  );
+
+  const primary = workerCount
+    ? [
+        {
+          docket_id: docketId,
+          project_id: clean(
+            draft.projectId,
+          ),
+          source_tower_id: sourceTowerId,
+          target_tower_id: sourceTowerId,
+          allocation_type: "production",
+          activity:
+            clean(
+              draft.primaryWorkActivity,
+            ) || "mixed",
+          hours:
+            (productionPool *
+              (primaryPercent / 100)) /
+            workerCount,
+          worker_names: workers,
+          reason:
+            clean(draft.primaryWorkNotes) ||
+            null,
+        },
+      ]
+    : [];
 
   return [
     ...primary,
@@ -1030,6 +1064,51 @@ export async function POST(request: Request) {
       );
     }
 
+    await syncMobileDocketMaterialEvents({
+      service,
+      docketId: savedDocketId,
+      projectId,
+      towerId,
+      docketDate: clean(draft.docketDate),
+      materialEvents: draft.materialEvents ?? [],
+    });
+
+    await syncMobileBundleTransfers({
+      service,
+      docketId: savedDocketId,
+      projectId,
+      towerId,
+      docketDate: clean(draft.docketDate),
+      leadingHand: clean(draft.leadingHand),
+      bundleTransferDrafts: draft.bundleTransfers ?? [],
+      activeBundleTransfers:
+        draft.activeBundleTransfers ?? [],
+      replacementDrafts:
+        draft.bundleReplacementDrafts ?? {},
+    });
+
+    await syncMobileDocketDelayDayworks({
+      service,
+      docketId: savedDocketId,
+      projectId,
+      towerId,
+      docketDate: clean(draft.docketDate),
+      leadingHand: clean(draft.leadingHand),
+      dailySiteSummary: clean(draft.dailySiteSummary),
+      delayRows: draft.delayRows ?? [],
+      labourRows: labourTotals.rows,
+      plantRows: draft.plantRows ?? [],
+    });
+
+    await syncMobileDocketDefectLinks({
+      service,
+      projectId,
+      towerId,
+      docketId: savedDocketId,
+      linkedDefects: draft.linkedDefects ?? [],
+      newDefects: draft.newDefects ?? [],
+    });
+
     await recalcTower(service, towerId);
 
     return NextResponse.json({
@@ -1047,9 +1126,7 @@ export async function POST(request: Request) {
         progress.erectionPercent,
       overallProgressPercent:
         progress.totalProgressPercent,
-      warnings: [
-        "Batch 2A save route does not yet write material events, bundle transfers, linked Dayworks or controlled Defects. The mobile editor is not switched to this route until Batch 2B adds those features.",
-      ],
+      warnings: [],
     });
   } catch (error) {
     const apiError = mobileDocketApiError(error);

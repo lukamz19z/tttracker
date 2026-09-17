@@ -510,12 +510,45 @@ export async function POST(
       );
     }
 
-    const supabase = await createRouteSupabase();
+    const authorization = _request.headers.get("authorization") || "";
+    const bearerToken = authorization.toLowerCase().startsWith("bearer ")
+      ? authorization.slice(7).trim()
+      : "";
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+    let user = null;
+    let userError: { message?: string } | null = null;
+
+    if (bearerToken) {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return NextResponse.json(
+          { error: "Supabase public configuration is missing." },
+          { status: 500 },
+        );
+      }
+
+      const bearerClient = createClient(
+        supabaseUrl,
+        supabaseAnonKey,
+        {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+          },
+        },
+      );
+
+      const authResult = await bearerClient.auth.getUser(bearerToken);
+      user = authResult.data.user;
+      userError = authResult.error;
+    } else {
+      const supabase = await createRouteSupabase();
+      const authResult = await supabase.auth.getUser();
+      user = authResult.data.user;
+      userError = authResult.error;
+    }
 
     if (userError || !user) {
       return NextResponse.json(
