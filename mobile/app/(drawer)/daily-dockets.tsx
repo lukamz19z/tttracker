@@ -618,21 +618,14 @@ export default function DailyDocketScreen() {
           clean(draft.bcRepUserId) || editorPayload.identity.userId,
       });
 
-      const refreshed = await getDailyDocketEditor({
-        projectId: draft.projectId,
-        towerId: draft.towerId,
-        docketId: result.docketId,
-        docketDate: draft.docketDate,
-      });
-
-      const nextDraft: DailyDocketDraft = {
-        ...refreshed.draft,
-        mode: "edit",
-      };
-
-      setEditorPayload(refreshed);
-      setDraft(nextDraft);
+      // Saving a draft is treated as completing the current docket action.
+      // Refresh the register and close the editor instead of immediately
+      // reopening the saved docket in Edit mode.
+      setSelectedTowerId(draft.towerId);
       await loadList(true);
+      setEditorPayload(null);
+      setDraft(null);
+      setStep("setup");
 
       if (showAlert) {
         Alert.alert(

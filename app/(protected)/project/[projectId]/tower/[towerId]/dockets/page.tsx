@@ -398,27 +398,6 @@ function itemLabel(item: MaterialEventItem) {
   return `${qtyPrefix}${item.item_reference || "Unlisted item"}`;
 }
 
-function normalizeWebsiteRole(value: string | null | undefined) {
-  switch (String(value || "").trim().toLowerCase()) {
-    case "site_admin":
-    case "administrator":
-      return "admin";
-    case "commercial_manager":
-      return "commercial";
-    case "safety":
-    case "safety_manager":
-      return "hseq";
-    case "mechanic":
-    case "assets":
-      return "asset_manager";
-    case "leading_hand":
-    case "field":
-      return "crew";
-    default:
-      return String(value || "").trim().toLowerCase();
-  }
-}
-
 export default function TowerDocketsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const params = useParams();
@@ -440,8 +419,7 @@ export default function TowerDocketsPage() {
   const [search, setSearch] = useState("");
   const [deletingDocketId, setDeletingDocketId] = useState<string | null>(null);
   const [workflowBusyId, setWorkflowBusyId] = useState<string | null>(null);
-  const [currentRole, setCurrentRole] = useState("");
-  const [configuredBcReviewerRoles, setConfiguredBcReviewerRoles] = useState<string[]>([]);
+  const [canReviewBc, setCanReviewBc] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -606,64 +584,48 @@ export default function TowerDocketsPage() {
   }, [projectId, supabase, towerId]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const timer = window.setTimeout(() => {
       void (async () => {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        if (!user) {
-          setCurrentRole("");
-          setConfiguredBcReviewerRoles([]);
-          return;
-        }
-
-        const [roleResult, reviewerRolesResult] = await Promise.all([
-          supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", user.id)
-            .maybeSingle(),
-          supabase
-            .from("project_docket_approval_roles")
-            .select("role, receives_bc_review")
-            .eq("project_id", projectId)
-            .eq("receives_bc_review", true),
-        ]);
-
-        setCurrentRole(
-          normalizeWebsiteRole(
-            (roleResult.data as { role?: string | null } | null)?.role,
-          ),
-        );
-
-        if (reviewerRolesResult.error) {
-          console.warn(
-            "Daily Docket reviewer configuration could not be loaded",
-            reviewerRolesResult.error,
+        try {
+          const response = await fetch(
+            `/api/daily-dockets/reviewer-access?projectId=${encodeURIComponent(projectId)}`,
+            { method: "GET", cache: "no-store" },
           );
-          setConfiguredBcReviewerRoles([]);
-          return;
-        }
 
-        setConfiguredBcReviewerRoles(
-          Array.from(
-            new Set(
-              ((reviewerRolesResult.data || []) as Array<{
-                role?: string | null;
-                receives_bc_review?: boolean | null;
-              }>)
-                .filter((row) => row.receives_bc_review !== false)
-                .map((row) => normalizeWebsiteRole(row.role))
-                .filter(Boolean),
-            ),
-          ),
-        );
+          const payload = (await response.json().catch(() => null)) as
+            | { allowed?: boolean; error?: string }
+            | null;
+
+          if (!response.ok) {
+            throw new Error(
+              payload?.error ||
+                "Daily Docket reviewer access could not be verified.",
+            );
+          }
+
+          if (!cancelled) {
+            setCanReviewBc(Boolean(payload?.allowed));
+          }
+        } catch (error) {
+          console.warn(
+            "Daily Docket reviewer access could not be verified",
+            error,
+          );
+
+          if (!cancelled) {
+            setCanReviewBc(false);
+          }
+        }
       })();
     }, 0);
 
-    return () => window.clearTimeout(timer);
-  }, [projectId, supabase]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [projectId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void fetchData(), 0);
@@ -951,8 +913,6 @@ export default function TowerDocketsPage() {
     eventsByDocket,
     towerNameById,
   ]);
-
-  const canReviewBc = configuredBcReviewerRoles.includes(currentRole);
 
   async function submitForBcApproval(id: string) {
     setWorkflowBusyId(id);
