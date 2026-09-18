@@ -305,7 +305,7 @@ async function loadDocketData(
       .eq("docket_id", docketId)
       .order("created_at"),
     service
-      .from("tower_docket_defect_links")
+      .from("tower_docket_defects")
       .select(`
         id,
         link_type,
@@ -321,6 +321,7 @@ async function loadDocketData(
     progressResult.error,
     materialResult.error,
     allocationResult.error,
+    defectLinkResult.error,
   ].filter(Boolean);
 
   if (errors.length) {

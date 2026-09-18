@@ -21,6 +21,10 @@ import {
   type MobileDefectSeverity,
 } from "@/lib/api/defects";
 import {
+  formatDocketDate,
+  parseDocketDateInput,
+} from "@/lib/dockets/dates";
+import {
   createBlankBundleTransfer,
   createBlankDelayRow,
   createBlankMaterialEvent,
@@ -735,9 +739,7 @@ export function DailyDocketSiteEvents({
   ) => {
     const event = createBlankMaterialEvent("found_received");
     event.occurred_time = currentTime();
-    event.notes = `Delivery against missing material first reported ${clean(
-      issue.first_reported_at,
-    ).slice(0, 10)}`.trim();
+    event.notes = `Delivery against missing material first reported ${formatDocketDate(issue.first_reported_at)}`.trim();
     event.items = [
       {
         ...createBlankMaterialItem(),
@@ -2273,32 +2275,32 @@ export function DailyDocketSiteEvents({
               <View style={styles.col}>
                 <Field
                   label="Started"
-                  value={draft.mobilisation.started_date}
-                  onChangeText={(started_date) =>
+                  value={formatDocketDate(draft.mobilisation.started_date)}
+                  onChangeText={(value) =>
                     setDraft({
                       mobilisation: {
                         ...draft.mobilisation,
-                        started_date,
+                        started_date: parseDocketDateInput(value),
                       },
                     })
                   }
-                  placeholder="YYYY-MM-DD"
+                  placeholder="DD-MM-YYYY"
                   disabled={locked}
                 />
               </View>
               <View style={styles.col}>
                 <Field
                   label="Target move"
-                  value={draft.mobilisation.target_move_date}
-                  onChangeText={(target_move_date) =>
+                  value={formatDocketDate(draft.mobilisation.target_move_date)}
+                  onChangeText={(value) =>
                     setDraft({
                       mobilisation: {
                         ...draft.mobilisation,
-                        target_move_date,
+                        target_move_date: parseDocketDateInput(value),
                       },
                     })
                   }
-                  placeholder="YYYY-MM-DD"
+                  placeholder="DD-MM-YYYY"
                   disabled={locked}
                 />
               </View>
@@ -2306,16 +2308,16 @@ export function DailyDocketSiteEvents({
 
             <Field
               label="Completed"
-              value={draft.mobilisation.completed_date}
-              onChangeText={(completed_date) =>
+              value={formatDocketDate(draft.mobilisation.completed_date)}
+              onChangeText={(value) =>
                 setDraft({
                   mobilisation: {
                     ...draft.mobilisation,
-                    completed_date,
+                    completed_date: parseDocketDateInput(value),
                   },
                 })
               }
-              placeholder="YYYY-MM-DD"
+              placeholder="DD-MM-YYYY"
               disabled={locked}
             />
 

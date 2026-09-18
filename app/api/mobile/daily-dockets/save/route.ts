@@ -58,6 +58,32 @@ type SaveBody = {
   draft?: any;
 };
 
+function normaliseIsoDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return raw;
+
+  const au = raw.match(/^(\d{1,2})[\-/.\s](\d{1,2})[\-/.\s](\d{4})$/);
+  if (!au) return raw;
+
+  const day = Number(au[1]);
+  const month = Number(au[2]);
+  const year = Number(au[3]);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return raw;
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function delaySummary(delays: any[]) {
   return delays.reduce<Record<string, number>>(
     (summary, row) => {
@@ -191,7 +217,7 @@ function docketPayload(args: {
   return {
     project_id: clean(draft.projectId),
     tower_id: clean(draft.towerId),
-    docket_date: clean(draft.docketDate),
+    docket_date: normaliseIsoDate(draft.docketDate),
     crew: clean(draft.crewName) || null,
     leading_hand:
       clean(draft.leadingHand) || null,

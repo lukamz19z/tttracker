@@ -25,6 +25,10 @@ import {
   toNumber,
 } from "@/lib/dockets/calculations";
 import {
+  formatDocketDate,
+  parseDocketDateInput,
+} from "@/lib/dockets/dates";
+import {
   createBlankLabourRow,
   createBlankPlantRow,
   createBlankSectionV2Rows,
@@ -1454,11 +1458,11 @@ export function DailyDocketEditorFoundation({
 
         <Field
           label="Docket date"
-          value={draft.docketDate}
-          onChangeText={(docketDate) =>
-            setDraft({ docketDate })
+          value={formatDocketDate(draft.docketDate)}
+          onChangeText={(value) =>
+            setDraft({ docketDate: parseDocketDateInput(value) })
           }
-          placeholder="YYYY-MM-DD"
+          placeholder="DD-MM-YYYY"
           disabled={locked}
         />
 

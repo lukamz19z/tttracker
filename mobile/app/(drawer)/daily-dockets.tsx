@@ -34,6 +34,7 @@ import {
   DAILY_DOCKET_STEPS,
   type DailyDocketStep,
 } from "@/lib/dockets/constants";
+import { formatDocketDate } from "@/lib/dockets/dates";
 import {
   calculateLabourTotals,
   toNumber,
@@ -103,21 +104,7 @@ function localDate() {
 }
 
 function prettyDate(value: unknown) {
-  const raw = clean(value).slice(0, 10);
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return raw || "No date";
-
-  const date = new Date(
-    Number(match[1]),
-    Number(match[2]) - 1,
-    Number(match[3]),
-  );
-
-  return date.toLocaleDateString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return formatDocketDate(value) || "No date";
 }
 
 function towerName(tower: TowerRow) {

@@ -62,7 +62,7 @@ export async function syncMobileDocketDefectLinks(args: {
 
   const { data: existingLinks, error: linkLoadError } =
     await service
-      .from("tower_docket_defect_links")
+      .from("tower_docket_defects")
       .select("id,defect_id,link_type")
       .eq("docket_id", docketId);
 
@@ -120,7 +120,7 @@ export async function syncMobileDocketDefectLinks(args: {
 
   if (staleLinkIds.length > 0) {
     const { error } = await service
-      .from("tower_docket_defect_links")
+      .from("tower_docket_defects")
       .delete()
       .in("id", staleLinkIds);
 
@@ -137,7 +137,7 @@ export async function syncMobileDocketDefectLinks(args: {
     if (existing) {
       if (clean(existing.link_type) !== linkType) {
         const { error } = await service
-          .from("tower_docket_defect_links")
+          .from("tower_docket_defects")
           .update({ link_type: linkType })
           .eq("id", existing.id);
 
@@ -152,7 +152,7 @@ export async function syncMobileDocketDefectLinks(args: {
     }
 
     const { error } = await service
-      .from("tower_docket_defect_links")
+      .from("tower_docket_defects")
       .insert({
         project_id: projectId,
         tower_id: towerId,
