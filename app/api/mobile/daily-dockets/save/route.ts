@@ -980,8 +980,7 @@ export async function POST(request: Request) {
           "tower_docket_hour_allocations",
         )
         .delete()
-        .eq("docket_id", savedDocketId)
-        .is("transfer_id", null),
+        .eq("docket_id", savedDocketId),
     ]);
 
     const deleteError = [

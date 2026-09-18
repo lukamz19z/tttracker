@@ -83,6 +83,40 @@ function normalizedName(value: unknown) {
   return clean(value).replace(/\s+/g, " ").toLowerCase();
 }
 
+function commonLabourShift(rows: LabourRow[]) {
+  const pairs = new Map<
+    string,
+    { count: number; timeIn: string; timeOut: string; totalHours: string }
+  >();
+
+  rows.forEach((row) => {
+    if (!clean(row.worker_name)) return;
+    if (!clean(row.time_in) || !clean(row.time_out)) return;
+
+    const totalHours = calculateHours(row.time_in, row.time_out);
+    if (!totalHours) return;
+
+    const key = `${row.time_in}|${row.time_out}`;
+    const existing = pairs.get(key);
+
+    pairs.set(key, {
+      count: (existing?.count ?? 0) + 1,
+      timeIn: row.time_in,
+      timeOut: row.time_out,
+      totalHours,
+    });
+  });
+
+  return (
+    Array.from(pairs.values()).sort((a, b) => b.count - a.count)[0] ?? {
+      count: 0,
+      timeIn: "",
+      timeOut: "",
+      totalHours: "",
+    }
+  );
+}
+
 type AssetAllocationRow = Record<string, unknown>;
 
 function firstAssetString(row: AssetAllocationRow, keys: string[]) {
@@ -632,6 +666,8 @@ export function DailyDocketEditorFoundation({
 }: DailyDocketEditorFoundationProps) {
   const [bulkIn, setBulkIn] = useState("");
   const [bulkOut, setBulkOut] = useState("");
+  const [plantBulkIn, setPlantBulkIn] = useState("");
+  const [plantBulkOut, setPlantBulkOut] = useState("");
   const [employeePickerOpen, setEmployeePickerOpen] =
     useState(false);
   const [crewLoading, setCrewLoading] = useState(false);
@@ -677,6 +713,20 @@ export function DailyDocketEditorFoundation({
       draft.mobilisation.worker_names,
       draft.mobilisationHours,
     ],
+  );
+
+  const crewShift = useMemo(
+    () => commonLabourShift(draft.labourRows),
+    [draft.labourRows],
+  );
+
+  const totalPlantHours = useMemo(
+    () =>
+      draft.plantRows.reduce(
+        (sum, row) => sum + Math.max(0, toNumber(row.total_hours)),
+        0,
+      ),
+    [draft.plantRows],
   );
 
   const progressTotals = useMemo(
@@ -966,6 +1016,11 @@ export function DailyDocketEditorFoundation({
       ),
     }));
 
+    setBulkIn("");
+    setBulkOut("");
+    setPlantBulkIn("");
+    setPlantBulkOut("");
+
     onChange({
       ...draft,
       selectedCrewId,
@@ -1008,8 +1063,89 @@ export function DailyDocketEditorFoundation({
       ? normalizeTimeInput(bulkOut)
       : "";
 
+    const labourRows = draft.labourRows.map((row) => {
+      const next = {
+        ...row,
+        time_in: normalizedIn || row.time_in,
+        time_out: normalizedOut || row.time_out,
+      };
+
+      return {
+        ...next,
+        total_hours: calculateHours(
+          next.time_in,
+          next.time_out,
+        ),
+      };
+    });
+
+    const plantRows = draft.plantRows.map((row) => {
+      const next = {
+        ...row,
+        time_in: normalizedIn || row.time_in,
+        time_out: normalizedOut || row.time_out,
+      };
+
+      return {
+        ...next,
+        total_hours: calculateHours(
+          next.time_in,
+          next.time_out,
+        ),
+      };
+    });
+
+    setPlantBulkIn(normalizedIn || plantBulkIn);
+    setPlantBulkOut(normalizedOut || plantBulkOut);
+
+    setDraft({ labourRows, plantRows });
+  };
+
+  const applyCrewHoursToPlant = () => {
+    if (locked) return;
+
+    const timeIn =
+      crewShift.timeIn ||
+      (bulkIn ? normalizeTimeInput(bulkIn) : "");
+    const timeOut =
+      crewShift.timeOut ||
+      (bulkOut ? normalizeTimeInput(bulkOut) : "");
+
+    if (!timeIn || !timeOut) {
+      Alert.alert(
+        "Crew hours required",
+        "Enter/apply the personnel Time In and Time Out first, then use Crew Hours for Plant.",
+      );
+      return;
+    }
+
+    setPlantBulkIn(timeIn);
+    setPlantBulkOut(timeOut);
+
     setDraft({
-      labourRows: draft.labourRows.map((row) => {
+      plantRows: draft.plantRows.map((row) => ({
+        ...row,
+        time_in: timeIn,
+        time_out: timeOut,
+        total_hours: calculateHours(timeIn, timeOut),
+      })),
+    });
+  };
+
+  const applyPlantBulkTimes = () => {
+    if (locked) return;
+
+    const normalizedIn = plantBulkIn
+      ? normalizeTimeInput(plantBulkIn)
+      : "";
+    const normalizedOut = plantBulkOut
+      ? normalizeTimeInput(plantBulkOut)
+      : "";
+
+    if (!normalizedIn && !normalizedOut) return;
+
+    setDraft({
+      plantRows: draft.plantRows.map((row) => {
         const next = {
           ...row,
           time_in: normalizedIn || row.time_in,
@@ -1569,7 +1705,7 @@ export function DailyDocketEditorFoundation({
             ]}
           >
             <Text style={styles.fullSecondaryButtonText}>
-              Apply Times to All Workers
+              Apply Times to Crew + Plant
             </Text>
           </Pressable>
         </View>
@@ -1727,14 +1863,20 @@ export function DailyDocketEditorFoundation({
         action={
           <Pressable
             disabled={locked}
-            onPress={() =>
+            onPress={() => {
+              const timeIn = crewShift.timeIn || plantBulkIn;
+              const timeOut = crewShift.timeOut || plantBulkOut;
+              const row = {
+                ...createBlankPlantRow(),
+                time_in: timeIn,
+                time_out: timeOut,
+                total_hours: calculateHours(timeIn, timeOut),
+              };
+
               setDraft({
-                plantRows: [
-                  ...draft.plantRows,
-                  createBlankPlantRow(),
-                ],
-              })
-            }
+                plantRows: [...draft.plantRows, row],
+              });
+            }}
             style={[
               styles.primaryIconButton,
               locked && styles.buttonDisabled,
@@ -1744,6 +1886,98 @@ export function DailyDocketEditorFoundation({
           </Pressable>
         }
       >
+        <View style={styles.plantHoursCard}>
+          <View style={styles.plantHoursHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.miniHeading}>Plant Hours</Text>
+              <Text style={styles.plantHoursHelper}>
+                {crewShift.timeIn && crewShift.timeOut
+                  ? `Crew shift: ${crewShift.timeIn}–${crewShift.timeOut} · ${toNumber(crewShift.totalHours).toFixed(2)} h`
+                  : "Apply personnel hours, or set separate plant hours below."}
+              </Text>
+            </View>
+            <View style={styles.plantHoursTotal}>
+              <Text style={styles.plantHoursTotalValue}>
+                {totalPlantHours.toFixed(1)}
+              </Text>
+              <Text style={styles.plantHoursTotalLabel}>PLANT HRS</Text>
+            </View>
+          </View>
+
+          <Pressable
+            disabled={
+              locked ||
+              draft.plantRows.length === 0 ||
+              (!crewShift.timeIn && !bulkIn) ||
+              (!crewShift.timeOut && !bulkOut)
+            }
+            onPress={applyCrewHoursToPlant}
+            style={[
+              styles.fullSecondaryButton,
+              (locked ||
+                draft.plantRows.length === 0 ||
+                (!crewShift.timeIn && !bulkIn) ||
+                (!crewShift.timeOut && !bulkOut)) &&
+                styles.buttonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="people-outline"
+              size={16}
+              color="#1d4ed8"
+            />
+            <Text style={styles.fullSecondaryButtonText}>
+              Use Crew Hours for All Plant
+            </Text>
+          </Pressable>
+
+          <View style={styles.twoColumn}>
+            <View style={styles.column}>
+              <Field
+                label="Plant time in"
+                value={plantBulkIn}
+                onChangeText={setPlantBulkIn}
+                placeholder={crewShift.timeIn || "06:00"}
+                disabled={locked}
+              />
+            </View>
+            <View style={styles.column}>
+              <Field
+                label="Plant time out"
+                value={plantBulkOut}
+                onChangeText={setPlantBulkOut}
+                placeholder={crewShift.timeOut || "18:00"}
+                disabled={locked}
+              />
+            </View>
+          </View>
+
+          <Pressable
+            disabled={
+              locked ||
+              draft.plantRows.length === 0 ||
+              (!plantBulkIn && !plantBulkOut)
+            }
+            onPress={applyPlantBulkTimes}
+            style={[
+              styles.fullSecondaryButton,
+              (locked ||
+                draft.plantRows.length === 0 ||
+                (!plantBulkIn && !plantBulkOut)) &&
+                styles.buttonDisabled,
+            ]}
+          >
+            <Ionicons
+              name="construct-outline"
+              size={16}
+              color="#1d4ed8"
+            />
+            <Text style={styles.fullSecondaryButtonText}>
+              Apply Plant Hours
+            </Text>
+          </Pressable>
+        </View>
+
         {draft.plantRows.length === 0 ? (
           <EmptyCard
             icon="construct-outline"
@@ -1755,11 +1989,18 @@ export function DailyDocketEditorFoundation({
             {draft.plantRows.map((row, index) => (
               <View key={index} style={styles.workerCard}>
                 <View style={styles.workerHeader}>
-                  <Text style={styles.workerName}>
-                    {row.plant_name ||
-                      row.asset_id ||
-                      `Plant ${index + 1}`}
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.workerName}>
+                      {row.plant_name ||
+                        row.asset_id ||
+                        `Plant ${index + 1}`}
+                    </Text>
+                    <Text style={styles.workerMeta}>
+                      {row.time_in && row.time_out
+                        ? `${row.time_in}–${row.time_out} · ${toNumber(row.total_hours).toFixed(2)} h`
+                        : "Plant hours not set"}
+                    </Text>
+                  </View>
                   <Pressable
                     disabled={locked}
                     onPress={() =>
@@ -3006,6 +3247,40 @@ const styles = StyleSheet.create({
   },
   stack: {
     gap: 10,
+  },
+  plantHoursCard: {
+    padding: 12,
+    gap: 10,
+    borderRadius: 14,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  plantHoursHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  plantHoursHelper: {
+    marginTop: 2,
+    color: "#64748b",
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  plantHoursTotal: {
+    minWidth: 64,
+    alignItems: "flex-end",
+  },
+  plantHoursTotalValue: {
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  plantHoursTotalLabel: {
+    color: "#64748b",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.5,
   },
   bulkTimeCard: {
     padding: 12,
