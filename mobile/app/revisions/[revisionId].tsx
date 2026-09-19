@@ -14,6 +14,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -39,8 +40,11 @@ import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityMemberCatalog,
+  cachedQualityRevisionDetail,
   downloadQualityFile,
   refreshQualityMemberCatalog,
+  refreshQualityRevisionDetail,
+  resolveQualityRevision,
   shareQualityFile,
   submitRevisionForReview,
   type QualityMemberCatalogRow,
@@ -111,9 +115,9 @@ export default function RevisionDetailScreen() {
   const params = useLocalSearchParams<{ revisionId: string }>();
   const routeRevisionId = clean(params.revisionId);
 
-  const { data, loading, refresh } = useQuality();
+  const { data, loading: metadataLoading } = useQuality();
   const { profile } = useAuth();
-  const { online } = useSync();
+  const { online, syncing } = useSync();
 
   const projectId =
     clean(data?.projectId) || clean(profile?.projectId);
@@ -147,50 +151,23 @@ export default function RevisionDetailScreen() {
     useState<{ uri: string; name: string } | null>(null);
   const [openingId, setOpeningId] =
     useState<string | null>(null);
+  const wasSyncingRef = useRef(false);
 
-  const revisions = useMemo(
-    () => (Array.isArray(data?.revisions) ? data.revisions : []),
-    [data?.revisions],
-  );
-  const items = useMemo(
-    () => (Array.isArray(data?.items) ? data.items : []),
-    [data?.items],
-  );
-  const files = useMemo(
-    () => (Array.isArray(data?.files) ? data.files : []),
-    [data?.files],
-  );
   const towers = useMemo(
     () => (Array.isArray(data?.towers) ? data.towers : []),
     [data?.towers],
   );
 
-
   const localClientMutationId =
     clientMutationIdFromRouteKey(routeRevisionId);
 
-  const serverRevision = useMemo(() => {
-    if (isLocalRevisionRouteKey(routeRevisionId)) {
-      if (!localClientMutationId) return null;
-      return (
-        revisions.find(
-          (row) =>
-            clean(row.mobile_client_mutation_id) ===
-            localClientMutationId,
-        ) ?? null
-      );
-    }
+  const [detail, setDetail] = useState<
+    Awaited<ReturnType<typeof refreshQualityRevisionDetail>> | null
+  >(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
-    return (
-      revisions.find(
-        (row) => clean(row.id) === routeRevisionId,
-      ) ?? null
-    );
-  }, [
-    localClientMutationId,
-    revisions,
-    routeRevisionId,
-  ]);
+  const serverRevision = detail?.revision ?? null;
 
   const activeRevisionId =
     clean(serverRevision?.id) ||
@@ -200,49 +177,10 @@ export default function RevisionDetailScreen() {
     clean(serverRevision?.tower_id) ||
     clean(workspace?.towerId);
 
-  const qualityTowerMembers = useMemo<QualityMemberCatalogRow[]>(
-    () =>
-      (Array.isArray(data?.members) ? data.members : [])
-        .filter(
-          (member) =>
-            clean(member.tower_id) === towerId,
-        )
-        .map((member) => ({
-          id:
-            clean(member.id) ||
-            [
-              clean(member.tower_id),
-              clean(member.mark_no),
-              clean(member.drawing_number),
-              clean(member.tower_segment),
-            ].join("::"),
-          towerId: clean(member.tower_id),
-          bundleReference:
-            clean(member.bundle_reference) || null,
-          drawingNumber:
-            clean(member.drawing_number) || null,
-          memberNumber: clean(member.mark_no),
-          alternateMemberNumber: null,
-          qtyPerTower:
-            member.qty_per_tower === null ||
-            member.qty_per_tower === undefined
-              ? null
-              : Number(member.qty_per_tower),
-          section: clean(member.section) || null,
-          towerSegment:
-            clean(member.tower_segment) || null,
-        }))
-        .filter((member) => member.memberNumber),
-    [data?.members, towerId],
-  );
-
   const availableMembers = useMemo(() => {
     const rows = new Map<string, QualityMemberCatalogRow>();
 
-    for (const member of [
-      ...qualityTowerMembers,
-      ...memberCatalog,
-    ]) {
+    for (const member of memberCatalog) {
       const key =
         clean(member.id) ||
         [
@@ -258,7 +196,7 @@ export default function RevisionDetailScreen() {
     }
 
     return Array.from(rows.values());
-  }, [memberCatalog, qualityTowerMembers]);
+  }, [memberCatalog]);
 
   const tower = towers.find(
     (row) => clean(row.id) === towerId,
@@ -285,25 +223,13 @@ export default function RevisionDetailScreen() {
     .join(" ");
 
   const revisionItems = useMemo(
-    () =>
-      activeRevisionId
-        ? items.filter(
-            (row) =>
-              clean(row.revision_id) === activeRevisionId,
-          )
-        : [],
-    [activeRevisionId, items],
+    () => detail?.items ?? [],
+    [detail?.items],
   );
 
   const revisionFiles = useMemo(
-    () =>
-      activeRevisionId
-        ? files.filter(
-            (row) =>
-              clean(row.revision_id) === activeRevisionId,
-          )
-        : [],
-    [activeRevisionId, files],
+    () => detail?.files ?? [],
+    [detail?.files],
   );
 
   const issueOptions = useMemo(() => {
@@ -336,6 +262,128 @@ export default function RevisionDetailScreen() {
         option.id ===
         (findingForm.issueTypeId ?? "__other__"),
     )?.label ?? "Select flagged issue";
+
+  const canonicalRevisionId =
+    isLocalRevisionRouteKey(routeRevisionId)
+      ? clean(workspace?.serverRevisionId)
+      : routeRevisionId;
+
+  const reloadDetail = useCallback(
+    async (_forceLive = false) => {
+      if (!projectId || !canonicalRevisionId) {
+        return;
+      }
+
+      setDetailLoading(true);
+      setDetailError(null);
+      let hadCache = false;
+
+      try {
+        const cached =
+          await cachedQualityRevisionDetail(
+            projectId,
+            canonicalRevisionId,
+          );
+
+        if (cached?.value) {
+          hadCache = true;
+          setDetail(cached.value);
+        }
+
+        if (online) {
+          const latest =
+            await refreshQualityRevisionDetail(
+              projectId,
+              canonicalRevisionId,
+            );
+          setDetail(latest);
+        }
+      } catch (loadError) {
+        if (!hadCache) {
+          setDetailError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Revision could not be loaded.",
+          );
+        }
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [
+      canonicalRevisionId,
+      online,
+      projectId,
+    ],
+  );
+
+  useEffect(() => {
+    void reloadDetail(false);
+  }, [reloadDetail]);
+
+  useEffect(() => {
+    const wasSyncing = wasSyncingRef.current;
+    wasSyncingRef.current = syncing;
+
+    if (
+      wasSyncing &&
+      !syncing &&
+      online &&
+      canonicalRevisionId
+    ) {
+      void reloadDetail(true);
+    }
+  }, [
+    canonicalRevisionId,
+    online,
+    reloadDetail,
+    syncing,
+  ]);
+
+  useEffect(() => {
+    if (
+      !online ||
+      !projectId ||
+      !workspace ||
+      !localClientMutationId ||
+      workspace.serverRevisionId
+    ) {
+      return;
+    }
+
+    let active = true;
+
+    void resolveQualityRevision(
+      projectId,
+      localClientMutationId,
+    )
+      .then(async (result) => {
+        const revisionId = clean(
+          result.revision?.id,
+        );
+        if (!active || !revisionId) return;
+
+        const next = touchWorkspace({
+          ...workspace,
+          serverRevisionId: revisionId,
+        });
+
+        await saveRevisionWorkspace(next);
+        if (active) setWorkspace(next);
+      })
+      .catch(() => {
+        // Parent may still be waiting in the offline queue.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    localClientMutationId,
+    online,
+    projectId,
+    workspace,
+  ]);
 
   const loadWorkspace = useCallback(async () => {
     if (!projectId || !routeRevisionId) return;
@@ -850,7 +898,7 @@ export default function RevisionDetailScreen() {
         `${title} submitted. ${count} configured recipient${count === 1 ? "" : "s"} notified.${result.notification?.warning ? `\n\n${result.notification.warning}` : ""}`,
       );
 
-      await refresh();
+      await reloadDetail(true);
     } catch (error) {
       Alert.alert(
         "Could not submit",
@@ -865,7 +913,7 @@ export default function RevisionDetailScreen() {
 
   if (
     workspaceLoading ||
-    (loading && !serverRevision && !workspace)
+    ((metadataLoading || detailLoading) && !serverRevision && !workspace)
   ) {
     return (
       <QualityShell
@@ -884,7 +932,7 @@ export default function RevisionDetailScreen() {
         title="Revision"
       >
         <Text>
-          Revision not found in the current cache.
+          {detailError || "Revision not found."}
         </Text>
       </QualityShell>
     );

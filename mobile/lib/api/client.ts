@@ -1,7 +1,11 @@
+import type { Session } from "@supabase/supabase-js";
+
 import { supabase } from "@/lib/supabase";
 
 export type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
+  /** Set false only when two identical GETs must intentionally run separately. */
+  dedupe?: boolean;
 };
 
 function canonicalBase(value: string) {
@@ -33,19 +37,40 @@ export function apiUrl(input: string) {
   return `${API_BASE_URL}${value.startsWith("/") ? "" : "/"}${value}`;
 }
 
-export async function apiFetch(
+let sessionPromise: Promise<Session | null> | null = null;
+const inFlightJson = new Map<string, Promise<unknown>>();
+
+function currentSession(): Promise<Session | null> {
+  if (sessionPromise) return sessionPromise;
+
+  const task = supabase.auth
+    .getSession()
+    .then(({ data, error }) => {
+      if (error) throw error;
+      return data.session;
+    });
+
+  const tracked = task.finally(() => {
+    if (sessionPromise === tracked) {
+      sessionPromise = null;
+    }
+  });
+
+  sessionPromise = tracked;
+  return tracked;
+}
+
+async function performFetch(
   input: string,
-  init: ApiRequestInit = {},
+  init: ApiRequestInit,
+  session: Session | null,
 ): Promise<Response> {
   const {
     timeoutMs = 30_000,
+    dedupe: _dedupe,
     signal: externalSignal,
     ...requestInit
   } = init;
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
 
   const headers = new Headers(requestInit.headers);
 
@@ -94,6 +119,14 @@ export async function apiFetch(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function apiFetch(
+  input: string,
+  init: ApiRequestInit = {},
+): Promise<Response> {
+  const session = await currentSession();
+  return performFetch(input, init, session);
 }
 
 function isResponseLike(value: unknown): value is Response {
@@ -205,8 +238,46 @@ export async function apiJson<T>(
   input: string,
   init: ApiRequestInit = {},
 ): Promise<T> {
-  return jsonBody<T>(
-    apiFetch(input, init),
+  const method = String(init.method ?? "GET").toUpperCase();
+  const canDedupe =
+    init.dedupe !== false &&
+    method === "GET" &&
+    init.body == null &&
+    init.signal == null;
+
+  if (!canDedupe) {
+    return jsonBody<T>(
+      apiFetch(input, init),
+      "TTTracker request failed.",
+    );
+  }
+
+  const session = await currentSession();
+  const tokenTail = session?.access_token.slice(-12) ?? "anon";
+  const key = [
+    session?.user.id ?? "anon",
+    tokenTail,
+    method,
+    apiUrl(input),
+    String(init.timeoutMs ?? 30_000),
+  ].join("|");
+
+  const existing = inFlightJson.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const task = jsonBody<T>(
+    performFetch(input, init, session),
     "TTTracker request failed.",
   );
+
+  const tracked = task.finally(() => {
+    if (inFlightJson.get(key) === tracked) {
+      inFlightJson.delete(key);
+    }
+  });
+
+  inFlightJson.set(key, tracked);
+  return tracked;
 }

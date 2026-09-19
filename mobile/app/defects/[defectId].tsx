@@ -40,8 +40,10 @@ import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields"
 import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
+  cachedQualityDefectDetail,
   cachedQualityMemberCatalog,
   downloadQualityFile,
+  refreshQualityDefectDetail,
   refreshQualityMemberCatalog,
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
@@ -97,13 +99,9 @@ function DefectDetailContent() {
   }>();
   const defectId = clean(params.defectId);
 
-  const { data, loading, refresh } = useQuality();
+  const { data, loading: metadataLoading } = useQuality();
   const { online } = useSync();
 
-  const defects = useMemo(
-    () => (Array.isArray(data?.defects) ? data.defects : []),
-    [data?.defects],
-  );
   const issueTypes = useMemo(
     () => (Array.isArray(data?.issueTypes) ? data.issueTypes : []),
     [data?.issueTypes],
@@ -112,14 +110,61 @@ function DefectDetailContent() {
     () => (Array.isArray(data?.towers) ? data.towers : []),
     [data?.towers],
   );
-  const files = useMemo(
-    () => (Array.isArray(data?.files) ? data.files : []),
-    [data?.files],
+
+  const projectId = clean(data?.projectId);
+  const [detail, setDetail] = useState<
+    Awaited<ReturnType<typeof refreshQualityDefectDetail>> | null
+  >(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  const reloadDetail = useCallback(
+    async (_forceLive = false) => {
+      if (!projectId || !defectId) return;
+
+      setDetailLoading(true);
+      setDetailError(null);
+      let hadCache = false;
+
+      try {
+        const cached = await cachedQualityDefectDetail(
+          projectId,
+          defectId,
+        );
+
+        if (cached?.value) {
+          hadCache = true;
+          setDetail(cached.value);
+        }
+
+        if (online) {
+          const latest = await refreshQualityDefectDetail(
+            projectId,
+            defectId,
+          );
+          setDetail(latest);
+        }
+      } catch (loadError) {
+        if (!hadCache) {
+          setDetailError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Defect could not be loaded.",
+          );
+        }
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [defectId, online, projectId],
   );
 
-  const defect = defects.find(
-    (row) => clean(row.id) === defectId,
-  );
+  useEffect(() => {
+    void reloadDetail(false);
+  }, [reloadDetail]);
+
+  const defect = detail?.defect ?? null;
+  const files = detail?.files ?? [];
 
   const [members, setMembers] = useState<
     QualityMemberCatalogRow[]
@@ -167,7 +212,6 @@ function DefectDetailContent() {
   const [preview, setPreview] =
     useState<Preview | null>(null);
 
-  const projectId = clean(data?.projectId);
   const towerId = clean(defect?.tower_id);
 
   const towerLabel =
@@ -411,7 +455,7 @@ function DefectDetailContent() {
       );
 
       setEdit(null);
-      await refresh();
+      await reloadDetail(true);
 
       if (payload.warning) {
         Alert.alert(
@@ -594,7 +638,7 @@ function DefectDetailContent() {
         }
       }
 
-      await Promise.all([refresh(), loadActions()]);
+      await Promise.all([reloadDetail(true), loadActions()]);
       setLifecycleMode(null);
       setLifecycleComment("");
       setLifecyclePhotos([]);
@@ -672,7 +716,7 @@ function DefectDetailContent() {
 
       setNewPhotos([]);
       setPhotoModalOpen(false);
-      await refresh();
+      await reloadDetail(true);
     } catch (error) {
       Alert.alert(
         "Photos could not be uploaded",
@@ -685,7 +729,10 @@ function DefectDetailContent() {
     }
   }
 
-  if (loading && !data) {
+  if (
+    (metadataLoading && !data) ||
+    (detailLoading && !detail)
+  ) {
     return <ActivityIndicator />;
   }
 
@@ -697,7 +744,7 @@ function DefectDetailContent() {
         subtitle="The requested Defect is not in the current project cache."
       >
         <Text style={styles.helper}>
-          Refresh the project data and try again.
+          {detailError || "Refresh the Defect and try again."}
         </Text>
       </QualityShell>
     );

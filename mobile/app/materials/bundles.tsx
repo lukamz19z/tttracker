@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
@@ -14,6 +14,10 @@ import {
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { TowerPicker } from "@/components/materials/TowerPicker";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import {
+  cachedBundleMembers,
+  loadBundleMembers,
+} from "@/lib/api/materials-bundles";
 import type {
   BundleCheckStatus,
   BundleRecord,
@@ -62,7 +66,6 @@ export default function Bundles() {
     currentQty,
     transferOutQty,
     pendingTransferInQty,
-    membersForBundle,
     memberCheckFor,
     deriveBundleStatus,
     saveBundleQty,
@@ -81,6 +84,11 @@ export default function Bundles() {
   const [visibleCount, setVisibleCount] = useState(6);
   const [actionBundle, setActionBundle] = useState<BundleRecord | null>(null);
   const [memberAction, setMemberAction] = useState<MemberRecord | null>(null);
+  const [packMembersByBundleId, setPackMembersByBundleId] = useState<
+    Record<string, MemberRecord[]>
+  >({});
+  const [packLoadingId, setPackLoadingId] = useState<string | null>(null);
+  const [packErrors, setPackErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setVisibleCount(6);
@@ -93,6 +101,87 @@ export default function Bundles() {
     if (nextTowerId) setTowerId(nextTowerId);
     if (nextBundleId) setExpandedBundleId(nextBundleId);
   }, [params.bundleId, params.towerId]);
+
+  const ensureBundleMembers = useCallback(
+    async (bundle: BundleRecord, force = false) => {
+      const projectId = clean(data?.projectId);
+      const bundleId = clean(bundle.id);
+
+      if (!projectId || !bundleId) return;
+      if (!force && Object.prototype.hasOwnProperty.call(packMembersByBundleId, bundleId)) {
+        return;
+      }
+
+      setPackLoadingId(bundleId);
+      setPackErrors((current) => {
+        const next = { ...current };
+        delete next[bundleId];
+        return next;
+      });
+
+      let hadCachedMembers = false;
+
+      try {
+        const cached = await cachedBundleMembers(projectId, bundleId);
+        if (cached) {
+          hadCachedMembers = true;
+          setPackMembersByBundleId((current) => ({
+            ...current,
+            [bundleId]: cached.value.members ?? [],
+          }));
+        }
+
+        try {
+          const latest = await loadBundleMembers(projectId, bundleId);
+          setPackMembersByBundleId((current) => ({
+            ...current,
+            [bundleId]: latest.members ?? [],
+          }));
+        } catch (error) {
+          if (!hadCachedMembers) throw error;
+        }
+      } catch (error) {
+        setPackErrors((current) => ({
+          ...current,
+          [bundleId]:
+            error instanceof Error
+              ? error.message
+              : "Bundle members could not be loaded.",
+        }));
+        setPackMembersByBundleId((current) => ({
+          ...current,
+          [bundleId]: current[bundleId] ?? [],
+        }));
+      } finally {
+        setPackLoadingId((current) => (current === bundleId ? null : current));
+      }
+    },
+    [data?.projectId, packMembersByBundleId],
+  );
+
+  const toggleBundle = useCallback(
+    (bundle: BundleRecord) => {
+      const bundleId = clean(bundle.id);
+      if (!bundleId) return;
+
+      if (expandedBundleId === bundleId) {
+        setExpandedBundleId("");
+        return;
+      }
+
+      setExpandedBundleId(bundleId);
+      void ensureBundleMembers(bundle);
+    },
+    [ensureBundleMembers, expandedBundleId],
+  );
+
+  useEffect(() => {
+    if (!expandedBundleId || !data?.bundles?.length) return;
+    const bundle = data.bundles.find(
+      (item) => clean(item.id) === expandedBundleId,
+    );
+    if (bundle) void ensureBundleMembers(bundle);
+  }, [data?.bundles, ensureBundleMembers, expandedBundleId]);
 
   const rows = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -254,8 +343,15 @@ export default function Bundles() {
         const expanded = expandedBundleId === actualBundleId;
         const saving = busyBundleId === actualBundleId;
         const pending = isBundlePending(actualBundleId);
-        const members = expanded ? membersForBundle(bundle) : [];
-        const memberCount = membersForBundle(bundle).length;
+        const members = expanded
+          ? packMembersByBundleId[actualBundleId] ?? []
+          : [];
+        const memberCount = Math.max(
+          numberValue(bundle.member_qty),
+          packMembersByBundleId[actualBundleId]?.length ?? 0,
+        );
+        const packLoading = expanded && packLoadingId === actualBundleId;
+        const packError = expanded ? packErrors[actualBundleId] : null;
 
         const transfers = expanded
           ? (data?.transfers ?? []).filter(
@@ -357,12 +453,14 @@ export default function Bundles() {
               <Pressable
                 style={styles.footerButton}
                 disabled={!actualBundleId}
-                onPress={() =>
-                  setExpandedBundleId(expanded ? "" : actualBundleId)
-                }
+                onPress={() => toggleBundle(bundle)}
               >
                 <Text style={styles.footerButtonText}>
-                  {expanded ? "Close Pack" : `Open Pack (${memberCount})`}
+                  {expanded
+                    ? "Close Pack"
+                    : memberCount > 0
+                      ? `Open Pack (${memberCount})`
+                      : "Open Pack"}
                 </Text>
               </Pressable>
 
@@ -388,7 +486,29 @@ export default function Bundles() {
                   </Text>
                 </View>
 
-                {!members.length ? (
+                {packLoading && !members.length ? (
+                  <View style={styles.packLoading}>
+                    <ActivityIndicator size="small" />
+                    <Text style={styles.packLoadingText}>Loading pack members…</Text>
+                  </View>
+                ) : packError && !members.length ? (
+                  <View style={styles.packErrorBox}>
+                    <Text style={styles.packErrorText}>{packError}</Text>
+                    <Pressable
+                      style={styles.packRetryButton}
+                      onPress={() => {
+                        setPackMembersByBundleId((current) => {
+                          const next = { ...current };
+                          delete next[actualBundleId];
+                          return next;
+                        });
+                        void ensureBundleMembers(bundle, true);
+                      }}
+                    >
+                      <Text style={styles.packRetryText}>Retry</Text>
+                    </Pressable>
+                  </View>
+                ) : !members.length ? (
                   <Text style={styles.packEmpty}>
                     No members are linked to this bundle.
                   </Text>
@@ -601,7 +721,7 @@ function MemberActionsModal({
   onClose: () => void;
   onAction: (status: MemberCheckStatus | "clear") => void;
 }) {
-  const options: Array<[MemberCheckStatus | "clear", string]> = [
+  const options: [MemberCheckStatus | "clear", string][] = [
     ["arrived", "Arrived"],
     ["not_here", "Not Here"],
     ["missing", "Missing"],
@@ -914,6 +1034,49 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
     borderRadius: 10,
     fontSize: 11,
+  },
+  packLoading: {
+    minHeight: 54,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  packLoadingText: {
+    color: "#64748b",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  packErrorBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#fed7aa",
+    backgroundColor: "#fff7ed",
+    padding: 10,
+    gap: 8,
+  },
+  packErrorText: {
+    color: "#9a3412",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  packRetryButton: {
+    alignSelf: "flex-start",
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#fdba74",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  packRetryText: {
+    color: "#9a3412",
+    fontSize: 10,
+    fontWeight: "900",
   },
   member: {
     flexDirection: "row",

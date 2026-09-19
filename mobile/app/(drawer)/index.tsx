@@ -1,5 +1,6 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Redirect, router, type Href } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -29,6 +30,7 @@ import {
 } from "lucide-react-native";
 
 import { ProjectSelector } from "@/components/ProjectSelector";
+import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
@@ -159,6 +161,18 @@ const EMPTY_DASHBOARD: ProjectDashboardData = {
   inProgressTowers: [],
   deliveryTowers: [],
 };
+
+const HOME_DASHBOARD_CACHE_PREFIX = "tttracker:home-dashboard:v2:";
+
+type CachedDashboard = {
+  savedAt: string;
+  projectId: string;
+  dashboard: ProjectDashboardData;
+};
+
+function dashboardCacheKey(projectId: string) {
+  return `${HOME_DASHBOARD_CACHE_PREFIX}${projectId}`;
+}
 
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
@@ -337,6 +351,9 @@ export default function HomeScreen() {
     useState<ProjectDashboardData>(EMPTY_DASHBOARD);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const dashboardHasDataRef = useRef(false);
+  const dashboardProjectRef = useRef<string | null>(null);
+
 
   const [notifications, setNotifications] =
     useState<NotificationSummary>(EMPTY_NOTIFICATIONS);
@@ -425,14 +442,23 @@ export default function HomeScreen() {
       return;
     }
 
-    setDashboardLoading(true);
+    const projectChanged = dashboardProjectRef.current !== projectId;
+    if (projectChanged) {
+      dashboardProjectRef.current = projectId;
+      dashboardHasDataRef.current = false;
+      setDashboard(EMPTY_DASHBOARD);
+    }
+
+    if (!dashboardHasDataRef.current) {
+      setDashboardLoading(true);
+    }
     setDashboardError(null);
 
     try {
       const [towersResult, docketsResult] = await Promise.all([
         supabase
           .from("towers")
-          .select("*")
+          .select("id,project_id,name,line,status,progress,tower_number,structure_number,tower_no,extra_data")
           .eq("project_id", projectId),
 
         supabase
@@ -461,7 +487,7 @@ export default function HomeScreen() {
             .in("tower_id", towerIds),
           supabase
             .from("tower_required_bundles")
-            .select("*")
+            .select("tower_id,qty_required,required_qty")
             .in("tower_id", towerIds),
         ]);
 
@@ -503,7 +529,7 @@ export default function HomeScreen() {
           ]) {
             const { data, error } = await supabase
               .from(table)
-              .select("*")
+              .select("delivery_id,qty_delivered,quantity_delivered,delivered_qty,qty")
               .in("delivery_id", deliveryIds);
 
             if (!error && data) {
@@ -514,29 +540,51 @@ export default function HomeScreen() {
         }
       }
 
+      /* Build lookup maps once instead of repeatedly filtering whole arrays for every tower. */
+      const docketsByTower = new Map<string, DocketRow[]>();
+      for (const docket of dockets) {
+        if (!docket.tower_id) continue;
+        const current = docketsByTower.get(docket.tower_id) ?? [];
+        current.push(docket);
+        docketsByTower.set(docket.tower_id, current);
+      }
+
+      const requiredQtyByTower = new Map<string, number>();
+      for (const bundle of bundles) {
+        if (!bundle.tower_id) continue;
+        requiredQtyByTower.set(
+          bundle.tower_id,
+          (requiredQtyByTower.get(bundle.tower_id) ?? 0) + getRequiredQty(bundle),
+        );
+      }
+
+      const deliveryIdsByTower = new Map<string, string[]>();
+      for (const delivery of deliveries) {
+        if (!delivery.tower_id) continue;
+        const current = deliveryIdsByTower.get(delivery.tower_id) ?? [];
+        current.push(delivery.id);
+        deliveryIdsByTower.set(delivery.tower_id, current);
+      }
+
+      const deliveredQtyByDelivery = new Map<string, number>();
+      for (const item of deliveryItems) {
+        if (!item.delivery_id) continue;
+        deliveredQtyByDelivery.set(
+          item.delivery_id,
+          (deliveredQtyByDelivery.get(item.delivery_id) ?? 0) + getDeliveredQty(item),
+        );
+      }
+
       const deliverySummaryByTower = new Map<string, DeliverySummary>();
 
       for (const tower of towers) {
-        const requiredQty = bundles
-          .filter((bundle) => bundle.tower_id === tower.id)
-          .reduce((sum, bundle) => sum + getRequiredQty(bundle), 0);
-
-        const towerDeliveryIds = new Set(
-          deliveries
-            .filter((delivery) => delivery.tower_id === tower.id)
-            .map((delivery) => delivery.id),
+        const requiredQty = requiredQtyByTower.get(tower.id) ?? 0;
+        const deliveredQty = (deliveryIdsByTower.get(tower.id) ?? []).reduce(
+          (sum, deliveryId) =>
+            sum + (deliveredQtyByDelivery.get(deliveryId) ?? 0),
+          0,
         );
-
-        const deliveredQty = deliveryItems
-          .filter(
-            (item) =>
-              item.delivery_id &&
-              towerDeliveryIds.has(item.delivery_id),
-          )
-          .reduce((sum, item) => sum + getDeliveredQty(item), 0);
-
         const outstandingQty = Math.max(0, requiredQty - deliveredQty);
-
         const deliveryPercent =
           requiredQty > 0
             ? clampPercent((deliveredQty / requiredQty) * 100)
@@ -551,16 +599,20 @@ export default function HomeScreen() {
       }
 
       const towerSummaries: TowerSummary[] = towers.map((tower) => {
-        const computedProgress = getTowerProgress(tower, dockets);
+        const towerDockets = docketsByTower.get(tower.id) ?? [];
+        const computedProgress =
+          towerDockets.length > 0
+            ? towerDockets.reduce(
+                (maximum, docket) =>
+                  Math.max(maximum, getDocketProgress(docket)),
+                0,
+              )
+            : clampPercent(safeNumber(tower.progress));
         const computedWeight = getTowerWeight(tower.extra_data);
         const completedTonnes =
           computedWeight && computedWeight > 0
             ? computedWeight * (computedProgress / 100)
             : null;
-
-        const towerDockets = dockets.filter(
-          (docket) => docket.tower_id === tower.id,
-        );
 
         const rawManhours = towerDockets.reduce(
           (sum, docket) => sum + safeNumber(docket.raw_manhours),
@@ -668,7 +720,7 @@ export default function HomeScreen() {
               new Date(b).getTime() - new Date(a).getTime(),
           )[0] ?? null;
 
-      setDashboard({
+      const nextDashboard: ProjectDashboardData = {
         totalTowers: towerSummaries.length,
         completedTowers,
         towersInProgress,
@@ -712,7 +764,19 @@ export default function HomeScreen() {
           )
           .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
           .slice(0, 4),
-      });
+      };
+
+      dashboardHasDataRef.current = true;
+      setDashboard(nextDashboard);
+
+      void AsyncStorage.setItem(
+        dashboardCacheKey(projectId),
+        JSON.stringify({
+          savedAt: new Date().toISOString(),
+          projectId,
+          dashboard: nextDashboard,
+        } satisfies CachedDashboard),
+      );
     } catch (error) {
       console.error("Project dashboard load failed:", error);
 
@@ -726,7 +790,9 @@ export default function HomeScreen() {
             ? error.message
             : "Unable to load the project dashboard.";
 
-      setDashboard(EMPTY_DASHBOARD);
+      if (!dashboardHasDataRef.current) {
+        setDashboard(EMPTY_DASHBOARD);
+      }
       setDashboardError(message);
     } finally {
       setDashboardLoading(false);
@@ -734,8 +800,44 @@ export default function HomeScreen() {
   }, [profile?.projectId]);
 
   useEffect(() => {
-    void loadProjectDashboard();
-  }, [loadProjectDashboard]);
+    const projectId = profile?.projectId ?? null;
+    let cancelled = false;
+
+    if (!projectId) {
+      dashboardProjectRef.current = null;
+      dashboardHasDataRef.current = false;
+      setDashboard(EMPTY_DASHBOARD);
+      setDashboardLoading(false);
+      return;
+    }
+
+    dashboardProjectRef.current = projectId;
+
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(dashboardCacheKey(projectId));
+
+        if (!cancelled && raw) {
+          const cached = JSON.parse(raw) as CachedDashboard;
+          if (cached?.projectId === projectId && cached.dashboard) {
+            dashboardHasDataRef.current = true;
+            setDashboard(cached.dashboard);
+            setDashboardLoading(false);
+          }
+        }
+      } catch (cacheError) {
+        console.warn("Home dashboard cache could not be read:", cacheError);
+      }
+
+      if (!cancelled) {
+        void loadProjectDashboard();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProjectDashboard, profile?.projectId]);
 
   useEffect(() => {
     void loadNotifications();
@@ -1323,17 +1425,7 @@ export default function HomeScreen() {
           </>
         ) : null}
 
-        <View style={styles.statusCard}>
-          <View style={styles.statusDot} />
-          <View style={styles.statusContent}>
-            <Text style={styles.statusTitle}>
-              All changes uploaded
-            </Text>
-            <Text style={styles.statusText}>
-              No items are currently waiting to sync.
-            </Text>
-          </View>
-        </View>
+        <SyncStatus />
       </ScrollView>
 
     </SafeAreaView>

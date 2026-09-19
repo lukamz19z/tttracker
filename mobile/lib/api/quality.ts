@@ -7,31 +7,265 @@ import type {
   DefectAssignee,
   DefectStatus,
   QualityDefect,
+  QualityDefectDetailPayload,
+  QualityDefectListRow,
+  QualityListPage,
   QualityPayload,
   QualityRevision,
+  QualityRevisionDetailPayload,
   QualityRevisionItem,
+  QualityRevisionListRow,
   RevisionItemStatus,
   RevisionStatus,
 } from "@/types/quality";
 
-export const qualityCacheKey = (projectId: string) => `quality:${projectId}`;
+const QUALITY_CACHE_VERSION = 2;
+
+export const qualityCacheKey = (projectId: string) =>
+  `quality:v${QUALITY_CACHE_VERSION}:${projectId}`;
+
+const legacyQualityCacheKey = (projectId: string) =>
+  `quality:${projectId}`;
+
+function slimPayload(value: QualityPayload): QualityPayload {
+  return {
+    ...value,
+    payloadVersion: QUALITY_CACHE_VERSION,
+    members: [],
+    revisions: [],
+    items: [],
+    files: [],
+    defects: [],
+  };
+}
 
 export async function refreshQuality(projectId: string) {
   const data = await apiJson<QualityPayload>(
     `/api/mobile/quality/bootstrap?projectId=${encodeURIComponent(projectId)}`,
-    { timeoutMs: 120000 },
+    { timeoutMs: 45_000 },
   );
 
-  await setCache(qualityCacheKey(projectId), data);
-  return data;
+  const slim = slimPayload(data);
+  await setCache(qualityCacheKey(projectId), slim);
+  return slim;
 }
 
-export function cachedQuality(projectId: string) {
-  return getCache<QualityPayload>(qualityCacheKey(projectId));
+export async function cachedQuality(projectId: string) {
+  const current = await getCache<QualityPayload>(
+    qualityCacheKey(projectId),
+  );
+  if (current) return current;
+
+  const legacy = await getCache<QualityPayload>(
+    legacyQualityCacheKey(projectId),
+  );
+  if (!legacy) return null;
+
+  const slim = slimPayload(legacy.value);
+  await setCache(qualityCacheKey(projectId), slim);
+
+  return {
+    ...legacy,
+    value: slim,
+  };
 }
 
-export async function getDefectAssignees(projectId: string) {
-  const payload = await apiJson<{ users?: DefectAssignee[] }>(
+function listKey(
+  kind: "defects" | "revisions",
+  projectId: string,
+  query: string,
+  status: string,
+  offset: number,
+) {
+  const q = query.trim().toLowerCase().slice(0, 80);
+  return `quality:list:${kind}:${projectId}:${status}:${offset}:${q}`;
+}
+
+export async function listQualityDefects(input: {
+  projectId: string;
+  query?: string;
+  status?: string;
+  offset?: number;
+  limit?: number;
+}) {
+  const query = input.query?.trim() ?? "";
+  const status = input.status?.trim() || "All";
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(10, Math.min(50, input.limit ?? 25));
+
+  const payload = await apiJson<
+    QualityListPage<QualityDefectListRow>
+  >(
+    `/api/mobile/quality/lists/defects?projectId=${encodeURIComponent(input.projectId)}&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    { timeoutMs: 30_000 },
+  );
+
+  await setCache(
+    listKey(
+      "defects",
+      input.projectId,
+      query,
+      status,
+      offset,
+    ),
+    payload,
+  );
+
+  return payload;
+}
+
+export function cachedQualityDefectList(input: {
+  projectId: string;
+  query?: string;
+  status?: string;
+  offset?: number;
+}) {
+  return getCache<QualityListPage<QualityDefectListRow>>(
+    listKey(
+      "defects",
+      input.projectId,
+      input.query ?? "",
+      input.status ?? "All",
+      Math.max(0, input.offset ?? 0),
+    ),
+  );
+}
+
+export async function listQualityRevisions(input: {
+  projectId: string;
+  query?: string;
+  status?: string;
+  offset?: number;
+  limit?: number;
+}) {
+  const query = input.query?.trim() ?? "";
+  const status = input.status?.trim() || "All";
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(10, Math.min(50, input.limit ?? 25));
+
+  const payload = await apiJson<
+    QualityListPage<QualityRevisionListRow>
+  >(
+    `/api/mobile/quality/lists/revisions?projectId=${encodeURIComponent(input.projectId)}&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    { timeoutMs: 30_000 },
+  );
+
+  await setCache(
+    listKey(
+      "revisions",
+      input.projectId,
+      query,
+      status,
+      offset,
+    ),
+    payload,
+  );
+
+  return payload;
+}
+
+export function cachedQualityRevisionList(input: {
+  projectId: string;
+  query?: string;
+  status?: string;
+  offset?: number;
+}) {
+  return getCache<QualityListPage<QualityRevisionListRow>>(
+    listKey(
+      "revisions",
+      input.projectId,
+      input.query ?? "",
+      input.status ?? "All",
+      Math.max(0, input.offset ?? 0),
+    ),
+  );
+}
+
+const defectDetailKey = (
+  projectId: string,
+  defectId: string,
+) => `quality:defect:${projectId}:${defectId}`;
+
+export async function refreshQualityDefectDetail(
+  projectId: string,
+  defectId: string,
+) {
+  const payload =
+    await apiJson<QualityDefectDetailPayload>(
+      `/api/mobile/quality/details/defects/${encodeURIComponent(defectId)}?projectId=${encodeURIComponent(projectId)}`,
+      { timeoutMs: 30_000 },
+    );
+
+  await setCache(
+    defectDetailKey(projectId, defectId),
+    payload,
+  );
+  return payload;
+}
+
+export function cachedQualityDefectDetail(
+  projectId: string,
+  defectId: string,
+) {
+  return getCache<QualityDefectDetailPayload>(
+    defectDetailKey(projectId, defectId),
+  );
+}
+
+const revisionDetailKey = (
+  projectId: string,
+  revisionId: string,
+) => `quality:revision:${projectId}:${revisionId}`;
+
+export async function refreshQualityRevisionDetail(
+  projectId: string,
+  revisionId: string,
+) {
+  const payload =
+    await apiJson<QualityRevisionDetailPayload>(
+      `/api/mobile/quality/details/revisions/${encodeURIComponent(revisionId)}?projectId=${encodeURIComponent(projectId)}`,
+      { timeoutMs: 30_000 },
+    );
+
+  await setCache(
+    revisionDetailKey(projectId, revisionId),
+    payload,
+  );
+  return payload;
+}
+
+export function cachedQualityRevisionDetail(
+  projectId: string,
+  revisionId: string,
+) {
+  return getCache<QualityRevisionDetailPayload>(
+    revisionDetailKey(projectId, revisionId),
+  );
+}
+
+export async function resolveQualityRevision(
+  projectId: string,
+  clientMutationId: string,
+) {
+  return apiJson<{
+    revision: {
+      id: string;
+      project_id: string;
+      tower_id: string;
+      mobile_client_mutation_id: string | null;
+    } | null;
+  }>(
+    `/api/mobile/quality/details/revisions/resolve?projectId=${encodeURIComponent(projectId)}&clientMutationId=${encodeURIComponent(clientMutationId)}`,
+    { timeoutMs: 20_000 },
+  );
+}
+
+export async function getDefectAssignees(
+  projectId: string,
+) {
+  const payload = await apiJson<{
+    users?: DefectAssignee[];
+  }>(
     `/api/quality/defects/notification-settings?projectId=${encodeURIComponent(projectId)}`,
   );
 
@@ -132,7 +366,10 @@ export async function uploadQualityPhoto(input: {
   defectId?: string;
   revisionId?: string;
   revisionItemId?: string;
-  fileRole: "defect_photo" | "before_photo" | "after_photo";
+  fileRole:
+    | "defect_photo"
+    | "before_photo"
+    | "after_photo";
   uri: string;
   name: string;
   mimeType: string;
@@ -175,7 +412,7 @@ export async function uploadQualityPhoto(input: {
     {
       method: "POST",
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 120_000,
     },
   );
 
@@ -185,7 +422,8 @@ export async function uploadQualityPhoto(input: {
 
   if (!response.ok) {
     throw new Error(
-      data?.error ?? "Quality evidence could not be uploaded.",
+      data?.error ??
+        "Quality evidence could not be uploaded.",
     );
   }
 
@@ -198,9 +436,7 @@ export async function shareQualityFile(
 ) {
   const response = await apiFetch(
     `/api/quality/files/${encodeURIComponent(fileId)}/content`,
-    {
-      timeoutMs: 120000,
-    },
+    { timeoutMs: 120_000 },
   );
 
   if (!response.ok) {
@@ -212,11 +448,9 @@ export async function shareQualityFile(
   const bytes = new Uint8Array(
     await response.arrayBuffer(),
   );
-
   const safe = (
     fileName || "quality-evidence"
   ).replace(/[^a-zA-Z0-9._-]/g, "_");
-
   const file = new File(
     Paths.cache,
     `${Date.now()}-${safe}`,
@@ -226,7 +460,6 @@ export async function shareQualityFile(
     overwrite: true,
     intermediates: true,
   });
-
   file.write(bytes);
 
   if (await Sharing.isAvailableAsync()) {
@@ -236,8 +469,9 @@ export async function shareQualityFile(
   return file.uri;
 }
 
-
-export async function submitRevisionForReview(revisionId: string) {
+export async function submitRevisionForReview(
+  revisionId: string,
+) {
   return apiJson<{
     revision: QualityRevision;
     notification?: {
@@ -249,7 +483,7 @@ export async function submitRevisionForReview(revisionId: string) {
     };
   }>(
     `/api/quality/revisions/${encodeURIComponent(revisionId)}/submit-review`,
-    { method: "POST", timeoutMs: 120000 },
+    { method: "POST", timeoutMs: 120_000 },
   );
 }
 
@@ -259,21 +493,33 @@ export async function downloadQualityFile(
 ) {
   const response = await apiFetch(
     `/api/quality/files/${encodeURIComponent(fileId)}/content`,
-    { timeoutMs: 120000 },
+    { timeoutMs: 120_000 },
   );
 
   if (!response.ok) {
-    throw new Error("Quality evidence could not be opened.");
+    throw new Error(
+      "Quality evidence could not be opened.",
+    );
   }
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const safe = (fileName || "quality-evidence").replace(/[^a-zA-Z0-9._-]/g, "_");
-  const file = new File(Paths.cache, `${Date.now()}-${safe}`);
-  file.create({ overwrite: true, intermediates: true });
+  const bytes = new Uint8Array(
+    await response.arrayBuffer(),
+  );
+  const safe = (
+    fileName || "quality-evidence"
+  ).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const file = new File(
+    Paths.cache,
+    `${Date.now()}-${safe}`,
+  );
+
+  file.create({
+    overwrite: true,
+    intermediates: true,
+  });
   file.write(bytes);
   return file.uri;
 }
-
 
 export type QualityMemberCatalogRow = {
   id: string;
@@ -309,7 +555,7 @@ export async function refreshQualityMemberCatalog(
     members?: QualityMemberCatalogRow[];
   }>(
     `/api/mobile/quality/members?projectId=${encodeURIComponent(projectId)}&towerId=${encodeURIComponent(towerId)}`,
-    { timeoutMs: 120000 },
+    { timeoutMs: 45_000 },
   );
 
   const members = payload.members ?? [];
@@ -345,6 +591,6 @@ export async function createQualityRevision(input: {
   }>("/api/mobile/quality/revisions", {
     method: "POST",
     body: JSON.stringify(input),
-    timeoutMs: 120000,
+    timeoutMs: 60_000,
   });
 }

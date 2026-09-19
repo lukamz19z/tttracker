@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createContext,
   useCallback,
@@ -10,8 +11,8 @@ import {
 } from "react";
 import { AppState } from "react-native";
 
+import { useAuth } from "@/contexts/AuthContext";
 import { apiJson } from "@/lib/api/client";
-import { supabase } from "@/lib/supabase";
 
 export type DynamicRole = {
   id: string;
@@ -86,6 +87,12 @@ type BootstrapPayload = {
   approvalCounts?: ApprovalCounts;
 };
 
+type AccessCache = {
+  savedAt: string;
+  access: AccessMePayload;
+  bootstrap: BootstrapPayload | null;
+};
+
 type AccessState = {
   loading: boolean;
   error: string | null;
@@ -115,8 +122,16 @@ const DEFAULT_APP_CONFIG: AppConfig = {
 };
 
 const EMPTY_CAPABILITIES: MobileCapabilities = {
-  expense: { canReviewEdit: false, canApprove: false, canMarkPaid: false },
-  invoice: { canReviewEdit: false, canApprove: false, canMarkPaid: false },
+  expense: {
+    canReviewEdit: false,
+    canApprove: false,
+    canMarkPaid: false,
+  },
+  invoice: {
+    canReviewEdit: false,
+    canApprove: false,
+    canMarkPaid: false,
+  },
   docketReviewerProjectIds: [],
   hasApprovals: false,
 };
@@ -127,13 +142,73 @@ const EMPTY_COUNTS: ApprovalCounts = {
   invoices: 0,
 };
 
-const ACCESS_REFRESH_INTERVAL_MS = 60_000;
+/*
+ * Full RBAC/bootstrap refreshes are intentionally infrequent. Sensitive APIs
+ * still enforce current server-side permissions on every request.
+ */
+const ACCESS_STALE_MS = 5 * 60_000;
+const ACCESS_FALLBACK_CHECK_MS = 5 * 60_000;
+const ACCESS_CACHE_PREFIX = "tttracker:mobile-access:v2:";
+
 const AccessContext = createContext<AccessState | null>(null);
 
+function cacheKey(userId: string) {
+  return `${ACCESS_CACHE_PREFIX}${userId}`;
+}
+
+function normaliseProjectIds(access: AccessMePayload) {
+  const values =
+    access.project_ids ??
+    access.projects?.map(
+      (project) => project.project_id ?? project.id ?? "",
+    ) ??
+    [];
+
+  return Array.from(
+    new Set(values.map(String).map((value) => value.trim()).filter(Boolean)),
+  );
+}
+
+function normaliseMobilePermissions(access: AccessMePayload) {
+  return (
+    access.permissions?.mobile ??
+    (access.permissions?.all ?? []).filter((code) =>
+      String(code).startsWith("mobile."),
+    )
+  );
+}
+
+async function readAccessCache(userId: string) {
+  try {
+    const raw = await AsyncStorage.getItem(cacheKey(userId));
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as AccessCache;
+    if (!parsed?.access || !parsed.savedAt) return null;
+    return parsed;
+  } catch (error) {
+    console.warn("TTTracker access cache could not be read:", error);
+    return null;
+  }
+}
+
+async function writeAccessCache(userId: string, cache: AccessCache) {
+  try {
+    await AsyncStorage.setItem(cacheKey(userId), JSON.stringify(cache));
+  } catch (error) {
+    console.warn("TTTracker access cache could not be saved:", error);
+  }
+}
+
 export function AccessProvider({ children }: PropsWithChildren) {
-  const loadedRef = useRef(false);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const { session, loading: authLoading } = useAuth();
+
   const mountedRef = useRef(true);
+  const activeUserIdRef = useRef<string | null>(null);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const lastServerRefreshRef = useRef(0);
+  const latestAccessRef = useRef<AccessMePayload | null>(null);
+  const latestBootstrapRef = useRef<BootstrapPayload | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +223,10 @@ export function AccessProvider({ children }: PropsWithChildren) {
     useState<ApprovalCounts>(EMPTY_COUNTS);
 
   const clear = useCallback(() => {
+    latestAccessRef.current = null;
+    latestBootstrapRef.current = null;
+    lastServerRefreshRef.current = 0;
+
     if (!mountedRef.current) return;
 
     setRoles([]);
@@ -160,120 +239,88 @@ export function AccessProvider({ children }: PropsWithChildren) {
     setError(null);
   }, []);
 
-  const runRefresh = useCallback(async () => {
-    if (!loadedRef.current && mountedRef.current) {
-      setLoading(true);
+  const applyAccess = useCallback((access: AccessMePayload) => {
+    latestAccessRef.current = access;
+
+    if (!mountedRef.current) return;
+
+    setRoles(access.roles ?? []);
+    setProjectIds(normaliseProjectIds(access));
+    setPermissions(new Set(normaliseMobilePermissions(access)));
+  }, []);
+
+  const applyBootstrap = useCallback((bootstrap: BootstrapPayload | null) => {
+    if (!bootstrap) return;
+
+    latestBootstrapRef.current = bootstrap;
+
+    if (!mountedRef.current) return;
+
+    setNavigation(bootstrap.navigation ?? []);
+    setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
+    setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
+    setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
+  }, []);
+
+  const runServerRefresh = useCallback(async () => {
+    const userId = session?.user.id ?? null;
+
+    if (!userId) {
+      clear();
+      if (mountedRef.current) setLoading(false);
+      return;
     }
 
     if (mountedRef.current) {
       setError(null);
     }
 
+    const requestedUserId = userId;
+
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      /*
+       * These requests do not depend on each other, so run them together.
+       * This removes an avoidable serial round trip during startup.
+       */
+      const [accessResult, bootstrapResult] = await Promise.allSettled([
+        apiJson<AccessMePayload>("/api/access/me", { timeoutMs: 15_000 }),
+        apiJson<BootstrapPayload>("/api/mobile/bootstrap", {
+          timeoutMs: 15_000,
+        }),
+      ]);
 
-      if (__DEV__) {
-        console.log(
-          "TTTracker RBAC session:",
-          session ? session.user.email ?? session.user.id : "NO SESSION",
-        );
-      }
-
-      if (!session) {
-        clear();
+      if (
+        !mountedRef.current ||
+        activeUserIdRef.current !== requestedUserId
+      ) {
         return;
       }
 
-      const sessionUserId = session.user.id;
-
-      /*
-       * RBAC is deliberately loaded separately from the mobile bootstrap.
-       * A bootstrap/config failure must never wipe the user's roles and
-       * effective mobile permissions.
-       */
-      let access: AccessMePayload;
-
-      try {
-        access = await apiJson<AccessMePayload>("/api/access/me");
-
-        if (__DEV__) {
-          console.log("TTTracker RBAC roles:", access.roles ?? []);
-          console.log(
-            "TTTracker mobile permissions:",
-            access.permissions?.mobile ??
-              (access.permissions?.all ?? []).filter((code) =>
-                String(code).startsWith("mobile."),
-              ),
-          );
-        }
-      } catch (accessError) {
-        console.error("TTTracker /api/access/me failed:", accessError);
-        throw accessError;
+      if (accessResult.status === "rejected") {
+        throw accessResult.reason;
       }
 
-      /*
-       * The user may have signed out or switched accounts while the request
-       * was in flight. Never apply access returned for a stale session.
-       */
-      const {
-        data: { session: currentSession },
-      } = await supabase.auth.getSession();
+      applyAccess(accessResult.value);
 
-      if (!currentSession || currentSession.user.id !== sessionUserId) {
-        clear();
-        return;
-      }
-
-      const nextProjectIds =
-        access.project_ids ??
-        access.projects?.map(
-          (project) => project.project_id ?? project.id ?? "",
-        ) ??
-        [];
-
-      const nextMobilePermissions =
-        access.permissions?.mobile ??
-        (access.permissions?.all ?? []).filter((code) =>
-          String(code).startsWith("mobile."),
-        );
-
-      if (!mountedRef.current) return;
-
-      setRoles(access.roles ?? []);
-      setProjectIds(
-        Array.from(new Set(nextProjectIds.map(String).filter(Boolean))),
-      );
-      setPermissions(new Set(nextMobilePermissions));
-
-      /*
-       * Bootstrap is supplementary. If it fails, preserve the last known
-       * navigation/config/capability data instead of blanking the app.
-       */
-      try {
-        const bootstrap =
-          await apiJson<BootstrapPayload>("/api/mobile/bootstrap");
-
-        if (!mountedRef.current) return;
-
-        setNavigation(bootstrap.navigation ?? []);
-        setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
-        setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
-        setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
-
-        if (__DEV__) {
-          console.log(
-            "TTTracker mobile bootstrap:",
-            `${bootstrap.navigation?.length ?? 0} navigation items`,
-          );
-        }
-      } catch (bootstrapError) {
+      if (bootstrapResult.status === "fulfilled") {
+        applyBootstrap(bootstrapResult.value);
+      } else {
         console.warn(
-          "TTTracker /api/mobile/bootstrap failed; keeping last known mobile config:",
-          bootstrapError,
+          "TTTracker /api/mobile/bootstrap failed; keeping cached mobile config:",
+          bootstrapResult.reason,
         );
       }
+
+      lastServerRefreshRef.current = Date.now();
+
+      await writeAccessCache(requestedUserId, {
+        savedAt: new Date().toISOString(),
+        access: accessResult.value,
+        bootstrap:
+          bootstrapResult.status === "fulfilled"
+            ? bootstrapResult.value
+            : latestBootstrapRef.current,
+      });
     } catch (refreshError) {
       const message =
         refreshError instanceof Error
@@ -286,87 +333,118 @@ export function AccessProvider({ children }: PropsWithChildren) {
         setError(message);
       }
     } finally {
-      loadedRef.current = true;
-
       if (mountedRef.current) {
         setLoading(false);
       }
     }
-  }, [clear]);
+  }, [applyAccess, applyBootstrap, clear, session?.user.id]);
 
-  /*
-   * Deduplicate refreshes.
-   *
-   * Expo/Supabase startup can trigger refresh from several places at nearly
-   * the same time:
-   *   - the provider's initial useEffect
-   *   - Supabase INITIAL_SESSION / SIGNED_IN events
-   *   - AppState returning to active
-   *   - the one-minute background access refresh
-   *
-   * All callers now share one in-flight Promise rather than launching
-   * multiple /api/access/me + /api/mobile/bootstrap request pairs.
-   */
   const refresh = useCallback((): Promise<void> => {
     if (refreshPromiseRef.current) {
-      if (__DEV__) {
-        console.log("TTTracker access refresh already in progress; reusing request.");
-      }
-
       return refreshPromiseRef.current;
     }
 
-    const task = runRefresh();
-
-    const trackedTask = task.finally(() => {
-      if (refreshPromiseRef.current === trackedTask) {
+    const task = runServerRefresh();
+    const tracked = task.finally(() => {
+      if (refreshPromiseRef.current === tracked) {
         refreshPromiseRef.current = null;
       }
     });
 
-    refreshPromiseRef.current = trackedTask;
-    return trackedTask;
-  }, [runRefresh]);
+    refreshPromiseRef.current = tracked;
+    return tracked;
+  }, [runServerRefresh]);
 
   useEffect(() => {
     mountedRef.current = true;
-
-    void refresh();
-
-    const authListener = supabase.auth.onAuthStateChange((event) => {
-      if (__DEV__) {
-        console.log("TTTracker auth state change:", event);
-      }
-
-      /*
-       * TOKEN_REFRESHED only replaces the JWT. Permissions are refreshed by
-       * the normal one-minute timer, and launching another RBAC request here
-       * creates unnecessary traffic.
-       */
-      if (event === "TOKEN_REFRESHED") return;
-
-      void refresh();
-    });
-
-    const appListener = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        void refresh();
-      }
-    });
-
-    const interval = setInterval(() => {
-      if (AppState.currentState === "active") {
-        void refresh();
-      }
-    }, ACCESS_REFRESH_INTERVAL_MS);
-
     return () => {
       mountedRef.current = false;
-      authListener.data.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+
+    const userId = session?.user.id ?? null;
+    const previousUserId = activeUserIdRef.current;
+    activeUserIdRef.current = userId;
+
+    if (!userId) {
+      clear();
+      setLoading(false);
+
+      if (previousUserId) {
+        void AsyncStorage.removeItem(cacheKey(previousUserId));
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      setLoading(true);
+      setError(null);
+
+      const cached = await readAccessCache(userId);
+      if (cancelled || activeUserIdRef.current !== userId) return;
+
+      if (cached) {
+        applyAccess(cached.access);
+        applyBootstrap(cached.bootstrap);
+        setLoading(false);
+
+        const savedAt = new Date(cached.savedAt).getTime();
+        if (Number.isFinite(savedAt)) {
+          lastServerRefreshRef.current = savedAt;
+        }
+      }
+
+      /* Always revalidate after cold start, but never block cached UI on it. */
+      void refresh();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyAccess,
+    applyBootstrap,
+    authLoading,
+    clear,
+    refresh,
+    session?.user.id,
+  ]);
+
+  useEffect(() => {
+    if (!session?.user.id) return;
+
+    const appListener = AppState.addEventListener("change", (state) => {
+      if (
+        state === "active" &&
+        Date.now() - lastServerRefreshRef.current >= ACCESS_STALE_MS
+      ) {
+        void refresh();
+      }
+    });
+
+    /*
+     * Low-frequency fallback for a role/permission change while the app stays
+     * continuously open. This is 5x less frequent than the old full refresh.
+     */
+    const interval = setInterval(() => {
+      if (
+        AppState.currentState === "active" &&
+        Date.now() - lastServerRefreshRef.current >= ACCESS_STALE_MS
+      ) {
+        void refresh();
+      }
+    }, ACCESS_FALLBACK_CHECK_MS);
+
+    return () => {
       appListener.remove();
       clearInterval(interval);
     };
-  }, [refresh]);
+  }, [refresh, session?.user.id]);
 
   const roleCodes = useMemo(
     () =>
@@ -407,7 +485,9 @@ export function AccessProvider({ children }: PropsWithChildren) {
         roleCodes.has(String(roleCode).trim().toLowerCase()),
       hasCapability: (capabilityKey) => {
         if (!capabilityKey) return true;
-        if (capabilityKey === "has_approvals") return capabilities.hasApprovals;
+        if (capabilityKey === "has_approvals") {
+          return capabilities.hasApprovals;
+        }
         return false;
       },
     }),

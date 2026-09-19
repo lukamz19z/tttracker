@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
 } from "react";
@@ -93,6 +94,8 @@ type Value = {
 
 const Ctx = createContext<Value | undefined>(undefined);
 
+const MATERIALS_STALE_MS = 2 * 60_000;
+
 const clean = (value: unknown) => String(value ?? "").trim();
 const upper = (value: unknown) => clean(value).toUpperCase();
 const numberValue = (value: unknown) => {
@@ -136,6 +139,15 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   const [pendingMutations, setPendingMutations] = useState<
     PendingMaterialMutation[]
   >([]);
+
+  const dataRef = useRef<MaterialPayload | null>(null);
+  const projectRef = useRef<string | null>(null);
+  const loadPromiseRef = useRef<{ projectId: string; promise: Promise<void> } | null>(null);
+  const lastServerRefreshRef = useRef(0);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   const persist = useCallback(
     (next: MaterialPayload | null) => {
@@ -217,16 +229,37 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     [online, projectId, replaceQueue],
   );
 
-  const load = useCallback(
-    async (refresh = false) => {
+  const runLoad = useCallback(
+    async (forceRefresh = false) => {
       if (!projectId) {
+        projectRef.current = null;
+        dataRef.current = null;
+        lastServerRefreshRef.current = 0;
         setData(null);
         setCachedAt(null);
         setPendingMutations([]);
+        setError(null);
+        setLoading(false);
+        setRefreshing(false);
         return;
       }
 
-      refresh ? setRefreshing(true) : setLoading(true);
+      const projectChanged = projectRef.current !== projectId;
+      if (projectChanged) {
+        projectRef.current = projectId;
+        dataRef.current = null;
+        lastServerRefreshRef.current = 0;
+        setData(null);
+        setCachedAt(null);
+        setPendingMutations([]);
+      }
+
+      if (!dataRef.current) {
+        setLoading(true);
+      } else if (forceRefresh) {
+        setRefreshing(true);
+      }
+
       setError(null);
 
       try {
@@ -235,26 +268,64 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           loadMaterialQueue(projectId),
         ]);
 
+        if (projectRef.current !== projectId) return;
+
         setPendingMutations(queued);
 
         if (cached) {
+          dataRef.current = cached.value;
           setData(cached.value);
           setCachedAt(cached.updatedAt);
+          setLoading(false);
+
+          const cachedTime = new Date(cached.updatedAt).getTime();
+          if (Number.isFinite(cachedTime)) {
+            lastServerRefreshRef.current = Math.max(
+              lastServerRefreshRef.current,
+              cachedTime,
+            );
+          }
         }
 
         let remaining = queued;
 
         if (online && queued.length) {
           remaining = await flushQueue(queued);
+          if (projectRef.current !== projectId) return;
         }
 
-        if (online && remaining.length === 0) {
+        const cacheFresh =
+          Boolean(cached) &&
+          Date.now() - new Date(cached?.updatedAt ?? 0).getTime() <
+            MATERIALS_STALE_MS;
+
+        const recentlyRefreshed =
+          Date.now() - lastServerRefreshRef.current < MATERIALS_STALE_MS;
+
+        const shouldRefreshServer =
+          online &&
+          remaining.length === 0 &&
+          (forceRefresh || !cached || (!cacheFresh && !recentlyRefreshed));
+
+        if (shouldRefreshServer) {
+          if (dataRef.current) {
+            setRefreshing(true);
+          }
+
           try {
             const latest = await refreshMaterials(projectId);
+            if (projectRef.current !== projectId) return;
+
+            const now = new Date().toISOString();
+
+            dataRef.current = latest;
             setData(latest);
-            setCachedAt(new Date().toISOString());
+            setCachedAt(now);
+            lastServerRefreshRef.current = Date.now();
+            setError(null);
           } catch (refreshError) {
-            if (!cached) throw refreshError;
+            if (!cached && !dataRef.current) throw refreshError;
+
             setError(
               refreshError instanceof Error
                 ? `${refreshError.message} Showing cached materials.`
@@ -276,18 +347,47 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     [flushQueue, online, projectId],
   );
 
+  const load = useCallback(
+    (forceRefresh = false): Promise<void> => {
+      const key = projectId ?? "";
+
+      if (
+        loadPromiseRef.current &&
+        loadPromiseRef.current.projectId === key
+      ) {
+        return loadPromiseRef.current.promise;
+      }
+
+      const task = runLoad(forceRefresh);
+      const tracked = task.finally(() => {
+        if (loadPromiseRef.current?.promise === tracked) {
+          loadPromiseRef.current = null;
+        }
+      });
+
+      loadPromiseRef.current = { projectId: key, promise: tracked };
+      return tracked;
+    },
+    [projectId, runLoad],
+  );
+
   useEffect(() => {
     void load(false);
   }, [load]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        void load(true);
+      if (
+        state === "active" &&
+        online &&
+        Date.now() - lastServerRefreshRef.current >= MATERIALS_STALE_MS
+      ) {
+        void load(false);
       }
     });
+
     return () => sub.remove();
-  }, [load]);
+  }, [load, online]);
 
   const towerMap = useMemo(
     () =>
@@ -316,30 +416,171 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     return counts;
   }, [data?.bundles]);
 
+  /*
+   * Materials can contain thousands of members and delivery rows. Previously
+   * every card/status calculation repeatedly scanned those arrays. Build the
+   * indexes once whenever the project snapshot changes, then keep the hot UI
+   * lookups O(1) (or O(members-in-one-bundle)).
+   */
+  const bundleCheckIndex = useMemo(() => {
+    const byId = new Map<string, BundleCheckRecord>();
+    const byTowerRef = new Map<string, BundleCheckRecord>();
+
+    for (const row of data?.bundleChecks ?? []) {
+      const bundleId = clean(row.bundle_id);
+      const fallbackKey = `${clean(row.tower_id)}::${normaliseBundle(row.bundle_no)}`;
+
+      if (bundleId) byId.set(bundleId, row);
+      if (fallbackKey !== "::") byTowerRef.set(fallbackKey, row);
+    }
+
+    return { byId, byTowerRef };
+  }, [data?.bundleChecks]);
+
+  const memberCheckIndex = useMemo(() => {
+    const byBundleMark = new Map<string, MemberCheckRecord>();
+    const byBundleId = new Map<string, MemberCheckRecord[]>();
+
+    for (const row of data?.memberChecks ?? []) {
+      const bundleId = clean(row.bundle_id);
+      const markNo = upper(row.mark_no);
+
+      if (bundleId) {
+        const rows = byBundleId.get(bundleId) ?? [];
+        rows.push(row);
+        byBundleId.set(bundleId, rows);
+      }
+
+      if (bundleId && markNo) {
+        byBundleMark.set(`${bundleId}::${markNo}`, row);
+      }
+    }
+
+    return { byBundleMark, byBundleId };
+  }, [data?.memberChecks]);
+
+  const memberIndex = useMemo(() => {
+    const byBundleId = new Map<string, MemberRecord[]>();
+    const byTowerRef = new Map<string, MemberRecord[]>();
+    const byTowerRefSection = new Map<string, MemberRecord[]>();
+
+    for (const member of data?.members ?? []) {
+      const bundleId = clean(member.bundle_id);
+      const towerId = clean(member.tower_id);
+      const bundleRef = normaliseBundle(member.bundle_reference);
+      const section = normaliseSection(member.tower_segment || member.section);
+
+      if (bundleId) {
+        const rows = byBundleId.get(bundleId) ?? [];
+        rows.push(member);
+        byBundleId.set(bundleId, rows);
+      }
+
+      if (towerId && bundleRef) {
+        const refKey = `${towerId}::${bundleRef}`;
+        const refRows = byTowerRef.get(refKey) ?? [];
+        refRows.push(member);
+        byTowerRef.set(refKey, refRows);
+
+        if (section) {
+          const sectionKey = `${refKey}::${section}`;
+          const sectionRows = byTowerRefSection.get(sectionKey) ?? [];
+          sectionRows.push(member);
+          byTowerRefSection.set(sectionKey, sectionRows);
+        }
+      }
+    }
+
+    return { byBundleId, byTowerRef, byTowerRefSection };
+  }, [data?.members]);
+
+  const deliveryIndex = useMemo(() => {
+    const byBundleId = new Map<string, number>();
+    const legacyByTowerRef = new Map<string, number>();
+
+    for (const delivery of data?.deliveries ?? []) {
+      const deliveryTowerId = clean(delivery.tower_id);
+      const items = Array.isArray(delivery.tower_bundle_delivery_items)
+        ? delivery.tower_bundle_delivery_items
+        : [];
+
+      for (const item of items) {
+        const qty = Math.max(
+          numberValue(
+            item.qty_delivered ?? item.quantity_delivered ?? item.qty,
+          ),
+          0,
+        );
+        if (qty <= 0) continue;
+
+        const bundleId = clean(item.bundle_id);
+        if (bundleId) {
+          byBundleId.set(bundleId, (byBundleId.get(bundleId) ?? 0) + qty);
+          continue;
+        }
+
+        const bundleNo = normaliseBundle(item.bundle_no);
+        if (!deliveryTowerId || !bundleNo) continue;
+
+        const key = `${deliveryTowerId}::${bundleNo}`;
+        legacyByTowerRef.set(key, (legacyByTowerRef.get(key) ?? 0) + qty);
+      }
+    }
+
+    return { byBundleId, legacyByTowerRef };
+  }, [data?.deliveries]);
+
+  const transferIndex = useMemo(() => {
+    const outByBundleId = new Map<string, number>();
+    const receivedInByBundleId = new Map<string, number>();
+    const pendingInByBundleId = new Map<string, number>();
+
+    for (const transfer of data?.transfers ?? []) {
+      const status = clean(transfer.status).toLowerCase();
+      const qty = Math.max(numberValue(transfer.quantity), 0);
+      if (qty <= 0) continue;
+
+      const sourceId = clean(transfer.source_bundle_id);
+      const destinationId = clean(transfer.destination_bundle_id);
+
+      if (sourceId && (status === "in_transit" || status === "received")) {
+        outByBundleId.set(
+          sourceId,
+          (outByBundleId.get(sourceId) ?? 0) + qty,
+        );
+      }
+
+      if (destinationId && status === "received") {
+        receivedInByBundleId.set(
+          destinationId,
+          (receivedInByBundleId.get(destinationId) ?? 0) + qty,
+        );
+      }
+
+      if (destinationId && status === "in_transit") {
+        pendingInByBundleId.set(
+          destinationId,
+          (pendingInByBundleId.get(destinationId) ?? 0) + qty,
+        );
+      }
+    }
+
+    return { outByBundleId, receivedInByBundleId, pendingInByBundleId };
+  }, [data?.transfers]);
+
   const bundleCheckFor = useCallback(
     (bundle: BundleRecord) => {
       const id = clean(bundle.id);
-
       if (id) {
-        const direct = (data?.bundleChecks ?? []).find(
-          (row) => clean(row.bundle_id) === id,
-        );
+        const direct = bundleCheckIndex.byId.get(id);
         if (direct) return direct;
       }
 
       const key = `${clean(bundle.tower_id)}::${normaliseBundle(bundle.bundle_no)}`;
-
-      if ((duplicateBundleRefs.get(key) || 0) !== 1) {
-        return undefined;
-      }
-
-      return (data?.bundleChecks ?? []).find(
-        (row) =>
-          clean(row.tower_id) === clean(bundle.tower_id) &&
-          normaliseBundle(row.bundle_no) === normaliseBundle(bundle.bundle_no),
-      );
+      if ((duplicateBundleRefs.get(key) || 0) !== 1) return undefined;
+      return bundleCheckIndex.byTowerRef.get(key);
     },
-    [data?.bundleChecks, duplicateBundleRefs],
+    [bundleCheckIndex, duplicateBundleRefs],
   );
 
   const receivedQty = useCallback(
@@ -351,142 +592,74 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   const deliveredQty = useCallback(
     (bundle: BundleRecord) => {
       const bundleId = clean(bundle.id);
-      const bundleNo = normaliseBundle(bundle.bundle_no);
-      const towerId = clean(bundle.tower_id);
-      const fallbackKey = `${towerId}::${bundleNo}`;
-      const allowFallback = (duplicateBundleRefs.get(fallbackKey) || 0) === 1;
+      const fallbackKey = `${clean(bundle.tower_id)}::${normaliseBundle(bundle.bundle_no)}`;
 
-      let total = 0;
+      const direct = bundleId ? deliveryIndex.byBundleId.get(bundleId) ?? 0 : 0;
+      const legacy =
+        (duplicateBundleRefs.get(fallbackKey) || 0) === 1
+          ? deliveryIndex.legacyByTowerRef.get(fallbackKey) ?? 0
+          : 0;
 
-      for (const delivery of data?.deliveries ?? []) {
-        if (clean(delivery.tower_id) && clean(delivery.tower_id) !== towerId) {
-          continue;
-        }
-
-        const items = Array.isArray(delivery.tower_bundle_delivery_items)
-          ? delivery.tower_bundle_delivery_items
-          : [];
-
-        for (const item of items) {
-          const itemBundleId = clean(item.bundle_id);
-
-          const matches =
-            (bundleId && itemBundleId === bundleId) ||
-            (!itemBundleId &&
-              allowFallback &&
-              normaliseBundle(item.bundle_no) === bundleNo);
-
-          if (!matches) continue;
-
-          total += Math.max(
-            numberValue(
-              item.qty_delivered ??
-                item.quantity_delivered ??
-                item.qty,
-            ),
-            0,
-          );
-        }
-      }
-
-      return total;
+      return direct + legacy;
     },
-    [data?.deliveries, duplicateBundleRefs],
+    [deliveryIndex, duplicateBundleRefs],
   );
 
   const membersForBundle = useCallback(
     (bundle: BundleRecord) => {
       const bundleId = clean(bundle.id);
-
       if (bundleId) {
-        const direct = (data?.members ?? []).filter(
-          (member) => clean(member.bundle_id) === bundleId,
-        );
-        if (direct.length) return direct;
+        const direct = memberIndex.byBundleId.get(bundleId);
+        if (direct?.length) return direct;
       }
 
-      const sameReference = (data?.members ?? []).filter(
-        (member) =>
-          clean(member.tower_id) === clean(bundle.tower_id) &&
-          normaliseBundle(member.bundle_reference) ===
-            normaliseBundle(bundle.bundle_no),
-      );
+      const refKey = `${clean(bundle.tower_id)}::${normaliseBundle(bundle.bundle_no)}`;
+      const sectionKey = `${refKey}::${normaliseSection(bundle.section)}`;
+      const exactSection = memberIndex.byTowerRefSection.get(sectionKey);
+      if (exactSection?.length) return exactSection;
 
-      if (sameReference.length === 0) return [];
-
-      const exactSection = sameReference.filter(
-        (member) =>
-          normaliseSection(member.tower_segment || member.section) ===
-          normaliseSection(bundle.section),
-      );
-
-      if (exactSection.length) return exactSection;
-
-      const key = `${clean(bundle.tower_id)}::${normaliseBundle(bundle.bundle_no)}`;
-      return (duplicateBundleRefs.get(key) || 0) === 1 ? sameReference : [];
+      if ((duplicateBundleRefs.get(refKey) || 0) !== 1) return [];
+      return memberIndex.byTowerRef.get(refKey) ?? [];
     },
-    [data?.members, duplicateBundleRefs],
+    [duplicateBundleRefs, memberIndex],
   );
 
   const memberCheckFor = useCallback(
     (member: MemberRecord) => {
       const bundleId = clean(member.bundle_id);
       const markNo = upper(member.mark_no);
-
-      if (bundleId) {
-        return (data?.memberChecks ?? []).find(
-          (row) =>
-            clean(row.bundle_id) === bundleId &&
-            upper(row.mark_no) === markNo,
-        );
-      }
-
-      return undefined;
+      if (!bundleId || !markNo) return undefined;
+      return memberCheckIndex.byBundleMark.get(`${bundleId}::${markNo}`);
     },
-    [data?.memberChecks],
+    [memberCheckIndex],
   );
 
   const transferOutQty = useCallback(
     (bundle: BundleRecord) => {
       const bundleId = clean(bundle.id);
-      if (!bundleId) return 0;
-
-      return (data?.transfers ?? []).reduce((sum, transfer) => {
-        const status = clean(transfer.status).toLowerCase();
-        if (!["in_transit", "received"].includes(status)) return sum;
-        if (clean(transfer.source_bundle_id) !== bundleId) return sum;
-        return sum + Math.max(numberValue(transfer.quantity), 0);
-      }, 0);
+      return bundleId ? transferIndex.outByBundleId.get(bundleId) ?? 0 : 0;
     },
-    [data?.transfers],
+    [transferIndex],
   );
 
   const transferInQty = useCallback(
     (bundle: BundleRecord) => {
       const bundleId = clean(bundle.id);
-      if (!bundleId) return 0;
-
-      return (data?.transfers ?? []).reduce((sum, transfer) => {
-        if (clean(transfer.status) !== "received") return sum;
-        if (clean(transfer.destination_bundle_id) !== bundleId) return sum;
-        return sum + Math.max(numberValue(transfer.quantity), 0);
-      }, 0);
+      return bundleId
+        ? transferIndex.receivedInByBundleId.get(bundleId) ?? 0
+        : 0;
     },
-    [data?.transfers],
+    [transferIndex],
   );
 
   const pendingTransferInQty = useCallback(
     (bundle: BundleRecord) => {
       const bundleId = clean(bundle.id);
-      if (!bundleId) return 0;
-
-      return (data?.transfers ?? []).reduce((sum, transfer) => {
-        if (clean(transfer.status) !== "in_transit") return sum;
-        if (clean(transfer.destination_bundle_id) !== bundleId) return sum;
-        return sum + Math.max(numberValue(transfer.quantity), 0);
-      }, 0);
+      return bundleId
+        ? transferIndex.pendingInByBundleId.get(bundleId) ?? 0
+        : 0;
     },
-    [data?.transfers],
+    [transferIndex],
   );
 
   const currentQty = useCallback(
@@ -509,6 +682,28 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       if (current >= required) return "arrived";
       if (current > 0) return "partial";
 
+      // The performance bootstrap intentionally does not preload the full
+      // member catalogue. Derive bundle state directly from the much smaller
+      // member-check register when possible, so status remains correct even
+      // with data.members = [].
+      const bundleId = clean(bundle.id);
+      const directChecks = bundleId
+        ? memberCheckIndex.byBundleId.get(bundleId) ?? []
+        : [];
+
+      if (directChecks.length) {
+        const statuses = directChecks.map(
+          (check) => check.status || "not_checked",
+        );
+
+        if (statuses.some((status) => status === "issue")) return "issue";
+        if (statuses.every((status) => status === "arrived")) return "arrived";
+        if (statuses.every((status) => status === "missing")) return "missing";
+        if (statuses.some((status) => status !== "not_checked")) return "partial";
+      }
+
+      // Legacy/fallback caches may still contain members. Keep the old logic
+      // available without requiring that catalogue in the normal bootstrap.
       const members = membersForBundle(bundle);
       if (!members.length) return manual?.status || "not_checked";
 
@@ -527,6 +722,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       bundleCheckFor,
       currentQty,
       memberCheckFor,
+      memberCheckIndex,
       membersForBundle,
       receivedQty,
       transferOutQty,

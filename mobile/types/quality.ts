@@ -2,11 +2,25 @@ export type DefectSeverity = "Minor" | "Major" | "Critical";
 
 export type DefectStatus = "Open" | "In Progress" | "Fixed" | "Closed";
 
-export type RevisionStatus = "Draft" | "In Progress" | "Ready for Review" | "Closed";
+export type RevisionStatus =
+  | "Draft"
+  | "In Progress"
+  | "Ready for Review"
+  | "Closed";
 
 export type RevisionItemStatus = "Open" | "Rectified" | "Verified";
 
-export type InspectionStage = "Post Assembly" | "Post Erection" | "Other";
+export type InspectionStage =
+  | "Post Assembly"
+  | "Post Erection"
+  | "Other";
+
+export type QualityProject = {
+  id: string;
+  name: string;
+  project_number: string | null;
+  status: string | null;
+};
 
 export type QualityTower = {
   id: string;
@@ -71,19 +85,8 @@ export type QualityRevision = {
   project_id: string;
   tower_id: string;
   sequence_no: number | null;
-
-  /**
-   * Canonical parent Revision code.
-   * Example: RECT-01
-   */
   revision_number: string | null;
-
-  /**
-   * Legacy compatibility field retained during the RECT/FLI rollout.
-   * New UI should use revision_number for parent Revisions.
-   */
   fli_number: string | null;
-
   inspection_stage: InspectionStage;
   inspection_date: string;
   client_inspector: string | null;
@@ -109,13 +112,7 @@ export type QualityRevisionItem = {
   project_id: string;
   tower_id: string;
   item_number: number | null;
-
-  /**
-   * Canonical child Flagged Issue code.
-   * Example: FLI-001
-   */
   fli_number: string | null;
-
   issue_type_id: string | null;
   other_issue_text: string | null;
   tower_segment: string | null;
@@ -162,16 +159,54 @@ export type QualityWorkflowOptions = {
 };
 
 export type QualityPayload = {
+  payloadVersion?: number;
   projectId: string;
   generatedAt: string;
+  project?: QualityProject | null;
   towers: QualityTower[];
   issueTypes: QualityIssueType[];
+
+  /*
+   * Compatibility arrays. Quality bootstrap v2 deliberately returns these
+   * empty. Large registers are loaded through paginated list/detail APIs.
+   */
   members: QualityMember[];
   revisions: QualityRevision[];
   items: QualityRevisionItem[];
   files: QualityFile[];
   defects: QualityDefect[];
+
   workflow: QualityWorkflowOptions;
+};
+
+export type QualityDefectListRow = QualityDefect & {
+  evidenceCount: number;
+};
+
+export type QualityRevisionListRow = QualityRevision & {
+  itemCount: number;
+};
+
+export type QualityListPage<T> = {
+  projectId: string;
+  rows: T[];
+  nextOffset: number | null;
+  generatedAt: string;
+};
+
+export type QualityDefectDetailPayload = {
+  projectId: string;
+  generatedAt: string;
+  defect: QualityDefect;
+  files: QualityFile[];
+};
+
+export type QualityRevisionDetailPayload = {
+  projectId: string;
+  generatedAt: string;
+  revision: QualityRevision;
+  items: QualityRevisionItem[];
+  files: QualityFile[];
 };
 
 export type LocalQualityPhoto = {

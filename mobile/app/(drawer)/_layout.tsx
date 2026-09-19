@@ -29,7 +29,16 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from "react";
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppFooter } from "@/components/common/AppFooter";
@@ -64,24 +73,32 @@ function formatUnreadCount(count: number) {
   return count > 99 ? "99+" : String(count);
 }
 
-function useUnreadNotificationCount(_channelScope: string) {
+type NotificationBadgeState = {
+  count: number;
+  refresh: () => Promise<void>;
+};
+
+const NotificationBadgeContext = createContext<NotificationBadgeState | null>(null);
+const NOTIFICATION_BADGE_STALE_MS = 2 * 60_000;
+
+function NotificationBadgeProvider({ children }: PropsWithChildren) {
+  const { session } = useAuth();
+  const userId = session?.user.id ?? null;
   const [count, setCount] = useState(0);
+  const lastLoadedRef = useRef(0);
+  const requestRef = useRef<Promise<void> | null>(null);
 
-  const loadUnreadCount = useCallback(async () => {
-    const { data: userResult, error: userError } =
-      await supabase.auth.getUser();
-
-    const user = userResult.user;
-
-    if (userError || !user) {
+  const runLoad = useCallback(async () => {
+    if (!userId) {
       setCount(0);
+      lastLoadedRef.current = Date.now();
       return;
     }
 
     const { count: unreadCount, error } = await supabase
       .from("user_notifications")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .is("read_at", null)
       .is("archived_at", null);
 
@@ -94,38 +111,73 @@ function useUnreadNotificationCount(_channelScope: string) {
     }
 
     setCount(unreadCount ?? 0);
-  }, []);
+    lastLoadedRef.current = Date.now();
+  }, [userId]);
+
+  const refresh = useCallback((): Promise<void> => {
+    if (requestRef.current) return requestRef.current;
+
+    const task = runLoad();
+    const tracked = task.finally(() => {
+      if (requestRef.current === tracked) {
+        requestRef.current = null;
+      }
+    });
+
+    requestRef.current = tracked;
+    return tracked;
+  }, [runLoad]);
 
   useEffect(() => {
-    let active = true;
-
-    async function refresh() {
-      if (!active) return;
-      await loadUnreadCount();
+    if (!userId) {
+      setCount(0);
+      return;
     }
 
     void refresh();
 
+    const channel = supabase
+      .channel(`mobile-notification-badge-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          void refresh();
+        },
+      )
+      .subscribe();
+
     const appListener = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
+      if (
+        state === "active" &&
+        Date.now() - lastLoadedRef.current >= NOTIFICATION_BADGE_STALE_MS
+      ) {
         void refresh();
       }
     });
 
-    const interval = setInterval(() => {
-      if (AppState.currentState === "active") {
-        void refresh();
-      }
-    }, 30_000);
-
     return () => {
-      active = false;
       appListener.remove();
-      clearInterval(interval);
+      void supabase.removeChannel(channel);
     };
-  }, [loadUnreadCount]);
+  }, [refresh, userId]);
 
-  return count;
+  const value = useMemo(() => ({ count, refresh }), [count, refresh]);
+
+  return (
+    <NotificationBadgeContext.Provider value={value}>
+      {children}
+    </NotificationBadgeContext.Provider>
+  );
+}
+
+function useUnreadNotificationCount() {
+  return useContext(NotificationBadgeContext)?.count ?? 0;
 }
 
 function navScreenName(route: string) {
@@ -138,7 +190,7 @@ function navScreenName(route: string) {
 
 function HeaderNotifications() {
   const router = useRouter();
-  const count = useUnreadNotificationCount("header");
+  const count = useUnreadNotificationCount();
 
   return (
     <Pressable
@@ -170,7 +222,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
   const router = useRouter();
   const { profile, signOut } = useAuth();
   const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
-  const unreadCount = useUnreadNotificationCount("drawer");
+  const unreadCount = useUnreadNotificationCount();
 
   const visibleItems = useMemo(() => {
     const permitted = navigation.filter(
@@ -335,7 +387,8 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 
 export default function DrawerLayout() {
   return (
-    <Drawer
+    <NotificationBadgeProvider>
+      <Drawer
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerStyle: { backgroundColor: "#fff" },
@@ -369,7 +422,8 @@ export default function DrawerLayout() {
       <Drawer.Screen name="assets" options={{ headerTitle: () => <DynamicTitle code="assets" fallback="Assets" /> }} />
       <Drawer.Screen name="fleet-jobs" options={{ headerTitle: () => <DynamicTitle code="fleet-jobs" fallback="Fleet Jobs" /> }} />
       <Drawer.Screen name="profile" options={{ headerTitle: () => <DynamicTitle code="profile" fallback="My Profile" /> }} />
-    </Drawer>
+      </Drawer>
+    </NotificationBadgeProvider>
   );
 }
 

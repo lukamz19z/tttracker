@@ -10,52 +10,140 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const { service, identity } = await requireMobileUser(request);
-    const projectId = request.nextUrl.searchParams.get("projectId")?.trim() || "";
-    if (!projectId) return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
+    const projectId =
+      request.nextUrl.searchParams.get("projectId")?.trim() || "";
+
+    if (!projectId) {
+      return NextResponse.json(
+        { error: "Project ID is required." },
+        { status: 400 },
+      );
+    }
 
     const [canRevision, canDefect] = await Promise.all([
-      userHasAccess(service, identity.userId, "mobile.rectifications"),
-      userHasAccess(service, identity.userId, "mobile.defects"),
+      userHasAccess(
+        service,
+        identity.userId,
+        "mobile.rectifications",
+      ),
+      userHasAccess(
+        service,
+        identity.userId,
+        "mobile.defects",
+      ),
     ]);
-    if (!canRevision && !canDefect) return NextResponse.json({ error: "You do not have mobile Quality access." }, { status: 403 });
-    await assertMobileProjectAccess(service, identity.userId, projectId);
 
-    const { data: towers, error: towerError } = await service
-      .from("towers")
-      .select("id,project_id,name,line,status,progress,extra_data")
-      .eq("project_id", projectId)
-      .order("name");
-    if (towerError) throw new Error(towerError.message);
-    const towerIds = (towers ?? []).map((tower) => tower.id);
+    if (!canRevision && !canDefect) {
+      return NextResponse.json(
+        { error: "You do not have mobile Quality access." },
+        { status: 403 },
+      );
+    }
 
-    const [issues, members, revisions, items, files, defects] = await Promise.all([
-      service.from("project_field_issue_types").select("id,project_id,applies_to,name,active,sort_order").eq("project_id", projectId).eq("active", true).order("sort_order").order("name"),
-      towerIds.length
-        ? service.from("tower_material_members").select("id,tower_id,bundle_reference,drawing_number,mark_no,qty_per_tower,section,tower_segment").in("tower_id", towerIds).order("tower_id").order("tower_segment").order("mark_no")
-        : Promise.resolve({ data: [], error: null }),
-      service.from("tower_revisions").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
-      service.from("tower_revision_items").select("*").eq("project_id", projectId).order("sort_order").order("item_number"),
-      service.from("tower_quality_files").select("id,project_id,tower_id,defect_id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
-      service.from("tower_defects").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
-    ]);
-    for (const result of [issues, members, revisions, items, files, defects]) if (result.error) throw new Error(result.error.message);
+    await assertMobileProjectAccess(
+      service,
+      identity.userId,
+      projectId,
+    );
+
+    /*
+     * PERFORMANCE:
+     * This endpoint is deliberately metadata-only.
+     *
+     * Do not put project-wide members, defects, revisions, FLI items or
+     * evidence back into this payload. Those registers are now loaded through
+     * paginated list/detail endpoints only when the user needs them.
+     */
+    const [projectResult, towersResult, issuesResult] =
+      await Promise.all([
+        service
+          .from("projects")
+          .select("id,name,project_number,status")
+          .eq("id", projectId)
+          .maybeSingle(),
+        service
+          .from("towers")
+          .select(
+            "id,project_id,name,line,status,progress,extra_data",
+          )
+          .eq("project_id", projectId)
+          .order("name"),
+        service
+          .from("project_field_issue_types")
+          .select(
+            "id,project_id,applies_to,name,active,sort_order",
+          )
+          .eq("project_id", projectId)
+          .eq("active", true)
+          .order("sort_order")
+          .order("name"),
+      ]);
+
+    for (const result of [
+      projectResult,
+      towersResult,
+      issuesResult,
+    ]) {
+      if (result.error) {
+        throw new Error(result.error.message);
+      }
+    }
 
     return NextResponse.json({
+      payloadVersion: 2,
       projectId,
       generatedAt: new Date().toISOString(),
-      towers: towers ?? [], issueTypes: issues.data ?? [], members: members.data ?? [], revisions: revisions.data ?? [], items: items.data ?? [], files: files.data ?? [], defects: defects.data ?? [],
+      project: projectResult.data ?? null,
+      towers: towersResult.data ?? [],
+      issueTypes: issuesResult.data ?? [],
+
+      // Retained as empty arrays for backwards type compatibility while the
+      // mobile app transitions to the paginated Quality API.
+      members: [],
+      revisions: [],
+      items: [],
+      files: [],
+      defects: [],
+
       workflow: {
         defectSeverities: ["Minor", "Major", "Critical"],
-        defectStatuses: ["Open", "In Progress", "Fixed", "Closed"],
-        revisionStatuses: ["Draft", "In Progress", "Ready for Review", "Closed"],
-        revisionItemStatuses: ["Open", "Rectified", "Verified"],
-        inspectionStages: ["Post Assembly", "Post Erection", "Other"],
+        defectStatuses: [
+          "Open",
+          "In Progress",
+          "Fixed",
+          "Closed",
+        ],
+        revisionStatuses: [
+          "Draft",
+          "In Progress",
+          "Ready for Review",
+          "Closed",
+        ],
+        revisionItemStatuses: [
+          "Open",
+          "Rectified",
+          "Verified",
+        ],
+        inspectionStages: [
+          "Post Assembly",
+          "Post Erection",
+          "Other",
+        ],
       },
     });
   } catch (error) {
     const apiError = mobileApiError(error);
-    const status = error instanceof Error && error.message === "MOBILE_PROJECT_DENIED" ? 403 : apiError.status;
-    const message = error instanceof Error && error.message === "MOBILE_PROJECT_DENIED" ? "You do not have access to this project." : apiError.message;
-    return NextResponse.json({ error: message }, { status });
+    const denied =
+      error instanceof Error &&
+      error.message === "MOBILE_PROJECT_DENIED";
+
+    return NextResponse.json(
+      {
+        error: denied
+          ? "You do not have access to this project."
+          : apiError.message,
+      },
+      { status: denied ? 403 : apiError.status },
+    );
   }
 }
