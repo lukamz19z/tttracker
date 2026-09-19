@@ -10,6 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type SearchKind = "all" | "member" | "bundle" | "bolt";
+type MemberField = "all" | "mark" | "pn" | "drawing" | "bundle" | "segment";
 
 type SearchResult = {
   kind: Exclude<SearchKind, "all">;
@@ -33,12 +34,19 @@ function requestedKind(value: string | null): SearchKind {
     : "all";
 }
 
+function requestedMemberField(value: string | null): MemberField {
+  const clean = cleanMaterialValue(value).toLowerCase();
+  return clean === "mark" ||
+    clean === "pn" ||
+    clean === "drawing" ||
+    clean === "bundle" ||
+    clean === "segment"
+    ? clean
+    : "all";
+}
+
 function displayTowerName(row: Record<string, unknown>) {
-  return (
-    cleanMaterialValue(row.name) ||
-    cleanMaterialValue(row.line) ||
-    "Tower"
-  );
+  return cleanMaterialValue(row.name) || cleanMaterialValue(row.line) || "Tower";
 }
 
 function searchableScore(result: SearchResult, query: string) {
@@ -56,38 +64,88 @@ function searchableScore(result: SearchResult, query: string) {
   return 6;
 }
 
+function memberFilterExpression(pattern: string, field: MemberField) {
+  if (field === "mark") return [`mark_no.ilike.${pattern}`];
+  if (field === "pn") return [`pn_final.ilike.${pattern}`];
+  if (field === "drawing") return [`drawing_number.ilike.${pattern}`];
+  if (field === "bundle") return [`bundle_reference.ilike.${pattern}`];
+  if (field === "segment") {
+    return [`section.ilike.${pattern}`, `tower_segment.ilike.${pattern}`];
+  }
+
+  return [
+    `mark_no.ilike.${pattern}`,
+    `pn_final.ilike.${pattern}`,
+    `bundle_reference.ilike.${pattern}`,
+    `drawing_number.ilike.${pattern}`,
+    `section.ilike.${pattern}`,
+    `tower_segment.ilike.${pattern}`,
+  ];
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const projectId = cleanMaterialValue(url.searchParams.get("projectId"));
+    const requestedTowerId = cleanMaterialValue(url.searchParams.get("towerId"));
     const rawQuery = cleanMaterialValue(url.searchParams.get("q"));
     const query = safeSearch(rawQuery);
     const kind = requestedKind(url.searchParams.get("kind"));
+    const memberField = requestedMemberField(url.searchParams.get("memberField"));
     const requestedLimit = Number(url.searchParams.get("limit") ?? 60);
-    const limit = Math.max(1, Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 60, 80));
+    const limit = Math.max(
+      1,
+      Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 60, 80),
+    );
 
     if (!projectId) {
       return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
     }
 
     if (query.length < 2) {
-      return NextResponse.json({ query: rawQuery, kind, results: [] });
+      return NextResponse.json({
+        query: rawQuery,
+        kind,
+        towerId: requestedTowerId,
+        memberField,
+        results: [],
+      });
     }
 
     const { service } = await requireMobileMaterialUser(request, projectId);
 
-    const { data: towers, error: towersError } = await service
+    let towersQuery = service
       .from("towers")
       .select("id,name,line")
       .eq("project_id", projectId);
 
+    if (requestedTowerId) {
+      towersQuery = towersQuery.eq("id", requestedTowerId);
+    }
+
+    const { data: towers, error: towersError } = await towersQuery;
     if (towersError) throw new Error(towersError.message);
 
     const towerRows = (towers ?? []) as Array<Record<string, unknown>>;
-    const towerIds = towerRows.map((row) => cleanMaterialValue(row.id)).filter(Boolean);
+    const towerIds = towerRows
+      .map((row) => cleanMaterialValue(row.id))
+      .filter(Boolean);
+
+    if (requestedTowerId && !towerIds.includes(requestedTowerId)) {
+      return NextResponse.json(
+        { error: "The selected tower is not available in this project." },
+        { status: 400 },
+      );
+    }
 
     if (!towerIds.length) {
-      return NextResponse.json({ query: rawQuery, kind, results: [] });
+      return NextResponse.json({
+        query: rawQuery,
+        kind,
+        towerId: requestedTowerId,
+        memberField,
+        results: [],
+      });
     }
 
     const towerNames = new Map(
@@ -105,16 +163,7 @@ export async function GET(request: Request) {
               "id,tower_id,bundle_id,bundle_reference,drawing_number,mark_no,pn_final,qty_per_tower,section,tower_segment",
             )
             .in("tower_id", towerIds)
-            .or(
-              [
-                `mark_no.ilike.${pattern}`,
-                `pn_final.ilike.${pattern}`,
-                `bundle_reference.ilike.${pattern}`,
-                `drawing_number.ilike.${pattern}`,
-                `section.ilike.${pattern}`,
-                `tower_segment.ilike.${pattern}`,
-              ].join(","),
-            )
+            .or(memberFilterExpression(pattern, memberField).join(","))
             .limit(perKindLimit)
         : Promise.resolve({ data: [], error: null });
 
@@ -122,7 +171,9 @@ export async function GET(request: Request) {
       kind === "all" || kind === "bundle"
         ? service
             .from("tower_required_bundles")
-            .select("id,tower_id,bundle_no,section,qty_required,total_weight,member_qty")
+            .select(
+              "id,tower_id,bundle_no,section,qty_required,total_weight,member_qty",
+            )
             .in("tower_id", towerIds)
             .or([`bundle_no.ilike.${pattern}`, `section.ilike.${pattern}`].join(","))
             .limit(perKindLimit)
@@ -158,7 +209,11 @@ export async function GET(request: Request) {
 
     for (const raw of (members.data ?? []) as Array<Record<string, unknown>>) {
       const towerId = cleanMaterialValue(raw.tower_id);
-      const mark = cleanMaterialValue(raw.mark_no) || cleanMaterialValue(raw.pn_final) || "Member";
+      const mark =
+        cleanMaterialValue(raw.mark_no) ||
+        cleanMaterialValue(raw.pn_final) ||
+        "Member";
+
       results.push({
         kind: "member",
         id: cleanMaterialValue(raw.id),
@@ -166,14 +221,23 @@ export async function GET(request: Request) {
         towerName: towerNames.get(towerId) ?? "Tower",
         title: mark,
         subtitle: [
-          cleanMaterialValue(raw.bundle_reference) && `Bundle ${cleanMaterialValue(raw.bundle_reference)}`,
-          cleanMaterialValue(raw.drawing_number) && `Drawing ${cleanMaterialValue(raw.drawing_number)}`,
+          cleanMaterialValue(raw.pn_final) && `PN ${cleanMaterialValue(raw.pn_final)}`,
+          cleanMaterialValue(raw.bundle_reference) &&
+            `Bundle ${cleanMaterialValue(raw.bundle_reference)}`,
+          cleanMaterialValue(raw.drawing_number) &&
+            `Drawing ${cleanMaterialValue(raw.drawing_number)}`,
           cleanMaterialValue(raw.tower_segment) || cleanMaterialValue(raw.section),
-        ].filter(Boolean).join(" · "),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         meta: [
           towerNames.get(towerId) ?? "Tower",
-          raw.qty_per_tower != null ? `Qty/Tower ${cleanMaterialValue(raw.qty_per_tower)}` : "",
-        ].filter(Boolean).join(" · "),
+          raw.qty_per_tower != null
+            ? `Qty/Tower ${cleanMaterialValue(raw.qty_per_tower)}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
         record: raw,
       });
     }
@@ -181,6 +245,7 @@ export async function GET(request: Request) {
     for (const raw of (bundles.data ?? []) as Array<Record<string, unknown>>) {
       const towerId = cleanMaterialValue(raw.tower_id);
       const bundleNo = cleanMaterialValue(raw.bundle_no) || "—";
+
       results.push({
         kind: "bundle",
         id: cleanMaterialValue(raw.id),
@@ -190,11 +255,17 @@ export async function GET(request: Request) {
         subtitle: [
           cleanMaterialValue(raw.section),
           raw.qty_required != null ? `Qty ${cleanMaterialValue(raw.qty_required)}` : "",
-        ].filter(Boolean).join(" · "),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         meta: [
           towerNames.get(towerId) ?? "Tower",
-          raw.member_qty != null ? `${cleanMaterialValue(raw.member_qty)} members` : "",
-        ].filter(Boolean).join(" · "),
+          raw.member_qty != null
+            ? `${cleanMaterialValue(raw.member_qty)} members`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
         record: raw,
       });
     }
@@ -203,19 +274,25 @@ export async function GET(request: Request) {
       const towerId = cleanMaterialValue(raw.tower_id);
       const diameter = cleanMaterialValue(raw.bolt_diameter);
       const length = cleanMaterialValue(raw.length);
+
       results.push({
         kind: "bolt",
         id: cleanMaterialValue(raw.id),
         towerId,
         towerName: towerNames.get(towerId) ?? "Tower",
         title: [diameter, length].filter(Boolean).join(" × ") || "Bolt",
-        subtitle: [cleanMaterialValue(raw.dn_sn), cleanMaterialValue(raw.tower_segment)]
+        subtitle: [
+          cleanMaterialValue(raw.dn_sn),
+          cleanMaterialValue(raw.tower_segment),
+        ]
           .filter(Boolean)
           .join(" · "),
         meta: [
           towerNames.get(towerId) ?? "Tower",
           raw.qty != null ? `Qty ${cleanMaterialValue(raw.qty)}` : "",
-        ].filter(Boolean).join(" · "),
+        ]
+          .filter(Boolean)
+          .join(" · "),
         record: raw,
       });
     }
@@ -223,14 +300,20 @@ export async function GET(request: Request) {
     results.sort((a, b) => {
       const score = searchableScore(a, query) - searchableScore(b, query);
       if (score !== 0) return score;
-      const tower = a.towerName.localeCompare(b.towerName, undefined, { numeric: true });
+
+      const tower = a.towerName.localeCompare(b.towerName, undefined, {
+        numeric: true,
+      });
       if (tower !== 0) return tower;
+
       return a.title.localeCompare(b.title, undefined, { numeric: true });
     });
 
     return NextResponse.json({
       query: rawQuery,
       kind,
+      towerId: requestedTowerId,
+      memberField,
       results: results.slice(0, limit),
     });
   } catch (error) {

@@ -70,33 +70,74 @@ export async function cachedQuality(projectId: string) {
   };
 }
 
+type QualityListFilters = {
+  towerId?: string;
+  memberNumber?: string;
+  issueTypeId?: string;
+  inspectionStage?: string;
+};
+
 function listKey(
   kind: "defects" | "revisions",
   projectId: string,
   query: string,
   status: string,
   offset: number,
+  filters: QualityListFilters = {},
 ) {
   const q = query.trim().toLowerCase().slice(0, 80);
-  return `quality:list:${kind}:${projectId}:${status}:${offset}:${q}`;
+  const tower = (filters.towerId ?? "").trim();
+  const member = (filters.memberNumber ?? "").trim().toLowerCase();
+  const issue = (filters.issueTypeId ?? "").trim();
+  const stage = (filters.inspectionStage ?? "").trim().toLowerCase();
+
+  return [
+    "quality:list",
+    kind,
+    projectId,
+    status,
+    String(offset),
+    encodeURIComponent(tower),
+    encodeURIComponent(member),
+    encodeURIComponent(issue),
+    encodeURIComponent(stage),
+    encodeURIComponent(q),
+  ].join(":");
 }
 
 export async function listQualityDefects(input: {
   projectId: string;
   query?: string;
   status?: string;
+  towerId?: string;
+  memberNumber?: string;
+  issueTypeId?: string;
   offset?: number;
   limit?: number;
 }) {
   const query = input.query?.trim() ?? "";
   const status = input.status?.trim() || "All";
+  const towerId = input.towerId?.trim() ?? "";
+  const memberNumber = input.memberNumber?.trim() ?? "";
+  const issueTypeId = input.issueTypeId?.trim() ?? "";
   const offset = Math.max(0, input.offset ?? 0);
   const limit = Math.max(10, Math.min(50, input.limit ?? 25));
+
+  const params = new URLSearchParams({
+    projectId: input.projectId,
+    q: query,
+    status,
+    towerId,
+    memberNumber,
+    issueTypeId,
+    offset: String(offset),
+    limit: String(limit),
+  });
 
   const payload = await apiJson<
     QualityListPage<QualityDefectListRow>
   >(
-    `/api/mobile/quality/lists/defects?projectId=${encodeURIComponent(input.projectId)}&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    `/api/mobile/quality/lists/defects?${params.toString()}`,
     { timeoutMs: 30_000 },
   );
 
@@ -107,6 +148,7 @@ export async function listQualityDefects(input: {
       query,
       status,
       offset,
+      { towerId, memberNumber, issueTypeId },
     ),
     payload,
   );
@@ -118,6 +160,9 @@ export function cachedQualityDefectList(input: {
   projectId: string;
   query?: string;
   status?: string;
+  towerId?: string;
+  memberNumber?: string;
+  issueTypeId?: string;
   offset?: number;
 }) {
   return getCache<QualityListPage<QualityDefectListRow>>(
@@ -127,6 +172,11 @@ export function cachedQualityDefectList(input: {
       input.query ?? "",
       input.status ?? "All",
       Math.max(0, input.offset ?? 0),
+      {
+        towerId: input.towerId,
+        memberNumber: input.memberNumber,
+        issueTypeId: input.issueTypeId,
+      },
     ),
   );
 }
@@ -135,18 +185,35 @@ export async function listQualityRevisions(input: {
   projectId: string;
   query?: string;
   status?: string;
+  towerId?: string;
+  memberNumber?: string;
+  inspectionStage?: string;
   offset?: number;
   limit?: number;
 }) {
   const query = input.query?.trim() ?? "";
   const status = input.status?.trim() || "All";
+  const towerId = input.towerId?.trim() ?? "";
+  const memberNumber = input.memberNumber?.trim() ?? "";
+  const inspectionStage = input.inspectionStage?.trim() ?? "";
   const offset = Math.max(0, input.offset ?? 0);
   const limit = Math.max(10, Math.min(50, input.limit ?? 25));
+
+  const params = new URLSearchParams({
+    projectId: input.projectId,
+    q: query,
+    status,
+    towerId,
+    memberNumber,
+    inspectionStage,
+    offset: String(offset),
+    limit: String(limit),
+  });
 
   const payload = await apiJson<
     QualityListPage<QualityRevisionListRow>
   >(
-    `/api/mobile/quality/lists/revisions?projectId=${encodeURIComponent(input.projectId)}&q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}&offset=${offset}&limit=${limit}`,
+    `/api/mobile/quality/lists/revisions?${params.toString()}`,
     { timeoutMs: 30_000 },
   );
 
@@ -157,6 +224,7 @@ export async function listQualityRevisions(input: {
       query,
       status,
       offset,
+      { towerId, memberNumber, inspectionStage },
     ),
     payload,
   );
@@ -168,6 +236,9 @@ export function cachedQualityRevisionList(input: {
   projectId: string;
   query?: string;
   status?: string;
+  towerId?: string;
+  memberNumber?: string;
+  inspectionStage?: string;
   offset?: number;
 }) {
   return getCache<QualityListPage<QualityRevisionListRow>>(
@@ -177,6 +248,11 @@ export function cachedQualityRevisionList(input: {
       input.query ?? "",
       input.status ?? "All",
       Math.max(0, input.offset ?? 0),
+      {
+        towerId: input.towerId,
+        memberNumber: input.memberNumber,
+        inspectionStage: input.inspectionStage,
+      },
     ),
   );
 }

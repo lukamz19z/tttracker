@@ -26,10 +26,22 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { useSync } from "@/contexts/SyncContext";
 import { useAccess } from "@/lib/access";
 import {
+  cacheSitePrestartBootstrap,
+  cacheSitePrestartDetail,
+  cacheSitePrestartRegister,
+  cachedSitePrestartBootstrap,
+  cachedSitePrestartDetail,
+  cachedSitePrestartRegister,
+  loadPendingSitePrestartSignatures,
+  queueSitePrestartSignature,
   readSitePrestartJson,
+  removePendingSitePrestartSignature,
   sitePrestartApi,
+  syncPendingSitePrestartSignatures,
+  type PendingSitePrestartSignature,
 } from "@/lib/site-prestarts-api";
 
 type Project = {
@@ -109,11 +121,9 @@ type BootstrapPayload = {
 };
 
 type RegisterPayload = {
-  prestarts: Array<
-    Prestart & {
-      attendee_count?: number;
-    }
-  >;
+  prestarts: (Prestart & {
+    attendee_count?: number;
+  })[];
 };
 
 const PAD_WIDTH = 320;
@@ -228,6 +238,7 @@ function breathDisplay(value: unknown) {
 
 export default function SitePrestartScreen() {
   const { profile } = useAuth();
+  const { online } = useSync();
   const { can } = useAccess();
   const canUseSitePrestart = can("mobile.site_prestarts");
 
@@ -237,6 +248,9 @@ export default function SitePrestartScreen() {
 
   const [drafts, setDrafts] = useState<Prestart[]>([]);
   const [detail, setDetail] = useState<DetailPayload | null>(null);
+  const [pendingSignatures, setPendingSignatures] = useState<
+    PendingSitePrestartSignature[]
+  >([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -300,15 +314,58 @@ export default function SitePrestartScreen() {
     ) ?? null;
   }, [detail]);
 
+  const pendingForActive = useMemo(() => {
+    if (!active) return [];
+    return pendingSignatures.filter(
+      (row) =>
+        row.prestartId === active.id &&
+        row.revisionNo === Number(active.current_revision),
+    );
+  }, [active, pendingSignatures]);
+
+  const mergedAttendees = useMemo<Attendee[]>(() => {
+    if (!detail) return [];
+
+    const byKey = new Map<string, Attendee>();
+    for (const attendee of detail.attendees) {
+      byKey.set(
+        `${attendee.employee_id}::${attendee.discussion_revision_no}`,
+        attendee,
+      );
+    }
+
+    for (const pending of pendingSignatures) {
+      if (pending.prestartId !== detail.prestart.id) continue;
+      const key = `${pending.employee.id}::${pending.revisionNo}`;
+      if (byKey.has(key)) continue;
+
+      byKey.set(key, {
+        id: `local:${pending.id}`,
+        prestart_id: pending.prestartId,
+        discussion_revision_no: pending.revisionNo,
+        employee_id: pending.employee.id,
+        employee_name: pending.employee.fullName,
+        payroll_id: pending.employee.payrollId,
+        breathalyser_reading: pending.breathalyserReading,
+        declaration_text: pending.declarationText,
+        declaration_accepted: true,
+        signature_strokes: pending.signatureStrokes,
+        signed_at: pending.signedAt,
+      });
+    }
+
+    return Array.from(byKey.values());
+  }, [detail, pendingSignatures]);
+
   const currentAttendees = useMemo(() => {
     if (!detail) return [];
 
-    return detail.attendees.filter(
+    return mergedAttendees.filter(
       (attendee) =>
         Number(attendee.discussion_revision_no) ===
         Number(detail.prestart.current_revision),
     );
-  }, [detail]);
+  }, [detail, mergedAttendees]);
 
   const signedCurrentIds = useMemo(
     () => new Set(currentAttendees.map((attendee) => attendee.employee_id)),
@@ -320,7 +377,7 @@ export default function SitePrestartScreen() {
 
     const all = new Map<string, string>();
 
-    for (const attendee of detail.attendees) {
+    for (const attendee of mergedAttendees) {
       all.set(attendee.employee_id, attendee.employee_name);
     }
 
@@ -330,7 +387,7 @@ export default function SitePrestartScreen() {
         employeeId,
         employeeName,
       }));
-  }, [detail, signedCurrentIds]);
+  }, [detail, mergedAttendees, signedCurrentIds]);
 
   const filteredEmployees = useMemo(() => {
     const query = employeeSearch.trim().toLowerCase();
@@ -352,7 +409,55 @@ export default function SitePrestartScreen() {
       .slice(0, 12);
   }, [employeeSearch, employees]);
 
+  const applyBootstrap = useCallback(
+    (bootstrap: BootstrapPayload, register: RegisterPayload) => {
+      setProjects(bootstrap.projects ?? []);
+      setEmployees(bootstrap.employees ?? []);
+      setDeclaration(bootstrap.declaration ?? "");
+
+      const nextDrafts = (register.prestarts ?? [])
+        .filter((row) => row.status === "draft")
+        .slice(0, 12);
+      setDrafts(nextDrafts);
+
+      setProjectId((current) => {
+        if (current) return current;
+
+        const profileProjectId = profile?.projectId ?? "";
+        if (
+          profileProjectId &&
+          bootstrap.projects.some(
+            (project) => project.id === profileProjectId,
+          )
+        ) {
+          return profileProjectId;
+        }
+
+        return bootstrap.projects[0]?.id ?? "";
+      });
+    },
+    [profile?.projectId],
+  );
+
   const loadBootstrap = useCallback(async () => {
+    const [cachedBootstrap, cachedRegister] = await Promise.all([
+      cachedSitePrestartBootstrap<BootstrapPayload>(),
+      cachedSitePrestartRegister<RegisterPayload>(),
+    ]);
+
+    if (cachedBootstrap?.value && cachedRegister?.value) {
+      applyBootstrap(cachedBootstrap.value, cachedRegister.value);
+    }
+
+    if (!online) {
+      if (!cachedBootstrap?.value || !cachedRegister?.value) {
+        throw new Error(
+          "Site Prestart data has not been cached on this device yet. Connect once to download the employee and draft registers.",
+        );
+      }
+      return;
+    }
+
     const [bootstrapResponse, registerResponse] = await Promise.all([
       sitePrestartApi("/api/site-prestarts/bootstrap"),
       sitePrestartApi("/api/site-prestarts"),
@@ -362,50 +467,19 @@ export default function SitePrestartScreen() {
       bootstrapResponse,
       "Site Prestart setup could not be loaded.",
     );
-
     const register = await readSitePrestartJson<RegisterPayload>(
       registerResponse,
       "Site Prestart drafts could not be loaded.",
     );
 
-    setProjects(bootstrap.projects ?? []);
-    setEmployees(bootstrap.employees ?? []);
-    setDeclaration(bootstrap.declaration ?? "");
+    await Promise.all([
+      cacheSitePrestartBootstrap(bootstrap),
+      cacheSitePrestartRegister(register),
+    ]);
+    applyBootstrap(bootstrap, register);
+  }, [applyBootstrap, online]);
 
-    const nextDrafts = (register.prestarts ?? [])
-      .filter((row) => row.status === "draft")
-      .slice(0, 12);
-
-    setDrafts(nextDrafts);
-
-    setProjectId((current) => {
-      if (current) return current;
-
-      const profileProjectId = profile?.projectId ?? "";
-
-      if (
-        profileProjectId &&
-        bootstrap.projects.some(
-          (project) => project.id === profileProjectId,
-        )
-      ) {
-        return profileProjectId;
-      }
-
-      return bootstrap.projects[0]?.id ?? "";
-    });
-  }, [profile?.projectId]);
-
-  const loadDetail = useCallback(async (prestartId: string) => {
-    const response = await sitePrestartApi(
-      `/api/site-prestarts/${encodeURIComponent(prestartId)}`,
-    );
-
-    const payload = await readSitePrestartJson<DetailPayload>(
-      response,
-      "Site Prestart could not be loaded.",
-    );
-
+  const applyDetail = useCallback((payload: DetailPayload) => {
     setDetail(payload);
     setNotesDraft(clean(payload.prestart.admin_notes));
     setRevisionDraft(
@@ -417,9 +491,36 @@ export default function SitePrestartScreen() {
         )?.discussion_points,
       ),
     );
-
-    return payload;
   }, []);
+
+  const loadDetail = useCallback(
+    async (prestartId: string) => {
+      const cached = await cachedSitePrestartDetail<DetailPayload>(prestartId);
+      if (cached?.value) applyDetail(cached.value);
+
+      if (!online) {
+        if (!cached?.value) {
+          throw new Error(
+            "This Site Prestart has not been opened on this device before, so its detail is not available offline.",
+          );
+        }
+        return cached.value;
+      }
+
+      const response = await sitePrestartApi(
+        `/api/site-prestarts/${encodeURIComponent(prestartId)}`,
+      );
+      const payload = await readSitePrestartJson<DetailPayload>(
+        response,
+        "Site Prestart could not be loaded.",
+      );
+
+      await cacheSitePrestartDetail(prestartId, payload);
+      applyDetail(payload);
+      return payload;
+    },
+    [applyDetail, online],
+  );
 
   useEffect(() => {
     if (!canUseSitePrestart) {
@@ -443,6 +544,35 @@ export default function SitePrestartScreen() {
     })();
   }, [canUseSitePrestart, loadBootstrap]);
 
+  useEffect(() => {
+    if (!canUseSitePrestart) return;
+
+    let activeEffect = true;
+
+    void (async () => {
+      const queued = await loadPendingSitePrestartSignatures();
+      if (activeEffect) setPendingSignatures(queued);
+
+      if (!online || queued.length === 0) return;
+
+      const result = await syncPendingSitePrestartSignatures();
+      if (!activeEffect) return;
+
+      setPendingSignatures(result.rows);
+      if (result.synced > 0 && detail?.prestart.id) {
+        try {
+          await loadDetail(detail.prestart.id);
+        } catch {
+          // Keep cached/optimistic detail if the refresh cannot complete.
+        }
+      }
+    })();
+
+    return () => {
+      activeEffect = false;
+    };
+  }, [canUseSitePrestart, detail?.prestart.id, loadDetail, online]);
+
   async function refresh() {
     setRefreshing(true);
 
@@ -463,6 +593,14 @@ export default function SitePrestartScreen() {
   }
 
   async function startPrestart() {
+    if (!online) {
+      Alert.alert(
+        "Connection required",
+        "Starting a brand-new Site Prestart still requires a connection. Existing cached drafts can be opened and employees can sign them offline.",
+      );
+      return;
+    }
+
     if (!projectId) {
       Alert.alert("Project required", "Select the project first.");
       return;
@@ -721,35 +859,75 @@ export default function SitePrestartScreen() {
 
     setBusy(true);
 
+    const employee = selectedEmployee;
+    const signedAt = new Date().toISOString();
+    const pendingInput = {
+      prestartId: active.id,
+      revisionNo: Number(active.current_revision),
+      employee: {
+        id: employee.id,
+        fullName: employee.full_name,
+        payrollId: clean(employee.payroll_id) || null,
+      },
+      breathalyserReading: breathalyserReading.trim() || null,
+      declarationText: declaration,
+      signatureStrokes,
+      signatureWidth: PAD_WIDTH,
+      signatureHeight: PAD_HEIGHT,
+      signedAt,
+    };
+
     try {
-      const response = await sitePrestartApi(
-        `/api/site-prestarts/${encodeURIComponent(active.id)}/attendees`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            employeeId: selectedEmployee.id,
-            breathalyserReading: breathalyserReading.trim() || null,
-            declarationAccepted: true,
-            signatureStrokes,
-            signatureWidth: PAD_WIDTH,
-            signatureHeight: PAD_HEIGHT,
-          }),
-        },
-      );
+      if (online) {
+        let response: Response | null = null;
 
-      await readSitePrestartJson(
-        response,
-        "Employee signature could not be saved.",
-      );
+        try {
+          response = await sitePrestartApi(
+            `/api/site-prestarts/${encodeURIComponent(active.id)}/attendees`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                employeeId: employee.id,
+                breathalyserReading: pendingInput.breathalyserReading,
+                declarationAccepted: true,
+                signatureStrokes,
+                signatureWidth: PAD_WIDTH,
+                signatureHeight: PAD_HEIGHT,
+                signedAt,
+                discussionRevisionNo: Number(active.current_revision),
+              }),
+            },
+          );
+        } catch {
+          // No usable connection: preserve the signed acknowledgement locally.
+        }
 
-      const employeeName = selectedEmployee.full_name;
+        if (response) {
+          // A server validation / conflict response must be shown to the user,
+          // not silently converted into an offline queue item.
+          await readSitePrestartJson(
+            response,
+            "Employee signature could not be saved.",
+          );
 
+          cancelSigner();
+          await loadDetail(active.id);
+
+          Alert.alert(
+            "Signed",
+            `${employee.full_name} has been added to ${active.prestart_number}.`,
+          );
+          return;
+        }
+      }
+
+      await queueSitePrestartSignature(pendingInput);
+      setPendingSignatures(await loadPendingSitePrestartSignatures());
       cancelSigner();
-      await loadDetail(active.id);
 
       Alert.alert(
-        "Signed",
-        `${employeeName} has been added to ${active.prestart_number}.`,
+        "Signature saved offline",
+        `${employee.full_name}'s signature is stored on this device and will upload when TTTracker reconnects.`,
       );
     } catch (error) {
       Alert.alert(
@@ -763,6 +941,21 @@ export default function SitePrestartScreen() {
 
   async function removeAttendee(attendee: Attendee) {
     if (!active) return;
+
+    if (attendee.id.startsWith("local:")) {
+      const pendingId = attendee.id.slice("local:".length);
+      await removePendingSitePrestartSignature(pendingId);
+      setPendingSignatures(await loadPendingSitePrestartSignatures());
+      return;
+    }
+
+    if (!online) {
+      Alert.alert(
+        "Connection required",
+        "This signature is already synced to TTTracker. Reconnect before removing it.",
+      );
+      return;
+    }
 
     Alert.alert(
       "Remove signature?",
@@ -812,6 +1005,24 @@ export default function SitePrestartScreen() {
 
   async function completePrestart() {
     if (!active) return;
+
+    if (!online) {
+      Alert.alert(
+        "Connection required",
+        "Completing a Site Prestart requires a connection because TTTracker generates the controlled PDF and publishes it to SharePoint.",
+      );
+      return;
+    }
+
+    if (pendingForActive.length > 0) {
+      Alert.alert(
+        "Signatures still pending upload",
+        `${pendingForActive.length} employee signature${
+          pendingForActive.length === 1 ? " is" : "s are"
+        } still stored on this device. Wait for them to upload before completing the prestart.`,
+      );
+      return;
+    }
 
     if (currentAttendees.length === 0) {
       Alert.alert(
@@ -1189,8 +1400,10 @@ export default function SitePrestartScreen() {
             ) : (
               <Section title="Add Employee">
                 <Text style={styles.helper}>
-                  Hand the device to the employee. They search their
-                  name, read the declaration and sign.
+                  Hand the device to the employee. They search their name,
+                  read the declaration and sign. The employee register is
+                  cached on this device, so search and signing still work
+                  without reception.
                 </Text>
 
                 <View style={styles.searchWrap}>
@@ -1277,13 +1490,18 @@ export default function SitePrestartScreen() {
                           {clean(attendee.payroll_id) ||
                             "No payroll ID"}
                           {" · "}
-                          Breatho{" "}
+                          Breathalyser{" "}
                           {breathDisplay(
                             attendee.breathalyser_reading,
                           )}
                           {" · "}
                           {formatDateTime(attendee.signed_at)}
                         </Text>
+                        {attendee.id.startsWith("local:") ? (
+                          <Text style={styles.pendingUploadText}>
+                            Pending upload · saved on this device
+                          </Text>
+                        ) : null}
                       </View>
 
                       <Pressable
@@ -1303,10 +1521,28 @@ export default function SitePrestartScreen() {
               )}
             </Section>
 
+            {pendingForActive.length > 0 ? (
+              <View style={styles.pendingUploadCard}>
+                <Ionicons
+                  name="cloud-upload-outline"
+                  size={18}
+                  color="#92400E"
+                />
+                <Text style={styles.pendingUploadCardText}>
+                  {pendingForActive.length} signature{
+                    pendingForActive.length === 1 ? "" : "s"
+                  } saved offline. TTTracker will upload them when a
+                  connection is available.
+                </Text>
+              </View>
+            ) : null}
+
             <Pressable
               style={[
                 styles.completeButton,
                 (busy ||
+                  !online ||
+                  pendingForActive.length > 0 ||
                   currentAttendees.length === 0 ||
                   needsResign.length > 0) &&
                   styles.disabledButton,
@@ -1314,6 +1550,8 @@ export default function SitePrestartScreen() {
               onPress={() => void completePrestart()}
               disabled={
                 busy ||
+                !online ||
+                pendingForActive.length > 0 ||
                 currentAttendees.length === 0 ||
                 needsResign.length > 0
               }
@@ -2159,6 +2397,29 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontSize: 11,
     fontWeight: "600",
+  },
+  pendingUploadText: {
+    marginTop: 4,
+    color: "#92400E",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  pendingUploadCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    backgroundColor: "#FFFBEB",
+    borderRadius: 12,
+    padding: 12,
+  },
+  pendingUploadCardText: {
+    flex: 1,
+    color: "#92400E",
+    fontSize: 11,
+    lineHeight: 17,
+    fontWeight: "700",
   },
   signedBadge: {
     borderRadius: 999,

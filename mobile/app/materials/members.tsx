@@ -5,8 +5,8 @@ export default function Members() {
     <MaterialLiveSearch
       kind="member"
       title="Members"
-      subtitle="Search member number, part number, drawing, bundle or segment without loading the full member register into the results list."
-      placeholder="Member, PN, drawing, bundle, segment…"
+      subtitle="Choose a tower and search field, then search only that part of the member register."
+      placeholder="Search selected member field…"
     />
   );
 }

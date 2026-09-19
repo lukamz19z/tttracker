@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { deleteDriveItem } from "@/lib/sharepoint/graph";
 import {
   canManageSitePrestarts,
   canViewSitePrestarts,
   clean,
-  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
 } from "@/lib/site-prestarts/server";
@@ -39,12 +39,6 @@ export async function GET(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
-
-    await requireSitePrestartProjectAccess(
-      service,
-      identity.userId,
-      prestart.project_id,
-    );
 
     const [projectResult, revisionsResult, attendeesResult] = await Promise.all([
       service
@@ -103,7 +97,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const { data: existing, error: existingError } = await service
       .from("site_prestarts")
-      .select("id,status,project_id")
+      .select("id,status")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -115,12 +109,6 @@ export async function PATCH(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
-
-    await requireSitePrestartProjectAccess(
-      service,
-      identity.userId,
-      existing.project_id,
-    );
 
     if (existing.status !== "draft") {
       return NextResponse.json(
@@ -165,6 +153,78 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (updateError) throw new Error(updateError.message);
 
     return NextResponse.json({ prestart });
+  } catch (error) {
+    const apiError = sitePrestartApiError(error);
+
+    return NextResponse.json(
+      { error: apiError.message },
+      { status: apiError.status },
+    );
+  }
+}
+
+export async function DELETE(request: Request, context: RouteContext) {
+  try {
+    const { prestartId } = await context.params;
+    const { service, identity } = await requireSitePrestartUser(request);
+
+    if (!canManageSitePrestarts(identity.role)) {
+      throw new Error("MANAGE_FORBIDDEN");
+    }
+
+    const { data: existing, error: existingError } = await service
+      .from("site_prestarts")
+      .select(
+        "id,prestart_number,status,sharepoint_drive_id,sharepoint_item_id,sharepoint_web_url",
+      )
+      .eq("id", prestartId)
+      .maybeSingle();
+
+    if (existingError) throw new Error(existingError.message);
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: "Site Prestart could not be found." },
+        { status: 404 },
+      );
+    }
+
+    const { error: deleteError } = await service
+      .from("site_prestarts")
+      .delete()
+      .eq("id", prestartId);
+
+    if (deleteError) throw new Error(deleteError.message);
+
+    let warning: string | null = null;
+    let sharepointDeleted = false;
+
+    const driveId = clean(existing.sharepoint_drive_id);
+    const itemId = clean(existing.sharepoint_item_id);
+
+    if (driveId && itemId) {
+      try {
+        await deleteDriveItem({ driveId, itemId });
+        sharepointDeleted = true;
+      } catch (sharepointError) {
+        const message =
+          sharepointError instanceof Error
+            ? sharepointError.message
+            : "Unknown SharePoint deletion error.";
+
+        warning =
+          `The TTTracker record was deleted, but its final SharePoint PDF could not be removed automatically. ` +
+          `Delete it manually from SharePoint if it still exists. ${message}`;
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      deletedId: prestartId,
+      prestartNumber: existing.prestart_number,
+      sharepointDeleted,
+      warning,
+    });
   } catch (error) {
     const apiError = sitePrestartApiError(error);
 

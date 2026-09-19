@@ -3,8 +3,10 @@ import { router, type Href } from "expo-router";
 import {
   AlertTriangle,
   Camera,
+  ChevronDown,
   Plus,
   Search,
+  X,
 } from "lucide-react-native";
 import {
   useCallback,
@@ -21,6 +23,10 @@ import {
   View,
 } from "react-native";
 
+import {
+  QualitySelector,
+  type QualitySelectorOption,
+} from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { SyncStatus } from "@/components/sync/SyncStatus";
@@ -28,7 +34,10 @@ import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityDefectList,
+  cachedQualityMemberCatalog,
   listQualityDefects,
+  refreshQualityMemberCatalog,
+  type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
 import type { QualityDefectListRow } from "@/types/quality";
 
@@ -46,6 +55,16 @@ export default function DefectsScreen() {
   const [debouncedQuery, setDebouncedQuery] =
     useState("");
   const [status, setStatus] = useState("All");
+  const [towerId, setTowerId] = useState("");
+  const [memberNumber, setMemberNumber] = useState("");
+  const [issueTypeId, setIssueTypeId] = useState("");
+  const [selector, setSelector] = useState<
+    "tower" | "member" | "issue" | null
+  >(null);
+  const [memberCatalog, setMemberCatalog] = useState<
+    QualityMemberCatalogRow[]
+  >([]);
+  const [memberLoading, setMemberLoading] = useState(false);
   const [rows, setRows] = useState<
     QualityDefectListRow[]
   >([]);
@@ -83,6 +102,100 @@ export default function DefectsScreen() {
 
   const defectStatuses =
     data?.workflow?.defectStatuses ?? [];
+
+  const towerOptions = useMemo<QualitySelectorOption[]>(
+    () => [
+      { id: "", label: "All towers" },
+      ...towers.map((tower) => ({
+        id: clean(tower.id),
+        label: clean(tower.name) || "Tower",
+        subtitle: [clean(tower.line), clean(tower.status)]
+          .filter(Boolean)
+          .join(" · "),
+      })),
+    ],
+    [towers],
+  );
+
+  const issueOptions = useMemo<QualitySelectorOption[]>(
+    () => [
+      { id: "", label: "All issue types" },
+      ...issueTypes
+        .filter((row) =>
+          ["defect", "both"].includes(clean(row.applies_to)),
+        )
+        .map((row) => ({
+          id: clean(row.id),
+          label: clean(row.name) || "Issue",
+        })),
+    ],
+    [issueTypes],
+  );
+
+  const memberOptions = useMemo<QualitySelectorOption[]>(() => {
+    const byNumber = new Map<string, QualitySelectorOption>();
+
+    for (const member of memberCatalog) {
+      const number = clean(member.memberNumber);
+      if (!number || byNumber.has(number)) continue;
+
+      byNumber.set(number, {
+        id: number,
+        label: number,
+        subtitle: [
+          clean(member.towerSegment),
+          clean(member.drawingNumber),
+          clean(member.bundleReference),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    }
+
+    return [
+      { id: "", label: "All members" },
+      ...Array.from(byNumber.values()),
+    ];
+  }, [memberCatalog]);
+
+  useEffect(() => {
+    setMemberNumber("");
+    setMemberCatalog([]);
+
+    if (!projectId || !towerId) return;
+
+    let active = true;
+    setMemberLoading(true);
+
+    void (async () => {
+      const cached = await cachedQualityMemberCatalog(
+        projectId,
+        towerId,
+      );
+
+      if (active && cached?.value) {
+        setMemberCatalog(cached.value);
+      }
+
+      if (online) {
+        try {
+          const latest = await refreshQualityMemberCatalog(
+            projectId,
+            towerId,
+          );
+          if (active) setMemberCatalog(latest);
+        } catch {
+          // Cached tower member list remains available offline / on poor reception.
+        }
+      }
+
+      if (active) setMemberLoading(false);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [online, projectId, towerId]);
 
   const towerById = useMemo(
     () =>
@@ -126,6 +239,9 @@ export default function DefectsScreen() {
           projectId,
           query: debouncedQuery,
           status,
+          towerId,
+          memberNumber,
+          issueTypeId,
           offset: 0,
         });
 
@@ -150,6 +266,9 @@ export default function DefectsScreen() {
         projectId,
         query: debouncedQuery,
         status,
+        towerId,
+        memberNumber,
+        issueTypeId,
         offset: 0,
         limit: 25,
       });
@@ -169,9 +288,12 @@ export default function DefectsScreen() {
     }
   }, [
     debouncedQuery,
+    issueTypeId,
+    memberNumber,
     online,
     projectId,
     status,
+    towerId,
   ]);
 
   useFocusEffect(
@@ -204,6 +326,9 @@ export default function DefectsScreen() {
           projectId,
           query: debouncedQuery,
           status,
+          towerId,
+          memberNumber,
+          issueTypeId,
           offset: nextOffset,
           limit: 25,
         });
@@ -213,6 +338,9 @@ export default function DefectsScreen() {
             projectId,
             query: debouncedQuery,
             status,
+            towerId,
+            memberNumber,
+            issueTypeId,
             offset: nextOffset,
           });
         page = cached?.value ?? null;
@@ -246,11 +374,14 @@ export default function DefectsScreen() {
     }
   }, [
     debouncedQuery,
+    issueTypeId,
     loadingMore,
+    memberNumber,
     nextOffset,
     online,
     projectId,
     status,
+    towerId,
   ]);
 
   return (
@@ -270,7 +401,7 @@ export default function DefectsScreen() {
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="Search defect, tower, member…"
+            placeholder="Defect no., description, client reference…"
             placeholderTextColor="#94a3b8"
             style={styles.searchInput}
           />
@@ -278,14 +409,58 @@ export default function DefectsScreen() {
 
         <Pressable
           style={styles.newButton}
-          onPress={() =>
-            router.push("/defects/new" as Href)
-          }
+          onPress={() => router.push("/defects/new" as Href)}
         >
           <Plus size={18} color="#fff" />
           <Text style={styles.newText}>New</Text>
         </Pressable>
       </View>
+
+      <View style={styles.selectorRow}>
+        <FilterSelect
+          label="Tower"
+          value={
+            towerId
+              ? towerById.get(towerId) || "Tower"
+              : "All towers"
+          }
+          onPress={() => setSelector("tower")}
+        />
+        <FilterSelect
+          label="Member"
+          value={
+            memberLoading
+              ? "Loading…"
+              : memberNumber ||
+                (towerId ? "All members" : "Select tower first")
+          }
+          disabled={!towerId || memberLoading}
+          onPress={() => setSelector("member")}
+        />
+        <FilterSelect
+          label="Issue"
+          value={
+            issueTypeId
+              ? issueById.get(issueTypeId) || "Issue"
+              : "All issues"
+          }
+          onPress={() => setSelector("issue")}
+        />
+      </View>
+
+      {towerId || memberNumber || issueTypeId ? (
+        <Pressable
+          style={styles.clearFilters}
+          onPress={() => {
+            setTowerId("");
+            setMemberNumber("");
+            setIssueTypeId("");
+          }}
+        >
+          <X size={14} color="#475569" />
+          <Text style={styles.clearFiltersText}>Clear tower / member / issue filters</Text>
+        </Pressable>
+      ) : null}
 
       <View style={styles.filters}>
         {["All", ...defectStatuses].map(
@@ -421,13 +596,71 @@ export default function DefectsScreen() {
           {loadingMore ? (
             <ActivityIndicator size="small" />
           ) : (
-            <Text style={styles.loadMoreText}>
-              Load more
-            </Text>
+            <Text style={styles.loadMoreText}>Load more</Text>
           )}
         </Pressable>
       ) : null}
+
+      <QualitySelector
+        visible={selector === "tower"}
+        title="Filter by tower"
+        options={towerOptions}
+        onClose={() => setSelector(null)}
+        onSelect={(option) => {
+          setTowerId(option.id);
+          setMemberNumber("");
+          setSelector(null);
+        }}
+      />
+      <QualitySelector
+        visible={selector === "member"}
+        title="Filter by member"
+        options={memberOptions}
+        onClose={() => setSelector(null)}
+        onSelect={(option) => {
+          setMemberNumber(option.id);
+          setSelector(null);
+        }}
+      />
+      <QualitySelector
+        visible={selector === "issue"}
+        title="Filter by issue type"
+        options={issueOptions}
+        onClose={() => setSelector(null)}
+        onSelect={(option) => {
+          setIssueTypeId(option.id);
+          setSelector(null);
+        }}
+      />
     </QualityShell>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.filterSelect, disabled && styles.filterSelectDisabled]}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={styles.filterSelectLabel}>{label}</Text>
+        <Text numberOfLines={1} style={styles.filterSelectValue}>
+          {value}
+        </Text>
+      </View>
+      <ChevronDown size={16} color={disabled ? "#cbd5e1" : "#64748b"} />
+    </Pressable>
   );
 }
 
@@ -439,6 +672,52 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: "row",
     gap: 8,
+  },
+  selectorRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  filterSelect: {
+    flexGrow: 1,
+    flexBasis: 105,
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 13,
+    backgroundColor: "#fff",
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  filterSelectDisabled: {
+    opacity: 0.55,
+    backgroundColor: "#f8fafc",
+  },
+  filterSelectLabel: {
+    color: "#94a3b8",
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+  filterSelectValue: {
+    marginTop: 2,
+    color: "#0f172a",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  clearFilters: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  clearFiltersText: {
+    color: "#475569",
+    fontSize: 10,
+    fontWeight: "800",
   },
   search: {
     flex: 1,

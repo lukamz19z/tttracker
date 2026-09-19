@@ -1,6 +1,28 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Redirect, router, type Href } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Redirect,
+  router,
+  useFocusEffect,
+  type Href,
+} from "expo-router";
+import {
+  AlertTriangle,
+  Bell,
+  CarFront,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  GraduationCap,
+  PackageCheck,
+  RadioTower,
+  ShieldAlert,
+} from "lucide-react-native";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,37 +34,20 @@ import {
   Text,
   View,
 } from "react-native";
-import {
-  AlertTriangle,
-  Bell,
-  Boxes,
-  CircleCheck,
-  CircleDot,
-  ClipboardCheck,
-  FileText,
-  Gauge,
-  HardHat,
-  PackageCheck,
-  RadioTower,
-  ShieldCheck,
-  Truck,
-  Wrench,
-} from "lucide-react-native";
 
 import { ProjectSelector } from "@/components/ProjectSelector";
-import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
+import { getMyTraining } from "@/lib/api/training";
 import { supabase } from "@/lib/supabase";
+import type { TrainingRecord } from "@/types/training";
+
+type Tone = "green" | "amber" | "red" | "blue" | "slate";
 
 type Tower = {
   id: string;
   project_id: string;
-  name: string | null;
-  line: string | null;
-  status: string | null;
   progress: number | null;
-  extra_data: Record<string, unknown> | null;
 };
 
 type DocketRow = {
@@ -52,13 +57,10 @@ type DocketRow = {
   docket_date: string | null;
   assembly_percent: number | null;
   erection_percent: number | null;
-  raw_manhours: number | null;
-  production_manhours: number | null;
 };
 
 type DefectRow = {
   id: string;
-  tower_id: string | null;
   status: string | null;
 };
 
@@ -70,28 +72,15 @@ type DeliveryRow = {
 type DeliveryItemRow = {
   delivery_id: string | null;
   qty_delivered?: number | null;
+  quantity_delivered?: number | null;
+  delivered_qty?: number | null;
+  qty?: number | null;
 };
 
 type MaterialBundleRow = {
   tower_id: string | null;
   qty_required?: number | null;
-};
-
-type TowerSummary = Tower & {
-  computedProgress: number;
-  computedWeight: number | null;
-  completedTonnes: number | null;
-  rawManhours: number;
-  productionManhours: number;
-  rawMhPerTonne: number | null;
-  productionMhPerTonne: number | null;
-};
-
-type DeliverySummary = {
-  requiredQty: number;
-  deliveredQty: number;
-  outstandingQty: number;
-  deliveryPercent: number;
+  required_qty?: number | null;
 };
 
 type UserNotification = {
@@ -114,11 +103,38 @@ type NotificationSummary = {
   recent: UserNotification[];
 };
 
-const EMPTY_NOTIFICATIONS: NotificationSummary = {
-  unreadCount: 0,
-  criticalCount: 0,
-  warningCount: 0,
-  recent: [],
+type VehicleAsset = {
+  id: string;
+  vehicle_id?: string | null;
+  vehicle_rego?: string | null;
+  rego?: string | null;
+  make?: string | null;
+  model?: string | null;
+  category?: string | null;
+  project?: string | null;
+  crew?: string | null;
+  status?: string | null;
+};
+
+type VehiclePrestart = {
+  id: string;
+  vehicle_asset_id: string | null;
+  asset_type: string | null;
+  asset_label: string | null;
+  vehicle_rego: string | null;
+  inspected_by_name: string | null;
+  prestart_date: string | null;
+  created_at: string | null;
+  severity: string | null;
+  result: string | null;
+  fleet_job_number: string | null;
+};
+
+type PersonalDashboard = {
+  training: TrainingRecord[];
+  assignedVehicleId: string;
+  vehicle: VehicleAsset | null;
+  latestVehiclePrestart: VehiclePrestart | null;
 };
 
 type ProjectDashboardData = {
@@ -127,48 +143,40 @@ type ProjectDashboardData = {
   towersInProgress: number;
   notStartedTowers: number;
   overallProgress: number;
-  deliveryProgress: number;
-  totalDeliveries: number;
-  openDefects: number;
-  completedTonnes: number | null;
-  rawMhPerTonne: number | null;
-  productionMhPerTonne: number | null;
+  deliveryProgress: number | null;
+  openDefects: number | null;
   latestDocketDate: string | null;
-  inProgressTowers: TowerSummary[];
-  deliveryTowers: (TowerSummary & DeliverySummary)[];
 };
 
-const EMPTY_DASHBOARD: ProjectDashboardData = {
+const ASSIGNED_VEHICLE_KEY = "tttracker.mobile.assigned_vehicle_id";
+
+const EMPTY_NOTIFICATIONS: NotificationSummary = {
+  unreadCount: 0,
+  criticalCount: 0,
+  warningCount: 0,
+  recent: [],
+};
+
+const EMPTY_PERSONAL: PersonalDashboard = {
+  training: [],
+  assignedVehicleId: "",
+  vehicle: null,
+  latestVehiclePrestart: null,
+};
+
+const EMPTY_PROJECT: ProjectDashboardData = {
   totalTowers: 0,
   completedTowers: 0,
   towersInProgress: 0,
   notStartedTowers: 0,
   overallProgress: 0,
-  deliveryProgress: 0,
-  totalDeliveries: 0,
-  openDefects: 0,
-  completedTonnes: null,
-  rawMhPerTonne: null,
-  productionMhPerTonne: null,
+  deliveryProgress: null,
+  openDefects: null,
   latestDocketDate: null,
-  inProgressTowers: [],
-  deliveryTowers: [],
 };
 
-const HOME_DASHBOARD_CACHE_PREFIX = "tttracker:home-dashboard:v2:";
-
-type CachedDashboard = {
-  savedAt: string;
-  projectId: string;
-  dashboard: ProjectDashboardData;
-};
-
-function dashboardCacheKey(projectId: string) {
-  return `${HOME_DASHBOARD_CACHE_PREFIX}${projectId}`;
-}
-
-function clampPercent(value: number) {
-  return Math.max(0, Math.min(100, value));
+function clean(value: unknown) {
+  return String(value ?? "").trim();
 }
 
 function safeNumber(value: unknown, fallback = 0) {
@@ -176,148 +184,101 @@ function safeNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function safeString(value: unknown, fallback = "") {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return fallback;
-  return String(value);
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
 }
 
-function extractNumericValue(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+function parseDateOnly(value: string | null | undefined) {
+  if (!value) return null;
 
-  const match = String(value).replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+  const match = clean(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) return null;
 
-  const parsed = Number(match[0]);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
 
-function getTowerWeight(extraData?: Record<string, unknown> | null) {
-  if (!extraData) return null;
-
-  const entries = Object.entries(extraData);
-
-  const exactEntry = entries.find(([key]) => {
-    const value = key.trim().toLowerCase();
-    return (
-      value === "tower weight" ||
-      value === "tower weight (t)" ||
-      value === "tower_weight" ||
-      value === "towerweight" ||
-      value === "structure total weights" ||
-      value === "structure total weight"
-    );
-  });
-
-  if (exactEntry) return extractNumericValue(exactEntry[1]);
-
-  const similarEntry = entries.find(([key]) => {
-    const value = key.trim().toLowerCase();
-    return (
-      (value.includes("tower") || value.includes("structure")) &&
-      value.includes("weight")
-    );
-  });
-
-  if (similarEntry) return extractNumericValue(similarEntry[1]);
-
-  const genericEntry = entries.find(([key]) =>
-    key.trim().toLowerCase().includes("weight"),
-  );
-
-  return genericEntry ? extractNumericValue(genericEntry[1]) : null;
-}
-
-function getTowerDisplayName(tower: Tower) {
-  const extra = tower.extra_data ?? {};
-
-  return (
-    safeString(tower.name).trim() ||
-    safeString(extra["tower_number"]).trim() ||
-    safeString(extra["structure_number"]).trim() ||
-    safeString(extra["tower_no"]).trim() ||
-    "Unnamed Tower"
-  );
-}
-
-function getTowerType(tower: Tower) {
-  if (tower.extra_data) {
-    const entry = Object.entries(tower.extra_data).find(([key]) =>
-      ["tower type", "tower_type", "structure type", "structure_type", "type"].includes(
-        key.trim().toLowerCase(),
-      ),
-    );
-
-    if (entry) {
-      const value = safeString(entry[1]).trim();
-      if (value) return value.toUpperCase();
-    }
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
   }
 
-  const extra = tower.extra_data ?? {};
-  const text = [
-    getTowerDisplayName(tower),
-    tower.name,
-    extra["structure_number"],
-    extra["tower_number"],
-    extra["tower_no"],
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toUpperCase();
+  return date;
+}
 
-  return text.match(/\b\d+[A-Z]{2}\b/)?.[0] ?? "Type not set";
+function formatAuDate(value: string | null | undefined, fallback = "—") {
+  const date = parseDateOnly(value);
+  if (!date) return fallback;
+
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getFullYear()),
+  ].join("-");
+}
+
+function daysUntil(value: string | null | undefined) {
+  const date = parseDateOnly(value);
+  if (!date) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
+}
+
+function daysSince(value: string | null | undefined) {
+  const date = parseDateOnly(value);
+  if (!date) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return Math.floor((today.getTime() - date.getTime()) / 86_400_000);
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(clampPercent(value))}%`;
 }
 
 function getDocketProgress(docket: DocketRow) {
   return clampPercent(
-    Math.round(
-      safeNumber(docket.assembly_percent) * 0.5 +
-        safeNumber(docket.erection_percent) * 0.5,
-    ),
+    safeNumber(docket.assembly_percent) * 0.5 +
+      safeNumber(docket.erection_percent) * 0.5,
   );
 }
 
 function getTowerProgress(tower: Tower, dockets: DocketRow[]) {
   const related = dockets.filter((docket) => docket.tower_id === tower.id);
 
-  if (related.length === 0) {
+  if (!related.length) {
     return clampPercent(safeNumber(tower.progress));
   }
 
   return related.reduce(
     (maximum, docket) => Math.max(maximum, getDocketProgress(docket)),
-    0,
+    clampPercent(safeNumber(tower.progress)),
   );
 }
 
 function getDeliveredQty(row: DeliveryItemRow) {
-  return safeNumber(row.qty_delivered);
+  return safeNumber(
+    row.qty_delivered ??
+      row.quantity_delivered ??
+      row.delivered_qty ??
+      row.qty,
+  );
 }
 
 function getRequiredQty(row: MaterialBundleRow) {
-  return safeNumber(row.qty_required);
+  return safeNumber(row.qty_required ?? row.required_qty);
 }
-
-function formatNumber(value: number | null, decimals = 0) {
-  if (value === null || !Number.isFinite(value)) return "—";
-  return value.toFixed(decimals);
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "No dockets yet";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "No dockets yet";
-
-  return date.toLocaleDateString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
 
 function crewDisplay(
   crewNumber: string | null,
@@ -329,6 +290,140 @@ function crewDisplay(
   return "No crew allocated";
 }
 
+function vehicleLabel(vehicle: VehicleAsset | null) {
+  if (!vehicle) return "Assigned vehicle";
+
+  const identifier =
+    clean(vehicle.vehicle_id) ||
+    clean(vehicle.vehicle_rego) ||
+    clean(vehicle.rego);
+  const makeModel = [clean(vehicle.make), clean(vehicle.model)]
+    .filter(Boolean)
+    .join(" ");
+
+  return [identifier, makeModel].filter(Boolean).join(" · ") || "Assigned vehicle";
+}
+
+function trainingTone(days: number | null): Tone {
+  if (days === null) return "slate";
+  if (days < 0) return "red";
+  if (days <= 30) return "red";
+  if (days <= 60) return "amber";
+  return "blue";
+}
+
+function trainingCountdown(days: number | null) {
+  if (days === null) return "No expiry";
+  if (days < 0) return `${Math.abs(days)}d overdue`;
+  if (days === 0) return "Expires today";
+  return `${days}d remaining`;
+}
+
+function prestartState(
+  vehicle: VehicleAsset | null,
+  prestart: VehiclePrestart | null,
+) {
+  if (!vehicle) {
+    return {
+      tone: "slate" as Tone,
+      title: "No vehicle assigned",
+      detail: "Open Vehicle Prestart to assign the vehicle you normally drive.",
+    };
+  }
+
+  if (!prestart) {
+    return {
+      tone: "red" as Tone,
+      title: "Prestart required",
+      detail: `${vehicleLabel(vehicle)} has no prestart in your history.`,
+    };
+  }
+
+  const severity = clean(prestart.severity).toLowerCase();
+  const hasIssue = Boolean(severity && severity !== "none");
+  const age = daysSince(prestart.prestart_date);
+
+  if (hasIssue) {
+    return {
+      tone: "red" as Tone,
+      title: "Last prestart had an issue",
+      detail: [
+        `Completed ${formatAuDate(prestart.prestart_date)}`,
+        prestart.fleet_job_number
+          ? `Fleet Job ${prestart.fleet_job_number}`
+          : clean(prestart.result),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  }
+
+  if (age === 0) {
+    return {
+      tone: "green" as Tone,
+      title: "Today's prestart is complete",
+      detail: `${vehicleLabel(vehicle)} was checked today.`,
+    };
+  }
+
+  if (age === null) {
+    return {
+      tone: "amber" as Tone,
+      title: "Prestart due today",
+      detail: `Open Vehicle Prestart to complete today's check for ${vehicleLabel(vehicle)}.`,
+    };
+  }
+
+  if (age >= 7) {
+    return {
+      tone: "red" as Tone,
+      title: "Prestart overdue",
+      detail: `Your last prestart was ${age} days ago on ${formatAuDate(prestart.prestart_date)}.`,
+    };
+  }
+
+  return {
+    tone: "amber" as Tone,
+    title: "Today's prestart is still required",
+    detail: `Your last prestart was ${age} day${age === 1 ? "" : "s"} ago on ${formatAuDate(prestart.prestart_date)}.`,
+  };
+}
+
+function tonePalette(tone: Tone) {
+  switch (tone) {
+    case "green":
+      return {
+        bg: "#ecfdf5",
+        border: "#a7f3d0",
+        fg: "#047857",
+      };
+    case "amber":
+      return {
+        bg: "#fffbeb",
+        border: "#fde68a",
+        fg: "#b45309",
+      };
+    case "red":
+      return {
+        bg: "#fff1f2",
+        border: "#fecdd3",
+        fg: "#be123c",
+      };
+    case "blue":
+      return {
+        bg: "#eff6ff",
+        border: "#bfdbfe",
+        fg: "#1d4ed8",
+      };
+    default:
+      return {
+        bg: "#f8fafc",
+        border: "#e2e8f0",
+        fg: "#475569",
+      };
+  }
+}
+
 export default function HomeScreen() {
   const {
     session,
@@ -338,45 +433,80 @@ export default function HomeScreen() {
     profileError,
     refreshProfile,
   } = useAuth();
+  const { can, roles } = useAccess();
 
-  const [dashboard, setDashboard] =
-    useState<ProjectDashboardData>(EMPTY_DASHBOARD);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
-  const dashboardHasDataRef = useRef(false);
-  const dashboardProjectRef = useRef<string | null>(null);
+  const canUseProjects = can("mobile.projects");
+  const canUseTowerProgress = can("mobile.tower_progress");
+  const canUseDockets = can("mobile.daily_dockets");
+  const canUseDeliveries = can("mobile.deliveries");
+  const canUseDefects = can("mobile.defects");
+  const canUseTraining = can("mobile.training");
+  const canUseVehiclePrestarts = can("mobile.vehicle_prestarts");
+  const canUseNotifications = can("mobile.notifications");
 
+  const canSeeProjectSnapshot = canUseProjects || canUseTowerProgress;
+  const canSeeMyDay = canUseTraining || canUseVehiclePrestarts;
 
   const [notifications, setNotifications] =
     useState<NotificationSummary>(EMPTY_NOTIFICATIONS);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
-  const [notificationsError, setNotificationsError] =
-    useState<string | null>(null);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
 
-  const { can, roles } = useAccess();
+  const [personal, setPersonal] = useState<PersonalDashboard>(EMPTY_PERSONAL);
+  const [personalLoading, setPersonalLoading] = useState(false);
+  const [personalError, setPersonalError] = useState<string | null>(null);
 
-  const roleLabel = roles.length > 0
-    ? roles.map((assignedRole) => assignedRole.name).join(" + ")
-    : profile?.employeeRole || "TTTracker User";
-
-  const canUseProjects = can("mobile.projects");
-  const canSeePerformance = can("mobile.projects");
-  const canUseTowerProgress = can("mobile.tower_progress");
-  const canUseDockets = can("mobile.daily_dockets");
-  const canUseTowerOperations = canUseTowerProgress || canUseDockets;
-  const canUseAssets = can("mobile.assets") || can("mobile.fleet_jobs");
-  const canUseFleetJobs = can("mobile.fleet_jobs");
-  const canUseMaterials = can("mobile.materials");
-  const canUseDeliveries = can("mobile.deliveries");
-  const canUseDefects = can("mobile.defects");
+  const [projectDashboard, setProjectDashboard] =
+    useState<ProjectDashboardData>(EMPTY_PROJECT);
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
 
   const selectedProject =
     profile?.availableProjects.find(
       (project) => project.id === profile.projectId,
     ) ?? null;
 
+  const roleLabel =
+    roles.length > 0
+      ? roles.map((assignedRole) => assignedRole.name).join(" + ")
+      : profile?.employeeRole || "TTTracker User";
+
+  const fullName =
+    profile?.fullName ??
+    session?.user.email?.split("@")[0] ??
+    "User";
+
+  const expiringTraining = useMemo(() => {
+    return personal.training
+      .filter(
+        (record) =>
+          record.current_version !== false &&
+          !record.superseded_at &&
+          !record.revoked_at &&
+          !record.does_not_expire &&
+          Boolean(record.expiry_date) &&
+          record.workflow_status !== "rejected" &&
+          record.record_status !== "rejected",
+      )
+      .map((record) => ({
+        record,
+        days: daysUntil(record.expiry_date),
+      }))
+      .sort((a, b) => {
+        const left = a.days ?? Number.MAX_SAFE_INTEGER;
+        const right = b.days ?? Number.MAX_SAFE_INTEGER;
+        return left - right;
+      })
+      .slice(0, 3);
+  }, [personal.training]);
+
+  const vehicleState = useMemo(
+    () => prestartState(personal.vehicle, personal.latestVehiclePrestart),
+    [personal.latestVehiclePrestart, personal.vehicle],
+  );
+
   const loadNotifications = useCallback(async () => {
-    if (!session?.user.id) {
+    if (!canUseNotifications || !session?.user.id) {
       setNotifications(EMPTY_NOTIFICATIONS);
       setNotificationsError(null);
       return;
@@ -394,7 +524,7 @@ export default function HomeScreen() {
         .eq("user_id", session.user.id)
         .is("archived_at", null)
         .order("created_at", { ascending: false })
-        .limit(25);
+        .limit(20);
 
       if (error) throw error;
 
@@ -409,109 +539,199 @@ export default function HomeScreen() {
         warningCount: unreadRows.filter(
           (row) => row.severity === "warning",
         ).length,
-        recent: rows.slice(0, 4),
+        recent: rows.slice(0, 2),
       });
     } catch (error) {
-      console.error("Notification summary load failed:", error);
-
       setNotifications(EMPTY_NOTIFICATIONS);
       setNotificationsError(
         error instanceof Error
           ? error.message
-          : "Unable to load notifications.",
+          : "Notifications could not be loaded.",
       );
     } finally {
       setNotificationsLoading(false);
     }
-  }, [session?.user.id]);
+  }, [canUseNotifications, session?.user.id]);
+
+  const loadPersonalDashboard = useCallback(async () => {
+    if (!canSeeMyDay) {
+      setPersonal(EMPTY_PERSONAL);
+      setPersonalError(null);
+      return;
+    }
+
+    setPersonalLoading(true);
+    setPersonalError(null);
+
+    const next: PersonalDashboard = { ...EMPTY_PERSONAL };
+    const errors: string[] = [];
+
+    if (canUseTraining) {
+      try {
+        const training = await getMyTraining();
+        next.training = training.records ?? [];
+      } catch (error) {
+        errors.push(
+          error instanceof Error
+            ? error.message
+            : "Training could not be loaded.",
+        );
+      }
+    }
+
+    if (canUseVehiclePrestarts) {
+      try {
+        const assignedVehicleId =
+          (await AsyncStorage.getItem(ASSIGNED_VEHICLE_KEY)) ?? "";
+        next.assignedVehicleId = assignedVehicleId;
+
+        if (assignedVehicleId) {
+          const [vehicleResult, prestartResult] = await Promise.all([
+            supabase
+              .from("vehicle_assets")
+              .select(
+                "id,vehicle_id,vehicle_rego,rego,make,model,category,project,crew,status",
+              )
+              .eq("id", assignedVehicleId)
+              .maybeSingle(),
+            supabase
+              .from("vehicle_prestarts")
+              .select(
+                "id,vehicle_asset_id,asset_type,asset_label,vehicle_rego,inspected_by_name,prestart_date,created_at,severity,result,fleet_job_number",
+              )
+              .eq("asset_type", "Vehicle")
+              .eq("vehicle_asset_id", assignedVehicleId)
+              .order("prestart_date", { ascending: false })
+              .order("created_at", { ascending: false })
+              .limit(50),
+          ]);
+
+          if (vehicleResult.error) throw vehicleResult.error;
+          if (prestartResult.error) throw prestartResult.error;
+
+          next.vehicle = (vehicleResult.data as VehicleAsset | null) ?? null;
+
+          const identity = clean(fullName).toLowerCase();
+          const prestarts = (prestartResult.data ?? []) as VehiclePrestart[];
+          next.latestVehiclePrestart =
+            prestarts.find(
+              (row) =>
+                clean(row.inspected_by_name).toLowerCase() === identity,
+            ) ?? null;
+        }
+      } catch (error) {
+        errors.push(
+          error instanceof Error
+            ? error.message
+            : "Vehicle prestart summary could not be loaded.",
+        );
+      }
+    }
+
+    setPersonal(next);
+    setPersonalError(errors.length ? errors.join(" · ") : null);
+    setPersonalLoading(false);
+  }, [canSeeMyDay, canUseTraining, canUseVehiclePrestarts, fullName]);
 
   const loadProjectDashboard = useCallback(async () => {
     const projectId = profile?.projectId;
 
-    if (!projectId) {
-      setDashboard(EMPTY_DASHBOARD);
-      setDashboardError(null);
+    if (!canSeeProjectSnapshot || !projectId) {
+      setProjectDashboard(EMPTY_PROJECT);
+      setProjectError(null);
       return;
     }
 
-    const projectChanged = dashboardProjectRef.current !== projectId;
-    if (projectChanged) {
-      dashboardProjectRef.current = projectId;
-      dashboardHasDataRef.current = false;
-      setDashboard(EMPTY_DASHBOARD);
-    }
-
-    if (!dashboardHasDataRef.current) {
-      setDashboardLoading(true);
-    }
-    setDashboardError(null);
+    setProjectLoading(true);
+    setProjectError(null);
 
     try {
-      const [towersResult, docketsResult] = await Promise.all([
-        supabase
-          .from("towers")
-          .select("id,project_id,name,line,status,progress,extra_data")
-          .eq("project_id", projectId),
-
-        supabase
-          .from("tower_daily_dockets")
-          .select(
-            "id,tower_id,project_id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours",
-          )
-          .eq("project_id", projectId),
-      ]);
+      const towersResult = await supabase
+        .from("towers")
+        .select("id,project_id,progress")
+        .eq("project_id", projectId);
 
       if (towersResult.error) throw towersResult.error;
-      if (docketsResult.error) throw docketsResult.error;
 
       const towers = (towersResult.data ?? []) as Tower[];
-      const dockets = (docketsResult.data ?? []) as DocketRow[];
       const towerIds = towers.map((tower) => tower.id);
 
-      let defects: DefectRow[] = [];
-      let bundles: MaterialBundleRow[] = [];
+      let dockets: DocketRow[] = [];
 
-      if (towerIds.length > 0) {
-        const [defectsResult, bundlesResult] = await Promise.all([
-          supabase
-            .from("tower_defects")
-            .select("id,tower_id,status")
-            .in("tower_id", towerIds),
-          supabase
-            .from("tower_required_bundles")
-            .select("tower_id,qty_required")
-            .in("tower_id", towerIds),
-        ]);
+      if (canUseTowerProgress || canUseDockets) {
+        const docketResult = await supabase
+          .from("tower_daily_dockets")
+          .select(
+            "id,tower_id,project_id,docket_date,assembly_percent,erection_percent",
+          )
+          .eq("project_id", projectId);
 
-        if (!defectsResult.error) {
-          defects = (defectsResult.data ?? []) as DefectRow[];
-        }
-
-        if (!bundlesResult.error) {
-          bundles = (bundlesResult.data ?? []) as MaterialBundleRow[];
+        if (!docketResult.error) {
+          dockets = (docketResult.data ?? []) as DocketRow[];
         }
       }
 
-      let deliveries: DeliveryRow[] = [];
-      let deliveryItems: DeliveryItemRow[] = [];
+      const progressValues = towers.map((tower) =>
+        getTowerProgress(tower, dockets),
+      );
 
-      if (towerIds.length > 0) {
-        for (const table of [
-          "tower_bundle_deliveries",
-          "tower_deliveries",
-        ]) {
-          const { data, error } = await supabase
+      const completedTowers = progressValues.filter(
+        (progress) => progress >= 100,
+      ).length;
+      const towersInProgress = progressValues.filter(
+        (progress) => progress > 0 && progress < 100,
+      ).length;
+      const notStartedTowers = progressValues.filter(
+        (progress) => progress <= 0,
+      ).length;
+      const overallProgress =
+        progressValues.length > 0
+          ? progressValues.reduce((sum, progress) => sum + progress, 0) /
+            progressValues.length
+          : 0;
+
+      let openDefects: number | null = null;
+
+      if (canUseDefects && towerIds.length > 0) {
+        const defectResult = await supabase
+          .from("tower_defects")
+          .select("id,status")
+          .in("tower_id", towerIds);
+
+        if (!defectResult.error) {
+          openDefects = ((defectResult.data ?? []) as DefectRow[]).filter(
+            (row) =>
+              !["closed", "complete", "completed"].includes(
+                clean(row.status).toLowerCase(),
+              ),
+          ).length;
+        }
+      }
+
+      let deliveryProgress: number | null = null;
+
+      if (canUseDeliveries && towerIds.length > 0) {
+        const bundleResult = await supabase
+          .from("tower_required_bundles")
+          .select("tower_id,qty_required,required_qty")
+          .in("tower_id", towerIds);
+
+        let deliveries: DeliveryRow[] = [];
+        let deliveryItems: DeliveryItemRow[] = [];
+
+        for (const table of ["tower_bundle_deliveries", "tower_deliveries"]) {
+          const result = await supabase
             .from(table)
             .select("id,tower_id")
             .in("tower_id", towerIds);
 
-          if (!error && data) {
-            deliveries = data as DeliveryRow[];
+          if (!result.error) {
+            deliveries = (result.data ?? []) as DeliveryRow[];
             break;
           }
         }
 
-        const deliveryIds = deliveries.map((delivery) => delivery.id);
+        const deliveryIds = deliveries.map((row) => row.id);
 
         if (deliveryIds.length > 0) {
           for (const table of [
@@ -519,326 +739,89 @@ export default function HomeScreen() {
             "tower_delivery_items",
             "tower_delivered_items",
           ]) {
-            const { data, error } = await supabase
+            const result = await supabase
               .from(table)
-              .select("delivery_id,qty_delivered")
+              .select("*")
               .in("delivery_id", deliveryIds);
 
-            if (!error && data) {
-              deliveryItems = data as DeliveryItemRow[];
+            if (!result.error) {
+              deliveryItems = (result.data ?? []) as DeliveryItemRow[];
               break;
             }
           }
         }
+
+        if (!bundleResult.error) {
+          const bundles =
+            (bundleResult.data ?? []) as MaterialBundleRow[];
+          const totalRequired = bundles.reduce(
+            (sum, row) => sum + getRequiredQty(row),
+            0,
+          );
+          const totalDelivered = deliveryItems.reduce(
+            (sum, row) => sum + getDeliveredQty(row),
+            0,
+          );
+
+          deliveryProgress =
+            totalRequired > 0
+              ? clampPercent((totalDelivered / totalRequired) * 100)
+              : 0;
+        }
       }
 
-      /* Build lookup maps once instead of repeatedly filtering whole arrays for every tower. */
-      const docketsByTower = new Map<string, DocketRow[]>();
-      for (const docket of dockets) {
-        if (!docket.tower_id) continue;
-        const current = docketsByTower.get(docket.tower_id) ?? [];
-        current.push(docket);
-        docketsByTower.set(docket.tower_id, current);
-      }
+      const latestDocketDate = canUseDockets
+        ? dockets
+            .map((docket) => docket.docket_date)
+            .filter((value): value is string => Boolean(value))
+            .sort((a, b) => {
+              const left = parseDateOnly(a)?.getTime() ?? 0;
+              const right = parseDateOnly(b)?.getTime() ?? 0;
+              return right - left;
+            })[0] ?? null
+        : null;
 
-      const requiredQtyByTower = new Map<string, number>();
-      for (const bundle of bundles) {
-        if (!bundle.tower_id) continue;
-        requiredQtyByTower.set(
-          bundle.tower_id,
-          (requiredQtyByTower.get(bundle.tower_id) ?? 0) + getRequiredQty(bundle),
-        );
-      }
-
-      const deliveryIdsByTower = new Map<string, string[]>();
-      for (const delivery of deliveries) {
-        if (!delivery.tower_id) continue;
-        const current = deliveryIdsByTower.get(delivery.tower_id) ?? [];
-        current.push(delivery.id);
-        deliveryIdsByTower.set(delivery.tower_id, current);
-      }
-
-      const deliveredQtyByDelivery = new Map<string, number>();
-      for (const item of deliveryItems) {
-        if (!item.delivery_id) continue;
-        deliveredQtyByDelivery.set(
-          item.delivery_id,
-          (deliveredQtyByDelivery.get(item.delivery_id) ?? 0) + getDeliveredQty(item),
-        );
-      }
-
-      const deliverySummaryByTower = new Map<string, DeliverySummary>();
-
-      for (const tower of towers) {
-        const requiredQty = requiredQtyByTower.get(tower.id) ?? 0;
-        const deliveredQty = (deliveryIdsByTower.get(tower.id) ?? []).reduce(
-          (sum, deliveryId) =>
-            sum + (deliveredQtyByDelivery.get(deliveryId) ?? 0),
-          0,
-        );
-        const outstandingQty = Math.max(0, requiredQty - deliveredQty);
-        const deliveryPercent =
-          requiredQty > 0
-            ? clampPercent((deliveredQty / requiredQty) * 100)
-            : 0;
-
-        deliverySummaryByTower.set(tower.id, {
-          requiredQty,
-          deliveredQty,
-          outstandingQty,
-          deliveryPercent,
-        });
-      }
-
-      const towerSummaries: TowerSummary[] = towers.map((tower) => {
-        const towerDockets = docketsByTower.get(tower.id) ?? [];
-        const computedProgress =
-          towerDockets.length > 0
-            ? towerDockets.reduce(
-                (maximum, docket) =>
-                  Math.max(maximum, getDocketProgress(docket)),
-                0,
-              )
-            : clampPercent(safeNumber(tower.progress));
-        const computedWeight = getTowerWeight(tower.extra_data);
-        const completedTonnes =
-          computedWeight && computedWeight > 0
-            ? computedWeight * (computedProgress / 100)
-            : null;
-
-        const rawManhours = towerDockets.reduce(
-          (sum, docket) => sum + safeNumber(docket.raw_manhours),
-          0,
-        );
-
-        const productionManhours = towerDockets.reduce(
-          (sum, docket) =>
-            sum +
-            safeNumber(
-              docket.production_manhours,
-              safeNumber(docket.raw_manhours),
-            ),
-          0,
-        );
-
-        return {
-          ...tower,
-          computedProgress,
-          computedWeight,
-          completedTonnes,
-          rawManhours,
-          productionManhours,
-          rawMhPerTonne:
-            completedTonnes && completedTonnes > 0
-              ? rawManhours / completedTonnes
-              : null,
-          productionMhPerTonne:
-            completedTonnes && completedTonnes > 0
-              ? productionManhours / completedTonnes
-              : null,
-        };
-      });
-
-      const totalTowerWeight = towerSummaries.reduce(
-        (sum, tower) => sum + safeNumber(tower.computedWeight),
-        0,
-      );
-
-      const completedTonnes = towerSummaries.reduce(
-        (sum, tower) => sum + safeNumber(tower.completedTonnes),
-        0,
-      );
-
-      const totalRawManhours = towerSummaries.reduce(
-        (sum, tower) => sum + tower.rawManhours,
-        0,
-      );
-
-      const totalProductionManhours = towerSummaries.reduce(
-        (sum, tower) => sum + tower.productionManhours,
-        0,
-      );
-
-      const completedTowers = towerSummaries.filter(
-        (tower) => tower.computedProgress >= 100,
-      ).length;
-
-      const towersInProgress = towerSummaries.filter(
-        (tower) =>
-          tower.computedProgress > 0 &&
-          tower.computedProgress < 100,
-      ).length;
-
-      const notStartedTowers = towerSummaries.filter(
-        (tower) => tower.computedProgress <= 0,
-      ).length;
-
-      const overallProgress =
-        totalTowerWeight > 0
-          ? clampPercent((completedTonnes / totalTowerWeight) * 100)
-          : towerSummaries.length > 0
-            ? clampPercent(
-                towerSummaries.reduce(
-                  (sum, tower) => sum + tower.computedProgress,
-                  0,
-                ) / towerSummaries.length,
-              )
-            : 0;
-
-      const totalRequiredQty = Array.from(
-        deliverySummaryByTower.values(),
-      ).reduce((sum, row) => sum + row.requiredQty, 0);
-
-      const deliveredQty = Array.from(
-        deliverySummaryByTower.values(),
-      ).reduce((sum, row) => sum + row.deliveredQty, 0);
-
-      const deliveryProgress =
-        totalRequiredQty > 0
-          ? clampPercent((deliveredQty / totalRequiredQty) * 100)
-          : 0;
-
-      const openDefects = defects.filter((defect) => {
-        const status = safeString(defect.status).trim().toLowerCase();
-        return !["closed", "complete", "completed"].includes(status);
-      }).length;
-
-      const latestDocketDate =
-        dockets
-          .map((docket) => docket.docket_date)
-          .filter((date): date is string => Boolean(date))
-          .sort(
-            (a, b) =>
-              new Date(b).getTime() - new Date(a).getTime(),
-          )[0] ?? null;
-
-      const nextDashboard: ProjectDashboardData = {
-        totalTowers: towerSummaries.length,
+      setProjectDashboard({
+        totalTowers: towers.length,
         completedTowers,
         towersInProgress,
         notStartedTowers,
         overallProgress,
         deliveryProgress,
-        totalDeliveries: deliveries.length,
         openDefects,
-        completedTonnes: completedTonnes > 0 ? completedTonnes : null,
-        rawMhPerTonne:
-          completedTonnes > 0
-            ? totalRawManhours / completedTonnes
-            : null,
-        productionMhPerTonne:
-          completedTonnes > 0
-            ? totalProductionManhours / completedTonnes
-            : null,
         latestDocketDate,
-        inProgressTowers: towerSummaries
-          .filter(
-            (tower) =>
-              tower.computedProgress > 0 &&
-              tower.computedProgress < 100,
-          )
-          .sort((a, b) => b.computedProgress - a.computedProgress)
-          .slice(0, 6),
-        deliveryTowers: towerSummaries
-          .map((tower) => ({
-            ...tower,
-            ...(deliverySummaryByTower.get(tower.id) ?? {
-              requiredQty: 0,
-              deliveredQty: 0,
-              outstandingQty: 0,
-              deliveryPercent: 0,
-            }),
-          }))
-          .filter(
-            (tower) =>
-              tower.deliveryPercent > 0 &&
-              tower.deliveryPercent < 100,
-          )
-          .sort((a, b) => b.deliveryPercent - a.deliveryPercent)
-          .slice(0, 4),
-      };
-
-      dashboardHasDataRef.current = true;
-      setDashboard(nextDashboard);
-
-      void AsyncStorage.setItem(
-        dashboardCacheKey(projectId),
-        JSON.stringify({
-          savedAt: new Date().toISOString(),
-          projectId,
-          dashboard: nextDashboard,
-        } satisfies CachedDashboard),
-      );
+      });
     } catch (error) {
-      console.error("Project dashboard load failed:", error);
-
-      const message =
-        error &&
-        typeof error === "object" &&
-        "message" in error &&
-        typeof error.message === "string"
+      setProjectDashboard(EMPTY_PROJECT);
+      setProjectError(
+        error instanceof Error
           ? error.message
-          : error instanceof Error
-            ? error.message
-            : "Unable to load the project dashboard.";
-
-      if (!dashboardHasDataRef.current) {
-        setDashboard(EMPTY_DASHBOARD);
-      }
-      setDashboardError(message);
+          : "Project summary could not be loaded.",
+      );
     } finally {
-      setDashboardLoading(false);
+      setProjectLoading(false);
     }
-  }, [profile?.projectId]);
+  }, [
+    canSeeProjectSnapshot,
+    canUseDefects,
+    canUseDeliveries,
+    canUseDockets,
+    canUseTowerProgress,
+    profile?.projectId,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPersonalDashboard();
+      void loadProjectDashboard();
+      void loadNotifications();
+    }, [loadNotifications, loadPersonalDashboard, loadProjectDashboard]),
+  );
 
   useEffect(() => {
-    const projectId = profile?.projectId ?? null;
-    let cancelled = false;
+    if (!canUseNotifications || !session?.user.id) return;
 
-    if (!projectId) {
-      dashboardProjectRef.current = null;
-      dashboardHasDataRef.current = false;
-      setDashboard(EMPTY_DASHBOARD);
-      setDashboardLoading(false);
-      return;
-    }
-
-    dashboardProjectRef.current = projectId;
-
-    void (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(dashboardCacheKey(projectId));
-
-        if (!cancelled && raw) {
-          const cached = JSON.parse(raw) as CachedDashboard;
-          if (cached?.projectId === projectId && cached.dashboard) {
-            dashboardHasDataRef.current = true;
-            setDashboard(cached.dashboard);
-            setDashboardLoading(false);
-          }
-        }
-      } catch (cacheError) {
-        console.warn("Home dashboard cache could not be read:", cacheError);
-      }
-
-      if (!cancelled) {
-        void loadProjectDashboard();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadProjectDashboard, profile?.projectId]);
-
-  useEffect(() => {
-    void loadNotifications();
-  }, [loadNotifications]);
-
-  useEffect(() => {
-    const userId = session?.user.id;
-    if (!userId) return;
-
+    const userId = session.user.id;
     const channel = supabase
       .channel(`home-notifications-${userId}`)
       .on(
@@ -858,30 +841,24 @@ export default function HomeScreen() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [loadNotifications, session?.user.id]);
+  }, [canUseNotifications, loadNotifications, session?.user.id]);
 
   if (!loading && !session) {
     return <Redirect href="/login" />;
   }
 
-  const fullName =
-    profile?.fullName ??
-    session?.user.email?.split("@")[0] ??
-    "User";
-
   async function refreshAll() {
     try {
       await refreshProfile();
       await Promise.all([
+        loadPersonalDashboard(),
         loadProjectDashboard(),
         loadNotifications(),
       ]);
     } catch (error) {
       Alert.alert(
         "Unable to refresh",
-        error instanceof Error
-          ? error.message
-          : "Please try again.",
+        error instanceof Error ? error.message : "Please try again.",
       );
     }
   }
@@ -891,9 +868,7 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingScreen}>
           <ActivityIndicator size="large" color="#0f172a" />
-          <Text style={styles.loadingText}>
-            Loading TTTracker...
-          </Text>
+          <Text style={styles.loadingText}>Loading TTTracker...</Text>
         </View>
       </SafeAreaView>
     );
@@ -908,7 +883,8 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={
               profileLoading ||
-              dashboardLoading ||
+              personalLoading ||
+              projectLoading ||
               notificationsLoading
             }
             onRefresh={() => void refreshAll()}
@@ -916,25 +892,16 @@ export default function HomeScreen() {
         }
       >
         <View style={styles.welcomeBlock}>
-          <Text style={styles.eyebrow}>TTTRACKER MOBILE</Text>
+          <Text style={styles.eyebrow}>TTTRACKER</Text>
           <Text style={styles.heading}>Welcome, {fullName}</Text>
-          <Text style={styles.role}>
-            {roleLabel}
-            {profile?.employeeRole ? ` · ${profile.employeeRole}` : ""}
-          </Text>
+          <Text style={styles.role}>{roleLabel}</Text>
           <Text style={styles.crew}>
-            {crewDisplay(
-              profile?.crewNumber ?? null,
-              profile?.crewName ?? null,
-            )}
+            {crewDisplay(profile?.crewNumber ?? null, profile?.crewName ?? null)}
           </Text>
         </View>
 
         {profileError ? (
-          <ErrorCard
-            title="Profile could not be loaded"
-            message={profileError}
-          />
+          <ErrorCard title="Profile could not be loaded" message={profileError} />
         ) : null}
 
         {canUseProjects ? (
@@ -943,7 +910,7 @@ export default function HomeScreen() {
           </View>
         ) : (
           <View style={styles.allocationCard}>
-            <Text style={styles.allocationEyebrow}>CURRENT ALLOCATION</Text>
+            <Text style={styles.smallEyebrow}>CURRENT PROJECT</Text>
             <Text style={styles.allocationTitle}>
               {profile?.projectNumber || "Project"}
             </Text>
@@ -953,566 +920,422 @@ export default function HomeScreen() {
           </View>
         )}
 
-        <View
-          style={[
-            styles.notificationHero,
-            notifications.criticalCount > 0 &&
-              styles.notificationHeroCritical,
-          ]}
-        >
-          <View style={styles.notificationHeroTop}>
-            <View
-              style={[
-                styles.notificationHeroIcon,
-                notifications.criticalCount > 0 &&
-                  styles.notificationHeroIconCritical,
-              ]}
-            >
-              <Bell
-                size={24}
-                color={
-                  notifications.criticalCount > 0
-                    ? "#ffffff"
-                    : "#1d4ed8"
-                }
-                strokeWidth={2.4}
-              />
-            </View>
-
-            <View style={styles.notificationHeroTitleBlock}>
-              <Text style={styles.notificationHeroEyebrow}>
-                ATTENTION REQUIRED
-              </Text>
-              <Text style={styles.notificationHeroTitle}>
-                {notifications.unreadCount > 0
-                  ? `${notifications.unreadCount} unread notification${
-                      notifications.unreadCount === 1 ? "" : "s"
-                    }`
-                  : "You're all caught up"}
-              </Text>
-              <Text style={styles.notificationHeroSubtitle}>
-                {notifications.criticalCount > 0
-                  ? `${notifications.criticalCount} critical item${
-                      notifications.criticalCount === 1 ? "" : "s"
-                    } need immediate attention.`
-                  : notifications.warningCount > 0
-                    ? `${notifications.warningCount} warning${
-                        notifications.warningCount === 1 ? "" : "s"
-                      } still require review.`
-                    : "No unread critical or warning items."}
-              </Text>
-            </View>
-          </View>
-
-          {notificationsLoading ? (
-            <View style={styles.notificationLoadingRow}>
-              <ActivityIndicator color="#2563eb" />
-              <Text style={styles.notificationLoadingText}>
-                Checking notifications...
-              </Text>
-            </View>
-          ) : notificationsError ? (
-            <Text style={styles.notificationErrorText}>
-              {notificationsError}
-            </Text>
-          ) : notifications.recent.length > 0 ? (
-            <View style={styles.notificationPreviewList}>
-              {notifications.recent.slice(0, 3).map((notification) => (
-                <Pressable
-                  key={notification.id}
-                  onPress={() =>
-                    router.push("/notifications" as Href)
-                  }
-                  style={({ pressed }) => [
-                    styles.notificationPreview,
-                    !notification.read_at &&
-                      styles.notificationPreviewUnread,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.notificationSeverityDot,
-                      notification.severity === "critical" &&
-                        styles.notificationSeverityCritical,
-                      notification.severity === "warning" &&
-                        styles.notificationSeverityWarning,
-                      notification.severity === "success" &&
-                        styles.notificationSeveritySuccess,
-                    ]}
-                  />
-                  <View style={styles.notificationPreviewText}>
-                    <Text
-                      style={styles.notificationPreviewTitle}
-                      numberOfLines={1}
-                    >
-                      {notification.title}
-                    </Text>
-                    <Text
-                      style={styles.notificationPreviewMessage}
-                      numberOfLines={2}
-                    >
-                      {notification.message}
-                    </Text>
-                  </View>
-                  {!notification.read_at ? (
-                    <View style={styles.unreadDot} />
-                  ) : null}
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-
-          <Pressable
-            onPress={() =>
-              router.push("/notifications" as Href)
-            }
-            style={({ pressed }) => [
-              styles.notificationOpenButton,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={styles.notificationOpenButtonText}>
-              Open Notification Centre
-            </Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>
-              {canUseAssets && !canUseTowerOperations
-                ? "Maintenance workspace"
-                : canUseTowerOperations
-                  ? "Field workspace"
-                  : "Today"}
-            </Text>
-            <Text style={styles.sectionSubtitle}>
-              Only actions available through your current TTTracker permissions are shown here.
-            </Text>
-          </View>
-        </View>
-
-        {!canUseTowerOperations && !canUseAssets ? (
-          <View style={styles.roleMessageCard}>
-            <View style={styles.roleMessageIcon}>
-              <CircleCheck size={22} color="#166534" strokeWidth={2.3} />
-            </View>
-            <View style={styles.roleMessageContent}>
-              <Text style={styles.roleMessageTitle}>Ready for today</Text>
-              <Text style={styles.roleMessageText}>
-                Use the sidebar when you need to open an available field feature. This page will keep you updated without duplicating the full menu.
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.quickActionGrid}>
-            {canUseTowerOperations ? (
-              <QuickAction
-                label="Daily Dockets"
-                icon={FileText}
-                onPress={() => router.push("/daily-dockets" as Href)}
-              />
-            ) : null}
-
-            {canUseTowerOperations ? (
-              <QuickAction
-                label="Tower Progress"
-                icon={HardHat}
-                onPress={() => router.push("/tower-progress" as Href)}
-              />
-            ) : null}
-
-            {canUseDockets ? (
-              <QuickAction
-                label="Truck Delivery"
-                icon={Truck}
-                onPress={() => router.push("/truck-delivery" as Href)}
-              />
-            ) : null}
-
-            {canUseAssets ? (
-              <QuickAction
-                label="Fleet Jobs"
-                icon={Wrench}
-                onPress={() => router.push("/fleet-jobs" as Href)}
-              />
-            ) : null}
-
-            {canUseAssets ? (
-              <QuickAction
-                label="Assets"
-                icon={Boxes}
-                onPress={() => router.push("/assets" as Href)}
-              />
-            ) : null}
-
-            {canUseFleetJobs ? (
-              <QuickAction
-                label="Vehicle Prestarts"
-                icon={ClipboardCheck}
-                onPress={() => router.push("/vehicle-prestart" as Href)}
-              />
-            ) : null}
-
-            {canUseProjects ? (
-              <QuickAction
-                label="Compliance"
-                icon={ShieldCheck}
-                onPress={() => router.push("/compliance" as Href)}
-              />
-            ) : null}
-          </View>
-        )}
-
-        {canUseProjects ? (
+        {canSeeMyDay ? (
           <>
-        {dashboardError ? (
-          <ErrorCard
-            title="Project summary unavailable"
-            message={dashboardError}
-          />
-        ) : null}
+            <SectionHeader
+              title="My day"
+              subtitle="The things that matter to you personally."
+            />
 
-        <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>Project summary</Text>
-            <Text style={styles.sectionSubtitle}>
-              Live overview for the selected project.
-            </Text>
-          </View>
-
-          <Pressable
-            disabled={!selectedProject}
-            onPress={() =>
-              router.push("/project-progress" as Href)
-            }
-            style={({ pressed }) => [
-              styles.openButton,
-              !selectedProject && styles.disabledButton,
-              pressed && selectedProject && styles.pressed,
-            ]}
-          >
-            <Text style={styles.openButtonText}>Open</Text>
-          </Pressable>
-        </View>
-
-        {dashboardLoading ? (
-          <View style={styles.dashboardLoading}>
-            <ActivityIndicator color="#0f172a" />
-            <Text style={styles.dashboardLoadingText}>
-              Updating project summary...
-            </Text>
-          </View>
-        ) : (
-          <>
-            <View style={styles.progressCard}>
-              <ProgressCircle
-                value={dashboard.overallProgress}
-                label="Overall"
-              />
-
-              <View style={styles.progressDetails}>
-                <Text style={styles.progressTitle}>
-                  Project completion
-                </Text>
-                <Text style={styles.progressDescription}>
-                  {dashboard.completedTowers} completed ·{" "}
-                  {dashboard.towersInProgress} in progress ·{" "}
-                  {dashboard.notStartedTowers} not started
-                </Text>
-
-                <View style={styles.miniProgressTrack}>
-                  <View
-                    style={[
-                      styles.miniProgressFill,
-                      {
-                        width: `${clampPercent(
-                          dashboard.overallProgress,
-                        )}%`,
-                      },
-                    ]}
-                  />
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.metricsGrid}>
-              <MetricCard
-                label="Total towers"
-                value={String(dashboard.totalTowers)}
-                detail={`${dashboard.completedTowers} complete`}
-                icon={RadioTower}
-              />
-              <MetricCard
-                label="In progress"
-                value={String(dashboard.towersInProgress)}
-                detail={`${dashboard.notStartedTowers} not started`}
-                icon={CircleDot}
-              />
-              <MetricCard
-                label="Delivery"
-                value={`${formatNumber(
-                  dashboard.deliveryProgress,
-                )}%`}
-                detail={`${dashboard.totalDeliveries} delivery records`}
-                icon={PackageCheck}
-              />
-              <MetricCard
-                label="Open defects"
-                value={String(dashboard.openDefects)}
-                detail={`Latest docket: ${formatDate(
-                  dashboard.latestDocketDate,
-                )}`}
-                icon={AlertTriangle}
-              />
-            </View>
-
-            {canSeePerformance ? (
-              <View style={styles.performanceCard}>
-                <View style={styles.performanceHeading}>
-                  <Gauge
-                    size={20}
-                    color="#6d28d9"
-                    strokeWidth={2.4}
-                  />
-                  <Text style={styles.performanceTitle}>
-                    Performance
-                  </Text>
-                </View>
-
-                <View style={styles.performanceGrid}>
-                  <PerformanceMetric
-                    label="Production MH/T"
-                    value={formatNumber(
-                      dashboard.productionMhPerTonne,
-                      2,
-                    )}
-                  />
-                  <PerformanceMetric
-                    label="Raw MH/T"
-                    value={formatNumber(
-                      dashboard.rawMhPerTonne,
-                      2,
-                    )}
-                  />
-                  <PerformanceMetric
-                    label="Completed tonnes"
-                    value={formatNumber(
-                      dashboard.completedTonnes,
-                      1,
-                    )}
-                  />
-                </View>
-              </View>
+            {personalError ? (
+              <ErrorCard title="Personal summary partly unavailable" message={personalError} />
             ) : null}
-          </>
-        )}
 
-          </>
-        ) : null}
+            {personalLoading ? (
+              <LoadingCard text="Updating your records..." />
+            ) : (
+              <View style={styles.stack}>
+                {canUseTraining ? (
+                  <View style={styles.panel}>
+                    <View style={styles.panelHeader}>
+                      <View style={styles.panelTitleRow}>
+                        <View style={[styles.iconBox, styles.iconBoxBlue]}>
+                          <GraduationCap size={20} color="#1d4ed8" />
+                        </View>
+                        <View style={styles.panelTitleBlock}>
+                          <Text style={styles.panelTitle}>Training & licences</Text>
+                          <Text style={styles.panelSubtitle}>
+                            Your next records to expire.
+                          </Text>
+                        </View>
+                      </View>
 
-        {canUseTowerProgress ? (
-          <>
-        <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>
-              Current towers in progress
-            </Text>
-            <Text style={styles.sectionSubtitle}>
-              The most advanced live towers on this project.
-            </Text>
-          </View>
-        </View>
-
-        {dashboard.inProgressTowers.length === 0 ? (
-          <EmptyCard message="No towers are currently in progress." />
-        ) : (
-          <View style={styles.list}>
-            {dashboard.inProgressTowers.map((tower) => (
-              <View key={tower.id} style={styles.towerCard}>
-                <View style={styles.towerHeader}>
-                  <View style={styles.towerTitleBlock}>
-                    <Text style={styles.towerName}>
-                      {getTowerDisplayName(tower)}
-                    </Text>
-                    <Text style={styles.towerMeta}>
-                      {getTowerType(tower)}
-                      {tower.line ? ` · ${tower.line}` : ""}
-                    </Text>
-                  </View>
-
-                  <Text style={styles.towerPercent}>
-                    {formatNumber(tower.computedProgress)}%
-                  </Text>
-                </View>
-
-                <View style={styles.towerProgressTrack}>
-                  <View
-                    style={[
-                      styles.towerProgressFill,
-                      {
-                        width: `${clampPercent(
-                          tower.computedProgress,
-                        )}%`,
-                      },
-                    ]}
-                  />
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-          </>
-        ) : null}
-
-        {canUseDeliveries && dashboard.deliveryTowers.length > 0 ? (
-          <>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>
-                  Deliveries in progress
-                </Text>
-                <Text style={styles.sectionSubtitle}>
-                  Towers with started but incomplete deliveries.
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.list}>
-              {dashboard.deliveryTowers.map((tower) => (
-                <View key={tower.id} style={styles.deliveryCard}>
-                  <View style={styles.towerHeader}>
-                    <View style={styles.towerTitleBlock}>
-                      <Text style={styles.towerName}>
-                        {getTowerDisplayName(tower)}
-                      </Text>
-                      <Text style={styles.towerMeta}>
-                        {formatNumber(tower.deliveredQty)} of{" "}
-                        {formatNumber(tower.requiredQty)} delivered
-                      </Text>
+                      <Pressable
+                        onPress={() => router.push("/training" as Href)}
+                        style={styles.textButton}
+                      >
+                        <Text style={styles.textButtonText}>Open</Text>
+                        <ChevronRight size={15} color="#2563eb" />
+                      </Pressable>
                     </View>
 
-                    <Text style={styles.deliveryPercent}>
-                      {formatNumber(tower.deliveryPercent)}%
-                    </Text>
+                    {expiringTraining.length === 0 ? (
+                      <View style={styles.goodRow}>
+                        <CheckCircle2 size={18} color="#047857" />
+                        <Text style={styles.goodRowText}>
+                          No dated training records are currently listed for expiry.
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.compactList}>
+                        {expiringTraining.map(({ record, days }) => (
+                          <Pressable
+                            key={record.id}
+                            onPress={() =>
+                              router.push(
+                                `/training/${encodeURIComponent(record.id)}` as Href,
+                              )
+                            }
+                            style={styles.trainingRow}
+                          >
+                            <View style={styles.trainingMain}>
+                              <Text style={styles.trainingName} numberOfLines={1}>
+                                {record.training_name}
+                              </Text>
+                              <Text style={styles.trainingMeta} numberOfLines={1}>
+                                {[
+                                  record.training_short_code,
+                                  record.certificate_number
+                                    ? `No. ${record.certificate_number}`
+                                    : null,
+                                  `Expiry ${formatAuDate(record.expiry_date)}`,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </Text>
+                            </View>
+                            <TonePill
+                              tone={trainingTone(days)}
+                              label={trainingCountdown(days)}
+                            />
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                ) : null}
+
+                {canUseVehiclePrestarts ? (
+                  <Pressable
+                    onPress={() => router.push("/vehicle-prestart" as Href)}
+                    style={styles.panel}
+                  >
+                    <View style={styles.panelHeader}>
+                      <View style={styles.panelTitleRow}>
+                        <View style={[styles.iconBox, styles.iconBoxSlate]}>
+                          <CarFront size={20} color="#334155" />
+                        </View>
+                        <View style={styles.panelTitleBlock}>
+                          <Text style={styles.panelTitle}>My vehicle</Text>
+                          <Text style={styles.panelSubtitle} numberOfLines={1}>
+                            {personal.vehicle
+                              ? vehicleLabel(personal.vehicle)
+                              : "Vehicle prestart"}
+                          </Text>
+                        </View>
+                      </View>
+                      <ChevronRight size={18} color="#94a3b8" />
+                    </View>
+
+                    <StatusStrip
+                      tone={vehicleState.tone}
+                      title={vehicleState.title}
+                      detail={vehicleState.detail}
+                    />
+                  </Pressable>
+                ) : null}
+              </View>
+            )}
+          </>
+        ) : null}
+
+        {canUseNotifications ? (
+          <>
+            <SectionHeader
+              title="Notifications"
+              subtitle="Only the items currently needing your attention."
+              action={
+                <Pressable
+                  onPress={() => router.push("/notifications" as Href)}
+                  style={styles.textButton}
+                >
+                  <Text style={styles.textButtonText}>Open</Text>
+                  <ChevronRight size={15} color="#2563eb" />
+                </Pressable>
+              }
+            />
+
+            <View style={styles.panel}>
+              {notificationsLoading ? (
+                <LoadingInline text="Checking notifications..." />
+              ) : notificationsError ? (
+                <Text style={styles.inlineError}>{notificationsError}</Text>
+              ) : notifications.unreadCount === 0 ? (
+                <View style={styles.goodRow}>
+                  <CheckCircle2 size={18} color="#047857" />
+                  <Text style={styles.goodRowText}>You are all caught up.</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.notificationSummary}>
+                    <View style={styles.notificationCountIcon}>
+                      <Bell size={19} color="#1d4ed8" />
+                    </View>
+                    <View style={styles.notificationSummaryText}>
+                      <Text style={styles.notificationCountTitle}>
+                        {notifications.unreadCount} unread notification
+                        {notifications.unreadCount === 1 ? "" : "s"}
+                      </Text>
+                      <Text style={styles.notificationCountMeta}>
+                        {notifications.criticalCount > 0
+                          ? `${notifications.criticalCount} critical`
+                          : notifications.warningCount > 0
+                            ? `${notifications.warningCount} warning`
+                            : "No critical items"}
+                      </Text>
+                    </View>
                   </View>
 
-                  <View style={styles.deliveryProgressTrack}>
-                    <View
-                      style={[
-                        styles.deliveryProgressFill,
-                        {
-                          width: `${clampPercent(
-                            tower.deliveryPercent,
-                          )}%`,
-                        },
-                      ]}
-                    />
+                  <View style={styles.compactList}>
+                    {notifications.recent.map((notification) => (
+                      <Pressable
+                        key={notification.id}
+                        onPress={() => router.push("/notifications" as Href)}
+                        style={styles.notificationRow}
+                      >
+                        <View
+                          style={[
+                            styles.notificationDot,
+                            notification.severity === "critical" &&
+                              styles.notificationDotCritical,
+                            notification.severity === "warning" &&
+                              styles.notificationDotWarning,
+                          ]}
+                        />
+                        <View style={styles.notificationText}>
+                          <Text style={styles.notificationTitle} numberOfLines={1}>
+                            {notification.title}
+                          </Text>
+                          <Text style={styles.notificationMessage} numberOfLines={2}>
+                            {notification.message}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    ))}
                   </View>
-                </View>
-              ))}
+                </>
+              )}
             </View>
           </>
         ) : null}
 
-        <SyncStatus />
-      </ScrollView>
+        {canSeeProjectSnapshot ? (
+          <>
+            <SectionHeader
+              title="Project snapshot"
+              subtitle="A simple view of the project — only information your permissions allow."
+              action={
+                canUseTowerProgress && selectedProject ? (
+                  <Pressable
+                    onPress={() => router.push("/project-progress" as Href)}
+                    style={styles.textButton}
+                  >
+                    <Text style={styles.textButtonText}>Open</Text>
+                    <ChevronRight size={15} color="#2563eb" />
+                  </Pressable>
+                ) : undefined
+              }
+            />
 
+            {projectError ? (
+              <ErrorCard title="Project snapshot unavailable" message={projectError} />
+            ) : null}
+
+            {projectLoading ? (
+              <LoadingCard text="Updating project snapshot..." />
+            ) : (
+              <View style={styles.panel}>
+                <View style={styles.projectProgressHeader}>
+                  <View>
+                    <Text style={styles.progressValue}>
+                      {formatPercent(projectDashboard.overallProgress)}
+                    </Text>
+                    <Text style={styles.progressLabel}>Overall progress</Text>
+                  </View>
+                  <RadioTower size={25} color="#2563eb" />
+                </View>
+
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${clampPercent(
+                          projectDashboard.overallProgress,
+                        )}%`,
+                      },
+                    ]}
+                  />
+                </View>
+
+                <View style={styles.towerStats}>
+                  <TowerStat
+                    value={projectDashboard.completedTowers}
+                    label="Complete"
+                    tone="green"
+                  />
+                  <TowerStat
+                    value={projectDashboard.towersInProgress}
+                    label="In progress"
+                    tone="blue"
+                  />
+                  <TowerStat
+                    value={projectDashboard.notStartedTowers}
+                    label="Not started"
+                    tone="slate"
+                  />
+                </View>
+
+                {(canUseDeliveries || canUseDefects || canUseDockets) ? (
+                  <View style={styles.permissionMetrics}>
+                    {canUseDeliveries && projectDashboard.deliveryProgress !== null ? (
+                      <SmallMetric
+                        icon={<PackageCheck size={17} color="#047857" />}
+                        label="Delivery"
+                        value={formatPercent(projectDashboard.deliveryProgress)}
+                      />
+                    ) : null}
+
+                    {canUseDefects && projectDashboard.openDefects !== null ? (
+                      <SmallMetric
+                        icon={<ShieldAlert size={17} color="#be123c" />}
+                        label="Open defects"
+                        value={String(projectDashboard.openDefects)}
+                      />
+                    ) : null}
+
+                    {canUseDockets ? (
+                      <SmallMetric
+                        icon={<Clock3 size={17} color="#475569" />}
+                        label="Latest docket"
+                        value={formatAuDate(
+                          projectDashboard.latestDocketDate,
+                          "None",
+                        )}
+                      />
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
+            )}
+          </>
+        ) : null}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-function ProgressCircle({
+function SectionHeader({
+  title,
+  subtitle,
+  action,
+}: {
+  title: string;
+  subtitle: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionHeaderText}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+      </View>
+      {action}
+    </View>
+  );
+}
+
+function TonePill({ tone, label }: { tone: Tone; label: string }) {
+  const palette = tonePalette(tone);
+  return (
+    <View
+      style={[
+        styles.tonePill,
+        {
+          backgroundColor: palette.bg,
+          borderColor: palette.border,
+        },
+      ]}
+    >
+      <Text style={[styles.tonePillText, { color: palette.fg }]}>{label}</Text>
+    </View>
+  );
+}
+
+function StatusStrip({
+  tone,
+  title,
+  detail,
+}: {
+  tone: Tone;
+  title: string;
+  detail: string;
+}) {
+  const palette = tonePalette(tone);
+
+  return (
+    <View
+      style={[
+        styles.statusStrip,
+        {
+          backgroundColor: palette.bg,
+          borderColor: palette.border,
+        },
+      ]}
+    >
+      {tone === "green" ? (
+        <CheckCircle2 size={19} color={palette.fg} />
+      ) : tone === "red" ? (
+        <AlertTriangle size={19} color={palette.fg} />
+      ) : (
+        <Clock3 size={19} color={palette.fg} />
+      )}
+      <View style={styles.statusStripText}>
+        <Text style={[styles.statusStripTitle, { color: palette.fg }]}>
+          {title}
+        </Text>
+        <Text style={styles.statusStripDetail}>{detail}</Text>
+      </View>
+    </View>
+  );
+}
+
+function TowerStat({
   value,
   label,
+  tone,
 }: {
   value: number;
   label: string;
+  tone: Tone;
 }) {
+  const palette = tonePalette(tone);
+
   return (
-    <View style={styles.progressCircle}>
-      <Text style={styles.progressCircleValue}>
-        {formatNumber(value)}%
-      </Text>
-      <Text style={styles.progressCircleLabel}>{label}</Text>
+    <View style={styles.towerStat}>
+      <Text style={[styles.towerStatValue, { color: palette.fg }]}>{value}</Text>
+      <Text style={styles.towerStatLabel}>{label}</Text>
     </View>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  icon: React.ComponentType<{
-    size?: number;
-    color?: string;
-    strokeWidth?: number;
-  }>;
-}) {
-  return (
-    <View style={styles.metricCard}>
-      <View style={styles.metricIcon}>
-        <Icon size={19} color="#0f172a" strokeWidth={2.2} />
-      </View>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricDetail}>{detail}</Text>
-    </View>
-  );
-}
-
-function PerformanceMetric({
+function SmallMetric({
+  icon,
   label,
   value,
 }: {
+  icon: React.ReactNode;
   label: string;
   value: string;
 }) {
   return (
-    <View style={styles.performanceMetric}>
-      <Text style={styles.performanceLabel}>{label}</Text>
-      <Text style={styles.performanceValue}>{value}</Text>
-    </View>
-  );
-}
-
-function QuickAction({
-  label,
-  icon: Icon,
-  onPress,
-}: {
-  label: string;
-  icon: React.ComponentType<{
-    size?: number;
-    color?: string;
-    strokeWidth?: number;
-  }>;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.quickAction,
-        pressed && styles.pressed,
-      ]}
-    >
-      <View style={styles.quickActionIcon}>
-        <Icon
-          size={22}
-          color="#0f172a"
-          strokeWidth={2.2}
-        />
+    <View style={styles.smallMetric}>
+      {icon}
+      <View style={styles.smallMetricText}>
+        <Text style={styles.smallMetricLabel}>{label}</Text>
+        <Text style={styles.smallMetricValue}>{value}</Text>
       </View>
-      <Text style={styles.quickActionLabel}>{label}</Text>
-    </Pressable>
+    </View>
   );
 }
 
@@ -1525,343 +1348,452 @@ function ErrorCard({
 }) {
   return (
     <View style={styles.errorCard}>
-      <Text style={styles.errorTitle}>{title}</Text>
-      <Text style={styles.errorMessage}>{message}</Text>
+      <AlertTriangle size={18} color="#be123c" />
+      <View style={styles.errorCardText}>
+        <Text style={styles.errorTitle}>{title}</Text>
+        <Text style={styles.errorMessage}>{message}</Text>
+      </View>
     </View>
   );
 }
 
-function EmptyCard({ message }: { message: string }) {
+function LoadingCard({ text }: { text: string }) {
   return (
-    <View style={styles.emptyCard}>
-      <Text style={styles.emptyText}>{message}</Text>
+    <View style={styles.loadingCard}>
+      <ActivityIndicator color="#2563eb" />
+      <Text style={styles.loadingCardText}>{text}</Text>
+    </View>
+  );
+}
+
+function LoadingInline({ text }: { text: string }) {
+  return (
+    <View style={styles.loadingInline}>
+      <ActivityIndicator size="small" color="#2563eb" />
+      <Text style={styles.loadingInlineText}>{text}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#f8fafc" },
-  content: { padding: 20, paddingBottom: 48 },
-  loadingScreen: { flex: 1, alignItems: "center", justifyContent: "center" },
-  loadingText: { marginTop: 12, color: "#64748b", fontSize: 14 },
-  welcomeBlock: { marginBottom: 20 },
-  eyebrow: { color: "#64748b", fontSize: 11, fontWeight: "800", letterSpacing: 1.3 },
-  heading: { color: "#0f172a", fontSize: 28, fontWeight: "900", marginTop: 5 },
-  role: { color: "#2563eb", fontSize: 13, fontWeight: "800", marginTop: 5 },
-  crew: { color: "#64748b", fontSize: 13, marginTop: 4 },
-  projectSelectorWrapper: {
-    marginBottom: 16,
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
   },
-
+  content: {
+    padding: 16,
+    paddingBottom: 42,
+    gap: 12,
+  },
+  loadingScreen: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#64748b",
+    fontSize: 13,
+  },
+  welcomeBlock: {
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+  eyebrow: {
+    color: "#2563eb",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+  heading: {
+    color: "#0f172a",
+    fontSize: 26,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  role: {
+    color: "#475569",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 5,
+  },
+  crew: {
+    color: "#64748b",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  projectSelectorWrapper: {
+    marginBottom: 2,
+  },
   allocationCard: {
     borderWidth: 1,
     borderColor: "#e2e8f0",
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: "#ffffff",
-    padding: 16,
-    marginBottom: 16,
+    padding: 14,
   },
-
-  allocationEyebrow: {
+  smallEyebrow: {
     color: "#64748b",
     fontSize: 9,
     fontWeight: "900",
-    letterSpacing: 1,
+    letterSpacing: 0.9,
   },
-
   allocationTitle: {
     color: "#0f172a",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "900",
-    marginTop: 5,
+    marginTop: 4,
   },
-
   allocationText: {
     color: "#64748b",
     fontSize: 12,
-    marginTop: 4,
+    marginTop: 3,
   },
-
-  roleMessageCard: {
-    borderWidth: 1,
-    borderColor: "#bbf7d0",
-    borderRadius: 18,
-    backgroundColor: "#f0fdf4",
+  sectionHeader: {
     flexDirection: "row",
     alignItems: "flex-start",
-    padding: 16,
-    marginBottom: 22,
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 7,
+    marginBottom: 1,
   },
-
-  roleMessageIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: "#dcfce7",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  roleMessageContent: {
+  sectionHeaderText: {
     flex: 1,
-    marginLeft: 12,
   },
-
-  roleMessageTitle: {
-    color: "#166534",
-    fontSize: 14,
-    fontWeight: "900",
-  },
-
-  roleMessageText: {
-    color: "#15803d",
-    fontSize: 11,
-    lineHeight: 17,
-    marginTop: 4,
-  },
-
-  notificationHero: {
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    borderRadius: 22,
-    backgroundColor: "#eff6ff",
-    padding: 17,
-    marginBottom: 22,
-  },
-
-  notificationHeroCritical: {
-    borderColor: "#fecaca",
-    backgroundColor: "#fff1f2",
-  },
-
-  notificationHeroTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-
-  notificationHeroIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 15,
-    backgroundColor: "#dbeafe",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  notificationHeroIconCritical: {
-    backgroundColor: "#dc2626",
-  },
-
-  notificationHeroTitleBlock: {
-    flex: 1,
-    marginLeft: 12,
-  },
-
-  notificationHeroEyebrow: {
-    color: "#64748b",
-    fontSize: 9,
-    fontWeight: "900",
-    letterSpacing: 1.1,
-  },
-
-  notificationHeroTitle: {
+  sectionTitle: {
     color: "#0f172a",
     fontSize: 18,
     fontWeight: "900",
-    marginTop: 3,
   },
-
-  notificationHeroSubtitle: {
+  sectionSubtitle: {
     color: "#64748b",
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 4,
-  },
-
-  notificationLoadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 14,
-  },
-
-  notificationLoadingText: {
-    color: "#64748b",
-    fontSize: 12,
-    marginLeft: 9,
-  },
-
-  notificationErrorText: {
-    color: "#b91c1c",
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 13,
-  },
-
-  notificationPreviewList: {
-    gap: 8,
-    marginTop: 14,
-  },
-
-  notificationPreview: {
-    minHeight: 62,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#dbeafe",
-    backgroundColor: "#ffffff",
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 10,
-  },
-
-  notificationPreviewUnread: {
-    borderColor: "#93c5fd",
-  },
-
-  notificationSeverityDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: "#2563eb",
-    marginRight: 10,
-  },
-
-  notificationSeverityCritical: {
-    backgroundColor: "#dc2626",
-  },
-
-  notificationSeverityWarning: {
-    backgroundColor: "#d97706",
-  },
-
-  notificationSeveritySuccess: {
-    backgroundColor: "#16a34a",
-  },
-
-  notificationPreviewText: {
-    flex: 1,
-  },
-
-  notificationPreviewTitle: {
-    color: "#0f172a",
-    fontSize: 12,
-    fontWeight: "900",
-  },
-
-  notificationPreviewMessage: {
-    color: "#64748b",
-    fontSize: 10,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 16,
     marginTop: 2,
   },
-
-  unreadDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: "#2563eb",
-    marginLeft: 8,
-  },
-
-  notificationOpenButton: {
-    minHeight: 45,
-    borderRadius: 13,
-    backgroundColor: "#0f172a",
+  textButton: {
+    minHeight: 34,
+    paddingHorizontal: 8,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 14,
+    gap: 2,
   },
-
-  notificationOpenButtonText: {
-    color: "#ffffff",
+  textButtonText: {
+    color: "#2563eb",
     fontSize: 11,
     fontWeight: "900",
   },
-
-  quickActionGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
+  stack: {
     gap: 10,
-    marginBottom: 22,
   },
-
-  quickAction: {
-    width: "48%",
-    minHeight: 104,
+  panel: {
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 18,
     backgroundColor: "#ffffff",
     padding: 14,
-    justifyContent: "space-between",
   },
-
-  quickActionIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: "#f1f5f9",
+  panelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  panelTitleRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  panelTitleBlock: {
+    flex: 1,
+  },
+  panelTitle: {
+    color: "#0f172a",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  panelSubtitle: {
+    color: "#64748b",
+    fontSize: 10,
+    marginTop: 2,
+  },
+  iconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  quickActionLabel: {
+  iconBoxBlue: {
+    backgroundColor: "#eff6ff",
+  },
+  iconBoxSlate: {
+    backgroundColor: "#f1f5f9",
+  },
+  compactList: {
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+    marginTop: 12,
+  },
+  trainingRow: {
+    minHeight: 57,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+    paddingVertical: 9,
+  },
+  trainingMain: {
+    flex: 1,
+  },
+  trainingName: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  trainingMeta: {
+    color: "#64748b",
+    fontSize: 9,
+    marginTop: 3,
+  },
+  tonePill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  tonePillText: {
+    fontSize: 8,
+    fontWeight: "900",
+  },
+  goodRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 9,
+  },
+  goodRowText: {
+    flex: 1,
+    color: "#047857",
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "700",
+  },
+  statusStrip: {
+    borderWidth: 1,
+    borderRadius: 13,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    padding: 11,
+    marginTop: 12,
+  },
+  statusStripText: {
+    flex: 1,
+  },
+  statusStripTitle: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  statusStripDetail: {
+    color: "#64748b",
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  notificationSummary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  notificationCountIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: "#eff6ff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  notificationSummaryText: {
+    flex: 1,
+  },
+  notificationCountTitle: {
     color: "#0f172a",
     fontSize: 13,
     fontWeight: "900",
+  },
+  notificationCountMeta: {
+    color: "#64748b",
+    fontSize: 10,
+    marginTop: 2,
+  },
+  notificationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  notificationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#2563eb",
+    marginTop: 4,
+  },
+  notificationDotCritical: {
+    backgroundColor: "#dc2626",
+  },
+  notificationDotWarning: {
+    backgroundColor: "#d97706",
+  },
+  notificationText: {
+    flex: 1,
+  },
+  notificationTitle: {
+    color: "#0f172a",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  notificationMessage: {
+    color: "#64748b",
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  inlineError: {
+    color: "#be123c",
+    fontSize: 11,
+  },
+  projectProgressHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  progressValue: {
+    color: "#0f172a",
+    fontSize: 26,
+    fontWeight: "900",
+  },
+  progressLabel: {
+    color: "#64748b",
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 1,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#e2e8f0",
+    overflow: "hidden",
     marginTop: 13,
   },
-  sectionHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginTop: 6, marginBottom: 13 },
-  sectionTitle: { color: "#0f172a", fontSize: 20, fontWeight: "900" },
-  sectionSubtitle: { color: "#64748b", fontSize: 13, lineHeight: 18, marginTop: 3 },
-  openButton: { borderRadius: 10, backgroundColor: "#0f172a", paddingHorizontal: 14, paddingVertical: 9 },
-  openButtonText: { color: "#ffffff", fontSize: 12, fontWeight: "800" },
-  disabledButton: { opacity: 0.4 },
-  dashboardLoading: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 18, backgroundColor: "#ffffff", padding: 18, marginBottom: 18 },
-  dashboardLoadingText: { color: "#64748b", fontSize: 13 },
-  progressCard: { flexDirection: "row", alignItems: "center", gap: 16, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 22, backgroundColor: "#ffffff", padding: 18, marginBottom: 14 },
-  progressCircle: { width: 92, height: 92, borderRadius: 46, alignItems: "center", justifyContent: "center", borderWidth: 9, borderColor: "#3b82f6", backgroundColor: "#eff6ff" },
-  progressCircleValue: { color: "#0f172a", fontSize: 21, fontWeight: "900" },
-  progressCircleLabel: { color: "#64748b", fontSize: 10, fontWeight: "700", marginTop: 2 },
-  progressDetails: { flex: 1 },
-  progressTitle: { color: "#0f172a", fontSize: 17, fontWeight: "900" },
-  progressDescription: { color: "#64748b", fontSize: 13, lineHeight: 19, marginTop: 5 },
-  miniProgressTrack: { height: 8, borderRadius: 4, overflow: "hidden", backgroundColor: "#e2e8f0", marginTop: 13 },
-  miniProgressFill: { height: "100%", borderRadius: 4, backgroundColor: "#3b82f6" },
-  metricsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 14 },
-  metricCard: { width: "48%", minHeight: 142, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 18, backgroundColor: "#ffffff", padding: 15 },
-  metricIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#f1f5f9" },
-  metricLabel: { color: "#64748b", fontSize: 12, fontWeight: "700", marginTop: 12 },
-  metricValue: { color: "#0f172a", fontSize: 24, fontWeight: "900", marginTop: 4 },
-  metricDetail: { color: "#94a3b8", fontSize: 11, lineHeight: 16, marginTop: 5 },
-  performanceCard: { borderWidth: 1, borderColor: "#ddd6fe", borderRadius: 20, backgroundColor: "#f5f3ff", padding: 17, marginBottom: 20 },
-  performanceHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
-  performanceTitle: { color: "#5b21b6", fontSize: 16, fontWeight: "900" },
-  performanceGrid: { flexDirection: "row", gap: 8, marginTop: 15 },
-  performanceMetric: { flex: 1, borderRadius: 14, backgroundColor: "#ffffff", padding: 12 },
-  performanceLabel: { color: "#7c3aed", fontSize: 10, fontWeight: "700" },
-  performanceValue: { color: "#4c1d95", fontSize: 19, fontWeight: "900", marginTop: 7 },
-  list: { gap: 10, marginBottom: 18 },
-  towerCard: { borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 18, backgroundColor: "#ffffff", padding: 16 },
-  deliveryCard: { borderWidth: 1, borderColor: "#bbf7d0", borderRadius: 18, backgroundColor: "#f0fdf4", padding: 16 },
-  towerHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
-  towerTitleBlock: { flex: 1 },
-  towerName: { color: "#0f172a", fontSize: 16, fontWeight: "900" },
-  towerMeta: { color: "#64748b", fontSize: 12, marginTop: 4 },
-  towerPercent: { color: "#2563eb", fontSize: 17, fontWeight: "900" },
-  deliveryPercent: { color: "#15803d", fontSize: 17, fontWeight: "900" },
-  towerProgressTrack: { height: 8, borderRadius: 4, overflow: "hidden", backgroundColor: "#e2e8f0", marginTop: 14 },
-  towerProgressFill: { height: "100%", borderRadius: 4, backgroundColor: "#3b82f6" },
-  deliveryProgressTrack: { height: 8, borderRadius: 4, overflow: "hidden", backgroundColor: "#dcfce7", marginTop: 14 },
-  deliveryProgressFill: { height: "100%", borderRadius: 4, backgroundColor: "#22c55e" },
-  emptyCard: { borderWidth: 1, borderStyle: "dashed", borderColor: "#cbd5e1", borderRadius: 18, backgroundColor: "#ffffff", padding: 20, marginBottom: 18 },
-  emptyText: { color: "#64748b", fontSize: 14, textAlign: "center" },
-  errorCard: { borderWidth: 1, borderColor: "#fecaca", borderRadius: 18, backgroundColor: "#fef2f2", padding: 17, marginBottom: 18 },
-  errorTitle: { color: "#991b1b", fontSize: 15, fontWeight: "900" },
-  errorMessage: { color: "#b91c1c", fontSize: 13, lineHeight: 19, marginTop: 5 },
-  statusCard: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#bbf7d0", borderRadius: 18, backgroundColor: "#f0fdf4", padding: 16, marginTop: 10 },
-  statusDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#16a34a", marginRight: 12 },
-  statusContent: { flex: 1 },
-  statusTitle: { color: "#166534", fontSize: 14, fontWeight: "800" },
-  statusText: { color: "#15803d", fontSize: 12, marginTop: 3 },
-  pressed: { opacity: 0.72 },
+  progressFill: {
+    height: "100%",
+    borderRadius: 4,
+    backgroundColor: "#3b82f6",
+  },
+  towerStats: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+    marginTop: 14,
+    paddingTop: 13,
+  },
+  towerStat: {
+    flex: 1,
+    alignItems: "center",
+  },
+  towerStatValue: {
+    fontSize: 19,
+    fontWeight: "900",
+  },
+  towerStatLabel: {
+    color: "#64748b",
+    fontSize: 9,
+    marginTop: 2,
+  },
+  permissionMetrics: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+    marginTop: 13,
+    paddingTop: 13,
+  },
+  smallMetric: {
+    minWidth: "47%",
+    flexGrow: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: "#f8fafc",
+    padding: 10,
+  },
+  smallMetricText: {
+    flex: 1,
+  },
+  smallMetricLabel: {
+    color: "#64748b",
+    fontSize: 8,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  smallMetricValue: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 2,
+  },
+  errorCard: {
+    flexDirection: "row",
+    gap: 9,
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+    borderRadius: 14,
+    backgroundColor: "#fff1f2",
+    padding: 12,
+  },
+  errorCardText: {
+    flex: 1,
+  },
+  errorTitle: {
+    color: "#be123c",
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  errorMessage: {
+    color: "#9f1239",
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  loadingCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 16,
+    backgroundColor: "#ffffff",
+    padding: 14,
+  },
+  loadingCardText: {
+    color: "#64748b",
+    fontSize: 11,
+  },
+  loadingInline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  loadingInlineText: {
+    color: "#64748b",
+    fontSize: 11,
+  },
 });

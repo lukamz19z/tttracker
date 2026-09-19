@@ -5,8 +5,8 @@ export default function MaterialSearch() {
     <MaterialLiveSearch
       kind="all"
       title="Search"
-      subtitle="Fast live search across members, bundles and bolts. Cached matches remain available when offline."
-      placeholder="Member, bundle, drawing, segment, bolt…"
+      subtitle="Choose a tower and material type first, then search the relevant register. Cached matches remain available offline."
+      placeholder="Search selected material register…"
       showKind
     />
   );

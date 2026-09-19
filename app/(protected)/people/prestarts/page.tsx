@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -151,6 +152,7 @@ export default function SitePrestartRegisterPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const apiFetch = useCallback(
     async (url: string, init: RequestInit = {}) => {
@@ -252,6 +254,60 @@ export default function SitePrestartRegisterPage() {
       );
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function deletePrestart(row: RegisterRow) {
+    const completedNote =
+      row.status === "completed"
+        ? "\n\nThe final SharePoint PDF will also be removed when TTTracker can reach it."
+        : "";
+
+    const confirmed = window.confirm(
+      `Delete ${row.prestart_number}?\n\nThis permanently removes the Site Prestart, all discussion revisions and all employee signatures.${completedNote}\n\nThis cannot be undone.`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(row.id);
+    setError("");
+
+    try {
+      const response = await apiFetch(
+        `/api/site-prestarts/${encodeURIComponent(row.id)}`,
+        { method: "DELETE" },
+      );
+
+      const payload = (await response.json()) as {
+        success?: boolean;
+        warning?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Site Prestart could not be deleted.");
+      }
+
+      setRows((current) => current.filter((item) => item.id !== row.id));
+
+      if (selectedId === row.id) {
+        setSelectedId(null);
+        setDetail(null);
+      }
+
+      if (payload.warning) {
+        window.alert(
+          `${row.prestart_number} was deleted from TTTracker.\n\n${payload.warning}`,
+        );
+      }
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Site Prestart could not be deleted.",
+      );
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -387,8 +443,8 @@ export default function SitePrestartRegisterPage() {
               </h1>
 
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-                Read-only website register of site prestarts completed through
-                TTTracker Mobile. Open a record to review discussion revisions,
+                Website register of site prestarts completed through TTTracker Mobile.
+                Open a record to review discussion revisions or remove accidental duplicates,
                 notes, signed employees, breathalyser readings and signatures.
               </p>
             </div>
@@ -559,6 +615,21 @@ export default function SitePrestartRegisterPage() {
                             View
                           </button>
 
+                          <button
+                            type="button"
+                            onClick={() => void deletePrestart(row)}
+                            disabled={deletingId === row.id}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            title={`Delete ${row.prestart_number}`}
+                          >
+                            {deletingId === row.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Trash2 size={14} />
+                            )}
+                            Delete
+                          </button>
+
                           {row.sharepoint_web_url ? (
                             <a
                               href={row.sharepoint_web_url}
@@ -594,16 +665,34 @@ export default function SitePrestartRegisterPage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedId(null);
-                  setDetail(null);
-                }}
-                className="rounded-xl border border-slate-200 p-2 text-slate-600"
-              >
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                {detail?.prestart ? (
+                  <button
+                    type="button"
+                    onClick={() => void deletePrestart(detail.prestart)}
+                    disabled={deletingId === detail.prestart.id}
+                    className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                  >
+                    {deletingId === detail.prestart.id ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={16} />
+                    )}
+                    Delete
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(null);
+                    setDetail(null);
+                  }}
+                  className="rounded-xl border border-slate-200 p-2 text-slate-600"
+                >
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-5">
