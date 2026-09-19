@@ -34,31 +34,31 @@ function cleanSearch(value: string) {
 
 export async function GET(request: NextRequest) {
   try {
-    const { service, identity } =
-      await requireMobilePermission(
-        request,
-        "mobile.rectifications",
-      );
+    const { service, identity } = await requireMobilePermission(
+      request,
+      "mobile.rectifications",
+    );
 
     const projectId =
-      request.nextUrl.searchParams.get("projectId")?.trim() ||
-      "";
+      request.nextUrl.searchParams.get("projectId")?.trim() || "";
     const search = cleanSearch(
       request.nextUrl.searchParams.get("q") ?? "",
     );
     const status =
-      request.nextUrl.searchParams.get("status")?.trim() ||
-      "All";
+      request.nextUrl.searchParams.get("status")?.trim() || "All";
+    const towerId =
+      request.nextUrl.searchParams.get("towerId")?.trim() || "";
+    const memberNumber = cleanSearch(
+      request.nextUrl.searchParams.get("memberNumber") ?? "",
+    );
+    const inspectionStage =
+      request.nextUrl.searchParams.get("inspectionStage")?.trim() || "";
     const offset = Math.max(
       0,
-      Number(
-        request.nextUrl.searchParams.get("offset") ?? 0,
-      ) || 0,
+      Number(request.nextUrl.searchParams.get("offset") ?? 0) || 0,
     );
     const limit = clamp(
-      Number(
-        request.nextUrl.searchParams.get("limit") ?? 25,
-      ) || 25,
+      Number(request.nextUrl.searchParams.get("limit") ?? 25) || 25,
       10,
       50,
     );
@@ -76,6 +76,42 @@ export async function GET(request: NextRequest) {
       projectId,
     );
 
+    let memberRevisionIds: string[] | null = null;
+
+    if (memberNumber) {
+      let memberQuery = service
+        .from("tower_revision_items")
+        .select("revision_id")
+        .eq("project_id", projectId)
+        .eq("member_number", memberNumber);
+
+      if (towerId) {
+        memberQuery = memberQuery.eq("tower_id", towerId);
+      }
+
+      const memberResult = await memberQuery.limit(500);
+      if (memberResult.error) {
+        throw new Error(memberResult.error.message);
+      }
+
+      memberRevisionIds = Array.from(
+        new Set(
+          (memberResult.data ?? [])
+            .map((row) => String(row.revision_id ?? ""))
+            .filter(Boolean),
+        ),
+      );
+
+      if (!memberRevisionIds.length) {
+        return NextResponse.json({
+          projectId,
+          rows: [],
+          nextOffset: null,
+          generatedAt: new Date().toISOString(),
+        });
+      }
+    }
+
     const makeBaseQuery = () => {
       let query = service
         .from("tower_revisions")
@@ -85,100 +121,56 @@ export async function GET(request: NextRequest) {
       if (status && status !== "All") {
         query = query.eq("status", status);
       }
+      if (towerId) {
+        query = query.eq("tower_id", towerId);
+      }
+      if (inspectionStage) {
+        query = query.eq("inspection_stage", inspectionStage);
+      }
+      if (memberRevisionIds) {
+        query = query.in("id", memberRevisionIds);
+      }
 
       return query;
     };
 
-    let matchedRows: Array<Record<string, unknown>> = [];
+    let matchedRows: Record<string, unknown>[] = [];
 
     if (!search) {
       const result = await makeBaseQuery()
         .order("created_at", { ascending: false })
         .range(offset, offset + limit);
 
-      if (result.error) {
-        throw new Error(result.error.message);
-      }
-
-      matchedRows = (result.data ?? []) as Array<
-        Record<string, unknown>
-      >;
+      if (result.error) throw new Error(result.error.message);
+      matchedRows = (result.data ?? []) as Record<string, unknown>[];
     } else {
       const pattern = `%${search}%`;
-
-      const towerResult = await service
-        .from("towers")
-        .select("id,name,line")
-        .eq("project_id", projectId);
-
-      if (towerResult.error) {
-        throw new Error(towerResult.error.message);
-      }
-
-      const lower = search.toLowerCase();
-      const towerIds = (towerResult.data ?? [])
-        .filter((tower) =>
-          [tower.name, tower.line]
-            .map((value) =>
-              String(value ?? "").toLowerCase(),
-            )
-            .some((value) => value.includes(lower)),
-        )
-        .map((tower) => String(tower.id));
-
-      const fieldPromises = SEARCH_FIELDS.map((field) =>
-        makeBaseQuery()
-          .ilike(field, pattern)
-          .order("created_at", { ascending: false })
-          .limit(60),
+      const results = await Promise.all(
+        SEARCH_FIELDS.map((field) =>
+          makeBaseQuery()
+            .ilike(field, pattern)
+            .order("created_at", { ascending: false })
+            .limit(80),
+        ),
       );
 
-      const towerPromise = towerIds.length
-        ? makeBaseQuery()
-            .in("tower_id", towerIds)
-            .order("created_at", { ascending: false })
-            .limit(60)
-        : Promise.resolve({ data: [], error: null });
-
-      const results = await Promise.all([
-        ...fieldPromises,
-        towerPromise,
-      ]);
-
-      const byId = new Map<
-        string,
-        Record<string, unknown>
-      >();
-
+      const byId = new Map<string, Record<string, unknown>>();
       for (const result of results) {
-        if (result.error) {
-          throw new Error(result.error.message);
-        }
-
+        if (result.error) throw new Error(result.error.message);
         for (const row of result.data ?? []) {
-          const id = String(
-            (row as Record<string, unknown>).id ?? "",
-          );
-          if (id) {
-            byId.set(
-              id,
-              row as Record<string, unknown>,
-            );
-          }
+          const record = row as Record<string, unknown>;
+          const id = String(record.id ?? "");
+          if (id) byId.set(id, record);
         }
       }
 
-      matchedRows = Array.from(byId.values()).sort(
-        (a, b) =>
+      matchedRows = Array.from(byId.values())
+        .sort((a, b) =>
           String(b.created_at ?? "").localeCompare(
             String(a.created_at ?? ""),
           ),
-      );
-
-      matchedRows = matchedRows.slice(
-        offset,
-        offset + limit + 1,
-      );
+        )
+        .slice(offset, offset + limit + 1);
     }
 
     const hasMore = matchedRows.length > limit;
@@ -205,17 +197,13 @@ export async function GET(request: NextRequest) {
       for (const row of itemResult.data ?? []) {
         const id = String(row.revision_id ?? "");
         if (!id) continue;
-        itemCounts.set(
-          id,
-          (itemCounts.get(id) ?? 0) + 1,
-        );
+        itemCounts.set(id, (itemCounts.get(id) ?? 0) + 1);
       }
     }
 
     const rows = pageRows.map((row) => ({
       ...row,
-      itemCount:
-        itemCounts.get(String(row.id ?? "")) ?? 0,
+      itemCount: itemCounts.get(String(row.id ?? "")) ?? 0,
     }));
 
     return NextResponse.json({

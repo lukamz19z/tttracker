@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import {
   canManageSitePrestarts,
   clean,
-  requireSitePrestartProjectAccess,
   requireSitePrestartUser,
   sitePrestartApiError,
   SITE_PRESTART_DECLARATION,
@@ -78,6 +77,8 @@ export async function POST(request: Request, context: RouteContext) {
       signatureStrokes?: unknown;
       signatureWidth?: number;
       signatureHeight?: number;
+      signedAt?: string | null;
+      discussionRevisionNo?: number | null;
     };
 
     const employeeId = clean(body.employeeId);
@@ -106,7 +107,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     const { data: prestart, error: prestartError } = await service
       .from("site_prestarts")
-      .select("id,status,current_revision,project_id")
+      .select("id,status,current_revision")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -119,15 +120,27 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    await requireSitePrestartProjectAccess(
-      service,
-      identity.userId,
-      prestart.project_id,
-    );
-
     if (prestart.status !== "draft") {
       return NextResponse.json(
         { error: "This Site Prestart is already completed." },
+        { status: 409 },
+      );
+    }
+
+    const requestedRevisionNo = Number(
+      body.discussionRevisionNo ?? prestart.current_revision,
+    );
+
+    if (
+      !Number.isInteger(requestedRevisionNo) ||
+      requestedRevisionNo < 1 ||
+      requestedRevisionNo !== Number(prestart.current_revision)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The Site Prestart discussion changed while this signature was offline. Refresh the prestart and ask the employee to sign the current revision again.",
+        },
         { status: 409 },
       );
     }
@@ -145,6 +158,24 @@ export async function POST(request: Request, context: RouteContext) {
         { error: "The selected employee is not active." },
         { status: 400 },
       );
+    }
+
+    let signedAt = new Date().toISOString();
+    const requestedSignedAt = clean(body.signedAt);
+    if (requestedSignedAt) {
+      const parsedSignedAt = new Date(requestedSignedAt);
+      const now = Date.now();
+      if (
+        Number.isNaN(parsedSignedAt.getTime()) ||
+        parsedSignedAt.getTime() > now + 5 * 60 * 1000 ||
+        parsedSignedAt.getTime() < now - 30 * 24 * 60 * 60 * 1000
+      ) {
+        return NextResponse.json(
+          { error: "The offline signature timestamp is invalid." },
+          { status: 400 },
+        );
+      }
+      signedAt = parsedSignedAt.toISOString();
     }
 
     let breathalyserReading: number | null = null;
@@ -184,7 +215,7 @@ export async function POST(request: Request, context: RouteContext) {
           signature_strokes: strokes,
           signature_width: 320,
           signature_height: 140,
-          signed_at: new Date().toISOString(),
+          signed_at: signedAt,
         },
         {
           onConflict:
@@ -228,7 +259,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const { data: prestart, error: prestartError } = await service
       .from("site_prestarts")
-      .select("status,project_id")
+      .select("status")
       .eq("id", prestartId)
       .maybeSingle();
 
@@ -240,12 +271,6 @@ export async function DELETE(request: Request, context: RouteContext) {
         { status: 404 },
       );
     }
-
-    await requireSitePrestartProjectAccess(
-      service,
-      identity.userId,
-      prestart.project_id,
-    );
 
     if (prestart.status !== "draft") {
       return NextResponse.json(

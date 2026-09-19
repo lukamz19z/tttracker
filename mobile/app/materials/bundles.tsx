@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
@@ -7,12 +7,11 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
-import { TowerPicker } from "@/components/materials/TowerPicker";
+import { MaterialRegisterFilters } from "@/components/materials/MaterialRegisterFilters";
 import { useMaterials } from "@/contexts/MaterialsContext";
 import {
   cachedBundleMembers,
@@ -77,7 +76,9 @@ export default function Bundles() {
   } = useMaterials();
 
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [towerId, setTowerId] = useState(clean(params.towerId));
+  const [section, setSection] = useState("");
   const [expandedBundleId, setExpandedBundleId] = useState(
     clean(params.bundleId),
   );
@@ -92,7 +93,7 @@ export default function Bundles() {
 
   useEffect(() => {
     setVisibleCount(6);
-  }, [query, towerId]);
+  }, [deferredQuery, section, towerId]);
 
   useEffect(() => {
     const nextTowerId = clean(params.towerId);
@@ -183,24 +184,64 @@ export default function Bundles() {
     if (bundle) void ensureBundleMembers(bundle);
   }, [data?.bundles, ensureBundleMembers, expandedBundleId]);
 
-  const rows = useMemo(() => {
-    const search = query.trim().toLowerCase();
+  const indexedBundles = useMemo(() => {
+    return (data?.bundles ?? []).map((bundle) => {
+      const bundleTowerId = clean(bundle.tower_id);
+      const bundleSection = clean(bundle.section) || "General";
+      const displayTower = towerName(bundle.tower_id);
 
-    return (data?.bundles ?? []).filter((bundle) => {
-      if (towerId && clean(bundle.tower_id) !== towerId) return false;
-      if (!search) return true;
-
-      return [
-        bundle.bundle_no,
-        bundle.section,
-        towerName(bundle.tower_id),
-      ]
-        .map(clean)
-        .join(" ")
-        .toLowerCase()
-        .includes(search);
+      return {
+        bundle,
+        towerId: bundleTowerId,
+        section: bundleSection,
+        search: [bundle.bundle_no, bundleSection, displayTower]
+          .map(clean)
+          .join(" ")
+          .toLowerCase(),
+      };
     });
-  }, [data?.bundles, query, towerId, towerName]);
+  }, [data?.bundles, towerName]);
+
+  const sectionOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const row of indexedBundles) {
+      if (towerId && row.towerId !== towerId) continue;
+      counts.set(row.section, (counts.get(row.section) ?? 0) + 1);
+    }
+
+    const options = Array.from(counts.entries())
+      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(([value, count]) => ({ value, label: value, count }));
+
+    return [
+      {
+        value: "",
+        label: "All Sections",
+        count: Array.from(counts.values()).reduce((sum, count) => sum + count, 0),
+      },
+      ...options,
+    ];
+  }, [indexedBundles, towerId]);
+
+  useEffect(() => {
+    if (!section) return;
+    if (sectionOptions.some((option) => option.value === section)) return;
+    setSection("");
+  }, [section, sectionOptions]);
+
+  const rows = useMemo(() => {
+    const search = deferredQuery.trim().toLowerCase();
+
+    return indexedBundles
+      .filter((row) => {
+        if (towerId && row.towerId !== towerId) return false;
+        if (section && row.section !== section) return false;
+        if (search && !row.search.includes(search)) return false;
+        return true;
+      })
+      .map((row) => row.bundle);
+  }, [deferredQuery, indexedBundles, section, towerId]);
 
   const summary = useMemo(() => {
     let checked = 0;
@@ -295,21 +336,19 @@ export default function Bundles() {
       title="Bundles"
       subtitle="Fast site check-off. Changes save on the phone immediately and sync when a connection is available."
     >
-      <TowerPicker
+      <MaterialRegisterFilters
         towers={data?.towers ?? []}
-        value={towerId}
-        onChange={setTowerId}
+        towerId={towerId}
+        onTowerChange={setTowerId}
         towerName={towerName}
-        label="Tower"
-        allowAll
-      />
-
-      <TextInput
-        style={styles.search}
-        placeholder="Search bundle number or section"
-        value={query}
-        onChangeText={setQuery}
-        autoCapitalize="none"
+        query={query}
+        onQueryChange={setQuery}
+        placeholder="Search bundle number, section or tower"
+        filterLabel="Section"
+        options={sectionOptions}
+        filterValue={section}
+        onFilterChange={setSection}
+        resultCount={rows.length}
       />
 
       <View style={styles.summary}>
@@ -812,15 +851,6 @@ function ActionButton({
 }
 
 const styles = StyleSheet.create({
-  search: {
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    backgroundColor: "#fff",
-    borderRadius: 13,
-    paddingHorizontal: 13,
-    paddingVertical: 12,
-    color: "#0f172a",
-  },
   summary: {
     flexDirection: "row",
     gap: 7,
@@ -997,8 +1027,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   moreButton: {
-    width: 72,
-    minHeight: 38,
+    width: 72,    minHeight: 38,
     borderRadius: 9,
     borderWidth: 1,
     borderColor: "#cbd5e1",

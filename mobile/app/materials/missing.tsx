@@ -1,22 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { MaterialsShell } from "@/components/materials/MaterialsShell";
-import { TowerPicker } from "@/components/materials/TowerPicker";
+  MaterialCard,
+  MaterialsShell,
+} from "@/components/materials/MaterialsShell";
+import { MaterialRegisterFilters } from "@/components/materials/MaterialRegisterFilters";
 import { useMaterials } from "@/contexts/MaterialsContext";
-import type {
-  MaterialEventItemRecord,
-  MaterialEventRecord,
-} from "@/types/materials";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 const numberValue = (value: unknown) => {
@@ -24,527 +14,336 @@ const numberValue = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-type Issue = {
-  issueKey: string;
-  event: MaterialEventRecord;
-  item: MaterialEventItemRecord;
-  originalQty: number;
-  deliveredQty: number;
-  remainingQty: number;
-  status: "open" | "partial" | "resolved";
+const INCLUDED_TYPES = new Set([
+  "missing",
+  "found_received",
+  "excess",
+  "damaged_incorrect",
+]);
+
+function eventLabel(value: unknown) {
+  const type = clean(value);
+  if (type === "missing") return "Missing";
+  if (type === "found_received") return "Found / Received";
+  if (type === "excess") return "Excess";
+  if (type === "damaged_incorrect") return "Damaged / Incorrect";
+  return type.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+
+  return `${String(date.getDate()).padStart(2, "0")}-${String(
+    date.getMonth() + 1,
+  ).padStart(2, "0")}-${date.getFullYear()}`;
+}
+
+type MaterialEventRow = Record<string, unknown>;
+type MaterialItemRow = Record<string, unknown>;
+
+type IndexedIssue = {
+  event: MaterialEventRow;
+  id: string;
+  towerId: string;
+  type: string;
+  section: string;
+  occurredAt: string;
+  items: MaterialItemRow[];
+  search: string;
 };
 
-function displayReference(item: MaterialEventItemRecord) {
+function eventItems(event: MaterialEventRow): MaterialItemRow[] {
+  const nested = event.tower_material_event_items;
+  if (Array.isArray(nested)) return nested as MaterialItemRow[];
+
+  const items = event.items;
+  return Array.isArray(items) ? (items as MaterialItemRow[]) : [];
+}
+
+function itemTitle(item: MaterialItemRow) {
   return (
     clean(item.item_reference) ||
     clean(item.bolt_size) ||
     clean(item.bundle_no) ||
+    clean(item.item_description) ||
     "Material item"
   );
 }
 
 export default function MissingMaterials() {
-  const {
-    data,
-    towerName,
-    busyIssueKey,
-    recordMissingReceipt,
-  } = useMaterials();
+  const { data, towerName } = useMaterials();
 
-  const [filter, setFilter] = useState<"all" | "open" | "partial" | "resolved" | "excess">("all");
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [towerId, setTowerId] = useState("");
-  const [selected, setSelected] = useState<Issue | null>(null);
-  const [quantity, setQuantity] = useState("");
-  const [notes, setNotes] = useState("");
-  const [visibleCount, setVisibleCount] = useState(15);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [visibleCount, setVisibleCount] = useState(16);
 
-  useEffect(() => {
-    setVisibleCount(15);
-  }, [filter, towerId]);
+  const indexed = useMemo<IndexedIssue[]>(() => {
+    const rows = ((data?.materialEvents ?? []) as unknown as MaterialEventRow[])
+      .filter((event) => INCLUDED_TYPES.has(clean(event.event_type)))
+      .map((event, index) => {
+        const items = eventItems(event);
+        const issueTowerId = clean(event.tower_id);
+        const type = clean(event.event_type);
+        const section =
+          clean(event.affected_section) ||
+          clean(event.affected_activity) ||
+          clean(items[0]?.bundle_section) ||
+          "General";
+        const occurredAt = clean(event.occurred_at);
 
-  const issues = useMemo<Issue[]>(() => {
-    const receipts = new Map<string, number>();
+        const itemSearch = items
+          .flatMap((item) => [
+            item.item_reference,
+            item.item_description,
+            item.material_type,
+            item.bolt_size,
+            item.bundle_no,
+            item.bundle_section,
+          ])
+          .map(clean)
+          .join(" ");
 
-    for (const event of data?.materialEvents ?? []) {
-      if (clean(event.event_type) !== "found_received") continue;
-      const items = Array.isArray(event.tower_material_event_items)
-        ? event.tower_material_event_items
-        : [];
-
-      for (const item of items) {
-        const key = clean(item.source_issue_key);
-        if (!key) continue;
-        receipts.set(
-          key,
-          (receipts.get(key) || 0) + Math.max(numberValue(item.quantity), 0),
-        );
-      }
-    }
-
-    const rows: Issue[] = [];
-
-    for (const event of data?.materialEvents ?? []) {
-      if (clean(event.event_type) !== "missing") continue;
-      if (towerId && clean(event.tower_id) !== towerId) continue;
-
-      const items = Array.isArray(event.tower_material_event_items)
-        ? event.tower_material_event_items
-        : [];
-
-      for (const item of items) {
-        const issueKey = clean(item.issue_key);
-        if (!issueKey) continue;
-
-        const originalQty = Math.max(numberValue(item.quantity), 1);
-        const deliveredQty = receipts.get(issueKey) || 0;
-        const remainingQty = Math.max(originalQty - deliveredQty, 0);
-
-        rows.push({
-          issueKey,
+        return {
           event,
-          item,
-          originalQty,
-          deliveredQty,
-          remainingQty,
-          status:
-            remainingQty <= 0
-              ? "resolved"
-              : deliveredQty > 0
-                ? "partial"
-                : "open",
-        });
-      }
-    }
-
-    return rows.sort((a, b) => {
-      const order = { open: 0, partial: 1, resolved: 2 };
-      return (
-        order[a.status] - order[b.status] ||
-        clean(b.event.occurred_at).localeCompare(clean(a.event.occurred_at))
-      );
-    });
-  }, [data?.materialEvents, towerId]);
-
-  const excess = useMemo(
-    () =>
-      (data?.materialEvents ?? []).filter(
-        (event) =>
-          clean(event.event_type) === "excess" &&
-          (!towerId || clean(event.tower_id) === towerId),
-      ),
-    [data?.materialEvents, towerId],
-  );
-
-  const filteredIssues = issues.filter(
-    (row) =>
-      filter === "all" ||
-      filter === "excess" ||
-      row.status === filter,
-  );
-
-  const openCount = issues.filter((row) => row.status === "open").length;
-  const partialCount = issues.filter((row) => row.status === "partial").length;
-  const resolvedCount = issues.filter((row) => row.status === "resolved").length;
-  const remaining = issues.reduce((sum, row) => sum + row.remainingQty, 0);
-
-  async function submitReceipt() {
-    if (!selected) return;
-
-    const qty = Math.max(Number(quantity) || 0, 0);
-
-    if (qty <= 0 || qty > selected.remainingQty) {
-      Alert.alert(
-        "Check quantity",
-        `Enter a received quantity between 1 and ${selected.remainingQty}.`,
-      );
-      return;
-    }
-
-    try {
-      await recordMissingReceipt({
-        issueKey: selected.issueKey,
-        quantity: qty,
-        notes: notes.trim(),
+          id: clean(event.id) || `event-${index}`,
+          towerId: issueTowerId,
+          type,
+          section,
+          occurredAt,
+          items,
+          search: [
+            eventLabel(type),
+            towerName(issueTowerId),
+            section,
+            event.notes,
+            event.current_effect,
+            event.work_outcome,
+            itemSearch,
+          ]
+            .map(clean)
+            .join(" ")
+            .toLowerCase(),
+        };
       });
 
-      setSelected(null);
-      setQuantity("");
-      setNotes("");
-    } catch (error) {
-      Alert.alert(
-        "Receipt could not be saved",
-        error instanceof Error ? error.message : "Please try again.",
+    return rows.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  }, [data?.materialEvents, towerName]);
+
+  const typeOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const row of indexed) {
+      if (towerId && row.towerId !== towerId) continue;
+      counts.set(row.type, (counts.get(row.type) ?? 0) + 1);
+    }
+
+    const preferred = [
+      "missing",
+      "found_received",
+      "excess",
+      "damaged_incorrect",
+    ];
+
+    const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
+
+    return [
+      { value: "", label: "All Issues", count: total },
+      ...preferred
+        .filter((value) => counts.has(value))
+        .map((value) => ({
+          value,
+          label: eventLabel(value),
+          count: counts.get(value) ?? 0,
+        })),
+    ];
+  }, [indexed, towerId]);
+
+  useEffect(() => {
+    setVisibleCount(16);
+  }, [deferredQuery, towerId, typeFilter]);
+
+  useEffect(() => {
+    if (!typeFilter) return;
+    if (typeOptions.some((option) => option.value === typeFilter)) return;
+    setTypeFilter("");
+  }, [typeFilter, typeOptions]);
+
+  const rows = useMemo(() => {
+    const search = deferredQuery.trim().toLowerCase();
+
+    return indexed.filter((row) => {
+      if (towerId && row.towerId !== towerId) return false;
+      if (typeFilter && row.type !== typeFilter) return false;
+      if (search && !row.search.includes(search)) return false;
+      return true;
+    });
+  }, [deferredQuery, indexed, towerId, typeFilter]);
+
+  const totals = useMemo(() => {
+    let items = 0;
+    let quantity = 0;
+
+    for (const row of rows) {
+      items += row.items.length;
+      quantity += row.items.reduce(
+        (sum, item) => sum + Math.max(numberValue(item.quantity) || 1, 0),
+        0,
       );
     }
-  }
+
+    return { events: rows.length, items, quantity };
+  }, [rows]);
 
   return (
     <MaterialsShell
       title="Missing & Excess"
-      subtitle="Outstanding missing items remain open until linked receipt quantities close them out. Crew can record received material here without another Daily Docket."
+      subtitle="Find material issues quickly without loading the whole register onto the screen."
     >
-      <TowerPicker
+      <MaterialRegisterFilters
         towers={data?.towers ?? []}
-        value={towerId}
-        onChange={setTowerId}
+        towerId={towerId}
+        onTowerChange={setTowerId}
         towerName={towerName}
-        label="Tower"
-        allowAll
+        query={query}
+        onQueryChange={setQuery}
+        placeholder="Search member, bundle, section, bolt or notes"
+        filterLabel="Issue Type"
+        options={typeOptions}
+        filterValue={typeFilter}
+        onFilterChange={setTypeFilter}
+        resultCount={rows.length}
       />
 
-      <View style={styles.metrics}>
-        <Metric label="Open" value={openCount} />
-        <Metric label="Part Delivered" value={partialCount} />
-        <Metric label="Resolved" value={resolvedCount} />
-        <Metric label="Qty Remaining" value={remaining} />
+      <View style={styles.summary}>
+        <Summary label="Events" value={totals.events} />
+        <Summary label="Items" value={totals.items} />
+        <Summary label="Qty" value={totals.quantity} />
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filters}
-      >
-        {(["all", "open", "partial", "resolved", "excess"] as const).map((value) => (
-          <Chip
-            key={value}
-            label={
-              value === "partial"
-                ? "Part Delivered"
-                : value[0].toUpperCase() + value.slice(1)
-            }
-            active={filter === value}
-            onPress={() => setFilter(value)}
-          />
-        ))}
-      </ScrollView>
-
-      {filter !== "excess"
-        ? filteredIssues.slice(0, visibleCount).map((row) => (
-            <View key={row.issueKey} style={styles.card}>
-              <View style={styles.rowBetween}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.title}>
-                    {displayReference(row.item)}
-                  </Text>
-                  <Text style={styles.meta}>
-                    {towerName(row.event.tower_id)}
-                    {row.item.bundle_no
-                      ? ` · Bundle ${clean(row.item.bundle_no)}`
-                      : ""}
-                    {row.item.bundle_section
-                      ? ` · ${clean(row.item.bundle_section)}`
-                      : ""}
-                  </Text>
-                  {row.item.item_description ? (
-                    <Text style={styles.meta}>
-                      {clean(row.item.item_description)}
-                    </Text>
-                  ) : null}
-                </View>
-                <View style={styles.status}>
-                  <Text style={styles.statusText}>{row.status}</Text>
-                </View>
-              </View>
-
-              <View style={styles.quantities}>
-                <Qty label="Missing" value={row.originalQty} />
-                <Qty label="Delivered" value={row.deliveredQty} />
-                <Qty label="Remaining" value={row.remainingQty} />
-              </View>
-
-              {row.remainingQty > 0 ? (
-                <Pressable
-                  style={styles.receive}
-                  onPress={() => {
-                    setSelected(row);
-                    setQuantity(String(row.remainingQty));
-                    setNotes("");
-                  }}
-                >
-                  <Text style={styles.receiveText}>
-                    Record Received / Found
-                  </Text>
-                </Pressable>
-              ) : (
-                <View style={styles.resolved}>
-                  <Text style={styles.resolvedText}>Fully resolved</Text>
-                </View>
-              )}
-            </View>
-          ))
-        : excess.slice(0, visibleCount).map((event, index) => {
-            const items = Array.isArray(event.tower_material_event_items)
-              ? event.tower_material_event_items
-              : [];
-
-            return (
-              <View key={clean(event.id) || String(index)} style={styles.card}>
-                <Text style={styles.title}>
-                  Excess material · {towerName(event.tower_id)}
-                </Text>
-                {items.map((item, itemIndex) => (
-                  <Text
-                    key={clean(item.id) || String(itemIndex)}
-                    style={styles.meta}
-                  >
-                    {displayReference(item)} · Qty{" "}
-                    {numberValue(item.quantity) || 1}
-                  </Text>
-                ))}
-              </View>
-            );
-          })}
-
-      {filter !== "excess" && filteredIssues.length > visibleCount ? (
-        <Pressable
-          style={styles.loadMore}
-          onPress={() => setVisibleCount((count) => count + 15)}
-        >
-          <Text style={styles.loadMoreText}>
-            Load 15 more · {filteredIssues.length - visibleCount} remaining
+      {!rows.length ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>No material issues found</Text>
+          <Text style={styles.emptyText}>
+            Change the tower, issue type or search term.
           </Text>
-        </Pressable>
-      ) : null}
-
-      {filter === "excess" && excess.length > visibleCount ? (
-        <Pressable
-          style={styles.loadMore}
-          onPress={() => setVisibleCount((count) => count + 15)}
-        >
-          <Text style={styles.loadMoreText}>
-            Load 15 more · {excess.length - visibleCount} remaining
-          </Text>
-        </Pressable>
-      ) : null}
-
-      <Modal
-        visible={Boolean(selected)}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setSelected(null)}
-      >
-        <View style={styles.modal}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.modalTitle}>Record Material Receipt</Text>
-            <Pressable
-              style={styles.closeButton}
-              onPress={() => setSelected(null)}
-            >
-              <Text style={styles.closeText}>×</Text>
-            </Pressable>
-          </View>
-
-          {selected ? (
-            <>
-              <Text style={styles.title}>
-                {displayReference(selected.item)}
-              </Text>
-              <Text style={styles.meta}>
-                Remaining: {selected.remainingQty}{" "}
-                {clean(selected.item.unit) || "ea"}
-              </Text>
-
-              <Text style={styles.label}>QUANTITY RECEIVED</Text>
-              <TextInput
-                style={styles.input}
-                value={quantity}
-                onChangeText={setQuantity}
-                keyboardType="decimal-pad"
-              />
-
-              <Text style={styles.label}>NOTES</Text>
-              <TextInput
-                style={[styles.input, styles.notes]}
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-                placeholder="Optional receipt note"
-              />
-
-              <Pressable
-                style={styles.receive}
-                disabled={busyIssueKey === selected.issueKey}
-                onPress={() => void submitReceipt()}
-              >
-                {busyIssueKey === selected.issueKey ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : null}
-                <Text style={styles.receiveText}>Save Receipt</Text>
-              </Pressable>
-            </>
-          ) : null}
         </View>
-      </Modal>
+      ) : null}
+
+      {rows.slice(0, visibleCount).map((row) => {
+        const itemSummary = row.items
+          .slice(0, 4)
+          .map((item) => {
+            const qty = numberValue(item.quantity) || 1;
+            return `${itemTitle(item)} × ${qty}`;
+          })
+          .filter(Boolean)
+          .join(", ");
+
+        const extraItems = Math.max(row.items.length - 4, 0);
+        const meta = [
+          itemSummary
+            ? `${itemSummary}${extraItems ? ` +${extraItems} more` : ""}`
+            : clean(row.event.notes) || "No item detail",
+          row.occurredAt ? formatDate(row.occurredAt) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        return (
+          <MaterialCard
+            key={row.id}
+            title={eventLabel(row.type)}
+            subtitle={`${towerName(row.towerId) || "Tower"} · ${row.section}`}
+            meta={meta}
+          />
+        );
+      })}
+
+      {rows.length > visibleCount ? (
+        <Pressable
+          style={styles.loadMore}
+          onPress={() => setVisibleCount((count) => count + 16)}
+        >
+          <Text style={styles.loadMoreText}>
+            Load 16 more · {rows.length - visibleCount} remaining
+          </Text>
+        </Pressable>
+      ) : null}
     </MaterialsShell>
   );
 }
 
-function Chip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
+function Summary({ label, value }: { label: string; value: number }) {
   return (
-    <Pressable
-      style={[styles.chip, active && styles.chipActive]}
-      onPress={onPress}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.metric}>
-      <Text style={styles.metricValue}>{value}</Text>
-      <Text style={styles.metricLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function Qty({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.qty}>
-      <Text style={styles.qtyValue}>{value}</Text>
-      <Text style={styles.qtyLabel}>{label}</Text>
+    <View style={styles.summaryCard}>
+      <Text style={styles.summaryValue}>{value}</Text>
+      <Text style={styles.summaryLabel}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  filters: { flexDirection: "row", gap: 6, paddingRight: 12 },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 999,
-    backgroundColor: "#fff",
-  },
-  chipActive: { backgroundColor: "#dbeafe", borderColor: "#60a5fa" },
-  chipText: { fontSize: 10, fontWeight: "800", color: "#475569" },
-  chipTextActive: { color: "#1d4ed8" },
-  metrics: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  metric: {
-    minWidth: "47%",
-    flex: 1,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 13,
-    padding: 12,
-  },
-  metricValue: { fontSize: 20, fontWeight: "900", color: "#0f172a" },
-  metricLabel: { fontSize: 9, fontWeight: "800", color: "#64748b" },
-  card: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 15,
-    padding: 14,
-    gap: 11,
-  },
-  rowBetween: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 10,
-  },
-  title: { fontWeight: "900", color: "#0f172a" },
-  meta: { marginTop: 3, fontSize: 11, color: "#64748b" },
-  status: {
-    backgroundColor: "#f1f5f9",
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-  },
-  statusText: {
-    fontSize: 9,
-    fontWeight: "900",
-    color: "#334155",
-    textTransform: "uppercase",
-  },
-  quantities: { flexDirection: "row", gap: 7 },
-  qty: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-    borderRadius: 10,
-    padding: 9,
-  },
-  qtyValue: { fontSize: 17, fontWeight: "900", color: "#0f172a" },
-  qtyLabel: {
-    fontSize: 8,
-    fontWeight: "800",
-    color: "#64748b",
-    textTransform: "uppercase",
-  },
-  receive: {
-    minHeight: 44,
-    borderRadius: 11,
-    backgroundColor: "#16a34a",
+  summary: {
     flexDirection: "row",
     gap: 7,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
   },
-  receiveText: { color: "#fff", fontWeight: "900" },
+  summaryCard: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  summaryValue: {
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  summaryLabel: {
+    marginTop: 1,
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  empty: {
+    alignItems: "center",
+    paddingVertical: 28,
+  },
+  emptyTitle: {
+    color: "#334155",
+    fontWeight: "900",
+  },
+  emptyText: {
+    marginTop: 3,
+    color: "#94a3b8",
+    fontSize: 12,
+    textAlign: "center",
+  },
   loadMore: {
-    minHeight: 43,
+    minHeight: 44,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: "#94a3b8",
     backgroundColor: "#fff",
-    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
   },
   loadMoreText: {
     color: "#334155",
+    fontWeight: "900",
     fontSize: 11,
-    fontWeight: "900",
   },
-  resolved: {
-    minHeight: 42,
-    borderRadius: 11,
-    backgroundColor: "#dcfce7",
-    flexDirection: "row",
-    gap: 7,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  resolvedText: { color: "#166534", fontWeight: "900" },
-  modal: { flex: 1, backgroundColor: "#f8fafc", padding: 18, gap: 12 },
-  modalTitle: { fontSize: 22, fontWeight: "900", color: "#0f172a" },
-  closeButton: {
-    width: 34,
-    height: 34,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  closeText: {
-    fontSize: 28,
-    lineHeight: 30,
-    color: "#475569",
-  },
-  label: {
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-    color: "#64748b",
-  },
-  input: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 12,
-    padding: 12,
-  },
-  notes: { minHeight: 90, textAlignVertical: "top" },
 });

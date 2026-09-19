@@ -42,9 +42,6 @@ type Tower = {
   line: string | null;
   status: string | null;
   progress: number | null;
-  tower_number: string | null;
-  structure_number: string | null;
-  tower_no: string | null;
   extra_data: Record<string, unknown> | null;
 };
 
@@ -73,15 +70,11 @@ type DeliveryRow = {
 type DeliveryItemRow = {
   delivery_id: string | null;
   qty_delivered?: number | null;
-  quantity_delivered?: number | null;
-  delivered_qty?: number | null;
-  qty?: number | null;
 };
 
 type MaterialBundleRow = {
   tower_id: string | null;
   qty_required?: number | null;
-  required_qty?: number | null;
 };
 
 type TowerSummary = Tower & {
@@ -237,11 +230,13 @@ function getTowerWeight(extraData?: Record<string, unknown> | null) {
 }
 
 function getTowerDisplayName(tower: Tower) {
+  const extra = tower.extra_data ?? {};
+
   return (
-    tower.tower_number ||
-    tower.structure_number ||
-    tower.tower_no ||
-    tower.name ||
+    safeString(tower.name).trim() ||
+    safeString(extra["tower_number"]).trim() ||
+    safeString(extra["structure_number"]).trim() ||
+    safeString(extra["tower_no"]).trim() ||
     "Unnamed Tower"
   );
 }
@@ -260,11 +255,13 @@ function getTowerType(tower: Tower) {
     }
   }
 
+  const extra = tower.extra_data ?? {};
   const text = [
     getTowerDisplayName(tower),
     tower.name,
-    tower.structure_number,
-    tower.tower_number,
+    extra["structure_number"],
+    extra["tower_number"],
+    extra["tower_no"],
   ]
     .filter(Boolean)
     .join(" ")
@@ -296,16 +293,11 @@ function getTowerProgress(tower: Tower, dockets: DocketRow[]) {
 }
 
 function getDeliveredQty(row: DeliveryItemRow) {
-  return safeNumber(
-    row.qty_delivered ??
-      row.quantity_delivered ??
-      row.delivered_qty ??
-      row.qty,
-  );
+  return safeNumber(row.qty_delivered);
 }
 
 function getRequiredQty(row: MaterialBundleRow) {
-  return safeNumber(row.qty_required ?? row.required_qty);
+  return safeNumber(row.qty_required);
 }
 
 function formatNumber(value: number | null, decimals = 0) {
@@ -458,7 +450,7 @@ export default function HomeScreen() {
       const [towersResult, docketsResult] = await Promise.all([
         supabase
           .from("towers")
-          .select("id,project_id,name,line,status,progress,tower_number,structure_number,tower_no,extra_data")
+          .select("id,project_id,name,line,status,progress,extra_data")
           .eq("project_id", projectId),
 
         supabase
@@ -487,7 +479,7 @@ export default function HomeScreen() {
             .in("tower_id", towerIds),
           supabase
             .from("tower_required_bundles")
-            .select("tower_id,qty_required,required_qty")
+            .select("tower_id,qty_required")
             .in("tower_id", towerIds),
         ]);
 
@@ -529,7 +521,7 @@ export default function HomeScreen() {
           ]) {
             const { data, error } = await supabase
               .from(table)
-              .select("delivery_id,qty_delivered,quantity_delivered,delivered_qty,qty")
+              .select("delivery_id,qty_delivered")
               .in("delivery_id", deliveryIds);
 
             if (!error && data) {
