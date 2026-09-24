@@ -110,7 +110,7 @@ export async function POST(request: Request) {
 
     // Keep Graph traffic controlled. Folder sync can involve rename + document
     // metadata/link refresh, so use smaller groups than simple provisioning.
-    for (const group of chunks(employees, 3)) {
+    for (const group of chunks(employees, 2)) {
       const results = await Promise.all(
         group.map(async (employee) => {
           try {
