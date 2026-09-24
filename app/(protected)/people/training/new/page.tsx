@@ -112,8 +112,6 @@ function canManageOtherEmployees(role: string) {
     "hseq",
     "safety",
     "safety_officer",
-    "training_officer",
-    "training_admin",
   ].includes(normaliseRole(role));
 }
 
@@ -175,6 +173,9 @@ export default function AddTrainingRecordPage() {
   const [singleFile, setSingleFile] = useState<File | null>(null);
   const [frontFile, setFrontFile] = useState<File | null>(null);
   const [backFile, setBackFile] = useState<File | null>(null);
+  const [flexibleEvidenceMode, setFlexibleEvidenceMode] = useState<
+    "single" | "front_back"
+  >("single");
 
   const [existingRecords, setExistingRecords] = useState<ExistingRecord[]>([]);
   const [replaceChoice, setReplaceChoice] = useState<"replace" | "add" | null>(null);
@@ -346,6 +347,7 @@ export default function AddTrainingRecordPage() {
     setSingleFile(null);
     setFrontFile(null);
     setBackFile(null);
+    setFlexibleEvidenceMode("single");
     setExistingRecords([]);
     setReplaceChoice(null);
     setReplaceRecordId("");
@@ -462,7 +464,19 @@ export default function AddTrainingRecordPage() {
 
     if (selectedType.requires_document) {
       if (selectedType.document_upload_type === "front_back") {
-        if (!frontFile || !backFile) return "Upload both the front and back files.";
+        if (!frontFile || !backFile) {
+          return "Upload both the front and back files.";
+        }
+      } else if (
+        selectedType.document_upload_type === "single_or_front_back"
+      ) {
+        if (flexibleEvidenceMode === "front_back") {
+          if (!frontFile || !backFile) {
+            return "Upload both the front and back files.";
+          }
+        } else if (!singleFile) {
+          return "Upload the complete certificate / licence evidence.";
+        }
       } else if (!singleFile) {
         return "Upload the required certificate / licence evidence.";
       }
@@ -517,7 +531,9 @@ export default function AddTrainingRecordPage() {
       );
       form.set(
         "documentUploadType",
-        selectedType.document_upload_type || "single",
+        selectedType.document_upload_type === "single_or_front_back"
+          ? flexibleEvidenceMode
+          : selectedType.document_upload_type || "single",
       );
       form.set("replacementMode", replaceChoice ?? "none");
       form.set("supersedesRecordId", replaceRecordId);
@@ -844,23 +860,126 @@ export default function AddTrainingRecordPage() {
             ) : null}
 
             {selectedType?.requires_document ? (
-              <Card title="4. Evidence" description="The file is held in TTTracker staging until review, then published to SharePoint after approval.">
-                {selectedType.document_upload_type === "front_back" ? (
+              <Card
+                title="4. Evidence"
+                description="The file is held in TTTracker staging until review, then published to SharePoint after approval."
+              >
+                {selectedType.document_upload_type === "single_or_front_back" ? (
+                  <>
+                    <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlexibleEvidenceMode("single");
+                          setFrontFile(null);
+                          setBackFile(null);
+                        }}
+                        className={`rounded-2xl border p-4 text-left transition ${
+                          flexibleEvidenceMode === "single"
+                            ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="font-black text-slate-900">
+                          Single document
+                        </div>
+                        <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                          Use for a Statement of Attainment, certificate or
+                          complete multi-page PDF.
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlexibleEvidenceMode("front_back");
+                          setSingleFile(null);
+                        }}
+                        className={`rounded-2xl border p-4 text-left transition ${
+                          flexibleEvidenceMode === "front_back"
+                            ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="font-black text-slate-900">
+                          Front + Back
+                        </div>
+                        <div className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                          Use for a two-sided licence, ticket or card such as a
+                          Gold Card.
+                        </div>
+                      </button>
+                    </div>
+
+                    {flexibleEvidenceMode === "front_back" ? (
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label="Front" required>
+                          <input
+                            type="file"
+                            className={fileInputClass}
+                            onChange={(event) =>
+                              setFrontFile(event.target.files?.[0] ?? null)
+                            }
+                          />
+                        </Field>
+                        <Field label="Back" required>
+                          <input
+                            type="file"
+                            className={fileInputClass}
+                            onChange={(event) =>
+                              setBackFile(event.target.files?.[0] ?? null)
+                            }
+                          />
+                        </Field>
+                      </div>
+                    ) : (
+                      <Field label="Certificate / Licence / Evidence" required>
+                        <input
+                          type="file"
+                          className={fileInputClass}
+                          onChange={(event) =>
+                            setSingleFile(event.target.files?.[0] ?? null)
+                          }
+                        />
+                      </Field>
+                    )}
+                  </>
+                ) : selectedType.document_upload_type === "front_back" ? (
                   <div className="grid gap-4 md:grid-cols-2">
                     <Field label="Front" required>
-                      <input type="file" className={fileInputClass} onChange={(event) => setFrontFile(event.target.files?.[0] ?? null)} />
+                      <input
+                        type="file"
+                        className={fileInputClass}
+                        onChange={(event) =>
+                          setFrontFile(event.target.files?.[0] ?? null)
+                        }
+                      />
                     </Field>
                     <Field label="Back" required>
-                      <input type="file" className={fileInputClass} onChange={(event) => setBackFile(event.target.files?.[0] ?? null)} />
+                      <input
+                        type="file"
+                        className={fileInputClass}
+                        onChange={(event) =>
+                          setBackFile(event.target.files?.[0] ?? null)
+                        }
+                      />
                     </Field>
                   </div>
                 ) : (
                   <Field label="Certificate / Licence / Evidence" required>
-                    <input type="file" className={fileInputClass} onChange={(event) => setSingleFile(event.target.files?.[0] ?? null)} />
+                    <input
+                      type="file"
+                      className={fileInputClass}
+                      onChange={(event) =>
+                        setSingleFile(event.target.files?.[0] ?? null)
+                      }
+                    />
                   </Field>
                 )}
+
                 <div className="mt-3 text-xs font-semibold leading-5 text-slate-500">
-                  Final filenames are generated server-side from your configured Training filename rules.
+                  Final filenames are generated server-side from your configured
+                  Training filename rules.
                 </div>
               </Card>
             ) : null}

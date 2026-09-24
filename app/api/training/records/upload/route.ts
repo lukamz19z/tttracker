@@ -6,9 +6,14 @@ import {
   assertCanSubmitForEmployee,
   requireTrainingUser,
   reviewerRecipientsFor,
+  roleCanManageTraining,
   trainingApiError,
 } from "@/lib/training/server";
-import { ensureEmployeeBaseTrainingFolder, publishApprovedTrainingRecord } from "@/lib/training/sharepoint";
+import {
+  archiveSupersededTrainingRecord,
+  ensureEmployeeBaseTrainingFolder,
+  publishApprovedTrainingRecord,
+} from "@/lib/training/sharepoint";
 import { createTrainingNotifications } from "@/lib/training/notifications";
 
 export const runtime = "nodejs";
@@ -179,6 +184,8 @@ async function reviewerFallbackIds(
         "hseq",
         "safety",
         "safety_officer",
+        "training_officer",
+        "training_admin",
       ].includes(clean(row.role).toLowerCase()),
     )
     .map((row) => clean(row.user_id))
@@ -466,20 +473,117 @@ export async function POST(request: Request) {
       });
     }
 
-    const uploadType =
-      clean(form.get("documentUploadType")) ||
+    const configuredUploadType =
       clean(trainingType.document_upload_type) ||
       (trainingType.requires_document ? "single" : "none");
 
-    if (trainingType.requires_document) {
-      if (uploadType === "front_back" && actualFiles.length < 2) {
-        return NextResponse.json(
-          { error: "Upload both the front and back document files." },
-          { status: 400 },
-        );
-      }
+    const requestedUploadType = clean(form.get("documentUploadType"));
 
-      if (uploadType !== "front_back" && actualFiles.length < 1) {
+    const hasSingle =
+      singleFile instanceof File && singleFile.size > 0;
+    const hasFront =
+      frontFile instanceof File && frontFile.size > 0;
+    const hasBack =
+      backFile instanceof File && backFile.size > 0;
+
+    let uploadType =
+      requestedUploadType ||
+      configuredUploadType;
+
+    /*
+     * Flexible Training Types can accept either:
+     *   - one complete document; or
+     *   - a matching front + back pair.
+     *
+     * Older/mobile clients may send the configured value
+     * "single_or_front_back" rather than the selected evidence mode.
+     * In that case infer the actual mode from the files supplied.
+     */
+    if (
+      configuredUploadType === "single_or_front_back" &&
+      (!requestedUploadType ||
+        requestedUploadType === "single_or_front_back")
+    ) {
+      uploadType =
+        hasFront || hasBack
+          ? "front_back"
+          : "single";
+    }
+
+    if (trainingType.requires_document) {
+      if (configuredUploadType === "single") {
+        if (uploadType !== "single") {
+          return NextResponse.json(
+            {
+              error:
+                "This Training Type requires a single document upload.",
+            },
+            { status: 400 },
+          );
+        }
+
+        if (!hasSingle || hasFront || hasBack) {
+          return NextResponse.json(
+            {
+              error:
+                "Upload one complete training document.",
+            },
+            { status: 400 },
+          );
+        }
+      } else if (configuredUploadType === "front_back") {
+        if (uploadType !== "front_back") {
+          return NextResponse.json(
+            {
+              error:
+                "This Training Type requires separate front and back evidence.",
+            },
+            { status: 400 },
+          );
+        }
+
+        if (!hasFront || !hasBack || hasSingle) {
+          return NextResponse.json(
+            {
+              error:
+                "Upload both the front and back document files.",
+            },
+            { status: 400 },
+          );
+        }
+      } else if (configuredUploadType === "single_or_front_back") {
+        if (uploadType !== "single" && uploadType !== "front_back") {
+          return NextResponse.json(
+            {
+              error:
+                "Choose either a single complete document or separate front and back evidence.",
+            },
+            { status: 400 },
+          );
+        }
+
+        if (uploadType === "single") {
+          if (!hasSingle || hasFront || hasBack) {
+            return NextResponse.json(
+              {
+                error:
+                  "For single-document evidence, upload one complete document only.",
+              },
+              { status: 400 },
+            );
+          }
+        } else {
+          if (!hasFront || !hasBack || hasSingle) {
+            return NextResponse.json(
+              {
+                error:
+                  "For front/back evidence, upload both the front and back files and do not also upload a single document.",
+              },
+              { status: 400 },
+            );
+          }
+        }
+      } else if (actualFiles.length < 1) {
         return NextResponse.json(
           { error: "Upload the required training document." },
           { status: 400 },
@@ -531,7 +635,14 @@ export async function POST(request: Request) {
       employee,
     });
 
-    const requiresReview = trainingType.requires_review !== false;
+    const autoApproveAuthorisedUpload =
+      Boolean(settings?.auto_approve_authorised_uploads) &&
+      roleCanManageTraining(identity.role);
+
+    const requiresReview =
+      trainingType.requires_review !== false &&
+      !autoApproveAuthorisedUpload;
+
     const workflowStatus = requiresReview ? "pending_review" : "approved";
     const submittedAt = new Date().toISOString();
 
@@ -629,8 +740,25 @@ export async function POST(request: Request) {
     }
 
     if (!requiresReview) {
+      // Publish the new evidence first. The existing approved record is not
+      // superseded until the replacement has safely reached SharePoint.
+      if (actualFiles.length > 0) {
+        await publishApprovedTrainingRecord({
+          service,
+          recordId: record.id,
+        });
+      }
+
       if (supersedesRecordId) {
         const supersededAt = new Date().toISOString();
+
+        // The new evidence is already safely in SharePoint at this point.
+        // Move the old published evidence into the employee Superseded folder
+        // before the database marks that record as superseded.
+        await archiveSupersededTrainingRecord({
+          service,
+          recordId: supersedesRecordId,
+        });
 
         const { error: supersedeError } = await service
           .from("employee_training_records")
@@ -646,64 +774,44 @@ export async function POST(request: Request) {
         if (supersedeError) throw new Error(supersedeError.message);
       }
 
-      if (actualFiles.length > 0) {
-        await publishApprovedTrainingRecord({
-          service,
-          recordId: record.id,
-        });
-      }
-
       let notificationWarning: string | null = null;
-      let approvalChannels = {
-        inApp: 0,
-        pushAttempted: 0,
-        emailSent: 0,
-      };
 
-      const outcomeUserIds = Array.from(
-        new Set(
-          [
-            clean(employee.user_id),
-            clean(identity.userId),
-          ].filter(Boolean),
-        ),
-      );
+      let emailSent = 0;
 
-      try {
-        const result = await createTrainingNotifications({
-          service,
-          userIds: outcomeUserIds,
-          inAppUserIds: outcomeUserIds,
-          pushUserIds: outcomeUserIds,
-          emailUserIds: outcomeUserIds,
-          emailAddresses: identity.email ? [identity.email] : [],
-          emailSubject: `Training approved - ${trainingType.name}`,
-          eventType: "training_record_approved",
-          title: "Training record approved",
-          message: `${trainingType.name} was approved and added to the TTTracker Training register.`,
-          severity: "success",
-          actionRoute: "/profile",
-          actionParams: { training_record_id: record.id },
-          sourceRecordId: record.id,
-        });
+      if (employee.user_id && employee.user_id !== identity.userId) {
+        try {
+          const notificationResult =
+            await createTrainingNotifications({
+              service,
+              userIds: [employee.user_id],
+              inAppUserIds: [employee.user_id],
+              pushUserIds: [employee.user_id],
+              emailUserIds: [employee.user_id],
+              emailSubject: `Training approved - ${trainingType.name}`,
+              eventType: "training_record_approved",
+              title: "Training record approved",
+              message: `${trainingType.name} was added to your TTTracker Training profile.`,
+              severity: "success",
+              actionRoute: "/profile",
+              actionParams: { training_record_id: record.id },
+              sourceRecordId: record.id,
+            });
 
-        approvalChannels = {
-          inApp: Number(result.inApp ?? 0),
-          pushAttempted: Number(result.pushAttempted ?? 0),
-          emailSent: Number(result.emailSent ?? 0),
-        };
-      } catch (error) {
-        console.error("Approved Training notification failed", error);
-        notificationWarning =
-          "The Training record was approved, but the employee/submitter notification could not be sent.";
+          emailSent = Number(notificationResult.emailSent ?? 0);
+        } catch (error) {
+          console.error("Approved Training notification failed", error);
+          notificationWarning =
+            "The Training record was approved, but the employee notification could not be sent.";
+        }
       }
 
       return NextResponse.json({
         success: true,
         recordId: record.id,
         workflowStatus: "approved",
+        autoApproved: autoApproveAuthorisedUpload,
+        emailSent,
         notificationWarning,
-        channels: approvalChannels,
       });
     }
 
@@ -719,37 +827,40 @@ export async function POST(request: Request) {
         userId,
         receivesInApp: true,
         receivesPush: true,
-        receivesEmail: true,
+        receivesEmail: false,
       }));
     }
 
-    // Do not automatically remove the submitting user from the reviewer list.
-    // If that user is explicitly configured as a Training reviewer (or belongs
-    // to a configured reviewer role), they should receive the review task.
-    const reviewerIds = reviewerRecipients.map(
+    // Keep the full reviewer list for permissions and queue access, but do not
+    // notify the person who just submitted the record. A Training Officer who
+    // uploads evidence they are authorised to review does not need an email,
+    // push and in-app notification telling them about their own upload.
+    const notificationRecipients = reviewerRecipients.filter(
+      (recipient) => recipient.userId !== identity.userId,
+    );
+
+    const reviewerIds = notificationRecipients.map(
       (recipient) => recipient.userId,
     );
-    const reviewerInAppIds = reviewerRecipients
+    const reviewerInAppIds = notificationRecipients
       .filter((recipient) => recipient.receivesInApp)
       .map((recipient) => recipient.userId);
-    const reviewerPushIds = reviewerRecipients
+    const reviewerPushIds = notificationRecipients
       .filter((recipient) => recipient.receivesPush)
       .map((recipient) => recipient.userId);
-    const reviewerEmailIds = reviewerRecipients
+    const reviewerEmailIds = notificationRecipients
       .filter((recipient) => recipient.receivesEmail)
       .map((recipient) => recipient.userId);
 
     let notificationWarning: string | null = null;
     let reviewersNotified = 0;
-    let reviewerChannels = {
-      inApp: 0,
-      pushAttempted: 0,
-      emailSent: 0,
-    };
 
-    if (reviewerIds.length > 0) {
+    if (reviewerRecipients.length === 0) {
+      notificationWarning =
+        "No reviewer is configured for this Training record. It remains safely in the Verification Queue.";
+    } else if (reviewerIds.length > 0) {
       try {
-        const result = await createTrainingNotifications({
+        await createTrainingNotifications({
           service,
           userIds: reviewerIds,
           inAppUserIds: reviewerInAppIds,
@@ -767,30 +878,21 @@ export async function POST(request: Request) {
           },
           sourceRecordId: record.id,
         });
-
-        reviewerChannels = {
-          inApp: Number(result.inApp ?? 0),
-          pushAttempted: Number(result.pushAttempted ?? 0),
-          emailSent: Number(result.emailSent ?? 0),
-        };
-
         reviewersNotified = reviewerIds.length;
       } catch (error) {
         console.error("Training review notification failed", error);
         notificationWarning =
           "The Training record is safely in the Verification Queue, but reviewer notification could not be sent.";
       }
-    } else {
-      notificationWarning =
-        "No reviewer is configured for this Training record. It remains safely in the Verification Queue.";
     }
+    // If the only matching reviewer is the submitter, the record remains in the
+    // queue and no self-notification is sent. That is expected behaviour.
 
     return NextResponse.json({
       success: true,
       recordId: record.id,
       workflowStatus: "pending_review",
       reviewersNotified,
-      channels: reviewerChannels,
       notificationWarning,
     });
   } catch (error) {

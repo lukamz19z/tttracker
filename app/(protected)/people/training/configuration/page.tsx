@@ -38,7 +38,11 @@ type Category = {
   active: boolean;
 };
 
-type DocumentUploadType = "none" | "single" | "front_back";
+type DocumentUploadType =
+  | "none"
+  | "single"
+  | "front_back"
+  | "single_or_front_back";
 
 type RecordType = {
   id: string;
@@ -125,7 +129,7 @@ function buildFilenamePreview(recordType: RecordType): string[] {
       .filter(Boolean);
 
     const extension =
-      recordType.document_upload_type === "front_back" ? "jpg" : "pdf";
+      side === "FRONT" || side === "BACK" ? "jpg" : "pdf";
 
     return `${parts.join("_") || "EMP000001_EMPLOYEE_NAME_RECORD_CODE"}.${extension}`;
   };
@@ -134,6 +138,14 @@ function buildFilenamePreview(recordType: RecordType): string[] {
 
   if (recordType.document_upload_type === "front_back") {
     return [build("FRONT"), build("BACK")];
+  }
+
+  if (recordType.document_upload_type === "single_or_front_back") {
+    return [
+      `${build("")} (single-document option)`,
+      `${build("FRONT")} (front/back option)`,
+      `${build("BACK")} (front/back option)`,
+    ];
   }
 
   return [build("")];
@@ -148,7 +160,8 @@ function filenameComponentsFor(recordType: RecordType): string[] {
     recordType.requires_project ? "project_code" : null,
     recordType.filename_date_field === "issue_date" ? "issue_date" : null,
     recordType.filename_date_field === "expiry_date" ? "expiry_date" : null,
-    recordType.document_upload_type === "front_back"
+    recordType.document_upload_type === "front_back" ||
+    recordType.document_upload_type === "single_or_front_back"
       ? "document_side"
       : null,
   ].filter((item): item is string => Boolean(item));
@@ -1333,12 +1346,19 @@ export default function TrainingConfigurationPage() {
                       value: "front_back",
                       label: "Front and back documents",
                     },
+                    {
+                      value: "single_or_front_back",
+                      label: "Single document OR front + back",
+                    },
                   ]}
                 />
                 <p className="mt-2 text-xs leading-5 text-slate-500">
                   Single document accepts one original file, including a
-                  multi-page PDF. Front and back requires two separate files and
-                  adds FRONT and BACK to their SharePoint filenames.
+                  multi-page PDF. Front and back requires two separate files.
+                  Single document OR front + back lets the uploader choose either
+                  one complete document (for example, a Statement of Attainment)
+                  or separate FRONT and BACK files (for example, a two-sided
+                  licence or card).
                 </p>
               </div>
               <Toggle
@@ -1598,9 +1618,11 @@ function TypesTable({
               item.requires_project ? "Project" : null,
               item.document_upload_type === "front_back"
                 ? "Front + back"
-                : item.document_upload_type === "single"
-                  ? "Single document"
-                  : "No document",
+                : item.document_upload_type === "single_or_front_back"
+                  ? "Single OR front + back"
+                  : item.document_upload_type === "single"
+                    ? "Single document"
+                    : "No document",
             ].filter(Boolean);
 
             return (

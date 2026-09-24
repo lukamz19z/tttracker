@@ -76,6 +76,7 @@ type CustomField = {
 
 type PersonDraft = {
   certificateNumber: string;
+  evidenceMode: "single" | "front_back";
   file: File | null;
   frontFile: File | null;
   backFile: File | null;
@@ -325,6 +326,20 @@ export default function TrainingBulkUploadPage() {
   useEffect(() => {
     setSelectedOptionIds([]);
     setMetadata({});
+    setDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([employeeId, draft]) => [
+          employeeId,
+          {
+            ...draft,
+            evidenceMode: "single",
+            file: null,
+            frontFile: null,
+            backFile: null,
+          },
+        ]),
+      ),
+    );
   }, [selectedTypeId]);
 
   const filteredEmployees = useMemo(() => {
@@ -364,6 +379,7 @@ export default function TrainingBulkUploadPage() {
           ...draftCurrent,
           [employeeId]: draftCurrent[employeeId] ?? {
             certificateNumber: "",
+            evidenceMode: "single",
             file: null,
             frontFile: null,
             backFile: null,
@@ -389,6 +405,7 @@ export default function TrainingBulkUploadPage() {
           }
         : {
             certificateNumber: "",
+            evidenceMode: "single",
             file: null,
             frontFile: null,
             backFile: null,
@@ -470,6 +487,20 @@ export default function TrainingBulkUploadPage() {
         if (selectedType.document_upload_type === "front_back") {
           if (!draft.frontFile || !draft.backFile) {
             return `Upload front and back evidence for ${
+              employee?.full_name ?? "each selected employee"
+            }.`;
+          }
+        } else if (
+          selectedType.document_upload_type === "single_or_front_back"
+        ) {
+          if (draft.evidenceMode === "front_back") {
+            if (!draft.frontFile || !draft.backFile) {
+              return `Upload front and back evidence for ${
+                employee?.full_name ?? "each selected employee"
+              }.`;
+            }
+          } else if (!draft.file) {
+            return `Upload one complete document for ${
               employee?.full_name ?? "each selected employee"
             }.`;
           }
@@ -560,7 +591,9 @@ export default function TrainingBulkUploadPage() {
           form.set("metadata", JSON.stringify(metadata));
           form.set(
             "documentUploadType",
-            selectedType.document_upload_type || "single",
+            selectedType.document_upload_type === "single_or_front_back"
+              ? draft?.evidenceMode || "single"
+              : selectedType.document_upload_type || "single",
           );
           form.set("replacementMode", "none");
           form.set("batchId", batch.id);
@@ -945,6 +978,7 @@ export default function TrainingBulkUploadPage() {
                     const draft =
                       drafts[employee.id] ?? {
                         certificateNumber: "",
+                        evidenceMode: "single",
                         file: null,
                         frontFile: null,
                         backFile: null,
@@ -996,7 +1030,104 @@ export default function TrainingBulkUploadPage() {
 
                           {selectedType?.requires_document &&
                           selectedType.document_upload_type ===
-                            "front_back" ? (
+                            "single_or_front_back" ? (
+                            <div className="md:col-span-2">
+                              <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateDraft(employee.id, {
+                                      evidenceMode: "single",
+                                      frontFile: null,
+                                      backFile: null,
+                                    })
+                                  }
+                                  className={`rounded-xl border p-3 text-left ${
+                                    draft.evidenceMode === "single"
+                                      ? "border-blue-500 bg-blue-50"
+                                      : "border-slate-200 bg-white"
+                                  }`}
+                                >
+                                  <div className="text-sm font-black text-slate-900">
+                                    Single document
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    Statement of Attainment, certificate or
+                                    complete PDF.
+                                  </div>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateDraft(employee.id, {
+                                      evidenceMode: "front_back",
+                                      file: null,
+                                    })
+                                  }
+                                  className={`rounded-xl border p-3 text-left ${
+                                    draft.evidenceMode === "front_back"
+                                      ? "border-blue-500 bg-blue-50"
+                                      : "border-slate-200 bg-white"
+                                  }`}
+                                >
+                                  <div className="text-sm font-black text-slate-900">
+                                    Front + Back
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    Two-sided licence, ticket or card.
+                                  </div>
+                                </button>
+                              </div>
+
+                              {draft.evidenceMode === "front_back" ? (
+                                <div className="grid gap-4 md:grid-cols-2">
+                                  <Field label="Front" required>
+                                    <input
+                                      type="file"
+                                      className={fileInputClass}
+                                      onChange={(event) =>
+                                        updateDraft(employee.id, {
+                                          frontFile:
+                                            event.target.files?.[0] ??
+                                            null,
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                  <Field label="Back" required>
+                                    <input
+                                      type="file"
+                                      className={fileInputClass}
+                                      onChange={(event) =>
+                                        updateDraft(employee.id, {
+                                          backFile:
+                                            event.target.files?.[0] ??
+                                            null,
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                </div>
+                              ) : (
+                                <Field label="Certificate / Evidence" required>
+                                  <input
+                                    type="file"
+                                    className={fileInputClass}
+                                    onChange={(event) =>
+                                      updateDraft(employee.id, {
+                                        file:
+                                          event.target.files?.[0] ??
+                                          null,
+                                      })
+                                    }
+                                  />
+                                </Field>
+                              )}
+                            </div>
+                          ) : selectedType?.requires_document &&
+                            selectedType.document_upload_type ===
+                              "front_back" ? (
                             <>
                               <Field label="Front" required>
                                 <input
