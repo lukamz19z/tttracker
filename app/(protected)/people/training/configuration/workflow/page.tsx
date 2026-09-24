@@ -1048,138 +1048,210 @@ export default function TrainingWorkflowConfigurationPage() {
     }
   }
 
-  async function syncEmployeeSharePoint(
-    employeeIds?: string[],
+async function syncEmployeeSharePoint(
+  employeeIds?: string[],
+) {
+  const syncingOne =
+    Array.isArray(employeeIds) && employeeIds.length === 1;
+
+  if (
+    !syncingOne &&
+    !window.confirm(
+      "Sync all active employee SharePoint folders with the current payroll IDs/names and refresh configured metadata on existing published Training documents?",
+    )
   ) {
-    const syncingOne =
-      Array.isArray(employeeIds) && employeeIds.length === 1;
+    return;
+  }
 
-    if (
-      !syncingOne &&
-      !window.confirm(
-        "Sync all active employee SharePoint folders with the current payroll IDs/names and refresh configured metadata on existing published Training documents?",
-      )
-    ) {
-      return;
-    }
+  if (syncingOne) {
+    setSyncingEmployeeId(employeeIds[0]);
+  } else {
+    setSyncingSharePoint(true);
+  }
 
-    if (syncingOne) {
-      setSyncingEmployeeId(employeeIds[0]);
-    } else {
-      setSyncingSharePoint(true);
-    }
+  setMessage(null);
 
-    setMessage(null);
-
-    try {
-      const response = await apiFetch(
-        "/api/training/employees/sync-sharepoint",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            includeInactive: false,
-            employeeIds: employeeIds ?? [],
-            syncMetadata: true,
-          }),
+  try {
+    const response = await apiFetch(
+      "/api/training/employees/sync-sharepoint",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          includeInactive: false,
+          employeeIds: employeeIds ?? [],
+          syncMetadata: true,
+        }),
+      },
+    );
 
-      const responseText = await response.text();
+    const responseText = await response.text();
 
-      const payload = responseText
-        ? (JSON.parse(responseText) as {
-            error?: string;
-            synced?: number;
-            failed?: number;
-            renamed?: number;
-            createdOrLinked?: number;
-            metadataUpdated?: number;
-            documentLinksRefreshed?: number;
-            documentsMoved?: number;
-            supersededArchived?: number;
-            legacyTrainingFoldersRemoved?: number;
-            failures?: Array<{
-              employeeName?: string;
-              error?: string;
-            }>;
-          })
-        : null;
+    type SyncPayload = {
+      error?: string;
+      success?: boolean;
+      requested?: number;
+      synced?: number;
+      failed?: number;
+      renamed?: number;
+      createdOrLinked?: number;
+      metadataUpdated?: number;
+      documentLinksRefreshed?: number;
+      documentsMoved?: number;
+      supersededArchived?: number;
+      legacyTrainingFoldersRemoved?: number;
+      failures?: Array<{
+        employeeId?: string;
+        employeeName?: string;
+        error?: string;
+      }>;
+    };
 
-      if (!response.ok) {
+    let payload: SyncPayload | null = null;
+
+    if (responseText.trim()) {
+      try {
+        payload = JSON.parse(responseText) as SyncPayload;
+      } catch {
+        const rawMessage = responseText.trim();
+
+        console.error(
+          "SharePoint employee sync returned a non-JSON response",
+          {
+            status: response.status,
+            statusText: response.statusText,
+            contentType: response.headers.get("content-type"),
+            response: rawMessage.slice(0, 2000),
+          },
+        );
+
+        if (rawMessage.startsWith("<!DOCTYPE") || rawMessage.startsWith("<html")) {
+          throw new Error(
+            `SharePoint sync failed (${response.status} ${response.statusText}). ` +
+              "The server returned an HTML error page instead of JSON. " +
+              "Check the Next.js/Vercel server logs for /api/training/employees/sync-sharepoint.",
+          );
+        }
+
         throw new Error(
-          clean(payload?.error) ||
-            "SharePoint employee sync failed.",
+          `SharePoint sync failed (${response.status} ${response.statusText}). ` +
+            `Server response: ${
+              rawMessage.slice(0, 500) ||
+              "No readable response was returned."
+            }`,
         );
       }
+    }
 
-      await loadData();
+    if (!response.ok) {
+      const serverMessage = clean(payload?.error);
 
-      const synced = Number(payload?.synced ?? 0);
-      const failed = Number(payload?.failed ?? 0);
-      const renamed = Number(payload?.renamed ?? 0);
-      const linked = Number(payload?.createdOrLinked ?? 0);
-      const metadataUpdated = Number(payload?.metadataUpdated ?? 0);
-      const linksRefreshed = Number(
-        payload?.documentLinksRefreshed ?? 0,
-      );
-      const documentsMoved = Number(payload?.documentsMoved ?? 0);
-      const supersededArchived = Number(
-        payload?.supersededArchived ?? 0,
-      );
-      const legacyFoldersRemoved = Number(
-        payload?.legacyTrainingFoldersRemoved ?? 0,
-      );
-
-      setMessage({
-        tone: failed > 0 ? "error" : "success",
-        text:
-          failed > 0
-            ? `${synced} employee SharePoint profile${
-                synced === 1 ? "" : "s"
-              } synced; ${failed} failed. ${renamed} folder${
-                renamed === 1 ? "" : "s"
-              } renamed; ${documentsMoved} published file${
-                documentsMoved === 1 ? "" : "s"
-              } moved into the simplified folder structure; ${supersededArchived} superseded file${
-                supersededArchived === 1 ? "" : "s"
-              } archived; ${metadataUpdated} metadata item${
-                metadataUpdated === 1 ? "" : "s"
-              } refreshed. ${
-                payload?.failures?.[0]?.error
-                  ? `First error: ${payload.failures[0].error}`
-                  : ""
-              }`
-            : `${synced} employee SharePoint profile${
-                synced === 1 ? "" : "s"
-              } synced. ${renamed} folder${
-                renamed === 1 ? "" : "s"
-              } renamed, ${linked} linked/created, ${documentsMoved} published file${
-                documentsMoved === 1 ? "" : "s"
-              } moved, ${supersededArchived} superseded file${
-                supersededArchived === 1 ? "" : "s"
-              } archived, ${metadataUpdated} metadata item${
-                metadataUpdated === 1 ? "" : "s"
-              } refreshed, ${linksRefreshed} document link${
-                linksRefreshed === 1 ? "" : "s"
-              } refreshed and ${legacyFoldersRemoved} empty legacy Training folder${
-                legacyFoldersRemoved === 1 ? "" : "s"
-              } removed.`,
+      console.error("SharePoint employee sync failed", {
+        status: response.status,
+        statusText: response.statusText,
+        payload,
+        response: responseText.slice(0, 2000),
       });
-    } catch (error) {
+
+      throw new Error(
+        serverMessage ||
+          `SharePoint employee sync failed (${response.status} ${response.statusText}).`,
+      );
+    }
+
+    if (!payload) {
+      throw new Error(
+        `SharePoint sync returned an empty or invalid response (${response.status} ${response.statusText}).`,
+      );
+    }
+
+    await loadData();
+
+    const synced = Number(payload.synced ?? 0);
+    const failed = Number(payload.failed ?? 0);
+    const renamed = Number(payload.renamed ?? 0);
+    const linked = Number(payload.createdOrLinked ?? 0);
+    const metadataUpdated = Number(payload.metadataUpdated ?? 0);
+    const linksRefreshed = Number(
+      payload.documentLinksRefreshed ?? 0,
+    );
+    const documentsMoved = Number(payload.documentsMoved ?? 0);
+    const supersededArchived = Number(
+      payload.supersededArchived ?? 0,
+    );
+    const legacyFoldersRemoved = Number(
+      payload.legacyTrainingFoldersRemoved ?? 0,
+    );
+
+    const firstFailure = clean(payload.failures?.[0]?.error);
+
+    if (failed > 0) {
       setMessage({
         tone: "error",
         text:
-          error instanceof Error
-            ? error.message
-            : "Unable to sync employee SharePoint folders.",
+          `${synced} employee SharePoint profile${
+            synced === 1 ? "" : "s"
+          } synced; ` +
+          `${failed} failed. ` +
+          `${renamed} folder${renamed === 1 ? "" : "s"} renamed; ` +
+          `${documentsMoved} published file${
+            documentsMoved === 1 ? "" : "s"
+          } moved; ` +
+          `${supersededArchived} superseded file${
+            supersededArchived === 1 ? "" : "s"
+          } archived; ` +
+          `${metadataUpdated} metadata item${
+            metadataUpdated === 1 ? "" : "s"
+          } refreshed.` +
+          (firstFailure
+            ? ` First error: ${firstFailure}`
+            : ""),
       });
-    } finally {
-      setSyncingSharePoint(false);
-      setSyncingEmployeeId(null);
-    }
-  }
 
+      return;
+    }
+
+    setMessage({
+      tone: "success",
+      text:
+        `${synced} employee SharePoint profile${
+          synced === 1 ? "" : "s"
+        } synced. ` +
+        `${renamed} folder${renamed === 1 ? "" : "s"} renamed, ` +
+        `${linked} linked/created, ` +
+        `${documentsMoved} published file${
+          documentsMoved === 1 ? "" : "s"
+        } moved, ` +
+        `${supersededArchived} superseded file${
+          supersededArchived === 1 ? "" : "s"
+        } archived, ` +
+        `${metadataUpdated} metadata item${
+          metadataUpdated === 1 ? "" : "s"
+        } refreshed, ` +
+        `${linksRefreshed} document link${
+          linksRefreshed === 1 ? "" : "s"
+        } refreshed and ` +
+        `${legacyFoldersRemoved} empty legacy Training folder${
+          legacyFoldersRemoved === 1 ? "" : "s"
+        } removed.`,
+    });
+  } catch (error) {
+    console.error("Unable to sync employee SharePoint folders", error);
+
+    setMessage({
+      tone: "error",
+      text:
+        error instanceof Error
+          ? error.message
+          : "Unable to sync employee SharePoint folders.",
+    });
+  } finally {
+    setSyncingSharePoint(false);
+    setSyncingEmployeeId(null);
+  }
+}
   if (loading) {
     return (
       <AppShell>

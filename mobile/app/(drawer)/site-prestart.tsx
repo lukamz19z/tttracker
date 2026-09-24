@@ -277,6 +277,7 @@ export default function SitePrestartScreen() {
   const [signatureStrokes, setSignatureStrokes] = useState<
     SignatureStroke[]
   >([]);
+  const [signaturePadActive, setSignaturePadActive] = useState(false);
 
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase();
@@ -692,6 +693,7 @@ export default function SitePrestartScreen() {
     setSelectedEmployee(null);
     setEmployeeSearch("");
     setSignatureStrokes([]);
+    setSignaturePadActive(false);
     setDeclarationAccepted(false);
     setBreathalyserReading("");
   }
@@ -829,6 +831,7 @@ export default function SitePrestartScreen() {
     setBreathalyserReading("");
     setDeclarationAccepted(false);
     setSignatureStrokes([]);
+    setSignaturePadActive(false);
   }
 
   function cancelSigner() {
@@ -836,10 +839,30 @@ export default function SitePrestartScreen() {
     setBreathalyserReading("");
     setDeclarationAccepted(false);
     setSignatureStrokes([]);
+    setSignaturePadActive(false);
   }
 
   async function saveSigner() {
     if (!active || !selectedEmployee) return;
+
+    const bacText = breathalyserReading.trim();
+    const bacValue = Number(bacText);
+
+    if (!bacText) {
+      Alert.alert(
+        "BAC reading required",
+        "Enter the employee's BAC reading before saving. Enter 0.000 when no alcohol is detected.",
+      );
+      return;
+    }
+
+    if (!Number.isFinite(bacValue) || bacValue < 0) {
+      Alert.alert(
+        "Invalid BAC reading",
+        "Enter a valid non-negative BAC reading, for example 0.000.",
+      );
+      return;
+    }
 
     if (!declarationAccepted) {
       Alert.alert(
@@ -869,7 +892,7 @@ export default function SitePrestartScreen() {
         fullName: employee.full_name,
         payrollId: clean(employee.payroll_id) || null,
       },
-      breathalyserReading: breathalyserReading.trim() || null,
+      breathalyserReading: bacText,
       declarationText: declaration,
       signatureStrokes,
       signatureWidth: PAD_WIDTH,
@@ -1156,6 +1179,8 @@ export default function SitePrestartScreen() {
           <ScrollView
             contentContainerStyle={styles.content}
             keyboardShouldPersistTaps="handled"
+            scrollEnabled={!signaturePadActive}
+            bounces={!signaturePadActive}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -1304,21 +1329,30 @@ export default function SitePrestartScreen() {
                   </Pressable>
                 </View>
 
-                <Text style={styles.fieldLabel}>
-                  Breathalyser reading
-                </Text>
+                <Text style={styles.fieldLabel}>BAC reading *</Text>
                 <TextInput
                   value={breathalyserReading}
-                  onChangeText={(value) =>
-                    setBreathalyserReading(
-                      value.replace(/[^0-9.]/g, ""),
-                    )
-                  }
+                  onChangeText={(value) => {
+                    const cleaned = value.replace(/[^0-9.]/g, "");
+                    const decimalCount = (cleaned.match(/\./g) ?? []).length;
+                    if (decimalCount <= 1) setBreathalyserReading(cleaned);
+                  }}
+                  onBlur={() => {
+                    const value = breathalyserReading.trim();
+                    if (!value) return;
+                    const parsed = Number(value);
+                    if (Number.isFinite(parsed) && parsed >= 0) {
+                      setBreathalyserReading(parsed.toFixed(3));
+                    }
+                  }}
                   style={styles.input}
-                  placeholder="0.000 (leave blank if not applicable)"
+                  placeholder="0.000"
                   placeholderTextColor="#94A3B8"
                   keyboardType="decimal-pad"
                 />
+                <Text style={styles.helper}>
+                  Required. Enter 0.000 when no alcohol is detected.
+                </Text>
 
                 <Pressable
                   style={[
@@ -1350,6 +1384,7 @@ export default function SitePrestartScreen() {
                 <SignaturePad
                   strokes={signatureStrokes}
                   onChange={setSignatureStrokes}
+                  onInteractionChange={setSignaturePadActive}
                   disabled={busy}
                 />
 
@@ -1367,13 +1402,19 @@ export default function SitePrestartScreen() {
                   <Pressable
                     style={[
                       styles.primaryButton,
-                      (!declarationAccepted ||
+                      (!breathalyserReading.trim() ||
+                        !Number.isFinite(Number(breathalyserReading)) ||
+                        Number(breathalyserReading) < 0 ||
+                        !declarationAccepted ||
                         signatureStrokes.length === 0 ||
                         busy) &&
                         styles.disabledButton,
                     ]}
                     onPress={() => void saveSigner()}
                     disabled={
+                      !breathalyserReading.trim() ||
+                      !Number.isFinite(Number(breathalyserReading)) ||
+                      Number(breathalyserReading) < 0 ||
                       !declarationAccepted ||
                       signatureStrokes.length === 0 ||
                       busy
@@ -1955,10 +1996,12 @@ export default function SitePrestartScreen() {
 function SignaturePad({
   strokes,
   onChange,
+  onInteractionChange,
   disabled,
 }: {
   strokes: SignatureStroke[];
   onChange: (strokes: SignatureStroke[]) => void;
+  onInteractionChange?: (active: boolean) => void;
   disabled?: boolean;
 }) {
   const [width, setWidth] = useState(0);
@@ -1967,6 +2010,13 @@ function SignaturePad({
   useEffect(() => {
     strokesRef.current = strokes;
   }, [strokes]);
+
+  useEffect(
+    () => () => {
+      onInteractionChange?.(false);
+    },
+    [onInteractionChange],
+  );
 
   const pointFromEvent = useCallback(
     (event: {
@@ -2006,10 +2056,14 @@ function SignaturePad({
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => !disabled,
+        onStartShouldSetPanResponderCapture: () => !disabled,
         onMoveShouldSetPanResponder: () => !disabled,
+        onMoveShouldSetPanResponderCapture: () => !disabled,
         onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
         onPanResponderGrant: (event) => {
           if (disabled) return;
+          onInteractionChange?.(true);
           const point = pointFromEvent(event);
           if (!point) return;
 
@@ -2035,8 +2089,14 @@ function SignaturePad({
 
           emit(next);
         },
+        onPanResponderRelease: () => {
+          onInteractionChange?.(false);
+        },
+        onPanResponderTerminate: () => {
+          onInteractionChange?.(false);
+        },
       }),
-    [disabled, emit, pointFromEvent],
+    [disabled, emit, onInteractionChange, pointFromEvent],
   );
 
   return (
@@ -2045,6 +2105,11 @@ function SignaturePad({
       onLayout={(event) =>
         setWidth(event.nativeEvent.layout.width)
       }
+      onTouchStart={() => {
+        if (!disabled) onInteractionChange?.(true);
+      }}
+      onTouchEnd={() => onInteractionChange?.(false)}
+      onTouchCancel={() => onInteractionChange?.(false)}
       {...responder.panHandlers}
     >
       {width > 0
