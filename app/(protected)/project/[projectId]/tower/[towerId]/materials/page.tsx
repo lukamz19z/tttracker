@@ -258,6 +258,9 @@ type MaterialsData = {
   bundles: Bundle[];
   members: Member[];
   bolts: Bolt[];
+  applicableBolts: Bolt[];
+  applicableMaterialSegments: string[];
+  materialApplicabilityActive: boolean;
   bundleChecks: BundleCheck[];
   memberChecks: MemberCheck[];
   materialEvents: MaterialEvent[];
@@ -758,6 +761,17 @@ function normaliseSegment(value: string): string {
     .join(" ");
 }
 
+function materialSegmentKey(value: string): string {
+  return normaliseSegment(value)
+    .toUpperCase()
+    .replace(/[–—]/g, "-")
+    .replace(/[^A-Z0-9+-]/g, "");
+}
+
+function isGeneralMaterialSegment(value: string): boolean {
+  return materialSegmentKey(value) === materialSegmentKey("General");
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -1106,6 +1120,52 @@ function useMaterialsData(projectId: string, towerId: string) {
 
     return undefined;
   }, [bundleById, bundlesByReference]);
+
+  const applicableMaterialSegmentMap = new Map<string, string>();
+
+  const addApplicableMaterialSegment = (value: string) => {
+    const display = normaliseSegment(value);
+    if (isGeneralMaterialSegment(display)) return;
+
+    const key = materialSegmentKey(display);
+    if (!key || applicableMaterialSegmentMap.has(key)) return;
+    applicableMaterialSegmentMap.set(key, display);
+  };
+
+  // The bundle register is the primary source of which assemblies belong to
+  // this tower. Resolved member segments are also included so alternate
+  // human-readable segment names already present in imported member data can
+  // match the bolt / packer register without any tower-type hard-coding.
+  bundles.forEach((bundle) => addApplicableMaterialSegment(bundle.section));
+
+  members.forEach((member) => {
+    const resolvedBundle = resolveBundleForMember(member);
+    if (!resolvedBundle) return;
+
+    addApplicableMaterialSegment(resolvedBundle.section);
+    if (member.tower_segment.trim()) {
+      addApplicableMaterialSegment(member.tower_segment);
+    }
+  });
+
+  const applicableMaterialSegments = Array.from(
+    applicableMaterialSegmentMap.values(),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const applicableMaterialSegmentKeys = new Set(
+    applicableMaterialSegments.map(materialSegmentKey),
+  );
+
+  const materialApplicabilityActive = applicableMaterialSegmentKeys.size > 0;
+
+  const applicableBolts = materialApplicabilityActive
+    ? bolts.filter((item) => {
+        if (isGeneralMaterialSegment(item.tower_segment)) return true;
+        return applicableMaterialSegmentKeys.has(
+          materialSegmentKey(item.tower_segment),
+        );
+      })
+    : bolts;
 
   const duplicateBundleRefs = useMemo(() => {
     return new Set(
@@ -1680,6 +1740,9 @@ function useMaterialsData(projectId: string, towerId: string) {
     bundles,
     members,
     bolts,
+    applicableBolts,
+    applicableMaterialSegments,
+    materialApplicabilityActive,
     bundleChecks,
     memberChecks,
     materialEvents,
@@ -1747,7 +1810,7 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
 
   const fastenerResults: Bolt[] = !q
     ? []
-    : data.bolts.filter((item) => materialItemSearchText(item).includes(q));
+    : data.applicableBolts.filter((item) => materialItemSearchText(item).includes(q));
 
   const placeholder =
     mode === "members"
@@ -4111,10 +4174,13 @@ function EditInput({
   );
 }
 
-function BoltRegister({ bolts }: { bolts: Bolt[] }) {
+function BoltRegister({ data }: { data: MaterialsData }) {
   const [query, setQuery] = useState("");
   const [segment, setSegment] = useState("all");
   const [itemType, setItemType] = useState<"all" | MaterialItemType>("all");
+
+  const bolts = data.applicableBolts;
+  const excludedRows = Math.max(data.bolts.length - data.applicableBolts.length, 0);
 
   const segments: string[] = Array.from(
     new Set<string>(
@@ -4171,8 +4237,21 @@ function BoltRegister({ bolts }: { bolts: Bolt[] }) {
 
   return (
     <div>
-      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3 text-xs leading-5 text-blue-900">
-        These quantities are scoped to this tower&apos;s imported register. Search a specific item such as <strong>M16 45</strong>, <strong>M20 220</strong>, <strong>DN M16</strong> or <strong>M16 #10</strong> and TTTracker will sum the matching quantity across this tower.
+      <div className={`rounded-2xl border p-3 text-xs leading-5 ${data.materialApplicabilityActive ? "border-blue-200 bg-blue-50/50 text-blue-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+        {data.materialApplicabilityActive ? (
+          <>
+            <strong>Automatic tower applicability is active.</strong> TTTracker is matching bolt and packer rows against the segments found in this tower&apos;s bundle register and the segments on members that resolve to those bundles. Showing <strong>{data.applicableBolts.length}</strong> of <strong>{data.bolts.length}</strong> imported row(s){excludedRows > 0 ? `; ${excludedRows} non-applicable row(s) are excluded from search and totals` : ""}. Search a specific item such as <strong>M16 45</strong>, <strong>M20 220</strong>, <strong>DN M16</strong> or <strong>M16 #10</strong> and TTTracker will sum only the matching requirement for this tower.
+            {data.applicableMaterialSegments.length > 0 && (
+              <div className="mt-2 text-[11px] text-blue-800">
+                <strong>Applicable segments:</strong> {data.applicableMaterialSegments.join(", ")}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <strong>No segment-specific bundle/member data was detected.</strong> TTTracker is temporarily showing all imported bolt and packer rows for this tower rather than silently hiding material. Add or correct bundle/member segment data to enable automatic applicability filtering.
+          </>
+        )}
       </div>
 
       <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between print:hidden">
@@ -4358,7 +4437,7 @@ export default function MaterialsControlPage() {
               <MainSummary label="Part Delivered" value={partialMissing} tone="amber" />
               <MainSummary label="Missing Qty Left" value={missingOutstandingQty} tone="red" />
               <MainSummary label="Excess" value={excessCount} tone="blue" />
-              <MainSummary label="Bolts / Packers" value={data.bolts.length} />
+              <MainSummary label="Applicable Bolt / Packer Rows" value={data.applicableBolts.length} />
             </div>
           </div>
 
@@ -4428,7 +4507,7 @@ export default function MaterialsControlPage() {
               />
             )}
             {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} />}
-            {activeTab === "bolts" && <BoltRegister bolts={data.bolts} />}
+            {activeTab === "bolts" && <BoltRegister data={data} />}
             {activeTab === "data" && <DataImportsWorkspace data={data} towerId={towerId} />}
           </div>
         </div>
