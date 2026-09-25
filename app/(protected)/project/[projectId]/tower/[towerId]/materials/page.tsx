@@ -80,13 +80,20 @@ type Member = {
   tower_segment: string;
 };
 
+type MaterialItemType = "bolt" | "packer";
+
 type Bolt = {
   id?: string;
   tower_id: string;
+  item_type: MaterialItemType;
   tower_segment: string;
+  drawing_number: string;
   bolt_diameter: string;
+  bolt_type: string;
   dn_sn: string;
   length: string;
+  packer_no: string;
+  packer_mark: string;
   qty: number;
 };
 
@@ -242,7 +249,6 @@ type ImportMode = "replace" | "merge";
 type DataManagerTab = "bundles" | "members" | "bolts";
 type IssueFilter = "all" | "open" | "partial" | "resolved" | "excess" | "damaged" | "movements";
 
-type CsvRow = Record<string, string | undefined>;
 type ImportSourceRow = Record<string, unknown>;
 
 type MaterialsData = {
@@ -541,6 +547,49 @@ function normaliseBoltDiameter(value: string): string {
   return trimmed.startsWith("M") ? trimmed : `M${trimmed}`;
 }
 
+function normaliseMaterialItemType(value: unknown, packerNo = ""): MaterialItemType {
+  const raw = safeString(value).trim().toLowerCase();
+  if (raw === "packer" || raw === "packers" || packerNo.trim()) return "packer";
+  return "bolt";
+}
+
+function materialItemLabel(item: Bolt): string {
+  if (item.item_type === "packer") {
+    return [item.bolt_diameter, item.packer_no, item.packer_mark ? `(${item.packer_mark})` : ""]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  return [
+    item.bolt_diameter,
+    item.length ? `× ${item.length}` : "",
+    item.dn_sn ? item.dn_sn.toUpperCase() : "",
+    item.bolt_type && item.bolt_type.toLowerCase() !== "standard bolt" ? item.bolt_type : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function materialItemSearchText(item: Bolt): string {
+  return [
+    item.item_type,
+    item.tower_segment,
+    item.drawing_number,
+    item.bolt_diameter,
+    item.bolt_type,
+    item.dn_sn,
+    item.length,
+    item.packer_no,
+    item.packer_mark,
+    item.qty,
+    materialItemLabel(item),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
 function csvEscape(value: string | number | null | undefined): string {
   const str = value == null ? "" : String(value);
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {
@@ -691,15 +740,21 @@ function buildMissingIssues(data: MaterialsData): MissingIssueRow[] {
 function normaliseSegment(value: string): string {
   const raw = value.trim();
   if (!raw) return "General";
-  const compact = raw.toLowerCase().replace(/-/g, " ").replace(/\s+/g, " ").trim();
-  const legMatch = compact.match(/^(\d+)\s*m?\s*leg(s)?$/i);
+
+  const compact = raw.toLowerCase().replace(/\s+/g, " ").trim();
+  const legMatch = compact.match(/^([+-]?\d+)\s*m?\s*leg(s)?$/i);
   if (legMatch) return `${legMatch[1]} Leg`;
+
   return compact
     .replace(/\blegs\b/g, "leg")
     .replace(/\bbody ext\b/g, "body extension")
     .replace(/\bcrossarms?\b/g, "crossarms")
     .split(" ")
-    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .map((word) =>
+      word.replace(/(^|[_/])([a-z])/g, (_match, prefix: string, letter: string) =>
+        `${prefix}${letter.toUpperCase()}`,
+      ),
+    )
     .join(" ");
 }
 
@@ -828,7 +883,7 @@ function useMaterialsData(projectId: string, towerId: string) {
         supabase.from("towers").select("id,name,line").eq("project_id", projectId).order("name"),
         supabase.from("tower_required_bundles").select("*").eq("tower_id", towerId).order("section").order("bundle_no"),
         fetchAllMembers(),
-        supabase.from("tower_material_bolts").select("*").eq("tower_id", towerId).order("tower_segment").order("bolt_diameter").order("length"),
+        supabase.from("tower_material_bolts").select("*").eq("tower_id", towerId).order("item_type").order("tower_segment").order("bolt_diameter").order("length"),
         supabase.from("tower_bundle_deliveries").select("tower_bundle_delivery_items(*)").eq("tower_id", towerId),
         supabase.from("tower_daily_dockets").select("id,docket_date,crew,leading_hand").eq("tower_id", towerId).order("docket_date", { ascending: false }),
         supabase.from("tower_material_bundle_checks").select("*").eq("tower_id", towerId),
@@ -933,15 +988,23 @@ function useMaterialsData(projectId: string, towerId: string) {
         tower_segment: safeString(row.tower_segment).trim() ? normaliseSegment(safeString(row.tower_segment)) : "",
       })));
 
-      setBolts(((boltRes.data || []) as Record<string, unknown>[]).map((row) => ({
-        id: safeString(row.id) || undefined,
-        tower_id: towerId,
-        tower_segment: normaliseSegment(safeString(row.tower_segment, "General")),
-        bolt_diameter: safeString(row.bolt_diameter),
-        dn_sn: safeString(row.dn_sn),
-        length: safeString(row.length),
-        qty: Math.max(safeNumber(row.qty), 0),
-      })));
+      setBolts(((boltRes.data || []) as Record<string, unknown>[]).map((row) => {
+        const packerNo = safeString(row.packer_no).trim();
+        return {
+          id: safeString(row.id) || undefined,
+          tower_id: towerId,
+          item_type: normaliseMaterialItemType(row.item_type, packerNo),
+          tower_segment: normaliseSegment(safeString(row.tower_segment, "General")),
+          drawing_number: safeString(row.drawing_number).trim(),
+          bolt_diameter: normaliseBoltDiameter(safeString(row.bolt_diameter)),
+          bolt_type: safeString(row.bolt_type, "Standard Bolt").trim() || "Standard Bolt",
+          dn_sn: safeString(row.dn_sn).trim(),
+          length: safeString(row.length).trim(),
+          packer_no: packerNo,
+          packer_mark: safeString(row.packer_mark).trim(),
+          qty: Math.max(safeNumber(row.qty), 0),
+        };
+      }));
 
       setBundleChecks(((bundleCheckRes.data || []) as Record<string, unknown>[]).map((row) => ({
         id: safeString(row.id) || undefined,
@@ -997,8 +1060,7 @@ function useMaterialsData(projectId: string, towerId: string) {
         })),
       );
     } catch (error) {
-      console.error("materials load error", error);
-    } finally {
+      console.error("materials load error", error);} finally {
       setLoading(false);
     }
   }, [fetchAllMemberChecks, fetchAllMembers, projectId, supabase, towerId]);
@@ -1651,7 +1713,7 @@ function useMaterialsData(projectId: string, towerId: string) {
   };
 }
 
-type SearchMode = "members" | "bundles";
+type SearchMode = "members" | "bundles" | "fasteners";
 
 function MaterialsSearch({ data }: { data: MaterialsData }) {
   const [mode, setMode] = useState<SearchMode>("members");
@@ -1683,12 +1745,24 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
           .includes(q);
       });
 
+  const fastenerResults: Bolt[] = !q
+    ? []
+    : data.bolts.filter((item) => materialItemSearchText(item).includes(q));
+
+  const placeholder =
+    mode === "members"
+      ? "Search member number, drawing, profile or segment…"
+      : mode === "bundles"
+        ? "Search bundle number, segment or a member inside the bundle…"
+        : "Search bolt, packer, diameter, #10, Y3, length, drawing or segment…";
+
   return (
     <div className="mx-auto max-w-5xl">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1.5">
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-3 gap-1">
           <button type="button" onClick={() => { setMode("members"); setQuery(""); setExpanded(null); }} className={`rounded-xl px-3 py-2.5 text-sm font-black transition ${mode === "members" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Search Members</button>
           <button type="button" onClick={() => { setMode("bundles"); setQuery(""); setExpanded(null); }} className={`rounded-xl px-3 py-2.5 text-sm font-black transition ${mode === "bundles" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Search Bundles</button>
+          <button type="button" onClick={() => { setMode("fasteners"); setQuery(""); setExpanded(null); }} className={`rounded-xl px-3 py-2.5 text-sm font-black transition ${mode === "fasteners" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Bolts & Packers</button>
         </div>
       </div>
 
@@ -1698,7 +1772,7 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
           autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={mode === "members" ? "Search member number, drawing, profile or segment…" : "Search bundle number, segment or a member inside the bundle…"}
+          placeholder={placeholder}
           className="w-full rounded-2xl border border-slate-300 bg-white py-3 pl-10 pr-10 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-100"
         />
         {query && <button type="button" onClick={() => setQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-800" title="Clear search"><X size={17} /></button>}
@@ -1706,8 +1780,8 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
 
       {!query ? (
         <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
-          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-white shadow-sm">{mode === "members" ? <Search size={20} /> : <Boxes size={20} />}</div>
-          <div className="mt-3 text-sm font-black text-slate-800">{mode === "members" ? "Search for a specific steel member" : "Search for a bundle or pack"}</div>
+          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-white shadow-sm">{mode === "members" ? <Search size={20} /> : mode === "bundles" ? <Boxes size={20} /> : <Wrench size={20} />}</div>
+          <div className="mt-3 text-sm font-black text-slate-800">{mode === "members" ? "Search for a specific steel member" : mode === "bundles" ? "Search for a bundle or pack" : "Search the tower bolt & packer register"}</div>
           <div className="mt-1 text-xs text-slate-500">Results appear as you type so the page stays clean on site.</div>
         </div>
       ) : mode === "members" ? (
@@ -1726,7 +1800,7 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
             </div>
           ))}
         </div>
-      ) : (
+      ) : mode === "bundles" ? (
         <div className="mt-4 space-y-2">
           <div className="text-xs font-bold text-slate-400">{bundleResults.length} result(s)</div>
           {bundleResults.length === 0 ? <SearchEmpty text={`No bundles match “${query}”.`} /> : bundleResults.map((bundle: Bundle) => {
@@ -1745,6 +1819,31 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
               </div>
             );
           })}
+        </div>
+      ) : (
+        <div className="mt-4 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-bold text-slate-400">{fastenerResults.length} result(s)</div>
+            <div className="text-xs font-black text-slate-600">Qty {fastenerResults.reduce((sum, row) => sum + row.qty, 0)}</div>
+          </div>
+          {fastenerResults.length === 0 ? <SearchEmpty text={`No bolts or packers match “${query}”.`} /> : fastenerResults.map((item) => (
+            <div key={item.id || `${item.item_type}-${item.tower_segment}-${item.bolt_diameter}-${item.length}-${item.packer_no}-${item.drawing_number}`} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black uppercase ${item.item_type === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}`}>{item.item_type}</span>
+                    <div className="text-base font-black text-slate-950">{materialItemLabel(item) || "Unspecified item"}</div>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">{item.tower_segment || "General"}{item.drawing_number ? ` · ${item.drawing_number}` : ""}</div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs md:min-w-97.5">
+                  <SearchInfo label="Type" value={item.item_type === "packer" ? "Packer" : [item.dn_sn, item.bolt_type].filter(Boolean).join(" · ") || "Bolt"} />
+                  <SearchInfo label="Spec" value={item.item_type === "packer" ? [item.packer_no, item.packer_mark].filter(Boolean).join(" · ") || "—" : item.length ? `${item.length} mm` : "—"} />
+                  <SearchInfo label="Qty / Tower" value={item.qty} strong />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -1997,8 +2096,7 @@ function BundleControl({ data, onTransfer }: { data: MaterialsData; onTransfer: 
         )}
       </div>
     </div>
-  );
-}
+  );}
 
 function BundleCardMetric({
   label,
@@ -2470,13 +2568,11 @@ function TransfersWorkspace({
 
 function TransferBundleModal({
   data,
-  projectId,
   towerId,
   initialBundle,
   onClose,
 }: {
   data: MaterialsData;
-  projectId: string;
   towerId: string;
   initialBundle: Bundle | null;
   onClose: () => void;
@@ -2560,7 +2656,7 @@ function TransferBundleModal({
     return () => {
       cancelled = true;
     };
-  }, [destinationTowerId, sourceBundleId, supabase]);
+  }, [destinationTowerId, sourceBundle, supabase]);
 
   const destinationBundle = destinationBundles.find(
     (bundle) => bundle.id === destinationBundleId,
@@ -2997,9 +3093,7 @@ function IssuesWorkspace({
             )}
           </div>
         </section>
-      )}
-
-      {(filter === "all" || filter === "damaged") && (
+      )}{(filter === "all" || filter === "damaged") && (
         <section className="border-t border-slate-200 pt-4">
           <h3 className="font-black text-slate-950">Damaged / incorrect material</h3>
           <div className="mt-2 space-y-2">
@@ -3158,9 +3252,8 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
     !q || [member.mark_no, member.bundle_reference, member.drawing_number, member.section, member.tower_segment]
       .join(" ").toLowerCase().includes(q),
   );
-  const filteredBolts = data.bolts.filter((bolt) =>
-    !q || [bolt.tower_segment, bolt.bolt_diameter, bolt.dn_sn, bolt.length, bolt.qty]
-      .join(" ").toLowerCase().includes(q),
+  const filteredBolts = data.bolts.filter((item) =>
+    !q || materialItemSearchText(item).includes(q),
   );
 
   async function importBundles(file: File) {
@@ -3368,33 +3461,73 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
     setBusy("bolts");
     try {
       const rows = await parseImportFile(file);
+      let invalid = 0;
+
       const mapped = rows.map((row) => {
+        const packerNo = safeString(getRowValue(row, [
+          "packer_no", "Packer No", "Packer Number", "Packer Size",
+        ])).trim();
+        const packerMark = safeString(getRowValue(row, [
+          "packer_mark", "Packer Mark", "Packer ID Mark",
+        ])).trim();
+        const itemType = normaliseMaterialItemType(
+          getRowValue(row, ["item_type", "Item Type", "Material Type"]),
+          packerNo,
+        );
+        const boltType = safeString(getRowValue(row, [
+          "bolt_type", "Bolt Type", "Bolt Style", "Bolt Kind",
+        ]), "Standard Bolt").trim() || "Standard Bolt";
         const diameter = normaliseBoltDiameter(safeString(getRowValue(row, [
           "bolt_diameter", "Bolt Diameter", "Diameter", "Bolt",
         ])));
-        const length = safeString(getRowValue(row, ["length", "Length", "Bolt Length"])).trim();
-        if (!diameter || !length) return null;
+        const length = safeString(getRowValue(row, ["length", "Length", "Bolt Length", "Length (mm)"])).trim();
+        const qty = Math.max(safeNumber(getRowValue(row, ["qty", "Qty", "QTY", "Quantity"]), 0), 0);
+
+        if (!diameter || qty <= 0 || (itemType === "bolt" && !length) || (itemType === "packer" && !packerNo)) {
+          invalid += 1;
+          return null;
+        }
+
         return {
           tower_id: towerId,
+          item_type: itemType,
           tower_segment: normaliseSegment(safeString(getRowValue(row, [
             "tower_segment", "Tower Segment", "Segment", "Section",
           ]), "General")),
+          drawing_number: safeString(getRowValue(row, [
+            "drawing_number", "Drawing Number", "Drawing No", "Drawing", "Schedule Drawing",
+          ])).trim(),
           bolt_diameter: diameter,
-          dn_sn: safeString(getRowValue(row, ["dn_sn", "DN/SN", "DN / SN", "DN-SN", "Type"])).trim(),
-          length,
-          qty: Math.max(safeNumber(getRowValue(row, ["qty", "Qty", "QTY", "Quantity"]), 0), 0),
+          bolt_type: itemType === "bolt" ? boltType : "",
+          dn_sn: itemType === "bolt"
+            ? safeString(getRowValue(row, ["dn_sn", "DN/SN", "DN / SN", "DN-SN"])).trim().toUpperCase()
+            : "",
+          length: itemType === "bolt" ? length : "",
+          packer_no: itemType === "packer" ? packerNo : "",
+          packer_mark: itemType === "packer" ? packerMark : "",
+          qty,
         };
       }).filter(Boolean) as Array<Omit<Bolt, "id">>;
 
       const unique = new Map<string, Omit<Bolt, "id">>();
       mapped.forEach((row) => {
-        const key = [row.tower_segment, row.bolt_diameter, row.dn_sn, row.length].join("__");
+        const key = [
+          row.tower_segment,
+          row.item_type,
+          row.drawing_number,
+          row.bolt_diameter,
+          row.bolt_type,
+          row.dn_sn,
+          row.length,
+          row.packer_no,
+          row.packer_mark,
+        ].join("__");
         const existing = unique.get(key);
         unique.set(key, existing ? { ...existing, qty: existing.qty + row.qty } : row);
       });
       const payload = Array.from(unique.values());
 
-      if (!payload.length) throw new Error("No valid bolt rows were found.");
+      if (!payload.length) throw new Error("No valid bolt or packer rows were found.");
 
       if (importMode === "replace") {
         const clear = await supabase.from("tower_material_bolts").delete().eq("tower_id", towerId);
@@ -3403,14 +3536,26 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
 
       const result = await supabase
         .from("tower_material_bolts")
-        .upsert(payload, { onConflict: "tower_id,tower_segment,bolt_diameter,dn_sn,length" });
+        .upsert(payload, {
+          onConflict: "tower_id,tower_segment,item_type,drawing_number,bolt_diameter,bolt_type,dn_sn,length,packer_no,packer_mark",
+        });
 
       if (result.error) throw result.error;
       await data.refresh();
-      alert(`Bolt import complete: ${payload.length} row(s).`);
+
+      const boltRows = payload.filter((row) => row.item_type === "bolt").length;
+      const packerRows = payload.filter((row) => row.item_type === "packer").length;
+      alert(
+        [
+          "Bolt & packer import complete.",
+          `Bolts: ${boltRows} row(s)`,
+          `Packers: ${packerRows} row(s)`,
+          `Invalid rows ignored: ${invalid}`,
+        ].join("\n"),
+      );
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Bolt import failed.");
+      alert(error instanceof Error ? error.message : "Bolt & packer import failed.");
     } finally {
       setBusy("");
     }
@@ -3522,15 +3667,29 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
   }
 
   async function saveBolt() {
-    if (!boltDraft?.bolt_diameter.trim() || !boltDraft.length.trim()) return;
+    if (!boltDraft?.bolt_diameter.trim()) return;
+    if (boltDraft.item_type === "bolt" && !boltDraft.length.trim()) {
+      alert("Enter a bolt length.");
+      return;
+    }
+    if (boltDraft.item_type === "packer" && !boltDraft.packer_no.trim()) {
+      alert("Enter the packer number, for example #10.");
+      return;
+    }
+
     setBusy("save");
     try {
       const payload = {
         tower_id: towerId,
+        item_type: boltDraft.item_type,
         tower_segment: normaliseSegment(boltDraft.tower_segment),
+        drawing_number: boltDraft.drawing_number.trim(),
         bolt_diameter: normaliseBoltDiameter(boltDraft.bolt_diameter),
-        dn_sn: boltDraft.dn_sn.trim(),
-        length: boltDraft.length.trim(),
+        bolt_type: boltDraft.item_type === "bolt" ? (boltDraft.bolt_type.trim() || "Standard Bolt") : "",
+        dn_sn: boltDraft.item_type === "bolt" ? boltDraft.dn_sn.trim().toUpperCase() : "",
+        length: boltDraft.item_type === "bolt" ? boltDraft.length.trim() : "",
+        packer_no: boltDraft.item_type === "packer" ? boltDraft.packer_no.trim() : "",
+        packer_mark: boltDraft.item_type === "packer" ? boltDraft.packer_mark.trim() : "",
         qty: Math.max(safeNumber(boltDraft.qty), 0),
       };
 
@@ -3543,7 +3702,7 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
       await data.refresh();
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Bolt save failed.");
+      alert(error instanceof Error ? error.message : "Bolt / packer save failed.");
     } finally {
       setBusy("");
     }
@@ -3582,10 +3741,22 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
         ...data.members.map((row) => [row.id, row.bundle_id, row.bundle_reference, row.drawing_number, row.mark_no, row.section, row.qty_per_tower, row.tower_segment]),
       ];
     } else {
-      filename = "materials_bolt_register.csv";
+      filename = "materials_bolts_and_packers_register.csv";
       rows = [
-        ["Bolt ID", "Tower Segment", "Bolt Diameter", "DN/SN", "Length", "Qty"],
-        ...data.bolts.map((row) => [row.id, row.tower_segment, row.bolt_diameter, row.dn_sn, row.length, row.qty]),
+        ["Item ID", "Item Type", "Tower Segment", "Drawing Number", "Bolt Diameter", "Bolt Type", "DN/SN", "Length", "Packer No", "Packer Mark", "Qty"],
+        ...data.bolts.map((row) => [
+          row.id,
+          row.item_type,
+          row.tower_segment,
+          row.drawing_number,
+          row.bolt_diameter,
+          row.bolt_type,
+          row.dn_sn,
+          row.length,
+          row.packer_no,
+          row.packer_mark,
+          row.qty,
+        ]),
       ];
     }
 
@@ -3627,8 +3798,8 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
             onClick={() => memberInputRef.current?.click()}
           />
           <ImportCard
-            title="Bolt Register"
-            description="CSV. Imports by tower segment, diameter, DN/SN and length."
+            title="Bolt & Packer Register"
+            description="CSV. Imports bolts and packers by segment, drawing, diameter and item specification."
             busy={busy === "bolts"}
             onClick={() => boltInputRef.current?.click()}
           />
@@ -3652,14 +3823,14 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
             <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
               {(["bundles", "members", "bolts"] as DataManagerTab[]).map((id) => (
                 <button key={id} type="button" onClick={() => { setTab(id); setQuery(""); }} className={`rounded-lg px-3 py-2 text-xs font-black capitalize ${tab === id ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>
-                  {id}
+                  {id === "bolts" ? "Bolts & Packers" : id}
                 </button>
               ))}
             </div>
             <div className="flex flex-1 gap-2 md:max-w-xl">
               <div className="relative flex-1">
                 <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${tab}…`} className="w-full rounded-xl border border-slate-300 py-2 pl-8 pr-3 text-xs" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tab === "bolts" ? "Search bolts & packers…" : `Search ${tab}…`} className="w-full rounded-xl border border-slate-300 py-2 pl-8 pr-3 text-xs" />
               </div>
               <button type="button" onClick={exportMasterData} className="inline-flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700">
                 <Download size={13} /> Export
@@ -3669,7 +3840,7 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
                 onClick={() => {
                   if (tab === "bundles") setBundleDraft({ tower_id: towerId, bundle_no: "", section: "General", qty_required: 1, member_qty: 0, total_weight: null });
                   if (tab === "members") setMemberDraft({ tower_id: towerId, bundle_id: null, bundle_reference: "", drawing_number: "", mark_no: "", qty_per_tower: 1, section: "", tower_segment: "General" });
-                  if (tab === "bolts") setBoltDraft({ tower_id: towerId, tower_segment: "General", bolt_diameter: "", dn_sn: "", length: "", qty: 0 });
+                  if (tab === "bolts") setBoltDraft({ tower_id: towerId, item_type: "bolt", tower_segment: "General", drawing_number: "", bolt_diameter: "", bolt_type: "Standard Bolt", dn_sn: "", length: "", packer_no: "", packer_mark: "", qty: 0 });
                 }}
                 className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white"
               >
@@ -3724,17 +3895,39 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
           {tab === "bolts" && (
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wide text-slate-400">
-                <tr><th className="px-3 py-2 text-left">Segment</th><th className="px-3 py-2 text-center">Diameter</th><th className="px-3 py-2 text-center">DN/SN</th><th className="px-3 py-2 text-center">Length</th><th className="px-3 py-2 text-center">Qty</th><th className="px-3 py-2 text-right">Actions</th></tr>
+                <tr>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-left">Segment</th>
+                  <th className="px-3 py-2 text-left">Drawing</th>
+                  <th className="px-3 py-2 text-center">Diameter</th>
+                  <th className="px-3 py-2 text-center">Specification</th>
+                  <th className="px-3 py-2 text-center">Qty</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredBolts.map((row) => (
-                  <tr key={row.id || `${row.tower_segment}-${row.bolt_diameter}-${row.dn_sn}-${row.length}`}>
+                  <tr key={row.id || `${row.item_type}-${row.tower_segment}-${row.bolt_diameter}-${row.bolt_type}-${row.dn_sn}-${row.length}-${row.packer_no}-${row.packer_mark}-${row.drawing_number}`}>
+                    <td className="px-3 py-2.5">
+                      <Pill className={row.item_type === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
+                        {row.item_type === "packer" ? "Packer" : "Bolt"}
+                      </Pill>
+                    </td>
                     <td className="px-3 py-2.5 font-black text-slate-950">{row.tower_segment}</td>
+                    <td className="px-3 py-2.5">{row.drawing_number || "—"}</td>
                     <td className="px-3 py-2.5 text-center font-black">{row.bolt_diameter}</td>
-                    <td className="px-3 py-2.5 text-center">{row.dn_sn || "—"}</td>
-                    <td className="px-3 py-2.5 text-center">{row.length}</td>
+                    <td className="px-3 py-2.5 text-center font-bold">
+                      {row.item_type === "packer"
+                        ? [row.packer_no, row.packer_mark].filter(Boolean).join(" · ") || "—"
+                        : [row.dn_sn, row.length ? `${row.length} mm` : "", row.bolt_type && row.bolt_type !== "Standard Bolt" ? row.bolt_type : ""].filter(Boolean).join(" · ") || "—"}
+                    </td>
                     <td className="px-3 py-2.5 text-center font-black">{row.qty}</td>
-                    <td className="px-3 py-2.5"><DataActions onEdit={() => setBoltDraft({ ...row })} onDelete={() => void deleteRow("tower_material_bolts", row.id, `${row.bolt_diameter} ${row.length}`)} /></td>
+                    <td className="px-3 py-2.5">
+                      <DataActions
+                        onEdit={() => setBoltDraft({ ...row })}
+                        onDelete={() => void deleteRow("tower_material_bolts", row.id, materialItemLabel(row))}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -3783,12 +3976,50 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
       )}
 
       {boltDraft && (
-        <EditPanel title={boltDraft.id ? "Edit Bolt" : "Add Bolt"} onClose={() => setBoltDraft(null)} onSave={() => void saveBolt()} saving={busy === "save"}>
+        <EditPanel
+          title={boltDraft.id ? "Edit Bolt / Packer" : "Add Bolt / Packer"}
+          onClose={() => setBoltDraft(null)}
+          onSave={() => void saveBolt()}
+          saving={busy === "save"}
+        >
+          <div>
+            <label className="mb-1 block text-xs font-black text-slate-500">Item Type</label>
+            <select
+              value={boltDraft.item_type}
+              onChange={(event) => {
+                const itemType = event.target.value as MaterialItemType;
+                setBoltDraft((prev) => prev ? {
+                  ...prev,
+                  item_type: itemType,
+                  bolt_type: itemType === "bolt" ? (prev.bolt_type || "Standard Bolt") : "",
+                  dn_sn: itemType === "bolt" ? prev.dn_sn : "",
+                  length: itemType === "bolt" ? prev.length : "",
+                  packer_no: itemType === "packer" ? prev.packer_no : "",
+                  packer_mark: itemType === "packer" ? prev.packer_mark : "",
+                } : prev);
+              }}
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+            >
+              <option value="bolt">Bolt</option>
+              <option value="packer">Packer</option>
+            </select>
+          </div>
           <EditInput label="Tower Segment" value={boltDraft.tower_segment} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, tower_segment: value } : prev)} />
+          <EditInput label="Drawing Number" value={boltDraft.drawing_number} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, drawing_number: value } : prev)} />
           <EditInput label="Bolt Diameter" value={boltDraft.bolt_diameter} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, bolt_diameter: value } : prev)} />
-          <EditInput label="DN/SN" value={boltDraft.dn_sn} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, dn_sn: value } : prev)} />
-          <EditInput label="Length" value={boltDraft.length} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, length: value } : prev)} />
-          <EditInput label="Qty" type="number" value={boltDraft.qty} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, qty: safeNumber(value) } : prev)} />
+          {boltDraft.item_type === "bolt" ? (
+            <>
+              <EditInput label="Bolt Type" value={boltDraft.bolt_type} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, bolt_type: value } : prev)} />
+              <EditInput label="DN/SN" value={boltDraft.dn_sn} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, dn_sn: value } : prev)} />
+              <EditInput label="Length (mm)" value={boltDraft.length} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, length: value } : prev)} />
+            </>
+          ) : (
+            <>
+              <EditInput label="Packer No" value={boltDraft.packer_no} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, packer_no: value } : prev)} />
+              <EditInput label="Packer Mark" value={boltDraft.packer_mark} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, packer_mark: value } : prev)} />
+            </>
+          )}
+          <EditInput label="Qty / Tower" type="number" value={boltDraft.qty} onChange={(value) => setBoltDraft((prev) => prev ? { ...prev, qty: safeNumber(value) } : prev)} />
         </EditPanel>
       )}
     </div>
@@ -3883,51 +4114,166 @@ function EditInput({
 function BoltRegister({ bolts }: { bolts: Bolt[] }) {
   const [query, setQuery] = useState("");
   const [segment, setSegment] = useState("all");
+  const [itemType, setItemType] = useState<"all" | MaterialItemType>("all");
 
   const segments: string[] = Array.from(
     new Set<string>(
-      bolts.map((bolt: Bolt) => bolt.tower_segment).filter((value): value is string => Boolean(value?.trim())),
+      bolts.map((item) => item.tower_segment).filter((value): value is string => Boolean(value?.trim())),
     ),
   ).sort((a, b) => a.localeCompare(b));
 
   const q = normaliseSearch(query);
-  const filtered: Bolt[] = bolts.filter((bolt: Bolt) => {
-    if (segment !== "all" && bolt.tower_segment !== segment) return false;
+  const filtered = bolts.filter((item) => {
+    if (segment !== "all" && item.tower_segment !== segment) return false;
+    if (itemType !== "all" && item.item_type !== itemType) return false;
     if (!q) return true;
-    return [bolt.tower_segment, bolt.bolt_diameter, bolt.dn_sn, bolt.length, bolt.qty]
-      .join(" ")
-      .toLowerCase()
-      .includes(q);
+    return materialItemSearchText(item).includes(q);
   });
 
-  const totalQty = filtered.reduce((sum: number, bolt: Bolt) => sum + Number(bolt.qty || 0), 0);
+  const totalQty = filtered.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const boltQty = filtered.filter((item) => item.item_type === "bolt").reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const packerQty = filtered.filter((item) => item.item_type === "packer").reduce((sum, item) => sum + Number(item.qty || 0), 0);
+
+  const grouped = (() => {
+    const map = new Map<string, {
+      key: string;
+      itemType: MaterialItemType;
+      label: string;
+      qty: number;
+      segments: Set<string>;
+      drawings: Set<string>;
+    }>();
+
+    filtered.forEach((item) => {
+      const key = item.item_type === "packer"
+        ? ["packer", item.bolt_diameter, item.packer_no, item.packer_mark].join("__")
+        : ["bolt", item.bolt_diameter, item.bolt_type, item.dn_sn, item.length].join("__");
+      const existing = map.get(key);
+
+      if (existing) {
+        existing.qty += Number(item.qty || 0);
+        if (item.tower_segment) existing.segments.add(item.tower_segment);
+        if (item.drawing_number) existing.drawings.add(item.drawing_number);
+      } else {
+        map.set(key, {
+          key,
+          itemType: item.item_type,
+          label: materialItemLabel(item),
+          qty: Number(item.qty || 0),
+          segments: new Set(item.tower_segment ? [item.tower_segment] : []),
+          drawings: new Set(item.drawing_number ? [item.drawing_number] : []),
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  })();
 
   return (
     <div>
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between print:hidden">
-        <div className="grid flex-1 grid-cols-1 gap-2 md:grid-cols-[1fr_260px]">
+      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3 text-xs leading-5 text-blue-900">
+        These quantities are scoped to this tower&apos;s imported register. Search a specific item such as <strong>M16 45</strong>, <strong>M20 220</strong>, <strong>DN M16</strong> or <strong>M16 #10</strong> and TTTracker will sum the matching quantity across this tower.
+      </div>
+
+      <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between print:hidden">
+        <div className="grid flex-1 grid-cols-1 gap-2 md:grid-cols-[1fr_220px_220px]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search diameter, DN/SN, length or segment…" className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-4 focus:ring-slate-100" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search bolt, packer, diameter, DN/SN, length, # number, drawing or segment…" className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-4 focus:ring-slate-100" />
           </div>
+
+          <select value={itemType} onChange={(event) => setItemType(event.target.value as "all" | MaterialItemType)} className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+            <option value="all">All item types</option>
+            <option value="bolt">Bolts only</option>
+            <option value="packer">Packers only</option>
+          </select>
 
           <select value={segment} onChange={(event) => setSegment(event.target.value)} className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
             <option value="all">All tower segments</option>
-            {segments.map((item: string) => <option key={item} value={item}>{item}</option>)}
+            {segments.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </div>
 
         <button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-1 rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-black text-slate-700"><Printer size={14} /> Print</button>
       </div>
 
-      <div className="mt-3 grid max-w-md grid-cols-2 gap-2"><BoltSummary label="Rows" value={filtered.length} /><BoltSummary label="Bolt Qty" value={totalQty} /></div>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <BoltSummary label="Rows" value={filtered.length} />
+        <BoltSummary label="Required Qty" value={totalQty} />
+        <BoltSummary label="Bolt Qty" value={boltQty} />
+        <BoltSummary label="Packer Qty" value={packerQty} />
+      </div>
+
+      {grouped.length > 0 && (
+        <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="text-xs font-black uppercase tracking-wide text-slate-500">Required by item</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">Same bolt / packer specification is combined across matching tower segments and drawings.</div>
+          </div>
+          <table className="min-w-full text-sm">
+            <thead className="bg-white text-[10px] font-black uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-3 py-2 text-left">Item</th>
+                <th className="px-3 py-2 text-left">Segments</th>
+                <th className="px-3 py-2 text-left">Drawings</th>
+                <th className="px-3 py-2 text-center">Required</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {grouped.map((group) => (
+                <tr key={group.key}>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <Pill className={group.itemType === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
+                        {group.itemType === "packer" ? "Packer" : "Bolt"}
+                      </Pill>
+                      <span className="font-black text-slate-950">{group.label || "Unspecified"}</span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.segments).join(", ") || "—"}</td>
+                  <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.drawings).join(", ") || "—"}</td>
+                  <td className="px-3 py-2.5 text-center"><span className="inline-flex min-w-14 justify-center rounded-lg bg-slate-950 px-2.5 py-1 font-black text-white">{group.qty}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="mt-3">
-        {filtered.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No bolts match the current filters.</div> : (
+        {filtered.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No bolts or packers match the current filters.</div> : (
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400"><tr><th className="px-3 py-2 text-left">Tower Segment</th><th className="px-3 py-2 text-center">Diameter</th><th className="px-3 py-2 text-center">DN/SN</th><th className="px-3 py-2 text-center">Length</th><th className="px-3 py-2 text-center">Qty</th></tr></thead>
-              <tbody className="divide-y divide-slate-100">{filtered.map((bolt: Bolt) => <tr key={bolt.id || `${bolt.tower_segment}-${bolt.bolt_diameter}-${bolt.dn_sn}-${bolt.length}`}><td className="px-3 py-2.5 font-bold text-slate-900">{bolt.tower_segment || "—"}</td><td className="px-3 py-2.5 text-center font-black text-slate-900">{bolt.bolt_diameter || "—"}</td><td className="px-3 py-2.5 text-center font-black uppercase text-slate-900">{bolt.dn_sn || "—"}</td><td className="px-3 py-2.5 text-center font-black text-slate-900">{bolt.length || "—"}</td><td className="px-3 py-2.5 text-center"><span className="inline-flex min-w-12 justify-center rounded-lg bg-slate-100 px-2 py-1 font-black text-slate-950">{bolt.qty}</span></td></tr>)}</tbody>
+              <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-left">Tower Segment</th>
+                  <th className="px-3 py-2 text-left">Drawing</th>
+                  <th className="px-3 py-2 text-center">Diameter</th>
+                  <th className="px-3 py-2 text-center">Specification</th>
+                  <th className="px-3 py-2 text-center">Qty</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((item) => (
+                  <tr key={item.id || `${item.item_type}-${item.tower_segment}-${item.bolt_diameter}-${item.bolt_type}-${item.dn_sn}-${item.length}-${item.packer_no}-${item.packer_mark}-${item.drawing_number}`}>
+                    <td className="px-3 py-2.5">
+                      <Pill className={item.item_type === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
+                        {item.item_type === "packer" ? "Packer" : "Bolt"}
+                      </Pill>
+                    </td>
+                    <td className="px-3 py-2.5 font-bold text-slate-900">{item.tower_segment || "—"}</td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">{item.drawing_number || "—"}</td>
+                    <td className="px-3 py-2.5 text-center font-black text-slate-900">{item.bolt_diameter || "—"}</td>
+                    <td className="px-3 py-2.5 text-center font-black text-slate-900">
+                      {item.item_type === "packer"
+                        ? [item.packer_no, item.packer_mark].filter(Boolean).join(" · ") || "—"
+                        : [item.dn_sn, item.length ? `${item.length} mm` : "", item.bolt_type && item.bolt_type !== "Standard Bolt" ? item.bolt_type : ""].filter(Boolean).join(" · ") || "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-center"><span className="inline-flex min-w-12 justify-center rounded-lg bg-slate-100 px-2 py-1 font-black text-slate-950">{item.qty}</span></td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
           </div>
         )}
@@ -3949,7 +4295,7 @@ const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
   { id: "bundles", label: "Bundles", icon: PackageCheck },
   { id: "transfers", label: "Transfers", icon: ArrowRightLeft },
   { id: "issues", label: "Issues", icon: TriangleAlert },
-  { id: "bolts", label: "Bolts", icon: Wrench },
+  { id: "bolts", label: "Bolts & Packers", icon: Wrench },
   { id: "data", label: "Data & Imports", icon: Database },
 ];
 
@@ -3989,7 +4335,7 @@ export default function MaterialsControlPage() {
                 <div>
                   <h1 className="text-xl font-black tracking-tight text-slate-950 md:text-2xl">Materials Control</h1>
                   <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-                    Website management workspace for bundle control, tower transfers, missing-material close-out, bolts and master data.
+                    Website management workspace for bundle control, tower transfers, missing-material close-out, bolts, packers and master data.
                   </p>
                 </div>
               </div>
@@ -3997,8 +4343,7 @@ export default function MaterialsControlPage() {
               <div className="flex flex-wrap items-center gap-2">
                 {data.saving && <span className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">Saving…</span>}
                 <button type="button" onClick={() => void data.refresh()} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50">
-                  <RefreshCw size={14} /> Refresh
-                </button>
+                  <RefreshCw size={14} /> Refresh</button>
                 <Link href={`/project/${projectId}/tower/${towerId}/dockets`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-200">
                   <ClipboardList size={14} /> Daily Dockets
                 </Link>
@@ -4013,7 +4358,7 @@ export default function MaterialsControlPage() {
               <MainSummary label="Part Delivered" value={partialMissing} tone="amber" />
               <MainSummary label="Missing Qty Left" value={missingOutstandingQty} tone="red" />
               <MainSummary label="Excess" value={excessCount} tone="blue" />
-              <MainSummary label="Bolts" value={data.bolts.length} />
+              <MainSummary label="Bolts / Packers" value={data.bolts.length} />
             </div>
           </div>
 
@@ -4092,7 +4437,6 @@ export default function MaterialsControlPage() {
       {transferModalOpen && (
         <TransferBundleModal
           data={data}
-          projectId={projectId}
           towerId={towerId}
           initialBundle={transferBundle}
           onClose={() => {
