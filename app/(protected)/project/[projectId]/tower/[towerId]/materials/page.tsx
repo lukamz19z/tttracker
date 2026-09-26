@@ -261,6 +261,8 @@ type MaterialsData = {
   applicableBolts: Bolt[];
   applicableMaterialSegments: string[];
   materialApplicabilityActive: boolean;
+  towerLegConfiguration: Array<{ key: string; label: string; count: number }>;
+  materialSegmentMultiplier: (segment: string) => number;
   bundleChecks: BundleCheck[];
   memberChecks: MemberCheck[];
   materialEvents: MaterialEvent[];
@@ -772,6 +774,238 @@ function isGeneralMaterialSegment(value: string): boolean {
   return materialSegmentKey(value) === materialSegmentKey("General");
 }
 
+function legConfigurationKey(value: unknown, allowBare = false): string {
+  const raw = safeString(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[–—−]/g, "-");
+
+  if (!raw) return "";
+
+  const hasLegContext = /\bLEGS?\b/.test(raw) || /LEG[\s_-]*EXT/.test(raw);
+
+  let compact = raw
+    .replace(/\s+/g, "")
+    .replace(/LEGEXTENSIONS?/g, "")
+    .replace(/LEGEXTS?/g, "")
+    .replace(/LEGS?/g, "")
+    .replace(/EXTENSIONS?/g, "")
+    .replace(/EXTS?/g, "");
+
+  // Drawing / tower data sometimes writes +5Am or -1Bm instead of +5m_A / -1m_B.
+  compact = compact.replace(/^([+-]?\d+)([A-Z])M$/, "$1M_$2");
+
+  if (
+    !allowBare &&
+    !hasLegContext &&
+    !/^[+-]?\d+(?:M)?(?:[_-]?[A-Z])?$/.test(compact)
+  ) {
+    return "";
+  }
+
+  const match = compact.match(/^([+-]?)(\d+)(?:M)?(?:[_-]?([A-Z]))?$/);
+  if (!match) return "";
+
+  const number = Number(match[2]);
+  if (!Number.isFinite(number)) return "";
+
+  const sign = number === 0 ? "" : match[1] === "-" ? "-" : "+";
+  const variant = match[3] || "";
+
+  return `${sign}${number}${variant}`;
+}
+
+function legConfigurationLabel(key: string): string {
+  const match = key.match(/^([+-]?)(\d+)([A-Z]?)$/);
+  if (!match) return key;
+
+  const number = Number(match[2]);
+  const sign = number === 0 ? "+" : match[1] === "-" ? "-" : "+";
+  const variant = match[3] ? `_${match[3]}` : "";
+
+  return `${sign}${number}m${variant} Leg Extension`;
+}
+
+function addLegConfigurationCount(
+  output: Map<string, number>,
+  key: string,
+  count: number,
+) {
+  if (!key || !Number.isFinite(count) || count <= 0) return;
+  output.set(key, (output.get(key) || 0) + Math.floor(count));
+}
+
+function collectLegConfigurationValue(
+  value: unknown,
+  output: Map<string, number>,
+  singleValueCount = 1,
+) {
+  if (value === null || value === undefined || value === "") return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectLegConfigurationValue(item, output, 1));
+    return;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record);
+
+    const countEntry = entries.find(([key]) => {
+      const header = normaliseHeader(key);
+      return header === "count" || header === "qty" || header === "quantity";
+    });
+    const configEntry = entries.find(([key]) => {
+      const header = normaliseHeader(key);
+      return (
+        header.includes("extension") ||
+        header.includes("leg type") ||
+        header === "value" ||
+        header === "type"
+      );
+    });
+
+    if (countEntry && configEntry) {
+      const key = legConfigurationKey(configEntry[1], true);
+      const count = Math.max(Math.floor(safeNumber(countEntry[1], 0)), 0);
+      if (key && count > 0) {
+        addLegConfigurationCount(output, key, count);
+        return;
+      }
+    }
+
+    entries.forEach(([key, nested]) => {
+      const header = normaliseHeader(key);
+      if (["count", "qty", "quantity"].includes(header)) return;
+      collectLegConfigurationValue(nested, output, 1);
+    });
+    return;
+  }
+
+  if (typeof value === "number") {
+    const key = legConfigurationKey(value, true);
+    if (key) addLegConfigurationCount(output, key, singleValueCount);
+    return;
+  }
+
+  const raw = safeString(value).trim();
+  if (!raw) return;
+
+  if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+    try {
+      collectLegConfigurationValue(JSON.parse(raw), output, singleValueCount);
+      return;
+    } catch {
+      // Continue with the human-readable parser below.
+    }
+  }
+
+  const text = raw.replace(/[–—−]/g, "-");
+
+  const forwardMultiplier = text.match(
+    /^\s*(\d+)\s*[x×]\s*([+-]?\s*\d+\s*(?:m)?(?:\s*[_-]?\s*[a-z])?(?:\s*leg(?:\s*extension)?)?)\s*$/i,
+  );
+  if (forwardMultiplier) {
+    const key = legConfigurationKey(forwardMultiplier[2], true);
+    if (key) {
+      addLegConfigurationCount(output, key, safeNumber(forwardMultiplier[1], 0));
+      return;
+    }
+  }
+
+  const reverseMultiplier = text.match(
+    /^\s*([+-]?\s*\d+\s*(?:m)?(?:\s*[_-]?\s*[a-z])?(?:\s*leg(?:\s*extension)?)?)\s*[x×]\s*(\d+)\s*$/i,
+  );
+  if (reverseMultiplier) {
+    const key = legConfigurationKey(reverseMultiplier[1], true);
+    if (key) {
+      addLegConfigurationCount(output, key, safeNumber(reverseMultiplier[2], 0));
+      return;
+    }
+  }
+
+  const withoutLegLabels = text.replace(/\bLEG\s*(?:[1-4]|[A-D])\s*[:=]?/gi, " ");
+  const separated = withoutLegLabels
+    .split(/[,;|/\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (separated.length > 1) {
+    let matched = 0;
+    separated.forEach((item) => {
+      const key = legConfigurationKey(item, true);
+      if (!key) return;
+      matched += 1;
+      addLegConfigurationCount(output, key, 1);
+    });
+    if (matched > 0) return;
+  }
+
+  const tokenMatches = Array.from(
+    withoutLegLabels.matchAll(/[+-]?\s*\d+\s*(?:m)?(?:\s*[_-]?\s*[a-z])?/gi),
+  )
+    .map((match) => legConfigurationKey(match[0], true))
+    .filter(Boolean);
+
+  if (tokenMatches.length > 1) {
+    tokenMatches.forEach((key) => addLegConfigurationCount(output, key, 1));
+    return;
+  }
+
+  const key = legConfigurationKey(raw, true);
+  if (key) addLegConfigurationCount(output, key, singleValueCount);
+}
+
+function looksLikeIndividualLegField(fieldName: string): boolean {
+  const key = normaliseHeader(fieldName);
+  return (
+    /^leg [1-4]$/.test(key) ||
+    /^leg [a-d]$/.test(key) ||
+    /^leg [1-4] extension$/.test(key) ||
+    /^leg [a-d] extension$/.test(key) ||
+    /^leg extension [1-4]$/.test(key) ||
+    /^leg extension [a-d]$/.test(key)
+  );
+}
+
+function getTowerLegConfigurationCounts(tower: TowerRecord | null): Map<string, number> {
+  const output = new Map<string, number>();
+  const extra = tower?.extra_data || {};
+  if (!Object.keys(extra).length) return output;
+
+  const genericKeys = new Set(
+    [
+      "Leg Extension",
+      "Leg Extensions",
+      "leg_extension",
+      "leg_extensions",
+      "Leg Type",
+      "Leg Types",
+      "Legs",
+    ].map(normaliseHeader),
+  );
+
+  // Prefer the same tower-level leg field that the Tower Overview uses. A
+  // single value on that field represents the common configuration for all
+  // four legs; lists / arrays / objects preserve each individual leg.
+  for (const [key, value] of Object.entries(extra)) {
+    if (!genericKeys.has(normaliseHeader(key))) continue;
+    const singleValueCount =
+      Array.isArray(value) || (value !== null && typeof value === "object") ? 1 : 4;
+    collectLegConfigurationValue(value, output, singleValueCount);
+    if (output.size > 0) return output;
+  }
+
+  // Some project imports expose the four legs as separate fields rather than
+  // one summary field. Count each of those fields independently.
+  for (const [key, value] of Object.entries(extra)) {
+    if (!looksLikeIndividualLegField(key)) continue;
+    collectLegConfigurationValue(value, output, 1);
+  }
+
+  return output;
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -1132,10 +1366,8 @@ function useMaterialsData(projectId: string, towerId: string) {
     applicableMaterialSegmentMap.set(key, display);
   };
 
-  // The bundle register is the primary source of which assemblies belong to
-  // this tower. Resolved member segments are also included so alternate
-  // human-readable segment names already present in imported member data can
-  // match the bolt / packer register without any tower-type hard-coding.
+  // The existing bundle/member process remains the primary source of which
+  // tower assemblies apply. No VSL segment names or tower numbers are coded here.
   bundles.forEach((bundle) => addApplicableMaterialSegment(bundle.section));
 
   members.forEach((member) => {
@@ -1148,6 +1380,26 @@ function useMaterialsData(projectId: string, towerId: string) {
     }
   });
 
+  const materialApplicabilityActive = applicableMaterialSegmentMap.size > 0;
+  const towerLegConfigurationMap = getTowerLegConfigurationCounts(tower);
+
+  const towerLegConfiguration = Array.from(towerLegConfigurationMap.entries())
+    .map(([key, count]) => ({
+      key,
+      label: legConfigurationLabel(key),
+      count,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  // Add overview leg configurations to the available segment list only when
+  // an equivalent leg segment is not already represented by bundles/members.
+  towerLegConfiguration.forEach((leg) => {
+    const alreadyRepresented = Array.from(applicableMaterialSegmentMap.values()).some(
+      (segment) => legConfigurationKey(segment) === leg.key,
+    );
+    if (!alreadyRepresented) addApplicableMaterialSegment(leg.label);
+  });
+
   const applicableMaterialSegments = Array.from(
     applicableMaterialSegmentMap.values(),
   ).sort((a, b) => a.localeCompare(b));
@@ -1156,15 +1408,28 @@ function useMaterialsData(projectId: string, towerId: string) {
     applicableMaterialSegments.map(materialSegmentKey),
   );
 
-  const materialApplicabilityActive = applicableMaterialSegmentKeys.size > 0;
+  const materialSegmentMultiplier = (value: string): number => {
+    const display = normaliseSegment(value);
+    if (isGeneralMaterialSegment(display)) return 1;
+
+    // If this material row is a leg-extension schedule, the Tower Overview
+    // determines both applicability and the number of identical legs. Example:
+    // four +3m legs => multiplier 4; two +3m and two +4m => 2 and 2.
+    const legKey = legConfigurationKey(display);
+    if (legKey) {
+      const legCount = towerLegConfigurationMap.get(legKey);
+      if (legCount && legCount > 0) return legCount;
+
+      // When overview leg data exists, another leg type is explicitly not
+      // applicable even if stale material rows were imported previously.
+      if (towerLegConfigurationMap.size > 0) return 0;
+    }
+
+    return applicableMaterialSegmentKeys.has(materialSegmentKey(display)) ? 1 : 0;
+  };
 
   const applicableBolts = materialApplicabilityActive
-    ? bolts.filter((item) => {
-        if (isGeneralMaterialSegment(item.tower_segment)) return true;
-        return applicableMaterialSegmentKeys.has(
-          materialSegmentKey(item.tower_segment),
-        );
-      })
+    ? bolts.filter((item) => materialSegmentMultiplier(item.tower_segment) > 0)
     : bolts;
 
   const duplicateBundleRefs = useMemo(() => {
@@ -1743,6 +2008,8 @@ function useMaterialsData(projectId: string, towerId: string) {
     applicableBolts,
     applicableMaterialSegments,
     materialApplicabilityActive,
+    towerLegConfiguration,
+    materialSegmentMultiplier,
     bundleChecks,
     memberChecks,
     materialEvents,
@@ -3523,8 +3790,16 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
   async function importBolts(file: File) {
     setBusy("bolts");
     try {
+      if (!data.materialApplicabilityActive) {
+        throw new Error(
+          "TTTracker cannot safely import the master bolt / packer register because this tower does not yet have usable bundle/member segment data. Import or correct the bundle and member registers first.",
+        );
+      }
+
       const rows = await parseImportFile(file);
       let invalid = 0;
+      let nonApplicable = 0;
+      let multipliedRows = 0;
 
       const mapped = rows.map((row) => {
         const packerNo = safeString(getRowValue(row, [
@@ -3551,12 +3826,22 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
           return null;
         }
 
+        const towerSegment = normaliseSegment(safeString(getRowValue(row, [
+          "tower_segment", "Tower Segment", "Segment", "Section",
+        ]), "General"));
+
+        const multiplier = data.materialSegmentMultiplier(towerSegment);
+        if (multiplier <= 0) {
+          nonApplicable += 1;
+          return null;
+        }
+
+        if (multiplier > 1) multipliedRows += 1;
+
         return {
           tower_id: towerId,
           item_type: itemType,
-          tower_segment: normaliseSegment(safeString(getRowValue(row, [
-            "tower_segment", "Tower Segment", "Segment", "Section",
-          ]), "General")),
+          tower_segment: towerSegment,
           drawing_number: safeString(getRowValue(row, [
             "drawing_number", "Drawing Number", "Drawing No", "Drawing", "Schedule Drawing",
           ])).trim(),
@@ -3568,7 +3853,9 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
           length: itemType === "bolt" ? length : "",
           packer_no: itemType === "packer" ? packerNo : "",
           packer_mark: itemType === "packer" ? packerMark : "",
-          qty,
+          // Leg-extension schedules are per leg. The multiplier comes from the
+          // current tower's Tower Overview rather than from hard-coded leg types.
+          qty: qty * multiplier,
         };
       }).filter(Boolean) as Array<Omit<Bolt, "id">>;
 
@@ -3590,7 +3877,11 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
       });
       const payload = Array.from(unique.values());
 
-      if (!payload.length) throw new Error("No valid bolt or packer rows were found.");
+      if (!payload.length) {
+        throw new Error(
+          "No bolt or packer rows matched this tower's bundle/member segments and Tower Overview leg configuration.",
+        );
+      }
 
       if (importMode === "replace") {
         const clear = await supabase.from("tower_material_bolts").delete().eq("tower_id", towerId);
@@ -3608,12 +3899,19 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
 
       const boltRows = payload.filter((row) => row.item_type === "bolt").length;
       const packerRows = payload.filter((row) => row.item_type === "packer").length;
+      const legSummary = data.towerLegConfiguration.length
+        ? data.towerLegConfiguration.map((leg) => `${leg.label} ×${leg.count}`).join(", ")
+        : "No separate leg multiplier detected";
+
       alert(
         [
           "Bolt & packer import complete.",
-          `Bolts: ${boltRows} row(s)`,
-          `Packers: ${packerRows} row(s)`,
+          `Bolts saved: ${boltRows} row(s)`,
+          `Packers saved: ${packerRows} row(s)`,
+          `Non-applicable master rows ignored: ${nonApplicable}`,
           `Invalid rows ignored: ${invalid}`,
+          `Leg-adjusted rows: ${multipliedRows}`,
+          `Tower legs: ${legSummary}`,
         ].join("\n"),
       );
     } catch (error) {
@@ -3862,7 +4160,7 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
           />
           <ImportCard
             title="Bolt & Packer Register"
-            description="CSV. Imports bolts and packers by segment, drawing, diameter and item specification."
+            description="CSV. Cross-checks tower segments and Tower Overview legs before saving; repeated leg configurations are multiplied automatically."
             busy={busy === "bolts"}
             onClick={() => boltInputRef.current?.click()}
           />
@@ -4189,16 +4487,16 @@ function BoltRegister({ data }: { data: MaterialsData }) {
   ).sort((a, b) => a.localeCompare(b));
 
   const q = normaliseSearch(query);
+
+  // Filter in the order the site user expects:
+  // current tower applicability -> selected segment -> item type -> search.
+  // Grouping and quantity totals happen only after those filters are applied.
   const filtered = bolts.filter((item) => {
-    if (segment !== "all" && item.tower_segment !== segment) return false;
+    if (segment !== "all" && materialSegmentKey(item.tower_segment) !== materialSegmentKey(segment)) return false;
     if (itemType !== "all" && item.item_type !== itemType) return false;
     if (!q) return true;
     return materialItemSearchText(item).includes(q);
   });
-
-  const totalQty = filtered.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  const boltQty = filtered.filter((item) => item.item_type === "bolt").reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  const packerQty = filtered.filter((item) => item.item_type === "packer").reduce((sum, item) => sum + Number(item.qty || 0), 0);
 
   const grouped = (() => {
     const map = new Map<string, {
@@ -4235,21 +4533,35 @@ function BoltRegister({ data }: { data: MaterialsData }) {
     return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
   })();
 
+  const totalQty = grouped.reduce((sum, item) => sum + item.qty, 0);
+  const boltQty = grouped
+    .filter((item) => item.itemType === "bolt")
+    .reduce((sum, item) => sum + item.qty, 0);
+  const packerQty = grouped
+    .filter((item) => item.itemType === "packer")
+    .reduce((sum, item) => sum + item.qty, 0);
+
   return (
     <div>
       <div className={`rounded-2xl border p-3 text-xs leading-5 ${data.materialApplicabilityActive ? "border-blue-200 bg-blue-50/50 text-blue-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
         {data.materialApplicabilityActive ? (
           <>
-            <strong>Automatic tower applicability is active.</strong> TTTracker is matching bolt and packer rows against the segments found in this tower&apos;s bundle register and the segments on members that resolve to those bundles. Showing <strong>{data.applicableBolts.length}</strong> of <strong>{data.bolts.length}</strong> imported row(s){excludedRows > 0 ? `; ${excludedRows} non-applicable row(s) are excluded from search and totals` : ""}. Search a specific item such as <strong>M16 45</strong>, <strong>M20 220</strong>, <strong>DN M16</strong> or <strong>M16 #10</strong> and TTTracker will sum only the matching requirement for this tower.
-            {data.applicableMaterialSegments.length > 0 && (
+            <strong>Automatic tower applicability is active.</strong> TTTracker first uses this tower&apos;s existing bundle/member segments, then cross-checks leg-extension rows against the Tower Overview. The quantities saved for a leg schedule already include the number of matching legs on this tower. Showing <strong>{data.applicableBolts.length}</strong> of <strong>{data.bolts.length}</strong> stored row(s){excludedRows > 0 ? `; ${excludedRows} stale or non-applicable row(s) are excluded` : ""}.
+            {data.towerLegConfiguration.length > 0 && (
               <div className="mt-2 text-[11px] text-blue-800">
+                <strong>Tower legs:</strong>{" "}
+                {data.towerLegConfiguration.map((leg) => `${leg.label} ×${leg.count}`).join(", ")}
+              </div>
+            )}
+            {data.applicableMaterialSegments.length > 0 && (
+              <div className="mt-1 text-[11px] text-blue-800">
                 <strong>Applicable segments:</strong> {data.applicableMaterialSegments.join(", ")}
               </div>
             )}
           </>
         ) : (
           <>
-            <strong>No segment-specific bundle/member data was detected.</strong> TTTracker is temporarily showing all imported bolt and packer rows for this tower rather than silently hiding material. Add or correct bundle/member segment data to enable automatic applicability filtering.
+            <strong>No segment-specific bundle/member data was detected.</strong> TTTracker is temporarily showing all stored bolt and packer rows. Import or correct the bundle/member register before using the master bolt / packer importer.
           </>
         )}
       </div>
@@ -4277,79 +4589,45 @@ function BoltRegister({ data }: { data: MaterialsData }) {
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-        <BoltSummary label="Rows" value={filtered.length} />
+        <BoltSummary label="Items" value={grouped.length} />
         <BoltSummary label="Required Qty" value={totalQty} />
         <BoltSummary label="Bolt Qty" value={boltQty} />
         <BoltSummary label="Packer Qty" value={packerQty} />
       </div>
 
-      {grouped.length > 0 && (
-        <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
-            <div className="text-xs font-black uppercase tracking-wide text-slate-500">Required by item</div>
-            <div className="mt-0.5 text-[11px] text-slate-500">Same bolt / packer specification is combined across matching tower segments and drawings.</div>
-          </div>
-          <table className="min-w-full text-sm">
-            <thead className="bg-white text-[10px] font-black uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-3 py-2 text-left">Item</th>
-                <th className="px-3 py-2 text-left">Segments</th>
-                <th className="px-3 py-2 text-left">Drawings</th>
-                <th className="px-3 py-2 text-center">Required</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {grouped.map((group) => (
-                <tr key={group.key}>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <Pill className={group.itemType === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
-                        {group.itemType === "packer" ? "Packer" : "Bolt"}
-                      </Pill>
-                      <span className="font-black text-slate-950">{group.label || "Unspecified"}</span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.segments).join(", ") || "—"}</td>
-                  <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.drawings).join(", ") || "—"}</td>
-                  <td className="px-3 py-2.5 text-center"><span className="inline-flex min-w-14 justify-center rounded-lg bg-slate-950 px-2.5 py-1 font-black text-white">{group.qty}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       <div className="mt-3">
-        {filtered.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">No bolts or packers match the current filters.</div> : (
+        {grouped.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+            No bolts or packers match the current filters.
+          </div>
+        ) : (
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-left">Item</th>
                   <th className="px-3 py-2 text-left">Tower Segment</th>
                   <th className="px-3 py-2 text-left">Drawing</th>
-                  <th className="px-3 py-2 text-center">Diameter</th>
-                  <th className="px-3 py-2 text-center">Specification</th>
-                  <th className="px-3 py-2 text-center">Qty</th>
+                  <th className="px-3 py-2 text-center">Required</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((item) => (
-                  <tr key={item.id || `${item.item_type}-${item.tower_segment}-${item.bolt_diameter}-${item.bolt_type}-${item.dn_sn}-${item.length}-${item.packer_no}-${item.packer_mark}-${item.drawing_number}`}>
+                {grouped.map((group) => (
+                  <tr key={group.key}>
                     <td className="px-3 py-2.5">
-                      <Pill className={item.item_type === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
-                        {item.item_type === "packer" ? "Packer" : "Bolt"}
+                      <Pill className={group.itemType === "packer" ? "border-violet-200 bg-violet-50 text-violet-700" : "border-blue-200 bg-blue-50 text-blue-700"}>
+                        {group.itemType === "packer" ? "Packer" : "Bolt"}
                       </Pill>
                     </td>
-                    <td className="px-3 py-2.5 font-bold text-slate-900">{item.tower_segment || "—"}</td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">{item.drawing_number || "—"}</td>
-                    <td className="px-3 py-2.5 text-center font-black text-slate-900">{item.bolt_diameter || "—"}</td>
-                    <td className="px-3 py-2.5 text-center font-black text-slate-900">
-                      {item.item_type === "packer"
-                        ? [item.packer_no, item.packer_mark].filter(Boolean).join(" · ") || "—"
-                        : [item.dn_sn, item.length ? `${item.length} mm` : "", item.bolt_type && item.bolt_type !== "Standard Bolt" ? item.bolt_type : ""].filter(Boolean).join(" · ") || "—"}
+                    <td className="px-3 py-2.5 font-black text-slate-950">{group.label || "Unspecified"}</td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.segments).join(", ") || "—"}</td>
+                    <td className="px-3 py-2.5 text-xs text-slate-600">{Array.from(group.drawings).join(", ") || "—"}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className="inline-flex min-w-14 justify-center rounded-lg bg-slate-950 px-2.5 py-1 font-black text-white">
+                        {group.qty}
+                      </span>
                     </td>
-                    <td className="px-3 py-2.5 text-center"><span className="inline-flex min-w-12 justify-center rounded-lg bg-slate-100 px-2 py-1 font-black text-slate-950">{item.qty}</span></td>
                   </tr>
                 ))}
               </tbody>
