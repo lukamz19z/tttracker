@@ -88,6 +88,64 @@ type LegConfigurationEntry = {
   count: number;
 };
 
+type MaterialConfigOption = {
+  id: string;
+  project_id: string | null;
+  category: string;
+  code: string;
+  label: string;
+  behavior: string;
+  value_text: string | null;
+  value_number: number | null;
+  is_effective: boolean;
+  is_closed: boolean;
+  is_active: boolean;
+  sort_order: number;
+  metadata: Record<string, unknown>;
+};
+
+type MaterialAmendmentItem = {
+  id: string;
+  amendment_id: string;
+  action_config_id: string;
+  base_material_id: string | null;
+  item_type: MaterialItemType;
+  tower_segment: string;
+  drawing_number: string;
+  bolt_diameter: string;
+  bolt_type: string;
+  dn_sn: string;
+  length: string;
+  packer_no: string;
+  packer_mark: string;
+  qty: number;
+  quantity_basis_config_id: string | null;
+  notes: string | null;
+};
+
+type MaterialAmendment = {
+  id: string;
+  project_id: string;
+  tower_id: string | null;
+  tower_type: string | null;
+  drawing_number: string | null;
+  drawing_revision: string | null;
+  tower_segment: string | null;
+  scope_config_id: string;
+  reference_type_config_id: string | null;
+  reference_no: string | null;
+  title: string;
+  reason: string | null;
+  status_config_id: string;
+  effective_date: string | null;
+  document_url: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  items: MaterialAmendmentItem[];
+};
+
 type Bolt = {
   id?: string;
   tower_id: string;
@@ -101,6 +159,17 @@ type Bolt = {
   packer_no: string;
   packer_mark: string;
   qty: number;
+  quantity_basis_behavior?: string;
+  source_kind?: "base" | "amendment";
+  base_material_id?: string | null;
+  amendment_id?: string | null;
+  amendment_reference?: string | null;
+  amendment_title?: string | null;
+  amendment_action_label?: string | null;
+  amendment_status_label?: string | null;
+  amendment_notes?: string | null;
+  amendment_document_url?: string | null;
+  original_item_label?: string | null;
 };
 
 type BundleCheck = {
@@ -265,6 +334,11 @@ type MaterialsData = {
   members: Member[];
   bolts: Bolt[];
   applicableBolts: Bolt[];
+  effectiveBolts: Bolt[];
+  materialConfigOptions: MaterialConfigOption[];
+  materialAmendments: MaterialAmendment[];
+  amendmentSetupAvailable: boolean;
+  amendmentSetupError: string | null;
   applicableMaterialSegments: string[];
   materialApplicabilityActive: boolean;
   towerLegConfiguration: LegConfigurationEntry[];
@@ -275,7 +349,10 @@ type MaterialsData = {
   isLegMaterialSegment: (segment: string) => boolean;
   isMaterialSegmentApplicable: (segment: string) => boolean;
   getMaterialMultiplier: (segment: string) => number;
+  getMaterialMultiplierForItem: (item: Bolt) => number;
   getRequiredMaterialQty: (item: Bolt) => number;
+  getMaterialConfigOptions: (category: string) => MaterialConfigOption[];
+  getMaterialConfigOption: (id: string | null | undefined) => MaterialConfigOption | undefined;
   bundleChecks: BundleCheck[];
   memberChecks: MemberCheck[];
   materialEvents: MaterialEvent[];
@@ -318,6 +395,61 @@ function safeString(value: unknown, fallback = ""): string {
 function safeNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function slugifyConfigCode(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getTowerTypeValue(tower: TowerRecord | null): string {
+  if (!tower) return "";
+  const extra = tower.extra_data || {};
+  const direct =
+    safeString(tower.tower_type) ||
+    safeString(tower.type) ||
+    safeString(extra["Tower Type"]) ||
+    safeString(extra["tower_type"]) ||
+    safeString(extra["Type"]);
+  return direct.trim();
+}
+
+function resolveConfigOptions(
+  options: MaterialConfigOption[],
+  category: string,
+  projectId: string,
+): MaterialConfigOption[] {
+  const wanted = options.filter(
+    (option) =>
+      option.is_active &&
+      option.category === category &&
+      (option.project_id === null || option.project_id === projectId),
+  );
+
+  const byCode = new Map<string, MaterialConfigOption>();
+  wanted
+    .filter((option) => option.project_id === null)
+    .forEach((option) => byCode.set(option.code, option));
+  wanted
+    .filter((option) => option.project_id === projectId)
+    .forEach((option) => byCode.set(option.code, option));
+
+  return Array.from(byCode.values()).sort((a, b) => {
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function amendmentReferenceLabel(
+  amendment: MaterialAmendment,
+  referenceType?: MaterialConfigOption,
+): string {
+  const typeLabel = referenceType?.label?.trim() || "";
+  const number = amendment.reference_no?.trim() || "";
+  return [typeLabel, number].filter(Boolean).join(" ") || amendment.title;
 }
 
 function normaliseBundleKey(value: unknown): string {
@@ -1161,7 +1293,17 @@ function materialQuantityBasis(
   segment: string,
   multiplier: number,
   legConfigurationDetected: boolean,
+  quantityBasisBehavior = "inherit",
 ): string {
+  if (quantityBasisBehavior === "per_tower") {
+    return `${baseQty} per tower`;
+  }
+
+  if (quantityBasisBehavior === "per_leg") {
+    if (!legConfigurationDetected) return `${baseQty} per leg`;
+    return `${baseQty} × ${multiplier} ${multiplier === 1 ? "leg" : "legs"}`;
+  }
+
   if (isLegMaterialSegmentValue(segment)) {
     if (!legConfigurationDetected) {
       return `${baseQty} per leg`;
@@ -1253,6 +1395,10 @@ function useMaterialsData(projectId: string, towerId: string) {
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [bolts, setBolts] = useState<Bolt[]>([]);
+  const [materialConfigOptions, setMaterialConfigOptions] = useState<MaterialConfigOption[]>([]);
+  const [materialAmendments, setMaterialAmendments] = useState<MaterialAmendment[]>([]);
+  const [amendmentSetupAvailable, setAmendmentSetupAvailable] = useState(true);
+  const [amendmentSetupError, setAmendmentSetupError] = useState<string | null>(null);
   const [bundleChecks, setBundleChecks] = useState<BundleCheck[]>([]);
   const [memberChecks, setMemberChecks] = useState<MemberCheck[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -1303,6 +1449,114 @@ function useMaterialsData(projectId: string, towerId: string) {
     }
     return rows;
   }, [supabase, towerId]);
+
+  const loadAmendmentLayer = useCallback(async () => {
+    const [configRes, amendmentRes] = await Promise.all([
+      supabase
+        .from("material_config_options")
+        .select("*")
+        .or(`project_id.is.null,project_id.eq.${projectId}`)
+        .order("category", { ascending: true })
+        .order("sort_order", { ascending: true })
+        .order("label", { ascending: true }),
+      supabase
+        .from("material_amendments")
+        .select(`
+          *,
+          items:material_amendment_items(*)
+        `)
+        .eq("project_id", projectId)
+        .order("effective_date", { ascending: true, nullsFirst: true })
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (configRes.error || amendmentRes.error) {
+      const message =
+        configRes.error?.message ||
+        amendmentRes.error?.message ||
+        "Material amendment tables are not available.";
+      setMaterialConfigOptions([]);
+      setMaterialAmendments([]);
+      setAmendmentSetupAvailable(false);
+      setAmendmentSetupError(message);
+      return;
+    }
+
+    setAmendmentSetupAvailable(true);
+    setAmendmentSetupError(null);
+
+    setMaterialConfigOptions(
+      ((configRes.data || []) as Array<Record<string, unknown>>).map((row) => ({
+        id: safeString(row.id),
+        project_id: safeString(row.project_id) || null,
+        category: safeString(row.category).trim(),
+        code: safeString(row.code).trim(),
+        label: safeString(row.label).trim(),
+        behavior: safeString(row.behavior).trim(),
+        value_text: safeString(row.value_text) || null,
+        value_number: row.value_number == null ? null : safeNumber(row.value_number),
+        is_effective: Boolean(row.is_effective),
+        is_closed: Boolean(row.is_closed),
+        is_active: row.is_active !== false,
+        sort_order: safeNumber(row.sort_order, 0),
+        metadata:
+          row.metadata && typeof row.metadata === "object"
+            ? (row.metadata as Record<string, unknown>)
+            : {},
+      })),
+    );
+
+    setMaterialAmendments(
+      ((amendmentRes.data || []) as Array<Record<string, unknown>>).map((row) => ({
+        id: safeString(row.id),
+        project_id: safeString(row.project_id, projectId),
+        tower_id: safeString(row.tower_id) || null,
+        tower_type: safeString(row.tower_type) || null,
+        drawing_number: safeString(row.drawing_number) || null,
+        drawing_revision: safeString(row.drawing_revision) || null,
+        tower_segment: safeString(row.tower_segment)
+          ? normaliseSegment(safeString(row.tower_segment))
+          : null,
+        scope_config_id: safeString(row.scope_config_id),
+        reference_type_config_id: safeString(row.reference_type_config_id) || null,
+        reference_no: safeString(row.reference_no) || null,
+        title: safeString(row.title, "Material amendment"),
+        reason: safeString(row.reason) || null,
+        status_config_id: safeString(row.status_config_id),
+        effective_date: safeString(row.effective_date) || null,
+        document_url: safeString(row.document_url) || null,
+        created_by: safeString(row.created_by) || null,
+        created_at: safeString(row.created_at) || null,
+        approved_by: safeString(row.approved_by) || null,
+        approved_at: safeString(row.approved_at) || null,
+        items: Array.isArray(row.items)
+          ? (row.items as Array<Record<string, unknown>>).map((item) => {
+              const packerNo = safeString(item.packer_no).trim();
+              return {
+                id: safeString(item.id),
+                amendment_id: safeString(item.amendment_id),
+                action_config_id: safeString(item.action_config_id),
+                base_material_id: safeString(item.base_material_id) || null,
+                item_type: normaliseMaterialItemType(item.item_type, packerNo),
+                tower_segment: normaliseSegment(
+                  safeString(item.tower_segment, "General"),
+                ),
+                drawing_number: safeString(item.drawing_number).trim(),
+                bolt_diameter: normaliseBoltDiameter(safeString(item.bolt_diameter)),
+                bolt_type: safeString(item.bolt_type, "Standard Bolt").trim() || "Standard Bolt",
+                dn_sn: safeString(item.dn_sn).trim().toUpperCase(),
+                length: safeString(item.length).trim(),
+                packer_no: packerNo,
+                packer_mark: safeString(item.packer_mark).trim(),
+                qty: safeNumber(item.qty, 0),
+                quantity_basis_config_id: safeString(item.quantity_basis_config_id) || null,
+                notes: safeString(item.notes) || null,
+              };
+            })
+          : [],
+      })),
+    );
+  }, [projectId, supabase]);
 
   const load = useCallback(async () => {
     if (!towerId) return;
@@ -1501,11 +1755,13 @@ function useMaterialsData(projectId: string, towerId: string) {
           notes: safeString(row.notes) || null,
         })),
       );
+
+      await loadAmendmentLayer();
     } catch (error) {
       console.error("materials load error", error);} finally {
       setLoading(false);
     }
-  }, [fetchAllMemberChecks, fetchAllMembers, projectId, supabase, towerId]);
+  }, [fetchAllMemberChecks, fetchAllMembers, loadAmendmentLayer, projectId, supabase, towerId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -1649,9 +1905,30 @@ function useMaterialsData(projectId: string, towerId: string) {
     return applicableMaterialSegmentKeys.has(materialSegmentKey(display));
   };
 
+  const getMaterialConfigOptions = (category: string): MaterialConfigOption[] =>
+    resolveConfigOptions(materialConfigOptions, category, projectId);
+
+  const materialConfigById = new Map(
+    materialConfigOptions.map((option) => [option.id, option]),
+  );
+
+  const getMaterialConfigOption = (
+    id: string | null | undefined,
+  ): MaterialConfigOption | undefined =>
+    id ? materialConfigById.get(id) : undefined;
+
+  const getMaterialMultiplierForItem = (item: Bolt): number => {
+    const behavior = item.quantity_basis_behavior || "inherit";
+    if (behavior === "per_tower") return 1;
+    if (behavior === "per_leg") {
+      return getMaterialMultiplier(item.tower_segment);
+    }
+    return getMaterialMultiplier(item.tower_segment);
+  };
+
   const getRequiredMaterialQty = (item: Bolt): number => {
-    const multiplier = getMaterialMultiplier(item.tower_segment);
-    return Math.max(Number(item.qty || 0), 0) * multiplier;
+    const multiplier = getMaterialMultiplierForItem(item);
+    return Math.max(Number(item.qty || 0), 0) * Math.max(multiplier, 0);
   };
 
   const applicableBolts = materialApplicabilityActive
@@ -1659,6 +1936,220 @@ function useMaterialsData(projectId: string, towerId: string) {
         isMaterialSegmentApplicable(item.tower_segment),
       )
     : bolts;
+
+  const currentTowerType = getTowerTypeValue(tower);
+
+  const amendmentIsInCurrentTowerScope = (amendment: MaterialAmendment): boolean => {
+    if (amendment.project_id !== projectId) return false;
+
+    const status = getMaterialConfigOption(amendment.status_config_id);
+    if (!status?.is_effective) return false;
+
+    const scope = getMaterialConfigOption(amendment.scope_config_id);
+    const behavior = scope?.behavior || "";
+
+    if (behavior === "tower") {
+      return amendment.tower_id === towerId;
+    }
+
+    if (behavior === "tower_type") {
+      return Boolean(
+        amendment.tower_type &&
+          currentTowerType &&
+          normaliseHeader(amendment.tower_type) === normaliseHeader(currentTowerType),
+      );
+    }
+
+    if (behavior === "project") return true;
+
+    if (behavior === "drawing") {
+      const drawing = safeString(amendment.drawing_number).trim().toUpperCase();
+      if (!drawing) return false;
+      return applicableBolts.some(
+        (item) => item.drawing_number.trim().toUpperCase() === drawing,
+      );
+    }
+
+    if (behavior === "segment") {
+      return Boolean(
+        amendment.tower_segment &&
+          isMaterialSegmentApplicable(amendment.tower_segment),
+      );
+    }
+
+    // Unknown scope behaviours fail closed. Adding a new scope label does not
+    // silently broaden where an amendment applies; its configured behaviour
+    // must map to a supported scope capability first.
+    return false;
+  };
+
+  const effectiveBolts = (() => {
+    const rows: Bolt[] = applicableBolts.map((item) => ({
+      ...item,
+      source_kind: "base",
+      base_material_id: item.id || null,
+      quantity_basis_behavior: item.quantity_basis_behavior || "inherit",
+    }));
+
+    const findBaseIndex = (baseMaterialId: string | null) => {
+      if (!baseMaterialId) return -1;
+      return rows.findIndex(
+        (row) =>
+          row.base_material_id === baseMaterialId ||
+          (row.source_kind === "base" && row.id === baseMaterialId),
+      );
+    };
+
+    const amendments = [...materialAmendments].sort((a, b) => {
+      const aDate = a.effective_date || a.created_at || "";
+      const bDate = b.effective_date || b.created_at || "";
+      return aDate.localeCompare(bDate);
+    });
+
+    amendments.forEach((amendment) => {
+      if (!amendmentIsInCurrentTowerScope(amendment)) return;
+
+      const status = getMaterialConfigOption(amendment.status_config_id);
+      const referenceType = getMaterialConfigOption(amendment.reference_type_config_id);
+      const reference = amendmentReferenceLabel(amendment, referenceType);
+      const scope = getMaterialConfigOption(amendment.scope_config_id);
+
+      amendment.items.forEach((amendmentItem) => {
+        const action = getMaterialConfigOption(amendmentItem.action_config_id);
+        const behavior = action?.behavior || "";
+        if (!behavior) return;
+
+        const baseIndex = findBaseIndex(amendmentItem.base_material_id);
+        const base = baseIndex >= 0 ? rows[baseIndex] : undefined;
+
+        // Drawing and segment scopes remain row-specific even when the
+        // amendment has a base link, preventing an amendment from leaking
+        // into another drawing/segment that happens to use the same item.
+        if (scope?.behavior === "drawing" && base) {
+          const scopeDrawing = safeString(amendment.drawing_number).trim().toUpperCase();
+          if (scopeDrawing && base.drawing_number.trim().toUpperCase() !== scopeDrawing) return;
+        }
+        if (scope?.behavior === "segment" && base) {
+          if (
+            amendment.tower_segment &&
+            materialSegmentKey(base.tower_segment) !== materialSegmentKey(amendment.tower_segment)
+          ) {
+            return;
+          }
+        }
+
+        const quantityBasis = getMaterialConfigOption(
+          amendmentItem.quantity_basis_config_id,
+        );
+        const quantityBasisBehavior =
+          quantityBasis?.behavior ||
+          base?.quantity_basis_behavior ||
+          "inherit";
+
+        const amendedRow = (qty: number): Bolt => ({
+          id: `amendment:${amendmentItem.id}`,
+          tower_id: towerId,
+          item_type: amendmentItem.item_type || base?.item_type || "bolt",
+          tower_segment: normaliseSegment(
+            amendmentItem.tower_segment || base?.tower_segment || amendment.tower_segment || "General",
+          ),
+          drawing_number:
+            amendmentItem.drawing_number ||
+            base?.drawing_number ||
+            amendment.drawing_number ||
+            "",
+          bolt_diameter:
+            amendmentItem.bolt_diameter || base?.bolt_diameter || "",
+          bolt_type:
+            amendmentItem.item_type === "packer"
+              ? ""
+              : amendmentItem.bolt_type || base?.bolt_type || "Standard Bolt",
+          dn_sn:
+            amendmentItem.item_type === "packer"
+              ? ""
+              : amendmentItem.dn_sn || base?.dn_sn || "",
+          length:
+            amendmentItem.item_type === "packer"
+              ? ""
+              : amendmentItem.length || base?.length || "",
+          packer_no:
+            amendmentItem.item_type === "packer"
+              ? amendmentItem.packer_no || base?.packer_no || ""
+              : "",
+          packer_mark:
+            amendmentItem.item_type === "packer"
+              ? amendmentItem.packer_mark || base?.packer_mark || ""
+              : "",
+          qty,
+          quantity_basis_behavior: quantityBasisBehavior,
+          source_kind: "amendment",
+          base_material_id: amendmentItem.base_material_id || base?.base_material_id || null,
+          amendment_id: amendment.id,
+          amendment_reference: reference,
+          amendment_title: amendment.title,
+          amendment_action_label: action?.label || null,
+          amendment_status_label: status?.label || null,
+          amendment_notes: amendmentItem.notes || amendment.reason || null,
+          amendment_document_url: amendment.document_url || null,
+          original_item_label: base ? materialItemLabel(base) : null,
+        });
+
+        if (behavior === "note") {
+          if (!base) return;
+          rows[baseIndex] = {
+            ...base,
+            amendment_id: amendment.id,
+            amendment_reference: [base.amendment_reference, reference]
+              .filter(Boolean)
+              .join("; "),
+            amendment_title: amendment.title,
+            amendment_action_label: action?.label || null,
+            amendment_status_label: status?.label || null,
+            amendment_notes: amendmentItem.notes || amendment.reason || null,
+            amendment_document_url: amendment.document_url || null,
+          };
+          return;
+        }
+
+        if (behavior === "remove") {
+          if (baseIndex >= 0) rows.splice(baseIndex, 1);
+          return;
+        }
+
+        if (behavior === "replace") {
+          if (!base) return;
+          const qty = amendmentItem.qty > 0 ? amendmentItem.qty : base.qty;
+          rows.splice(baseIndex, 1, amendedRow(qty));
+          return;
+        }
+
+        if (behavior === "quantity_override") {
+          if (!base) return;
+          rows.splice(baseIndex, 1, amendedRow(Math.max(amendmentItem.qty, 0)));
+          return;
+        }
+
+        if (behavior === "quantity_delta") {
+          if (!base) return;
+          rows.splice(
+            baseIndex,
+            1,
+            amendedRow(Math.max(Number(base.qty || 0) + amendmentItem.qty, 0)),
+          );
+          return;
+        }
+
+        if (behavior === "add") {
+          if (amendmentItem.qty <= 0) return;
+          const row = amendedRow(amendmentItem.qty);
+          if (!isMaterialSegmentApplicable(row.tower_segment)) return;
+          rows.push(row);
+        }
+      });
+    });
+
+    return rows.filter((item) => isMaterialSegmentApplicable(item.tower_segment));
+  })();
 
   const duplicateBundleRefs = useMemo(() => {
     return new Set(
@@ -2234,6 +2725,11 @@ function useMaterialsData(projectId: string, towerId: string) {
     members,
     bolts,
     applicableBolts,
+    effectiveBolts,
+    materialConfigOptions,
+    materialAmendments,
+    amendmentSetupAvailable,
+    amendmentSetupError,
     applicableMaterialSegments,
     materialApplicabilityActive,
     towerLegConfiguration,
@@ -2244,7 +2740,10 @@ function useMaterialsData(projectId: string, towerId: string) {
     isLegMaterialSegment: isLegMaterialSegmentValue,
     isMaterialSegmentApplicable,
     getMaterialMultiplier,
+    getMaterialMultiplierForItem,
     getRequiredMaterialQty,
+    getMaterialConfigOptions,
+    getMaterialConfigOption,
     bundleChecks,
     memberChecks,
     materialEvents,
@@ -2312,7 +2811,7 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
 
   const fastenerResults: Bolt[] = !q
     ? []
-    : data.applicableBolts.filter((item) => materialItemSearchText(item).includes(q));
+    : data.effectiveBolts.filter((item) => materialItemSearchText(item).includes(q));
 
   const placeholder =
     mode === "members"
@@ -2402,9 +2901,16 @@ function MaterialsSearch({ data }: { data: MaterialsData }) {
                   <div className="mt-1 text-xs text-slate-500">
                     {item.tower_segment || "General"}
                     {item.drawing_number ? ` · ${item.drawing_number}` : ""}
-                    {data.isLegMaterialSegment(item.tower_segment)
-                      ? ` · ${materialQuantityBasis(item.qty, item.tower_segment, data.getMaterialMultiplier(item.tower_segment), data.legConfigurationDetected)}`
+                    {data.isLegMaterialSegment(item.tower_segment) || item.quantity_basis_behavior === "per_leg"
+                      ? ` · ${materialQuantityBasis(
+                          item.qty,
+                          item.tower_segment,
+                          data.getMaterialMultiplierForItem(item),
+                          data.legConfigurationDetected,
+                          item.quantity_basis_behavior,
+                        )}`
                       : ""}
+                    {item.amendment_reference ? ` · Amended: ${item.amendment_reference}` : ""}
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs md:min-w-97.5">
@@ -4498,7 +5004,7 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
           <div>
             <h3 className="font-black text-blue-950">Data & Imports</h3>
             <p className="mt-1 text-xs text-blue-800">
-              Website-only management area for replacing, merging, correcting and exporting tower material data.
+              Website-only management area for replacing, merging, correcting and exporting source material data. Design / engineering changes should be recorded in Amendments so the original schedule remains auditable.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -4531,6 +5037,10 @@ function DataImportsWorkspace({ data, towerId }: { data: MaterialsData; towerId:
             busy={busy === "bolts"}
             onClick={() => boltInputRef.current?.click()}
           />
+        </div>
+
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+          <strong>Source data vs engineering change:</strong> use this area to fix import/data-entry mistakes in the source register. If an approved redline, RFI, drawing revision or other controlled instruction changes the actual material requirement, record it under <strong>Amendments</strong> instead of overwriting the original row.
         </div>
 
         <input ref={bundleInputRef} type="file" accept=".csv" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBundles(file); event.currentTarget.value = ""; }} />
@@ -4839,17 +5349,1029 @@ function EditInput({
   );
 }
 
+const MATERIAL_CONFIG_CATEGORIES = [
+  { id: "amendment_action", label: "Amendment Actions" },
+  { id: "amendment_status", label: "Workflow Statuses" },
+  { id: "amendment_scope", label: "Applicability Scopes" },
+  { id: "reference_type", label: "Reference Types" },
+  { id: "quantity_basis", label: "Quantity Bases" },
+] as const;
+
+function materialConfigBehaviorOptions(category: string) {
+  if (category === "amendment_action") {
+    return [
+      ["add", "Add a new / omitted material item"],
+      ["replace", "Replace an existing item / specification"],
+      ["remove", "Remove an existing item"],
+      ["quantity_override", "Override the existing base quantity"],
+      ["quantity_delta", "Add or subtract from the existing base quantity"],
+      ["note", "Attach a controlled note without changing quantity"],
+    ] as const;
+  }
+
+  if (category === "amendment_scope") {
+    return [
+      ["tower", "Current tower only"],
+      ["tower_type", "All matching tower types in this project"],
+      ["project", "Entire project"],
+      ["drawing", "Rows from a nominated drawing"],
+      ["segment", "Rows from a nominated tower segment"],
+    ] as const;
+  }
+
+  if (category === "quantity_basis") {
+    return [
+      ["inherit", "Use the normal segment basis"],
+      ["per_tower", "Quantity is per tower"],
+      ["per_leg", "Quantity is per matching leg"],
+    ] as const;
+  }
+
+  return [] as const;
+}
+
+type AmendmentDraftItem = {
+  key: string;
+  action_config_id: string;
+  base_material_id: string;
+  item_type: MaterialItemType;
+  tower_segment: string;
+  drawing_number: string;
+  bolt_diameter: string;
+  bolt_type: string;
+  dn_sn: string;
+  length: string;
+  packer_no: string;
+  packer_mark: string;
+  qty: string;
+  quantity_basis_config_id: string;
+  notes: string;
+};
+
+function makeDraftAmendmentItem(
+  actionConfigId = "",
+  quantityBasisConfigId = "",
+): AmendmentDraftItem {
+  return {
+    key:
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `amendment-item-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    action_config_id: actionConfigId,
+    base_material_id: "",
+    item_type: "bolt",
+    tower_segment: "General",
+    drawing_number: "",
+    bolt_diameter: "",
+    bolt_type: "Standard Bolt",
+    dn_sn: "",
+    length: "",
+    packer_no: "",
+    packer_mark: "",
+    qty: "1",
+    quantity_basis_config_id: quantityBasisConfigId,
+    notes: "",
+  };
+}
+
+function MaterialConfigPanel({
+  data,
+  projectId,
+}: {
+  data: MaterialsData;
+  projectId: string;
+}) {
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const [category, setCategory] = useState("amendment_action");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [code, setCode] = useState("");
+  const [behavior, setBehavior] = useState("");
+  const [sortOrder, setSortOrder] = useState("0");
+  const [isEffective, setIsEffective] = useState(false);
+  const [isClosed, setIsClosed] = useState(false);
+  const [isActive, setIsActive] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const projectRows = data.materialConfigOptions
+    .filter((option) => option.category === category)
+    .sort((a, b) => {
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return a.label.localeCompare(b.label);
+    });
+
+  const behaviorOptions = materialConfigBehaviorOptions(category);
+
+  function resetForm(nextCategory = category) {
+    setEditingId(null);
+    setCategory(nextCategory);
+    setLabel("");
+    setCode("");
+    setBehavior("");
+    setSortOrder("0");
+    setIsEffective(false);
+    setIsClosed(false);
+    setIsActive(true);
+  }
+
+  function editOption(option: MaterialConfigOption, forceProjectOverride = false) {
+    setEditingId(forceProjectOverride ? null : option.id);
+    setCategory(option.category);
+    setLabel(option.label);
+    setCode(option.code);
+    setBehavior(option.behavior || "");
+    setSortOrder(String(option.sort_order || 0));
+    setIsEffective(Boolean(option.is_effective));
+    setIsClosed(Boolean(option.is_closed));
+    setIsActive(option.is_active !== false);
+  }
+
+  async function saveOption() {
+    if (!label.trim()) {
+      alert("Enter a configuration label.");
+      return;
+    }
+
+    const cleanCode = slugifyConfigCode(code || label);
+    if (!cleanCode) {
+      alert("Enter a usable configuration code.");
+      return;
+    }
+
+    if (behaviorOptions.length > 0 && !behavior) {
+      alert("Select the system behaviour for this option.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const payload = {
+        project_id: projectId,
+        category,
+        code: cleanCode,
+        label: label.trim(),
+        behavior: behavior.trim(),
+        value_text: null,
+        value_number: null,
+        is_effective: category === "amendment_status" ? isEffective : false,
+        is_closed: category === "amendment_status" ? isClosed : false,
+        is_active: isActive,
+        sort_order: safeNumber(sortOrder, 0),
+        metadata: {},
+      };
+
+      const current = editingId
+        ? data.materialConfigOptions.find((option) => option.id === editingId)
+        : undefined;
+
+      if (current?.project_id === null) {
+        throw new Error(
+          "Global configuration rows are read-only here. Use Override to create a project-specific version.",
+        );
+      }
+
+      const result = editingId
+        ? await supabase
+            .from("material_config_options")
+            .update(payload)
+            .eq("id", editingId)
+        : await supabase.from("material_config_options").upsert(payload, {
+            onConflict: "project_id,category,code",
+          });
+
+      if (result.error) throw result.error;
+      resetForm(category);
+      await data.refresh();
+    } catch (error) {
+      console.error("material config save error", error);
+      alert(error instanceof Error ? error.message : "Configuration could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteOption(option: MaterialConfigOption) {
+    if (option.project_id === null) {
+      alert("Global rows cannot be deleted from the project Materials page. Create a project override instead.");
+      return;
+    }
+
+    if (!window.confirm(`Delete configuration option “${option.label}”?`)) return;
+
+    setBusy(true);
+    try {
+      const result = await supabase
+        .from("material_config_options")
+        .delete()
+        .eq("id", option.id);
+      if (result.error) throw result.error;
+      await data.refresh();
+    } catch (error) {
+      console.error("material config delete error", error);
+      alert(error instanceof Error ? error.message : "Configuration could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4">
+        <h3 className="font-black text-blue-950">Material amendment configuration</h3>
+        <p className="mt-1 text-xs leading-5 text-blue-800">
+          Labels, workflow statuses, scope choices, reference types and quantity bases are stored in Supabase configuration rows. The page only understands the configured system behaviour, so projects can rename, add, deactivate or override options without changing this file.
+        </p>
+      </div>
+
+      <div className="flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+        {MATERIAL_CONFIG_CATEGORIES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => resetForm(item.id)}
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-black ${
+              category === item.id ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
+        <div className="space-y-2">
+          {projectRows.length === 0 ? (
+            <IssueEmpty text="No options are configured in this category yet." />
+          ) : (
+            projectRows.map((option) => (
+              <div key={option.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-black text-slate-950">{option.label}</div>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">
+                        {option.code}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${option.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
+                        {option.is_active ? "ACTIVE" : "INACTIVE"}
+                      </span>
+                      {option.project_id === null && (
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-black text-blue-700">GLOBAL</span>
+                      )}
+                      {category === "amendment_status" && option.is_effective && (
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-black text-violet-700">AFFECTS REQUIREMENTS</span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {option.behavior ? `Behaviour: ${option.behavior}` : "No system behaviour required"} · Sort {option.sort_order}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    {option.project_id === null ? (
+                      <button type="button" onClick={() => editOption(option, true)} className="rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">
+                        Override for project
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => editOption(option)} className="inline-flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700">
+                          <Pencil size={13} /> Edit
+                        </button>
+                        <button type="button" onClick={() => void deleteOption(option)} className="inline-flex items-center gap-1 rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <h4 className="font-black text-slate-950">{editingId ? "Edit option" : "Add project option"}</h4>
+          <div className="mt-3 space-y-3">
+            <EditInput label="Label" value={label} onChange={(value) => { setLabel(value); if (!code) setCode(slugifyConfigCode(value)); }} />
+            <EditInput label="Code" value={code} onChange={setCode} />
+
+            {behaviorOptions.length > 0 && (
+              <div>
+                <label className="mb-1 block text-xs font-black text-slate-500">System Behaviour</label>
+                <select value={behavior} onChange={(event) => setBehavior(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                  <option value="">Select behaviour…</option>
+                  {behaviorOptions.map(([value, text]) => (
+                    <option key={value} value={value}>{text}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <EditInput label="Sort Order" value={sortOrder} onChange={setSortOrder} type="number" />
+
+            {category === "amendment_status" && (
+              <div className="space-y-2 rounded-xl bg-slate-50 p-3 text-xs">
+                <label className="flex items-center gap-2 font-bold text-slate-700">
+                  <input type="checkbox" checked={isEffective} onChange={(event) => setIsEffective(event.target.checked)} />
+                  This status changes the current bolt / packer requirement
+                </label>
+                <label className="flex items-center gap-2 font-bold text-slate-700">
+                  <input type="checkbox" checked={isClosed} onChange={(event) => setIsClosed(event.target.checked)} />
+                  This status is a closed workflow state
+                </label>
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+              Available for selection
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => resetForm(category)} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-600">
+                Clear
+              </button>
+              <button type="button" disabled={busy} onClick={() => void saveOption()} className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white disabled:opacity-50">
+                <Save size={13} /> {busy ? "Saving…" : "Save Option"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AmendmentsWorkspace({
+  data,
+  projectId,
+  towerId,
+}: {
+  data: MaterialsData;
+  projectId: string;
+  towerId: string;
+}) {
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const [mode, setMode] = useState<"register" | "new" | "config">("register");
+  const actions = data.getMaterialConfigOptions("amendment_action");
+  const statuses = data.getMaterialConfigOptions("amendment_status");
+  const scopes = data.getMaterialConfigOptions("amendment_scope");
+  const referenceTypes = data.getMaterialConfigOptions("reference_type");
+  const quantityBases = data.getMaterialConfigOptions("quantity_basis");
+  const defaultActionId = actions[0]?.id || "";
+  const defaultQuantityBasisId = quantityBases[0]?.id || "";
+
+  const [scopeConfigId, setScopeConfigId] = useState("");
+  const [statusConfigId, setStatusConfigId] = useState("");
+  const [referenceTypeConfigId, setReferenceTypeConfigId] = useState("");
+  const [referenceNo, setReferenceNo] = useState("");
+  const [title, setTitle] = useState("");
+  const [reason, setReason] = useState("");
+  const [drawingNumber, setDrawingNumber] = useState("");
+  const [drawingRevision, setDrawingRevision] = useState("");
+  const [towerSegment, setTowerSegment] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
+  const [documentUrl, setDocumentUrl] = useState("");
+  const [draftItems, setDraftItems] = useState<AmendmentDraftItem[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const currentTowerType = getTowerTypeValue(data.tower);
+  const selectedScope = data.getMaterialConfigOption(scopeConfigId);
+
+  const rawMaterialById = useMemo(
+    () => new Map(data.bolts.filter((item) => item.id).map((item) => [item.id!, item])),
+    [data.bolts],
+  );
+
+  const setupReady =
+    data.amendmentSetupAvailable && actions.length > 0 && statuses.length > 0 && scopes.length > 0;
+
+  function initialiseNew() {
+    setScopeConfigId(scopes[0]?.id || "");
+    setStatusConfigId(statuses[0]?.id || "");
+    setReferenceTypeConfigId(referenceTypes[0]?.id || "");
+    setReferenceNo("");
+    setTitle("");
+    setReason("");
+    setDrawingNumber("");
+    setDrawingRevision("");
+    setTowerSegment("");
+    setEffectiveDate("");
+    setDocumentUrl("");
+    setDraftItems([makeDraftAmendmentItem(defaultActionId, defaultQuantityBasisId)]);
+    setMode("new");
+  }
+
+  function updateDraftItem(index: number, patch: Partial<AmendmentDraftItem>) {
+    setDraftItems((previous) =>
+      previous.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...patch } : item,
+      ),
+    );
+  }
+
+  function chooseBaseMaterial(index: number, baseMaterialId: string) {
+    const base = rawMaterialById.get(baseMaterialId);
+    if (!base) {
+      updateDraftItem(index, { base_material_id: baseMaterialId });
+      return;
+    }
+
+    updateDraftItem(index, {
+      base_material_id: baseMaterialId,
+      item_type: base.item_type,
+      tower_segment: base.tower_segment,
+      drawing_number: base.drawing_number,
+      bolt_diameter: base.bolt_diameter,
+      bolt_type: base.bolt_type,
+      dn_sn: base.dn_sn,
+      length: base.length,
+      packer_no: base.packer_no,
+      packer_mark: base.packer_mark,
+      qty: String(base.qty),
+    });
+  }
+
+  async function saveAmendment() {
+    if (!setupReady) {
+      alert("Configure at least one action, status and scope before creating an amendment.");
+      return;
+    }
+    if (!title.trim()) {
+      alert("Enter an amendment title.");
+      return;
+    }
+    if (!scopeConfigId || !statusConfigId) {
+      alert("Select a scope and workflow status.");
+      return;
+    }
+    if (!draftItems.length) {
+      alert("Add at least one amendment item.");
+      return;
+    }
+
+    const scope = data.getMaterialConfigOption(scopeConfigId);
+    if (scope?.behavior === "tower_type" && !currentTowerType) {
+      alert("This tower does not have a Tower Type value, so a tower-type scope cannot be saved safely.");
+      return;
+    }
+    if (scope?.behavior === "drawing" && !drawingNumber.trim()) {
+      alert("Enter the drawing number for this drawing-scoped amendment.");
+      return;
+    }
+    if (scope?.behavior === "segment" && !towerSegment.trim()) {
+      alert("Select the tower segment for this segment-scoped amendment.");
+      return;
+    }
+
+    for (const [index, item] of draftItems.entries()) {
+      const action = data.getMaterialConfigOption(item.action_config_id);
+      const behavior = action?.behavior || "";
+      if (!action || !behavior) {
+        alert(`Amendment item ${index + 1} does not have a configured action behaviour.`);
+        return;
+      }
+
+      if (behavior !== "add" && !item.base_material_id) {
+        alert(`Amendment item ${index + 1} must be linked to an existing source material row.`);
+        return;
+      }
+
+      if (["add", "replace"].includes(behavior)) {
+        if (!item.bolt_diameter.trim()) {
+          alert(`Amendment item ${index + 1} requires a bolt / packer diameter.`);
+          return;
+        }
+        if (item.item_type === "bolt" && !item.length.trim()) {
+          alert(`Amendment item ${index + 1} requires a bolt length.`);
+          return;
+        }
+        if (item.item_type === "packer" && !item.packer_no.trim()) {
+          alert(`Amendment item ${index + 1} requires a packer number.`);
+          return;
+        }
+        if (safeNumber(item.qty, 0) <= 0) {
+          alert(`Amendment item ${index + 1} requires a quantity greater than zero.`);
+          return;
+        }
+      }
+    }
+
+    setSaving(true);
+    let amendmentId = "";
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const status = data.getMaterialConfigOption(statusConfigId);
+      const now = new Date().toISOString();
+
+      const headerPayload = {
+        project_id: projectId,
+        tower_id: scope?.behavior === "tower" ? towerId : null,
+        tower_type: scope?.behavior === "tower_type" ? currentTowerType : null,
+        drawing_number: scope?.behavior === "drawing" ? drawingNumber.trim() : drawingNumber.trim() || null,
+        drawing_revision: drawingRevision.trim() || null,
+        tower_segment: scope?.behavior === "segment" ? normaliseSegment(towerSegment) : towerSegment.trim() ? normaliseSegment(towerSegment) : null,
+        scope_config_id: scopeConfigId,
+        reference_type_config_id: referenceTypeConfigId || null,
+        reference_no: referenceNo.trim() || null,
+        title: title.trim(),
+        reason: reason.trim() || null,
+        status_config_id: statusConfigId,
+        effective_date: effectiveDate || null,
+        document_url: documentUrl.trim() || null,
+        created_by: userData.user?.id || null,
+        approved_by: status?.is_effective ? userData.user?.id || null : null,
+        approved_at: status?.is_effective ? now : null,
+      };
+
+      const headerResult = await supabase
+        .from("material_amendments")
+        .insert(headerPayload)
+        .select("id")
+        .single();
+      if (headerResult.error) throw headerResult.error;
+      amendmentId = safeString(headerResult.data?.id);
+      if (!amendmentId) throw new Error("The amendment header was saved without an ID.");
+
+      const itemPayload = draftItems.map((item) => {
+        const base = item.base_material_id ? rawMaterialById.get(item.base_material_id) : undefined;
+        const behavior = data.getMaterialConfigOption(item.action_config_id)?.behavior || "";
+        const useSpec = behavior === "add" || behavior === "replace";
+
+        return {
+          amendment_id: amendmentId,
+          action_config_id: item.action_config_id,
+          base_material_id: item.base_material_id || null,
+          item_type: useSpec ? item.item_type : base?.item_type || item.item_type,
+          tower_segment: normaliseSegment(useSpec ? item.tower_segment : base?.tower_segment || item.tower_segment || "General"),
+          drawing_number: useSpec ? item.drawing_number.trim() : base?.drawing_number || item.drawing_number.trim(),
+          bolt_diameter: normaliseBoltDiameter(useSpec ? item.bolt_diameter : base?.bolt_diameter || item.bolt_diameter),
+          bolt_type: (useSpec ? item.item_type : base?.item_type) === "packer" ? "" : (useSpec ? item.bolt_type : base?.bolt_type || item.bolt_type) || "Standard Bolt",
+          dn_sn: (useSpec ? item.item_type : base?.item_type) === "packer" ? "" : (useSpec ? item.dn_sn : base?.dn_sn || item.dn_sn).trim().toUpperCase(),
+          length: (useSpec ? item.item_type : base?.item_type) === "packer" ? "" : (useSpec ? item.length : base?.length || item.length).trim(),
+          packer_no: (useSpec ? item.item_type : base?.item_type) === "packer" ? (useSpec ? item.packer_no : base?.packer_no || item.packer_no).trim() : "",
+          packer_mark: (useSpec ? item.item_type : base?.item_type) === "packer" ? (useSpec ? item.packer_mark : base?.packer_mark || item.packer_mark).trim() : "",
+          qty: ["remove", "note"].includes(behavior) ? 0 : safeNumber(item.qty, 0),
+          quantity_basis_config_id: item.quantity_basis_config_id || null,
+          notes: item.notes.trim() || null,
+        };
+      });
+
+      const itemResult = await supabase.from("material_amendment_items").insert(itemPayload);
+      if (itemResult.error) throw itemResult.error;
+
+      await data.refresh();
+      setMode("register");
+      alert("Material amendment saved.");
+    } catch (error) {
+      console.error("material amendment save error", error);
+      if (amendmentId) {
+        await supabase.from("material_amendments").delete().eq("id", amendmentId);
+      }
+      alert(error instanceof Error ? error.message : "Material amendment could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateStatus(amendment: MaterialAmendment, statusConfigIdValue: string) {
+    const status = data.getMaterialConfigOption(statusConfigIdValue);
+    setSaving(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const payload: Record<string, unknown> = {
+        status_config_id: statusConfigIdValue,
+      };
+      if (status?.is_effective) {
+        payload.approved_by = userData.user?.id || null;
+        payload.approved_at = new Date().toISOString();
+      }
+      const result = await supabase
+        .from("material_amendments")
+        .update(payload)
+        .eq("id", amendment.id);
+      if (result.error) throw result.error;
+      await data.refresh();
+    } catch (error) {
+      console.error("amendment status update error", error);
+      alert(error instanceof Error ? error.message : "Status could not be updated.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteAmendment(amendment: MaterialAmendment) {
+    if (!window.confirm(`Delete material amendment “${amendment.title}”?`)) return;
+    setSaving(true);
+    try {
+      const result = await supabase.from("material_amendments").delete().eq("id", amendment.id);
+      if (result.error) throw result.error;
+      await data.refresh();
+    } catch (error) {
+      console.error("material amendment delete error", error);
+      alert(error instanceof Error ? error.message : "Amendment could not be deleted.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const currentTowerAmendments = data.materialAmendments.filter((amendment) => {
+    const scope = data.getMaterialConfigOption(amendment.scope_config_id);
+    if (!scope) return true;
+    if (scope.behavior === "tower") return amendment.tower_id === towerId;
+    if (scope.behavior === "tower_type") {
+      return Boolean(amendment.tower_type && currentTowerType && normaliseHeader(amendment.tower_type) === normaliseHeader(currentTowerType));
+    }
+    if (scope.behavior === "drawing") {
+      const drawing = safeString(amendment.drawing_number).trim().toUpperCase();
+      return Boolean(drawing && data.applicableBolts.some((item) => item.drawing_number.trim().toUpperCase() === drawing));
+    }
+    if (scope.behavior === "segment") {
+      return Boolean(amendment.tower_segment && data.isMaterialSegmentApplicable(amendment.tower_segment));
+    }
+    return scope.behavior === "project";
+  });
+
+  const q = normaliseSearch(query);
+  const filteredAmendments = currentTowerAmendments.filter((amendment) => {
+    if (!q) return true;
+    const referenceType = data.getMaterialConfigOption(amendment.reference_type_config_id);
+    const scope = data.getMaterialConfigOption(amendment.scope_config_id);
+    const status = data.getMaterialConfigOption(amendment.status_config_id);
+    return [
+      amendment.title,
+      amendment.reason,
+      amendment.reference_no,
+      referenceType?.label,
+      scope?.label,
+      status?.label,
+      amendment.drawing_number,
+      amendment.drawing_revision,
+      amendment.tower_segment,
+      ...amendment.items.flatMap((item) => [
+        materialItemLabel({
+          tower_id: towerId,
+          item_type: item.item_type,
+          tower_segment: item.tower_segment,
+          drawing_number: item.drawing_number,
+          bolt_diameter: item.bolt_diameter,
+          bolt_type: item.bolt_type,
+          dn_sn: item.dn_sn,
+          length: item.length,
+          packer_no: item.packer_no,
+          packer_mark: item.packer_mark,
+          qty: item.qty,
+        }),
+        item.notes,
+      ]),
+    ].filter(Boolean).join(" ").toLowerCase().includes(q);
+  });
+
+  const effectiveCount = currentTowerAmendments.filter((amendment) =>
+    Boolean(data.getMaterialConfigOption(amendment.status_config_id)?.is_effective),
+  ).length;
+
+  if (!data.amendmentSetupAvailable) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="font-black">Material amendment storage is not installed yet.</div>
+          <div className="mt-1 text-xs leading-5">
+            The rest of Materials Control continues to work, but amendments cannot be configured or applied until the material amendment migration is installed.
+          </div>
+          {data.amendmentSetupError && <div className="mt-2 rounded-xl bg-white/70 p-2 font-mono text-[11px]">{data.amendmentSetupError}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "config") {
+    return (
+      <div className="space-y-4">
+        <div className="flex justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">Amendment Configuration</h2>
+            <p className="mt-1 text-xs text-slate-500">Configure the options used by the material amendment workflow.</p>
+          </div>
+          <button type="button" onClick={() => setMode("register")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-700">Back to Register</button>
+        </div>
+        <MaterialConfigPanel data={data} projectId={projectId} />
+      </div>
+    );
+  }
+
+  if (mode === "new") {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">New Material Amendment</h2>
+            <p className="mt-1 text-xs text-slate-500">Record a controlled change without altering the original imported material schedule.</p>
+          </div>
+          <button type="button" onClick={() => setMode("register")} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-700">Cancel</button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs font-black text-slate-500">Workflow Status</label>
+              <select value={statusConfigId} onChange={(event) => setStatusConfigId(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                <option value="">Select status…</option>
+                {statuses.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-black text-slate-500">Applicability Scope</label>
+              <select value={scopeConfigId} onChange={(event) => setScopeConfigId(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                <option value="">Select scope…</option>
+                {scopes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-black text-slate-500">Reference Type</label>
+              <select value={referenceTypeConfigId} onChange={(event) => setReferenceTypeConfigId(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                <option value="">No reference type</option>
+                {referenceTypes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
+            <EditInput label="Reference No." value={referenceNo} onChange={setReferenceNo} />
+          </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <EditInput label="Title" value={title} onChange={setTitle} />
+            <EditInput label="Effective Date" value={effectiveDate} onChange={setEffectiveDate} type="text" />
+          </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {selectedScope?.behavior === "tower" && (
+              <div className="rounded-xl bg-slate-50 p-3 text-xs"><div className="font-black uppercase text-slate-400">Scope Target</div><div className="mt-1 font-black text-slate-900">{getTowerDisplayLabel(data.tower)}</div></div>
+            )}
+            {selectedScope?.behavior === "tower_type" && (
+              <div className="rounded-xl bg-slate-50 p-3 text-xs"><div className="font-black uppercase text-slate-400">Tower Type</div><div className="mt-1 font-black text-slate-900">{currentTowerType || "Not available"}</div></div>
+            )}
+            {(selectedScope?.behavior === "drawing" || drawingNumber) && <EditInput label="Drawing Number" value={drawingNumber} onChange={setDrawingNumber} />}
+            <EditInput label="Drawing Revision" value={drawingRevision} onChange={setDrawingRevision} />
+            {selectedScope?.behavior === "segment" && (
+              <div>
+                <label className="mb-1 block text-xs font-black text-slate-500">Tower Segment</label>
+                <select value={towerSegment} onChange={(event) => setTowerSegment(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                  <option value="">Select segment…</option>
+                  {data.applicableMaterialSegments.map((segment) => <option key={segment} value={segment}>{segment}</option>)}
+                </select>
+              </div>
+            )}
+            <EditInput label="Document / SharePoint URL" value={documentUrl} onChange={setDocumentUrl} />
+          </div>
+
+          <div className="mt-3">
+            <label className="mb-1 block text-xs font-black text-slate-500">Reason / Engineering Basis</label>
+            <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" placeholder="Explain why the source schedule is being amended and what evidence supports the change…" />
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-950">Amendment Items</h3>
+              <p className="mt-1 text-xs text-slate-500">Each item uses a configured action. Existing rows stay traceable through Base Material ID.</p>
+            </div>
+            <button type="button" onClick={() => setDraftItems((previous) => [...previous, makeDraftAmendmentItem(defaultActionId, defaultQuantityBasisId)])} className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white">
+              <Plus size={13} /> Add Item
+            </button>
+          </div>
+
+          {draftItems.map((item, index) => {
+            const action = data.getMaterialConfigOption(item.action_config_id);
+            const behavior = action?.behavior || "";
+            const needsBase = behavior !== "add";
+            const showSpec = behavior === "add" || behavior === "replace";
+            const showQty = ["add", "replace", "quantity_override", "quantity_delta"].includes(behavior);
+
+            return (
+              <div key={item.key} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="font-black text-slate-950">Item {index + 1}</div>
+                  <button type="button" onClick={() => setDraftItems((previous) => previous.filter((row) => row.key !== item.key))} className="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50"><Trash2 size={14} /></button>
+                </div>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div>
+                    <label className="mb-1 block text-xs font-black text-slate-500">Configured Action</label>
+                    <select value={item.action_config_id} onChange={(event) => updateDraftItem(index, { action_config_id: event.target.value })} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                      <option value="">Select action…</option>
+                      {actions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                    </select>
+                  </div>
+
+                  {needsBase && (
+                    <div className="md:col-span-1 xl:col-span-3">
+                      <label className="mb-1 block text-xs font-black text-slate-500">Existing Source Material Row</label>
+                      <select value={item.base_material_id} onChange={(event) => chooseBaseMaterial(index, event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                        <option value="">Select existing row…</option>
+                        {data.applicableBolts.filter((row) => row.id).map((row) => (
+                          <option key={row.id} value={row.id}>
+                            {row.tower_segment} · {materialItemLabel(row)} · Qty {row.qty}{row.drawing_number ? ` · ${row.drawing_number}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {showSpec && (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <div>
+                      <label className="mb-1 block text-xs font-black text-slate-500">Item Type</label>
+                      <select value={item.item_type} onChange={(event) => updateDraftItem(index, { item_type: event.target.value as MaterialItemType })} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                        <option value="bolt">Bolt</option>
+                        <option value="packer">Packer</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-black text-slate-500">Tower Segment</label>
+                      <select value={item.tower_segment} onChange={(event) => updateDraftItem(index, { tower_segment: event.target.value })} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                        <option value="General">General</option>
+                        {data.applicableMaterialSegments.map((segment) => <option key={segment} value={segment}>{segment}</option>)}
+                      </select>
+                    </div>
+                    <EditInput label="Drawing" value={item.drawing_number} onChange={(value) => updateDraftItem(index, { drawing_number: value })} />
+                    <EditInput label="Diameter" value={item.bolt_diameter} onChange={(value) => updateDraftItem(index, { bolt_diameter: value })} />
+                    {item.item_type === "bolt" ? (
+                      <>
+                        <EditInput label="Bolt Type" value={item.bolt_type} onChange={(value) => updateDraftItem(index, { bolt_type: value })} />
+                        <EditInput label="DN/SN" value={item.dn_sn} onChange={(value) => updateDraftItem(index, { dn_sn: value })} />
+                        <EditInput label="Length" value={item.length} onChange={(value) => updateDraftItem(index, { length: value })} />
+                      </>
+                    ) : (
+                      <>
+                        <EditInput label="Packer No." value={item.packer_no} onChange={(value) => updateDraftItem(index, { packer_no: value })} />
+                        <EditInput label="Packer Mark" value={item.packer_mark} onChange={(value) => updateDraftItem(index, { packer_mark: value })} />
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  {showQty && <EditInput label={behavior === "quantity_delta" ? "Quantity Delta (+/-)" : "Base Quantity"} value={item.qty} onChange={(value) => updateDraftItem(index, { qty: value })} type="number" />}
+                  {(showSpec || behavior === "quantity_override" || behavior === "quantity_delta") && quantityBases.length > 0 && (
+                    <div>
+                      <label className="mb-1 block text-xs font-black text-slate-500">Quantity Basis</label>
+                      <select value={item.quantity_basis_config_id} onChange={(event) => updateDraftItem(index, { quantity_basis_config_id: event.target.value })} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                        <option value="">Inherit source row</option>
+                        {quantityBases.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <EditInput label="Item Notes" value={item.notes} onChange={(value) => updateDraftItem(index, { notes: value })} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => setMode("register")} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-black text-slate-700">Cancel</button>
+          <button type="button" disabled={saving} onClick={() => void saveAmendment()} className="inline-flex items-center gap-1.5 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50">
+            <Save size={15} /> {saving ? "Saving…" : "Save Amendment"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <h2 className="text-lg font-black text-slate-950">Material Amendments</h2>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
+            Preserve the imported drawing/material schedule as the source record, then apply controlled, traceable amendments on top of it. Only statuses configured to affect requirements change the Bolts & Packers list.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setMode("config")} className="inline-flex items-center gap-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-700">
+            <Database size={13} /> Configuration
+          </button>
+          <button type="button" disabled={!setupReady} onClick={initialiseNew} className="inline-flex items-center gap-1 rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white disabled:opacity-40">
+            <Plus size={13} /> New Amendment
+          </button>
+        </div>
+      </div>
+
+      {!setupReady && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+          <strong>Configuration required.</strong> Create at least one Amendment Action, Workflow Status and Applicability Scope before recording an amendment. Nothing is hard-coded to a particular RFI, redline type, workflow label or scope.
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <IssueMetric label="Current Tower Amendments" value={currentTowerAmendments.length} tone="blue" />
+        <IssueMetric label="Effective Now" value={effectiveCount} tone="green" />
+        <IssueMetric label="Not Effective" value={Math.max(currentTowerAmendments.length - effectiveCount, 0)} tone="amber" />
+        <IssueMetric label="Effective Material Rows" value={data.effectiveBolts.length} />
+      </div>
+
+      <div className="relative">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search reference, title, drawing, item or status…" className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm" />
+      </div>
+
+      {filteredAmendments.length === 0 ? (
+        <IssueEmpty text="No material amendments match this tower and the current search." />
+      ) : (
+        <div className="space-y-3">
+          {[...filteredAmendments].reverse().map((amendment) => {
+            const scope = data.getMaterialConfigOption(amendment.scope_config_id);
+            const status = data.getMaterialConfigOption(amendment.status_config_id);
+            const referenceType = data.getMaterialConfigOption(amendment.reference_type_config_id);
+            const reference = amendmentReferenceLabel(amendment, referenceType);
+
+            return (
+              <div key={amendment.id} className={`rounded-2xl border bg-white p-4 shadow-sm ${status?.is_effective ? "border-emerald-200" : "border-slate-200"}`}>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-base font-black text-slate-950">{reference}</div>
+                      <Pill className={status?.is_effective ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700"}>
+                        {status?.label || "Unconfigured status"}
+                      </Pill>
+                      {scope && <Pill className="border-blue-200 bg-blue-50 text-blue-700">{scope.label}</Pill>}
+                    </div>
+                    <div className="mt-1 font-bold text-slate-800">{amendment.title}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {amendment.drawing_number ? `Drawing ${amendment.drawing_number}${amendment.drawing_revision ? ` Rev ${amendment.drawing_revision}` : ""} · ` : ""}
+                      {amendment.tower_segment ? `${amendment.tower_segment} · ` : ""}
+                      {amendment.effective_date ? `Effective ${formatDate(amendment.effective_date)}` : "No effective date"}
+                    </div>
+                    {amendment.reason && <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">{amendment.reason}</div>}
+                  </div>
+
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <select value={amendment.status_config_id} disabled={saving} onChange={(event) => void updateStatus(amendment, event.target.value)} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-black">
+                      {statuses.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                    </select>
+                    {amendment.document_url && (
+                      <a href={amendment.document_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">
+                        <ExternalLink size={13} /> Document
+                      </a>
+                    )}
+                    <button type="button" disabled={saving} onClick={() => void deleteAmendment(amendment)} className="inline-flex items-center gap-1 rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-50">
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {amendment.items.map((item) => {
+                    const action = data.getMaterialConfigOption(item.action_config_id);
+                    const base = item.base_material_id ? rawMaterialById.get(item.base_material_id) : undefined;
+                    const displayItem: Bolt = {
+                      tower_id: towerId,
+                      item_type: item.item_type,
+                      tower_segment: item.tower_segment,
+                      drawing_number: item.drawing_number,
+                      bolt_diameter: item.bolt_diameter,
+                      bolt_type: item.bolt_type,
+                      dn_sn: item.dn_sn,
+                      length: item.length,
+                      packer_no: item.packer_no,
+                      packer_mark: item.packer_mark,
+                      qty: item.qty,
+                    };
+
+                    return (
+                      <div key={item.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[170px_1fr_1fr_110px] md:items-center">
+                        <div><div className="text-[9px] font-black uppercase text-slate-400">Action</div><div className="text-xs font-black text-slate-900">{action?.label || "Unconfigured action"}</div></div>
+                        <div><div className="text-[9px] font-black uppercase text-slate-400">Original</div><div className="text-xs font-bold text-slate-700">{base ? `${materialItemLabel(base)} · ${base.tower_segment} · Qty ${base.qty}` : "No base row (added item)"}</div></div>
+                        <div><div className="text-[9px] font-black uppercase text-slate-400">Amended / Recorded</div><div className="text-xs font-bold text-slate-700">{materialItemLabel(displayItem) || "No replacement specification"}{item.tower_segment ? ` · ${item.tower_segment}` : ""}{item.notes ? ` · ${item.notes}` : ""}</div></div>
+                        <div className="text-right"><div className="text-[9px] font-black uppercase text-slate-400">Qty</div><div className="text-sm font-black text-slate-950">{item.qty}</div></div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BoltRegister({ data }: { data: MaterialsData }) {
   const [query, setQuery] = useState("");
   const [segment, setSegment] = useState("all");
   const [itemType, setItemType] =
     useState<"all" | MaterialItemType>("all");
 
-  const bolts = data.applicableBolts;
+  const bolts = data.effectiveBolts;
   const excludedRows = Math.max(
     data.bolts.length - data.applicableBolts.length,
     0,
   );
+  const appliedAmendmentCount = new Set(
+    bolts.map((item) => item.amendment_id).filter(Boolean),
+  ).size;
 
   const segments: string[] = Array.from(
     new Set<string>(
@@ -4895,6 +6417,9 @@ function BoltRegister({ data }: { data: MaterialsData }) {
         multiplier: number;
         requiredQty: number;
         drawings: Set<string>;
+        amendmentRefs: Set<string>;
+        amendmentDocuments: Set<string>;
+        quantityBasisBehavior: string;
       }
     >();
 
@@ -4918,7 +6443,8 @@ function BoltRegister({ data }: { data: MaterialsData }) {
       const segmentKey = materialSegmentKey(
         item.tower_segment,
       );
-      const key = `${segmentKey}__${specificationKey}`;
+      const quantityBasisBehavior = item.quantity_basis_behavior || "inherit";
+      const key = `${segmentKey}__${specificationKey}__${quantityBasisBehavior}`;
       const existing = map.get(key);
 
       if (existing) {
@@ -4926,6 +6452,8 @@ function BoltRegister({ data }: { data: MaterialsData }) {
         if (item.drawing_number) {
           existing.drawings.add(item.drawing_number);
         }
+        if (item.amendment_reference) existing.amendmentRefs.add(item.amendment_reference);
+        if (item.amendment_document_url) existing.amendmentDocuments.add(item.amendment_document_url);
         return;
       }
 
@@ -4935,15 +6463,16 @@ function BoltRegister({ data }: { data: MaterialsData }) {
         label: materialItemLabel(item),
         segment: item.tower_segment || "General",
         baseQty: Number(item.qty || 0),
-        multiplier: data.getMaterialMultiplier(
-          item.tower_segment,
-        ),
+        multiplier: data.getMaterialMultiplierForItem(item),
         requiredQty: 0,
         drawings: new Set(
           item.drawing_number
             ? [item.drawing_number]
             : [],
         ),
+        amendmentRefs: new Set(item.amendment_reference ? [item.amendment_reference] : []),
+        amendmentDocuments: new Set(item.amendment_document_url ? [item.amendment_document_url] : []),
+        quantityBasisBehavior,
       });
     });
 
@@ -5016,7 +6545,9 @@ function BoltRegister({ data }: { data: MaterialsData }) {
           row.segment,
           row.multiplier,
           data.legConfigurationDetected,
+          row.quantityBasisBehavior,
         );
+        const source = Array.from(row.amendmentRefs).join("; ") || "Source schedule";
 
         return `
           <tr>
@@ -5034,6 +6565,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                 "—",
             )}</td>
             <td>${escapeHtml(basis)}</td>
+            <td>${escapeHtml(source)}</td>
             <td class="qty">${escapeHtml(
               row.requiredQty,
             )}</td>
@@ -5270,6 +6802,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                 <th>Segment</th>
                 <th>Drawing</th>
                 <th>Basis</th>
+                <th>Source / Amendment</th>
                 <th>Required</th>
               </tr>
             </thead>
@@ -5329,6 +6862,11 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             {excludedRows > 0
               ? `; ${excludedRows} non-applicable row(s) are excluded`
               : ""}
+            . Current requirement rows after effective amendments: {" "}
+            <strong>{data.effectiveBolts.length}</strong>
+            {appliedAmendmentCount > 0
+              ? `; ${appliedAmendmentCount} effective amendment(s) are applied`
+              : "; no effective amendments are changing the list"}
             .
             {data.applicableMaterialSegments.length >
               0 && (
@@ -5542,6 +7080,9 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                   <th className="px-3 py-2 text-center">
                     Basis
                   </th>
+                  <th className="px-3 py-2 text-left">
+                    Source / Amendment
+                  </th>
                   <th className="px-3 py-2 text-center">
                     Required
                   </th>
@@ -5584,6 +7125,26 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                         row.segment,
                         row.multiplier,
                         data.legConfigurationDetected,
+                        row.quantityBasisBehavior,
+                      )}
+                    </td>
+
+                    <td className="px-3 py-2.5 text-xs text-slate-600">
+                      {row.amendmentRefs.size > 0 ? (
+                        <div className="space-y-1">
+                          {Array.from(row.amendmentRefs).map((reference) => (
+                            <div key={reference} className="font-black text-violet-700">
+                              {reference}
+                            </div>
+                          ))}
+                          {Array.from(row.amendmentDocuments).map((url) => (
+                            <a key={url} href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-black text-blue-700">
+                              <ExternalLink size={11} /> View document
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        "Source schedule"
                       )}
                     </td>
 
@@ -5608,7 +7169,7 @@ function BoltSummary({ label, value }: { label: string; value: number }) {
 }
 
 
-type Tab = "overview" | "search" | "bundles" | "transfers" | "issues" | "bolts" | "data";
+type Tab = "overview" | "search" | "bundles" | "transfers" | "issues" | "bolts" | "amendments" | "data";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
   { id: "overview", label: "Overview", icon: Boxes },
@@ -5617,6 +7178,7 @@ const tabs: Array<{ id: Tab; label: string; icon: typeof Search }> = [
   { id: "transfers", label: "Transfers", icon: ArrowRightLeft },
   { id: "issues", label: "Issues", icon: TriangleAlert },
   { id: "bolts", label: "Bolts & Packers", icon: Wrench },
+  { id: "amendments", label: "Amendments", icon: Pencil },
   { id: "data", label: "Data & Imports", icon: Database },
 ];
 
@@ -5656,7 +7218,7 @@ export default function MaterialsControlPage() {
                 <div>
                   <h1 className="text-xl font-black tracking-tight text-slate-950 md:text-2xl">Materials Control</h1>
                   <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-                    Website management workspace for bundle control, tower transfers, missing-material close-out, bolts, packers and master data.
+                    Website management workspace for bundle control, tower transfers, missing-material close-out, bolts, packers, controlled amendments and master data.
                   </p>
                 </div>
               </div>
@@ -5679,7 +7241,7 @@ export default function MaterialsControlPage() {
               <MainSummary label="Part Delivered" value={partialMissing} tone="amber" />
               <MainSummary label="Missing Qty Left" value={missingOutstandingQty} tone="red" />
               <MainSummary label="Excess" value={excessCount} tone="blue" />
-              <MainSummary label="Applicable Bolt / Packer Rows" value={data.applicableBolts.length} />
+              <MainSummary label="Current Bolt / Packer Rows" value={data.effectiveBolts.length} />
             </div>
           </div>
 
@@ -5693,7 +7255,9 @@ export default function MaterialsControlPage() {
                     ? openMissing + partialMissing
                     : tab.id === "transfers"
                       ? inTransitTransfers
-                      : null;
+                      : tab.id === "amendments"
+                        ? data.materialAmendments.length
+                        : null;
                 return (
                   <button
                     type="button"
@@ -5750,6 +7314,7 @@ export default function MaterialsControlPage() {
             )}
             {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} />}
             {activeTab === "bolts" && <BoltRegister data={data} />}
+            {activeTab === "amendments" && <AmendmentsWorkspace data={data} projectId={projectId} towerId={towerId} />}
             {activeTab === "data" && <DataImportsWorkspace data={data} towerId={towerId} />}
           </div>
         </div>
