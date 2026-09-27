@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Papa, { ParseResult } from "papaparse";
 import { useParams } from "next/navigation";
@@ -6363,6 +6363,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
   const [segment, setSegment] = useState("all");
   const [itemType, setItemType] =
     useState<"all" | MaterialItemType>("all");
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
 
   const bolts = data.effectiveBolts;
   const excludedRows = Math.max(
@@ -6405,90 +6406,127 @@ function BoltRegister({ data }: { data: MaterialsData }) {
     return materialItemSearchText(item).includes(q);
   });
 
-  const grouped = (() => {
-    const map = new Map<
-      string,
-      {
-        key: string;
-        itemType: MaterialItemType;
-        label: string;
-        segment: string;
-        baseQty: number;
-        multiplier: number;
-        requiredQty: number;
-        drawings: Set<string>;
-        amendmentRefs: Set<string>;
-        amendmentDocuments: Set<string>;
-        quantityBasisBehavior: string;
-      }
-    >();
+  type RequirementContribution = {
+    key: string;
+    segment: string;
+    drawing: string;
+    baseQty: number;
+    multiplier: number;
+    requiredQty: number;
+    basis: string;
+    amendmentReference: string | null;
+    amendmentDocumentUrl: string | null;
+    sourceLabel: string;
+  };
 
-    filtered.forEach((item) => {
+  type GroupedRequirement = {
+    key: string;
+    itemType: MaterialItemType;
+    label: string;
+    requiredQty: number;
+    segments: Set<string>;
+    drawings: Set<string>;
+    amendmentRefs: Set<string>;
+    amendmentDocuments: Set<string>;
+    contributions: RequirementContribution[];
+  };
+
+  // IMPORTANT: filtering happens first, then identical specifications are
+  // combined. With "All tower segments" selected this produces the actual
+  // whole-tower quantity for each bolt / packer specification while keeping
+  // the source drawing + segment breakdown available for traceability.
+  const grouped: GroupedRequirement[] = (() => {
+    const map = new Map<string, GroupedRequirement>();
+
+    filtered.forEach((item, index) => {
       const specificationKey =
         item.item_type === "packer"
           ? [
               "packer",
-              item.bolt_diameter,
-              item.packer_no,
-              item.packer_mark,
+              item.bolt_diameter.trim().toUpperCase(),
+              item.packer_no.trim().toUpperCase(),
+              item.packer_mark.trim().toUpperCase(),
             ].join("__")
           : [
               "bolt",
-              item.bolt_diameter,
-              item.bolt_type,
-              item.dn_sn,
-              item.length,
+              item.bolt_diameter.trim().toUpperCase(),
+              item.bolt_type.trim().toUpperCase(),
+              item.dn_sn.trim().toUpperCase(),
+              item.length.trim().toUpperCase(),
             ].join("__");
 
-      const segmentKey = materialSegmentKey(
-        item.tower_segment,
-      );
+      const multiplier = data.getMaterialMultiplierForItem(item);
+      const baseQty = Math.max(Number(item.qty || 0), 0);
+      const requiredQty = baseQty * Math.max(multiplier, 0);
+      const segmentLabel = item.tower_segment || "General";
       const quantityBasisBehavior = item.quantity_basis_behavior || "inherit";
-      const key = `${segmentKey}__${specificationKey}__${quantityBasisBehavior}`;
-      const existing = map.get(key);
+      const basis = materialQuantityBasis(
+        baseQty,
+        segmentLabel,
+        multiplier,
+        data.legConfigurationDetected,
+        quantityBasisBehavior,
+      );
+      const sourceLabel = item.amendment_reference || "Source schedule";
 
+      const contribution: RequirementContribution = {
+        key:
+          item.id ||
+          `${specificationKey}__${materialSegmentKey(segmentLabel)}__${item.drawing_number}__${index}`,
+        segment: segmentLabel,
+        drawing: item.drawing_number || "",
+        baseQty,
+        multiplier,
+        requiredQty,
+        basis,
+        amendmentReference: item.amendment_reference || null,
+        amendmentDocumentUrl: item.amendment_document_url || null,
+        sourceLabel,
+      };
+
+      const existing = map.get(specificationKey);
       if (existing) {
-        existing.baseQty += Number(item.qty || 0);
-        if (item.drawing_number) {
-          existing.drawings.add(item.drawing_number);
+        existing.requiredQty += requiredQty;
+        existing.segments.add(segmentLabel);
+        if (item.drawing_number) existing.drawings.add(item.drawing_number);
+        if (item.amendment_reference) {
+          existing.amendmentRefs.add(item.amendment_reference);
         }
-        if (item.amendment_reference) existing.amendmentRefs.add(item.amendment_reference);
-        if (item.amendment_document_url) existing.amendmentDocuments.add(item.amendment_document_url);
+        if (item.amendment_document_url) {
+          existing.amendmentDocuments.add(item.amendment_document_url);
+        }
+        existing.contributions.push(contribution);
         return;
       }
 
-      map.set(key, {
-        key,
+      map.set(specificationKey, {
+        key: specificationKey,
         itemType: item.item_type,
         label: materialItemLabel(item),
-        segment: item.tower_segment || "General",
-        baseQty: Number(item.qty || 0),
-        multiplier: data.getMaterialMultiplierForItem(item),
-        requiredQty: 0,
+        requiredQty,
+        segments: new Set([segmentLabel]),
         drawings: new Set(
-          item.drawing_number
-            ? [item.drawing_number]
-            : [],
+          item.drawing_number ? [item.drawing_number] : [],
         ),
-        amendmentRefs: new Set(item.amendment_reference ? [item.amendment_reference] : []),
-        amendmentDocuments: new Set(item.amendment_document_url ? [item.amendment_document_url] : []),
-        quantityBasisBehavior,
+        amendmentRefs: new Set(
+          item.amendment_reference ? [item.amendment_reference] : [],
+        ),
+        amendmentDocuments: new Set(
+          item.amendment_document_url ? [item.amendment_document_url] : [],
+        ),
+        contributions: [contribution],
       });
     });
 
-    return Array.from(map.values())
-      .map((row) => ({
-        ...row,
-        requiredQty:
-          row.baseQty * Math.max(row.multiplier, 0),
-      }))
-      .sort((a, b) => {
-        const segmentCompare = a.segment.localeCompare(
-          b.segment,
-        );
-        if (segmentCompare !== 0) return segmentCompare;
-        return a.label.localeCompare(b.label);
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.itemType !== b.itemType) {
+        return a.itemType.localeCompare(b.itemType);
+      }
+      return a.label.localeCompare(b.label, undefined, {
+        numeric: true,
+        sensitivity: "base",
       });
+    });
   })();
 
   const totalQty = grouped.reduce(
@@ -6517,6 +6555,21 @@ function BoltRegister({ data }: { data: MaterialsData }) {
         ? "Bolts only"
         : "Packers only";
 
+  function groupedCoverageLabel(row: GroupedRequirement): string {
+    if (segment !== "all") return segment;
+    if (row.segments.size === 1) {
+      return Array.from(row.segments)[0] || "General";
+    }
+    return `Whole tower · ${row.segments.size} segments`;
+  }
+
+  function groupedBasisLabel(row: GroupedRequirement): string {
+    if (row.contributions.length === 1) {
+      return row.contributions[0].basis;
+    }
+    return `${row.contributions.length} requirement lines summed`;
+  }
+
   function printRequirementList() {
     if (!grouped.length) {
       alert(
@@ -6540,14 +6593,13 @@ function BoltRegister({ data }: { data: MaterialsData }) {
 
     const rowsHtml = grouped
       .map((row) => {
-        const basis = materialQuantityBasis(
-          row.baseQty,
-          row.segment,
-          row.multiplier,
-          data.legConfigurationDetected,
-          row.quantityBasisBehavior,
-        );
-        const source = Array.from(row.amendmentRefs).join("; ") || "Source schedule";
+        const source =
+          Array.from(row.amendmentRefs).join("; ") ||
+          "Source schedule";
+        const drawings =
+          Array.from(row.drawings).join(", ") || "—";
+        const coverage = groupedCoverageLabel(row);
+        const basis = groupedBasisLabel(row);
 
         return `
           <tr>
@@ -6559,11 +6611,8 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             <td><strong>${escapeHtml(
               row.label || "Unspecified",
             )}</strong></td>
-            <td>${escapeHtml(row.segment)}</td>
-            <td>${escapeHtml(
-              Array.from(row.drawings).join(", ") ||
-                "—",
-            )}</td>
+            <td>${escapeHtml(coverage)}</td>
+            <td>${escapeHtml(drawings)}</td>
             <td>${escapeHtml(basis)}</td>
             <td>${escapeHtml(source)}</td>
             <td class="qty">${escapeHtml(
@@ -6727,7 +6776,11 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             <div>
               <h1>TTTracker - Bolt &amp; Packer List</h1>
               <div class="subtitle">
-                Required materials for the current tower and active filters
+                ${escapeHtml(
+                  segment === "all"
+                    ? "Whole-tower material quantities grouped by identical specification"
+                    : `Material quantities for ${segment}`,
+                )}
               </div>
             </div>
             <div>
@@ -6778,7 +6831,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             data.legConfigurationComplete
               ? `
                 <div class="leg-note">
-                  Leg-extension quantities show the source schedule quantity multiplied by the number of matching legs configured in Tower Overview.
+                  Leg-extension quantities include the configured matching-leg multiplier before identical specifications are summed into the whole-tower total.
                 </div>
               `
               : data.legConfigurationDetected
@@ -6799,8 +6852,8 @@ function BoltRegister({ data }: { data: MaterialsData }) {
               <tr>
                 <th>Type</th>
                 <th>Item</th>
-                <th>Segment</th>
-                <th>Drawing</th>
+                <th>Coverage</th>
+                <th>Drawing(s)</th>
                 <th>Basis</th>
                 <th>Source / Amendment</th>
                 <th>Required</th>
@@ -6812,6 +6865,9 @@ function BoltRegister({ data }: { data: MaterialsData }) {
           </table>
 
           <div class="totals">
+            <span>Unique Items: ${escapeHtml(
+              grouped.length,
+            )}</span>
             <span>Bolts: ${escapeHtml(
               boltQty,
             )}</span>
@@ -6862,7 +6918,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             {excludedRows > 0
               ? `; ${excludedRows} non-applicable row(s) are excluded`
               : ""}
-            . Current requirement rows after effective amendments: {" "}
+            . Current requirement rows after effective amendments:{" "}
             <strong>{data.effectiveBolts.length}</strong>
             {appliedAmendmentCount > 0
               ? `; ${appliedAmendmentCount} effective amendment(s) are applied`
@@ -6911,9 +6967,9 @@ function BoltRegister({ data }: { data: MaterialsData }) {
             <div className="mt-1 text-[11px]">
               Leg-extension schedule quantities are kept
               as their base quantity and multiplied by the
-              matching leg count. For example, a base
-              quantity of 34 on a configuration used by
-              four legs is shown as 34 × 4 = 136.
+              matching leg count before the same bolt /
+              packer specification is added into the
+              whole-tower total.
             </div>
           </>
         ) : data.legConfigurationDetected ? (
@@ -6944,6 +7000,17 @@ function BoltRegister({ data }: { data: MaterialsData }) {
         )}
       </div>
 
+      <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+        <strong>
+          {segment === "all"
+            ? "Whole-tower totals are active."
+            : `${segment} totals are active.`}
+        </strong>{" "}
+        Identical bolt / packer specifications are summed after tower applicability,
+        leg multipliers and effective amendments are applied. Expand an item to see
+        exactly which segments and drawings make up the total.
+      </div>
+
       <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div className="grid flex-1 grid-cols-1 gap-2 md:grid-cols-[1fr_220px_240px]">
           <div className="relative">
@@ -6956,7 +7023,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
               onChange={(event) =>
                 setQuery(event.target.value)
               }
-              placeholder="Search bolt, packer, diameter, DN/SN, length, # number, drawing or segment…"
+              placeholder="Search bolt, packer, diameter, DN/SN, length, drawing or segment…"
               className="w-full rounded-xl border border-slate-300 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-4 focus:ring-slate-100"
             />
           </div>
@@ -6985,13 +7052,14 @@ function BoltRegister({ data }: { data: MaterialsData }) {
 
           <select
             value={segment}
-            onChange={(event) =>
-              setSegment(event.target.value)
-            }
+            onChange={(event) => {
+              setSegment(event.target.value);
+              setExpandedItem(null);
+            }}
             className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
           >
             <option value="all">
-              All tower segments
+              All tower segments · whole tower
             </option>
             {segments.map((item) => {
               const multiplier =
@@ -7026,7 +7094,7 @@ function BoltRegister({ data }: { data: MaterialsData }) {
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <BoltSummary
-          label="Line Items"
+          label="Unique Items"
           value={grouped.length}
         />
         <BoltSummary
@@ -7053,12 +7121,12 @@ function BoltRegister({ data }: { data: MaterialsData }) {
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
             <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
               <div className="text-xs font-black uppercase tracking-wide text-slate-500">
-                Required bolt &amp; packer list
+                {segment === "all"
+                  ? "Whole-tower bolt & packer list"
+                  : `${segment} bolt & packer list`}
               </div>
               <div className="mt-0.5 text-[11px] text-slate-500">
-                The table below is the same list used by
-                Print List. Filters are applied before
-                quantities are grouped and calculated.
+                Identical specifications are combined into one requirement. The table below is the same grouped list used by Print List.
               </div>
             </div>
 
@@ -7072,10 +7140,10 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                     Item
                   </th>
                   <th className="px-3 py-2 text-left">
-                    Tower Segment
+                    Coverage
                   </th>
                   <th className="px-3 py-2 text-left">
-                    Drawing
+                    Drawing(s)
                   </th>
                   <th className="px-3 py-2 text-center">
                     Basis
@@ -7089,72 +7157,170 @@ function BoltRegister({ data }: { data: MaterialsData }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {grouped.map((row) => (
-                  <tr key={row.key}>
-                    <td className="px-3 py-2.5">
-                      <Pill
-                        className={
-                          row.itemType === "packer"
-                            ? "border-violet-200 bg-violet-50 text-violet-700"
-                            : "border-blue-200 bg-blue-50 text-blue-700"
-                        }
-                      >
-                        {row.itemType === "packer"
-                          ? "Packer"
-                          : "Bolt"}
-                      </Pill>
-                    </td>
+                {grouped.map((row) => {
+                  const open = expandedItem === row.key;
+                  const segmentNames = Array.from(row.segments).sort((a, b) =>
+                    a.localeCompare(b),
+                  );
 
-                    <td className="px-3 py-2.5 font-black text-slate-950">
-                      {row.label || "Unspecified"}
-                    </td>
+                  return (
+                    <Fragment key={row.key}>
+                      <tr>
+                        <td className="px-3 py-2.5">
+                          <Pill
+                            className={
+                              row.itemType === "packer"
+                                ? "border-violet-200 bg-violet-50 text-violet-700"
+                                : "border-blue-200 bg-blue-50 text-blue-700"
+                            }
+                          >
+                            {row.itemType === "packer"
+                              ? "Packer"
+                              : "Bolt"}
+                          </Pill>
+                        </td>
 
-                    <td className="px-3 py-2.5 font-bold text-slate-900">
-                      {row.segment}
-                    </td>
+                        <td className="px-3 py-2.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedItem(open ? null : row.key)
+                            }
+                            className="flex items-center gap-2 text-left font-black text-slate-950 hover:text-blue-700"
+                            title="Show quantity breakdown"
+                          >
+                            {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            <span>{row.label || "Unspecified"}</span>
+                          </button>
+                        </td>
 
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      {Array.from(row.drawings).join(
-                        ", ",
-                      ) || "—"}
-                    </td>
-
-                    <td className="px-3 py-2.5 text-center text-xs font-bold text-slate-700">
-                      {materialQuantityBasis(
-                        row.baseQty,
-                        row.segment,
-                        row.multiplier,
-                        data.legConfigurationDetected,
-                        row.quantityBasisBehavior,
-                      )}
-                    </td>
-
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      {row.amendmentRefs.size > 0 ? (
-                        <div className="space-y-1">
-                          {Array.from(row.amendmentRefs).map((reference) => (
-                            <div key={reference} className="font-black text-violet-700">
-                              {reference}
+                        <td className="px-3 py-2.5 text-xs font-bold text-slate-900">
+                          <div>{groupedCoverageLabel(row)}</div>
+                          {segment === "all" && row.segments.size > 1 && (
+                            <div className="mt-0.5 max-w-xs truncate text-[10px] font-medium text-slate-400" title={segmentNames.join(", ")}>
+                              {segmentNames.join(", ")}
                             </div>
-                          ))}
-                          {Array.from(row.amendmentDocuments).map((url) => (
-                            <a key={url} href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-black text-blue-700">
-                              <ExternalLink size={11} /> View document
-                            </a>
-                          ))}
-                        </div>
-                      ) : (
-                        "Source schedule"
-                      )}
-                    </td>
+                          )}
+                        </td>
 
-                    <td className="px-3 py-2.5 text-center">
-                      <span className="inline-flex min-w-14 justify-center rounded-lg bg-slate-950 px-2.5 py-1 font-black text-white">
-                        {row.requiredQty}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                        <td className="px-3 py-2.5 text-xs text-slate-600">
+                          {Array.from(row.drawings).join(
+                            ", ",
+                          ) || "—"}
+                        </td>
+
+                        <td className="px-3 py-2.5 text-center text-xs font-bold text-slate-700">
+                          {groupedBasisLabel(row)}
+                        </td>
+
+                        <td className="px-3 py-2.5 text-xs text-slate-600">
+                          {row.amendmentRefs.size > 0 ? (
+                            <div className="space-y-1">
+                              {Array.from(row.amendmentRefs).map((reference) => (
+                                <div key={reference} className="font-black text-violet-700">
+                                  {reference}
+                                </div>
+                              ))}
+                              {Array.from(row.amendmentDocuments).map((url) => (
+                                <a key={url} href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-black text-blue-700">
+                                  <ExternalLink size={11} /> View document
+                                </a>
+                              ))}
+                            </div>
+                          ) : (
+                            "Source schedule"
+                          )}
+                        </td>
+
+                        <td className="px-3 py-2.5 text-center">
+                          <span className="inline-flex min-w-14 justify-center rounded-lg bg-slate-950 px-2.5 py-1 font-black text-white">
+                            {row.requiredQty}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {open && (
+                        <tr className="bg-slate-50/70">
+                          <td colSpan={7} className="px-4 py-3">
+                            <div className="mb-2 flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                              <div>
+                                <div className="text-xs font-black uppercase tracking-wide text-slate-500">
+                                  Requirement breakdown
+                                </div>
+                                <div className="mt-0.5 text-[11px] text-slate-500">
+                                  These source lines add up to the displayed total of <strong>{row.requiredQty}</strong>.
+                                </div>
+                              </div>
+                              <div className="text-xs font-black text-slate-700">
+                                {row.contributions.length} source line{row.contributions.length === 1 ? "" : "s"}
+                              </div>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                              <table className="min-w-full text-xs">
+                                <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wide text-slate-400">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left">Segment</th>
+                                    <th className="px-3 py-2 text-left">Drawing</th>
+                                    <th className="px-3 py-2 text-center">Basis</th>
+                                    <th className="px-3 py-2 text-left">Source</th>
+                                    <th className="px-3 py-2 text-center">Qty</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {row.contributions
+                                    .slice()
+                                    .sort((a, b) => {
+                                      const segmentCompare = a.segment.localeCompare(b.segment);
+                                      if (segmentCompare !== 0) return segmentCompare;
+                                      return a.drawing.localeCompare(b.drawing);
+                                    })
+                                    .map((contribution) => (
+                                      <tr key={contribution.key}>
+                                        <td className="px-3 py-2 font-bold text-slate-800">
+                                          {contribution.segment}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-600">
+                                          {contribution.drawing || "—"}
+                                        </td>
+                                        <td className="px-3 py-2 text-center font-bold text-slate-700">
+                                          {contribution.basis}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-600">
+                                          {contribution.amendmentReference ? (
+                                            <div className="space-y-1">
+                                              <div className="font-black text-violet-700">
+                                                {contribution.amendmentReference}
+                                              </div>
+                                              {contribution.amendmentDocumentUrl && (
+                                                <a
+                                                  href={contribution.amendmentDocumentUrl}
+                                                  target="_blank"
+                                                  rel="noreferrer"
+                                                  className="inline-flex items-center gap-1 font-black text-blue-700"
+                                                >
+                                                  <ExternalLink size={10} /> View document
+                                                </a>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            contribution.sourceLabel
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 text-center font-black text-slate-950">
+                                          {contribution.requiredQty}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
