@@ -1,100 +1,230 @@
 "use client";
 
+
+
 import {
+
   useCallback,
+
   useEffect,
+
   useMemo,
+
   useState,
+
   type ReactNode,
+
 } from "react";
+
 import Link from "next/link";
+
 import {
+
   AlertTriangle,
+
   ArrowLeft,
+
   BadgeCheck,
+
   CheckCircle2,
+
   ChevronRight,
+
   ClipboardCheck,
+
   Clock3,
+
   CalendarDays,
+
   FolderCog,
+
   GraduationCap,
+
   Grid3X3,
+
   Loader2,
+
   RefreshCw,
+
   SearchCheck,
+
   ListChecks,
+
   TableProperties,
+
   UploadCloud,
+
   Users,
+
 } from "lucide-react";
 
+
+
 import { AppShell } from "@/components/layout/app-shell";
+
 import { createSupabaseBrowser } from "@/lib/supabase";
 
+
+
 type TrainingRecordRow = {
+
   id: string;
+
   employee_id: string;
+
   workflow_status: string | null;
+
   record_status: string | null;
+
   expiry_date: string | null;
+
   does_not_expire: boolean | null;
+
   current_version: boolean | null;
+
   superseded_at: string | null;
+
   revoked_at: string | null;
+
 };
+
+
 
 type EmployeeRow = {
+
   id: string;
+
   active: boolean | null;
+
   sharepoint_folder_id: string | null;
+
 };
 
-type UserRoleRow = {
-  role: string | null;
+
+
+type AccessRole = {
+  id?: string;
+  code?: string | null;
+  name?: string | null;
+  grants_all?: boolean | null;
 };
+
+type AccessPayload = {
+  error?: string;
+  roles?: AccessRole[];
+  permissions?: {
+    all?: string[];
+    web?: string[];
+    mobile?: string[];
+    sharepoint?: string[];
+  };
+};
+
+
 
 type DashboardStats = {
+
   activeEmployees: number;
+
   currentRecords: number;
+
   awaitingReview: number;
+
   expiringSoon: number;
+
   expired: number;
+
   sharePointLinked: number;
+
 };
+
+
 
 type Message = {
+
   tone: "error";
+
   text: string;
+
 };
+
+
 
 type ModuleCardProps = {
+
   href: string;
+
   title: string;
+
   description: string;
+
   icon: ReactNode;
+
   badge?: string;
+
   emphasis?: "blue" | "amber" | "emerald" | "slate";
+
 };
+
+
 
 const EMPTY_STATS: DashboardStats = {
+
   activeEmployees: 0,
+
   currentRecords: 0,
+
   awaitingReview: 0,
+
   expiringSoon: 0,
+
   expired: 0,
+
   sharePointLinked: 0,
+
 };
 
+
+
 function clean(value: unknown) {
+
   return String(value ?? "").trim();
+
 }
 
-function normaliseRole(value: unknown) {
+
+
+function normaliseAccessValue(value: unknown) {
   return clean(value).toLowerCase().replace(/\s+/g, "_");
 }
 
-function canManageTraining(role: string) {
+function canManageTrainingAccess(payload: AccessPayload | null) {
+  const roles = payload?.roles ?? [];
+
+  if (roles.some((role) => role.grants_all === true)) {
+    return true;
+  }
+
+  const permissions = new Set([
+    ...(payload?.permissions?.all ?? []),
+    ...(payload?.permissions?.web ?? []),
+  ]);
+
+  if (
+    permissions.has("tt.training.manage") ||
+    permissions.has("tt.admin.access")
+  ) {
+    return true;
+  }
+
+  // Compatibility while Training-specific permissions are rolled out to all roles.
+  const roleCodes = new Set(
+    roles.flatMap((role) => [
+      normaliseAccessValue(role.code),
+      normaliseAccessValue(role.name),
+    ]),
+  );
+
   return [
     "admin",
     "administrator",
@@ -104,134 +234,260 @@ function canManageTraining(role: string) {
     "safety_officer",
     "training_officer",
     "training_admin",
-  ].includes(normaliseRole(role));
+  ].some((role) => roleCodes.has(role));
 }
+
+
 
 function dateOnly(value: Date) {
+
   return value.toISOString().slice(0, 10);
+
 }
+
+
 
 function ModuleCard({
+
   href,
+
   title,
+
   description,
+
   icon,
+
   badge,
+
   emphasis = "slate",
+
 }: ModuleCardProps) {
+
   const classes = {
+
     blue: {
+
       icon: "bg-blue-50 text-blue-700 ring-blue-100",
+
       badge: "bg-blue-50 text-blue-700",
+
     },
+
     amber: {
+
       icon: "bg-amber-50 text-amber-700 ring-amber-100",
+
       badge: "bg-amber-50 text-amber-700",
+
     },
+
     emerald: {
+
       icon: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+
       badge: "bg-emerald-50 text-emerald-700",
+
     },
+
     slate: {
+
       icon: "bg-slate-100 text-slate-700 ring-slate-200",
+
       badge: "bg-slate-100 text-slate-700",
+
     },
+
   }[emphasis];
 
+
+
   return (
+
     <Link
+
       href={href}
+
       className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+
     >
+
       <div className="flex items-start justify-between gap-4">
+
         <div
+
           className={`flex size-11 shrink-0 items-center justify-center rounded-xl ring-1 ${classes.icon}`}
+
         >
+
           {icon}
+
         </div>
+
+
 
         <div className="flex items-center gap-2">
+
           {badge ? (
+
             <span
+
               className={`rounded-full px-2.5 py-1 text-xs font-black ${classes.badge}`}
+
             >
+
               {badge}
+
             </span>
+
           ) : null}
+
           <ChevronRight
+
             size={18}
+
             className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500"
+
           />
+
         </div>
+
       </div>
+
+
 
       <h3 className="mt-4 text-base font-black text-slate-950">
+
         {title}
+
       </h3>
+
       <p className="mt-1.5 text-sm leading-6 text-slate-600">
+
         {description}
+
       </p>
+
     </Link>
+
   );
+
 }
 
+
+
 function StatCard({
+
   label,
+
   value,
+
   hint,
+
   icon,
+
   href,
+
 }: {
+
   label: string;
+
   value: number;
+
   hint: string;
+
   icon: ReactNode;
+
   href?: string;
+
 }) {
+
   const content = (
+
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
       <div className="flex items-start justify-between gap-3">
+
         <div>
+
           <p className="text-xs font-black uppercase tracking-wider text-slate-500">
+
             {label}
+
           </p>
+
           <p className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+
             {value}
+
           </p>
+
         </div>
+
         <div className="flex size-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+
           {icon}
+
         </div>
+
       </div>
+
       <p className="mt-3 text-xs font-semibold text-slate-500">
+
         {hint}
+
       </p>
+
     </div>
+
   );
+
+
 
   if (!href) return content;
 
+
+
   return (
+
     <Link
+
       href={href}
+
       className="block transition hover:-translate-y-0.5"
+
     >
+
       {content}
+
     </Link>
+
   );
+
 }
 
+
+
 export default function TrainingPage() {
+
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
+
+
   const [stats, setStats] =
+
     useState<DashboardStats>(EMPTY_STATS);
-  const [role, setRole] = useState("");
+
+  const [isTrainingAdmin, setIsTrainingAdmin] = useState(false);
+
   const [loading, setLoading] = useState(true);
+
   const [refreshing, setRefreshing] = useState(false);
+
   const [message, setMessage] = useState<Message | null>(null);
 
-  const isTrainingAdmin = canManageTraining(role);
+
+
+
 
   const loadPage = useCallback(
     async (showRefresh = false) => {
@@ -245,43 +501,44 @@ export default function TrainingPage() {
 
       try {
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
 
-        if (userError) {
-          throw new Error(userError.message);
+        if (sessionError) {
+          throw new Error(sessionError.message);
         }
 
-        if (!user) {
+        if (!session?.access_token) {
+          throw new Error("You must be logged in to view Training.");
+        }
+
+        const [accessResponse, employeeResult, recordResult] =
+          await Promise.all([
+            fetch("/api/access/me", {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              cache: "no-store",
+            }),
+            supabase
+              .from("employees")
+              .select("id,active,sharepoint_folder_id"),
+            supabase
+              .from("employee_training_records")
+              .select(
+                "id,employee_id,workflow_status,record_status,expiry_date,does_not_expire,current_version,superseded_at,revoked_at",
+              ),
+          ]);
+
+        const accessPayload = (await accessResponse
+          .json()
+          .catch(() => null)) as AccessPayload | null;
+
+        if (!accessResponse.ok) {
           throw new Error(
-            "You must be logged in to view Training.",
+            clean(accessPayload?.error) || "Unable to verify Training access.",
           );
-        }
-
-        const [
-          roleResult,
-          employeeResult,
-          recordResult,
-        ] = await Promise.all([
-          supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", user.id)
-            .limit(1)
-            .maybeSingle(),
-          supabase
-            .from("employees")
-            .select("id,active,sharepoint_folder_id"),
-          supabase
-            .from("employee_training_records")
-            .select(
-              "id,employee_id,workflow_status,record_status,expiry_date,does_not_expire,current_version,superseded_at,revoked_at",
-            ),
-        ]);
-
-        if (roleResult.error) {
-          throw new Error(roleResult.error.message);
         }
 
         if (employeeResult.error) {
@@ -292,16 +549,10 @@ export default function TrainingPage() {
           throw new Error(recordResult.error.message);
         }
 
-        const roleRow =
-          (roleResult.data ?? null) as UserRoleRow | null;
+        setIsTrainingAdmin(canManageTrainingAccess(accessPayload));
 
-        const employees =
-          (employeeResult.data ?? []) as EmployeeRow[];
-
-        const records =
-          (recordResult.data ?? []) as TrainingRecordRow[];
-
-        setRole(normaliseRole(roleRow?.role));
+        const employees = (employeeResult.data ?? []) as EmployeeRow[];
+        const records = (recordResult.data ?? []) as TrainingRecordRow[];
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -372,318 +623,633 @@ export default function TrainingPage() {
   );
 
   useEffect(() => {
+
     void loadPage();
+
   }, [loadPage]);
 
+
+
   if (loading) {
+
     return (
+
       <AppShell>
+
         <div className="flex min-h-screen items-center justify-center">
+
           <div className="flex items-center gap-3 text-sm font-bold text-slate-500">
+
             <Loader2 size={22} className="animate-spin" />
+
             Loading Training...
+
           </div>
+
         </div>
+
       </AppShell>
+
     );
+
   }
 
+
+
   return (
+
     <AppShell>
+
       <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+
         <div>
+
           <Link
+
             href="/people"
+
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+
           >
+
             <ArrowLeft size={16} />
+
             Back to People
+
           </Link>
+
         </div>
 
+
+
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+
           <div className="p-6 sm:p-7">
+
             <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+
               <div>
+
                 <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-blue-700">
+
                   <GraduationCap size={18} />
+
                   People & Training
+
                 </div>
+
                 <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">
+
                   Training
+
                 </h1>
+
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+
                   Manage employee training evidence, verification,
+
                   SharePoint publishing and bulk VOC or course uploads.
+
                 </p>
+
               </div>
+
+
 
               <div className="flex flex-wrap gap-2">
+
                 <Link
+
                   href="/people/training/new"
+
                   className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-blue-800"
+
                 >
+
                   <UploadCloud size={17} />
+
                   Add Training Record
+
                 </Link>
 
+
+
                 {isTrainingAdmin ? (
+
                   <Link
+
                     href="/people/training/bulk-upload"
+
                     className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+
                   >
+
                     <Users size={17} />
+
                     Bulk Upload
+
                   </Link>
+
                 ) : null}
 
+
+
                 <button
+
                   type="button"
+
                   onClick={() => void loadPage(true)}
+
                   disabled={refreshing}
+
                   className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+
                 >
+
                   <RefreshCw
+
                     size={17}
+
                     className={refreshing ? "animate-spin" : ""}
+
                   />
+
                   Refresh
+
                 </button>
+
               </div>
+
             </div>
+
           </div>
+
+
 
           <div className="grid gap-px border-t border-slate-200 bg-slate-200 sm:grid-cols-2 xl:grid-cols-4">
+
             <div className="bg-slate-50 px-5 py-4">
+
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+
                 <Users size={15} />
+
                 Employees
+
               </div>
+
               <div className="mt-1 text-xl font-black text-slate-950">
+
                 {stats.activeEmployees}
+
               </div>
+
             </div>
 
+
+
             <div className="bg-slate-50 px-5 py-4">
+
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+
                 <BadgeCheck size={15} />
+
                 Current Records
+
               </div>
+
               <div className="mt-1 text-xl font-black text-slate-950">
+
                 {stats.currentRecords}
+
               </div>
+
             </div>
 
+
+
             <div className="bg-slate-50 px-5 py-4">
+
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+
                 <SearchCheck size={15} />
+
                 Awaiting Review
+
               </div>
+
               <div className="mt-1 text-xl font-black text-slate-950">
+
                 {stats.awaitingReview}
+
               </div>
+
             </div>
 
+
+
             <div className="bg-slate-50 px-5 py-4">
+
               <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+
                 <FolderCog size={15} />
+
                 SharePoint Linked
+
               </div>
+
               <div className="mt-1 text-xl font-black text-slate-950">
+
                 {stats.sharePointLinked}
+
                 <span className="ml-1 text-sm font-bold text-slate-400">
+
                   / {stats.activeEmployees}
+
                 </span>
+
               </div>
+
             </div>
+
           </div>
+
         </section>
+
+
 
         {message ? (
+
           <section className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+
             <div className="flex items-start gap-2">
+
               <AlertTriangle
+
                 size={18}
+
                 className="mt-0.5 shrink-0"
+
               />
+
               {message.text}
+
             </div>
+
           </section>
+
         ) : null}
 
+
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+
           <StatCard
+
             label="Current"
+
             value={stats.currentRecords}
+
             hint="Approved current employee records"
+
             icon={<CheckCircle2 size={19} />}
+
           />
+
           <StatCard
+
             label="Verification"
+
             value={stats.awaitingReview}
+
             hint="Pending review or changes required"
+
             icon={<ClipboardCheck size={19} />}
+
             href="/people/training/verification"
+
           />
+
           <StatCard
+
             label="Expiring in 30 days"
+
             value={stats.expiringSoon}
+
             hint="Records requiring renewal soon"
+
             icon={<Clock3 size={19} />}
+
             href="/people/training/expiry"
+
           />
+
           <StatCard
+
             label="Expired"
+
             value={stats.expired}
+
             hint="Current records past expiry"
+
             icon={<AlertTriangle size={19} />}
+
             href="/people/training/expiry"
+
           />
+
         </section>
+
+
 
         <section className="space-y-3">
+
           <div>
+
             <h2 className="text-lg font-black text-slate-950">
+
               Training actions
+
             </h2>
+
             <p className="mt-1 text-sm text-slate-600">
+
               Only modules that currently exist in TTTracker are shown here.
+
             </p>
+
           </div>
+
+
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+
             <ModuleCard
+
               href="/people/training/register"
+
               title="Training Register"
+
               description="Search the controlled register by employee, certificate, provider, project, class and status."
+
               icon={<TableProperties size={20} />}
+
               badge="Register"
+
               emphasis="blue"
+
             />
 
+
+
             <ModuleCard
+
               href="/people/training/matrix"
+
               title="Company Training Matrix"
+
               description="View employees against configured Training types and role requirements, including gaps and pending evidence."
+
               icon={<Grid3X3 size={20} />}
+
               badge="Matrix"
+
               emphasis="emerald"
+
             />
 
+
+
             <ModuleCard
+
               href="/people/training/expiry"
+
               title="Expiry Dashboard"
+
               description="See expired records, upcoming renewals and evidence still waiting for verification."
+
               icon={<Clock3 size={20} />}
+
               badge={
+
                 stats.expiringSoon + stats.expired > 0
+
                   ? String(stats.expiringSoon + stats.expired)
+
                   : undefined
+
               }
+
               emphasis={
+
                 stats.expiringSoon + stats.expired > 0
+
                   ? "amber"
+
                   : "slate"
+
               }
+
             />
 
+
+
             <ModuleCard
+
               href="/people/training/planner"
+
               title="Training Planner & Gap Analysis"
+
               description="Find missing or expiring Training, tick the people you want and hand the selected group into Bulk Upload."
+
               icon={<CalendarDays size={20} />}
+
               badge="Planner"
+
               emphasis="blue"
+
             />
 
+
+
             <ModuleCard
+
               href="/people/training/new"
+
               title="Add Training Record"
+
               description="Upload a licence, VOC, ticket, induction or another configured Training record."
+
               icon={<UploadCloud size={20} />}
+
               badge="Upload"
+
               emphasis="blue"
+
             />
 
+
+
             <ModuleCard
+
               href="/people/training/verification"
+
               title="Verification Queue"
+
               description="Review submitted evidence individually or bulk approve selected records for SharePoint publication."
+
               icon={<SearchCheck size={20} />}
+
               badge={
+
                 stats.awaitingReview > 0
+
                   ? String(stats.awaitingReview)
+
                   : undefined
+
               }
+
               emphasis={
+
                 stats.awaitingReview > 0 ? "amber" : "slate"
+
               }
+
             />
 
+
+
             {isTrainingAdmin ? (
+
               <ModuleCard
+
                 href="/people/training/project-requirements"
+
                 title="Project Requirements"
+
                 description="Configure project-wide and role-specific Training requirements, accepted alternatives and required classes."
+
                 icon={<ListChecks size={20} />}
+
                 badge="Admin"
+
                 emphasis="emerald"
+
               />
+
             ) : null}
+
+
 
             <ModuleCard
+
               href="/people/training/project-matrix"
+
               title="Project Training Matrix"
+
               description="Select the project workforce and check mobilisation readiness against project and role requirements."
+
               icon={<ClipboardCheck size={20} />}
+
               badge="Project"
+
               emphasis="emerald"
+
             />
 
+
+
             {isTrainingAdmin ? (
+
               <ModuleCard
+
                 href="/people/training/bulk-upload"
+
                 title="Bulk Training / VOC Upload"
+
                 description="Submit the same course or VOC for multiple employees while keeping certificate evidence employee-specific."
+
                 icon={<Users size={20} />}
+
                 badge="Admin"
+
                 emphasis="blue"
+
               />
+
             ) : null}
 
+
+
             {isTrainingAdmin ? (
+
               <ModuleCard
+
                 href="/people/training/configuration"
+
                 title="Training Configuration"
+
                 description="Maintain Training categories, types, class options, validity and document rules."
+
                 icon={<GraduationCap size={20} />}
+
                 badge="Admin"
+
                 emphasis="slate"
+
               />
+
             ) : null}
 
+
+
             {isTrainingAdmin ? (
+
               <ModuleCard
+
                 href="/people/training/configuration/workflow"
+
                 title="Workflow & SharePoint"
+
                 description="Configure SharePoint storage, reviewer rules, metadata, expiry warnings and authorised uploader behaviour."
+
                 icon={<FolderCog size={20} />}
+
                 badge="Admin"
+
                 emphasis="emerald"
+
               />
+
             ) : null}
+
           </div>
+
         </section>
+
+
 
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+
           <p className="text-sm leading-6 text-slate-600">
+
             The register, matrices, expiry dashboard and planner all read the
+
             same employee Training records. They do not maintain separate
+
             certificate data, so approval and SharePoint remain the controlled
+
             source of truth.
+
           </p>
+
         </section>
+
       </main>
+
     </AppShell>
+
   );
+
 }
