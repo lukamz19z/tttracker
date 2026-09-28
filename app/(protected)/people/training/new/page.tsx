@@ -360,6 +360,7 @@ export default function AddTrainingRecordPage() {
 
 
   const [employeeId, setEmployeeId] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
 
   const [trainingTypeId, setTrainingTypeId] = useState("");
 
@@ -598,6 +599,24 @@ export default function AddTrainingRecordPage() {
 
 
   const selectedEmployee = employees.find((item) => item.id === employeeId) ?? null;
+
+  const filteredEmployees = useMemo(() => {
+    const query = clean(employeeSearch).toLowerCase();
+
+    if (!query) {
+      return [];
+    }
+
+    return employees
+      .filter((employee) =>
+        [employee.full_name, employee.payroll_id, employee.role]
+          .map(clean)
+          .join(" " )
+          .toLowerCase()
+          .includes(query),
+      )
+      .slice(0, 12);
+  }, [employeeSearch, employees]);
 
   const selectedType = types.find((item) => item.id === trainingTypeId) ?? null;
 
@@ -1418,42 +1437,112 @@ export default function AddTrainingRecordPage() {
 
           <section className="space-y-6">
 
-            <Card title="1. Employee" description={canChooseEmployee ? "Select the employee or leave yourself selected." : "Your linked employee profile is used automatically."}>
-
+            <Card
+              title="1. Employee"
+              description={
+                canChooseEmployee
+                  ? "Search by employee name, payroll ID or role."
+                  : "Your linked employee profile is used automatically."
+              }
+            >
               {canChooseEmployee ? (
+                <div className="space-y-3">
+                  <Field label="Employee search" required>
+                    <input
+                      type="search"
+                      className={inputClass}
+                      value={employeeSearch}
+                      placeholder="Search name or payroll ID..."
+                      autoComplete="off"
+                      onChange={(event) => {
+                        setEmployeeSearch(event.target.value);
 
-                <Field label="Employee" required>
+                        if (employeeId) {
+                          setEmployeeId("");
+                        }
+                      }}
+                    />
+                  </Field>
 
-                  <select className={inputClass} value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
+                  {employeeSearch.trim() ? (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      {filteredEmployees.length > 0 ? (
+                        <div className="max-h-72 overflow-y-auto">
+                          {filteredEmployees.map((employee) => (
+                            <button
+                              key={employee.id}
+                              type="button"
+                              onClick={() => {
+                                setEmployeeId(employee.id);
+                                setEmployeeSearch("");
+                              }}
+                              className="flex w-full items-start justify-between gap-4 border-b border-slate-100 px-4 py-3 text-left transition last:border-b-0 hover:bg-blue-50"
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate font-black text-slate-950">
+                                  {employee.full_name}
+                                </div>
+                                <div className="mt-1 text-xs font-semibold text-slate-500">
+                                  {employee.payroll_id || "No Payroll ID"}
+                                  {employee.role ? ` · ${employee.role}` : ""}
+                                </div>
+                              </div>
+                              <span className="shrink-0 text-xs font-black text-blue-700">
+                                Select
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-4 text-sm font-semibold text-slate-500">
+                          No active employees match &quot;{employeeSearch.trim()}&quot;.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
 
-                    <option value="">Select...</option>
+                  {selectedEmployee ? (
+                    <div className="flex items-start justify-between gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
+                          Selected employee
+                        </div>
+                        <div className="mt-1 font-black text-slate-950">
+                          {selectedEmployee.full_name}
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-600">
+                          {selectedEmployee.payroll_id || "No Payroll ID"}
+                          {selectedEmployee.role ? ` · ${selectedEmployee.role}` : ""}
+                        </div>
+                      </div>
 
-                    {employees.map((employee) => (
-
-                      <option key={employee.id} value={employee.id}>
-
-                        {employee.payroll_id ? `${employee.payroll_id} - ` : ""}{employee.full_name}
-
-                      </option>
-
-                    ))}
-
-                  </select>
-
-                </Field>
-
-              ) : (
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-
-                  <div className="font-black text-slate-950">{selectedEmployee?.full_name || "No linked employee"}</div>
-
-                  <div className="mt-1 text-sm font-semibold text-slate-500">{selectedEmployee?.payroll_id || "No Payroll ID"}</div>
-
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmployeeId("");
+                          setEmployeeSearch("");
+                        }}
+                        className="shrink-0 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-800 transition hover:bg-emerald-100"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-500">
+                      Search for an employee above, then select their name.
+                    </div>
+                  )}
                 </div>
-
+              ) : (
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <div className="font-black text-slate-950">
+                    {selectedEmployee?.full_name || "No linked employee"}
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-500">
+                    {selectedEmployee?.payroll_id || "No Payroll ID"}
+                  </div>
+                </div>
               )}
-
             </Card>
 
 
