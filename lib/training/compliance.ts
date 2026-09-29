@@ -46,6 +46,7 @@ export type RoleTrainingRequirementLike = TrainingRequirementLike & {
 
 export type ProjectTrainingRequirementLike = TrainingRequirementLike & {
   project_id: string;
+  project_role_id?: string | null;
   applies_to_role?: string | null;
 };
 
@@ -92,6 +93,7 @@ export function trainingDaysUntil(
     fromDate.getMonth(),
     fromDate.getDate(),
   );
+
   const toUtc = Date.UTC(
     expiry.getFullYear(),
     expiry.getMonth(),
@@ -110,6 +112,10 @@ function recordStatus(record: TrainingRecordLike) {
 }
 
 export function isTrainingRecordPending(record: TrainingRecordLike) {
+  if (record.current_version === false) return false;
+  if (record.superseded_at) return false;
+  if (record.revoked_at) return false;
+
   return ["pending_review", "changes_required"].includes(
     recordWorkflow(record),
   );
@@ -122,20 +128,26 @@ export function isTrainingRecordApproved(record: TrainingRecordLike) {
 
   const workflow = recordWorkflow(record);
 
-  if (workflow) return workflow === "approved";
+  if (workflow) {
+    return workflow === "approved";
+  }
 
-  // Compatibility with records created before the controlled workflow was
-  // introduced. The migration stamps historical records approved, but this
-  // fallback prevents an older row from disappearing if that migration was
-  // applied incrementally.
-  return ["current", "expired", "approved"].includes(recordStatus(record));
+  /*
+   * Compatibility for historical Training rows created before
+   * the controlled workflow existed.
+   */
+  return ["current", "expired", "approved"].includes(
+    recordStatus(record),
+  );
 }
 
 function hasRequiredOptionCodes(
   record: TrainingRecordLike,
   requiredOptionCodes: string[],
 ) {
-  if (requiredOptionCodes.length === 0) return true;
+  if (requiredOptionCodes.length === 0) {
+    return true;
+  }
 
   const available = new Set(
     (record.option_codes ?? [])
@@ -149,19 +161,29 @@ function hasRequiredOptionCodes(
 }
 
 function recordSortValue(record: TrainingRecordLike) {
-  if (record.does_not_expire) return Number.MAX_SAFE_INTEGER;
+  if (record.does_not_expire) {
+    return Number.MAX_SAFE_INTEGER;
+  }
 
   const expiry = parseTrainingDate(record.expiry_date);
-  if (expiry) return expiry.getTime();
+
+  if (expiry) {
+    return expiry.getTime();
+  }
 
   const issue = parseTrainingDate(record.issue_date);
-  if (issue) return issue.getTime();
+
+  if (issue) {
+    return issue.getTime();
+  }
 
   const created = record.created_at
     ? new Date(record.created_at).getTime()
     : 0;
 
-  return Number.isFinite(created) ? created : 0;
+  return Number.isFinite(created)
+    ? created
+    : 0;
 }
 
 export function evaluateTrainingRequirement({
@@ -180,83 +202,137 @@ export function evaluateTrainingRequirement({
 
   const acceptedTrainingTypeIds = Array.from(
     new Set(
-      [requirement.training_type_id, ...alternativeIds]
+      [
+        requirement.training_type_id,
+        ...alternativeIds,
+      ]
         .map(cleanTrainingValue)
         .filter(Boolean),
     ),
   );
 
-  const acceptedSet = new Set(acceptedTrainingTypeIds);
-  const requiredOptionCodes = (requirement.required_option_codes ?? [])
-    .map((code) => cleanTrainingValue(code).toUpperCase())
-    .filter(Boolean);
+  const acceptedSet =
+    new Set(acceptedTrainingTypeIds);
+
+  const requiredOptionCodes =
+    (
+      requirement.required_option_codes ??
+      []
+    )
+      .map((code) =>
+        cleanTrainingValue(code).toUpperCase(),
+      )
+      .filter(Boolean);
 
   const matching = records.filter(
     (record) =>
       record.employee_id === employeeId &&
       Boolean(record.training_type_id) &&
-      acceptedSet.has(cleanTrainingValue(record.training_type_id)),
+      acceptedSet.has(
+        cleanTrainingValue(
+          record.training_type_id,
+        ),
+      ),
   );
 
   const approved = matching
     .filter(isTrainingRecordApproved)
     .filter((record) =>
-      hasRequiredOptionCodes(record, requiredOptionCodes),
+      hasRequiredOptionCodes(
+        record,
+        requiredOptionCodes,
+      ),
     )
-    .sort((a, b) => recordSortValue(b) - recordSortValue(a));
+    .sort(
+      (a, b) =>
+        recordSortValue(b) -
+        recordSortValue(a),
+    );
 
   const leadDays =
-    Number.isFinite(Number(requirement.renewal_lead_days)) &&
-    Number(requirement.renewal_lead_days) >= 0
-      ? Number(requirement.renewal_lead_days)
+    Number.isFinite(
+      Number(
+        requirement.renewal_lead_days,
+      ),
+    ) &&
+    Number(
+      requirement.renewal_lead_days,
+    ) >= 0
+      ? Number(
+          requirement.renewal_lead_days,
+        )
       : defaultLeadDays;
 
   if (approved.length > 0) {
     const record = approved[0];
 
-    if (record.does_not_expire || !record.expiry_date) {
+    if (
+      record.does_not_expire ||
+      !record.expiry_date
+    ) {
       return {
         status: "current",
         record,
-        matchedTrainingTypeId: record.training_type_id,
+        matchedTrainingTypeId:
+          record.training_type_id,
         daysRemaining: null,
-        requiredTrainingTypeId: requirement.training_type_id,
+        requiredTrainingTypeId:
+          requirement.training_type_id,
         acceptedTrainingTypeIds,
-        requirementLevel: cleanTrainingValue(
-          requirement.requirement_level || "mandatory",
-        ),
+        requirementLevel:
+          cleanTrainingValue(
+            requirement.requirement_level ||
+              "mandatory",
+          ),
         requiredOptionCodes,
       };
     }
 
-    const daysRemaining = trainingDaysUntil(record.expiry_date);
+    const daysRemaining =
+      trainingDaysUntil(
+        record.expiry_date,
+      );
 
-    if (daysRemaining !== null && daysRemaining < 0) {
+    if (
+      daysRemaining !== null &&
+      daysRemaining < 0
+    ) {
       return {
         status: "expired",
         record,
-        matchedTrainingTypeId: record.training_type_id,
+        matchedTrainingTypeId:
+          record.training_type_id,
         daysRemaining,
-        requiredTrainingTypeId: requirement.training_type_id,
+        requiredTrainingTypeId:
+          requirement.training_type_id,
         acceptedTrainingTypeIds,
-        requirementLevel: cleanTrainingValue(
-          requirement.requirement_level || "mandatory",
-        ),
+        requirementLevel:
+          cleanTrainingValue(
+            requirement.requirement_level ||
+              "mandatory",
+          ),
         requiredOptionCodes,
       };
     }
 
-    if (daysRemaining !== null && daysRemaining <= leadDays) {
+    if (
+      daysRemaining !== null &&
+      daysRemaining <= leadDays
+    ) {
       return {
         status: "expiring",
         record,
-        matchedTrainingTypeId: record.training_type_id,
+        matchedTrainingTypeId:
+          record.training_type_id,
         daysRemaining,
-        requiredTrainingTypeId: requirement.training_type_id,
+        requiredTrainingTypeId:
+          requirement.training_type_id,
         acceptedTrainingTypeIds,
-        requirementLevel: cleanTrainingValue(
-          requirement.requirement_level || "mandatory",
-        ),
+        requirementLevel:
+          cleanTrainingValue(
+            requirement.requirement_level ||
+              "mandatory",
+          ),
         requiredOptionCodes,
       };
     }
@@ -264,13 +340,17 @@ export function evaluateTrainingRequirement({
     return {
       status: "current",
       record,
-      matchedTrainingTypeId: record.training_type_id,
+      matchedTrainingTypeId:
+        record.training_type_id,
       daysRemaining,
-      requiredTrainingTypeId: requirement.training_type_id,
+      requiredTrainingTypeId:
+        requirement.training_type_id,
       acceptedTrainingTypeIds,
-      requirementLevel: cleanTrainingValue(
-        requirement.requirement_level || "mandatory",
-      ),
+      requirementLevel:
+        cleanTrainingValue(
+          requirement.requirement_level ||
+            "mandatory",
+        ),
       requiredOptionCodes,
     };
   }
@@ -278,36 +358,53 @@ export function evaluateTrainingRequirement({
   const pending = matching
     .filter(isTrainingRecordPending)
     .filter((record) =>
-      hasRequiredOptionCodes(record, requiredOptionCodes),
+      hasRequiredOptionCodes(
+        record,
+        requiredOptionCodes,
+      ),
     );
 
   if (pending.length > 0) {
     return {
       status: "pending_review",
       record: pending[0],
-      matchedTrainingTypeId: pending[0].training_type_id,
+      matchedTrainingTypeId:
+        pending[0].training_type_id,
       daysRemaining: null,
-      requiredTrainingTypeId: requirement.training_type_id,
+      requiredTrainingTypeId:
+        requirement.training_type_id,
       acceptedTrainingTypeIds,
-      requirementLevel: cleanTrainingValue(
-        requirement.requirement_level || "mandatory",
-      ),
+      requirementLevel:
+        cleanTrainingValue(
+          requirement.requirement_level ||
+            "mandatory",
+        ),
       requiredOptionCodes,
     };
   }
 
-  const revoked = matching.find((record) => Boolean(record.revoked_at));
-
+  /*
+   * Revoked and superseded records are historical records.
+   *
+   * They must not keep a matrix cell red after an incorrect
+   * upload has been removed.
+   *
+   * If the Training is genuinely required and no valid
+   * approved/pending evidence remains, the result is Missing.
+   */
   return {
-    status: revoked ? "revoked" : "missing",
-    record: revoked ?? null,
-    matchedTrainingTypeId: revoked?.training_type_id ?? null,
+    status: "missing",
+    record: null,
+    matchedTrainingTypeId: null,
     daysRemaining: null,
-    requiredTrainingTypeId: requirement.training_type_id,
+    requiredTrainingTypeId:
+      requirement.training_type_id,
     acceptedTrainingTypeIds,
-    requirementLevel: cleanTrainingValue(
-      requirement.requirement_level || "mandatory",
-    ),
+    requirementLevel:
+      cleanTrainingValue(
+        requirement.requirement_level ||
+          "mandatory",
+      ),
     requiredOptionCodes,
   };
 }
@@ -319,12 +416,17 @@ export function roleRequirementsForEmployee({
   employee: TrainingEmployeeLike;
   requirements: RoleTrainingRequirementLike[];
 }) {
-  const role = normaliseTrainingRole(employee.role);
+  const role =
+    normaliseTrainingRole(
+      employee.role,
+    );
 
   return requirements.filter(
     (requirement) =>
       requirement.active !== false &&
-      normaliseTrainingRole(requirement.role_name) === role,
+      normaliseTrainingRole(
+        requirement.role_name,
+      ) === role,
   );
 }
 
@@ -332,23 +434,72 @@ export function projectRequirementsForEmployee({
   employee,
   projectId,
   requirements,
+  projectRoleIds = [],
 }: {
   employee: TrainingEmployeeLike;
   projectId: string;
   requirements: ProjectTrainingRequirementLike[];
+  projectRoleIds?: string[];
 }) {
-  const role = normaliseTrainingRole(employee.role);
-
-  return requirements.filter((requirement) => {
-    if (requirement.active === false) return false;
-    if (requirement.project_id !== projectId) return false;
-
-    const requiredRole = normaliseTrainingRole(
-      requirement.applies_to_role,
+  const role =
+    normaliseTrainingRole(
+      employee.role,
     );
 
-    return !requiredRole || requiredRole === role;
-  });
+  const assignedProjectRoleIds =
+    new Set(
+      projectRoleIds
+        .map(cleanTrainingValue)
+        .filter(Boolean),
+    );
+
+  return requirements.filter(
+    (requirement) => {
+      if (
+        requirement.active === false
+      ) {
+        return false;
+      }
+
+      if (
+        requirement.project_id !==
+        projectId
+      ) {
+        return false;
+      }
+
+      const projectRoleId =
+        cleanTrainingValue(
+          requirement.project_role_id,
+        );
+
+      /*
+       * New model:
+       *
+       * The requirement belongs to a configurable
+       * project-specific role.
+       */
+      if (projectRoleId) {
+        return assignedProjectRoleIds.has(
+          projectRoleId,
+        );
+      }
+
+      /*
+       * Compatibility for old requirements created before
+       * project-defined Training roles existed.
+       */
+      const requiredRole =
+        normaliseTrainingRole(
+          requirement.applies_to_role,
+        );
+
+      return (
+        !requiredRole ||
+        requiredRole === role
+      );
+    },
+  );
 }
 
 export function combinedRequirementsForEmployee({
@@ -356,73 +507,129 @@ export function combinedRequirementsForEmployee({
   projectId,
   roleRequirements,
   projectRequirements,
+  projectRoleIds = [],
 }: {
   employee: TrainingEmployeeLike;
   projectId?: string | null;
   roleRequirements: RoleTrainingRequirementLike[];
   projectRequirements: ProjectTrainingRequirementLike[];
+  projectRoleIds?: string[];
 }) {
   const combined = [
     ...roleRequirementsForEmployee({
       employee,
-      requirements: roleRequirements,
+      requirements:
+        roleRequirements,
     }),
+
     ...(projectId
       ? projectRequirementsForEmployee({
           employee,
           projectId,
-          requirements: projectRequirements,
+          requirements:
+            projectRequirements,
+          projectRoleIds,
         })
       : []),
   ];
 
-  const merged = new Map<string, TrainingRequirementLike>();
+  const merged =
+    new Map<
+      string,
+      TrainingRequirementLike
+    >();
 
-  for (const requirement of combined) {
-    const current = merged.get(requirement.training_type_id);
+  for (
+    const requirement
+    of combined
+  ) {
+    const current =
+      merged.get(
+        requirement.training_type_id,
+      );
 
     if (!current) {
-      merged.set(requirement.training_type_id, {
-        ...requirement,
-        accepted_alternative_training_type_ids: Array.from(
-          new Set(
-            requirement.accepted_alternative_training_type_ids ?? [],
-          ),
-        ),
-        required_option_codes: Array.from(
-          new Set(requirement.required_option_codes ?? []),
-        ),
-      });
+      merged.set(
+        requirement.training_type_id,
+        {
+          ...requirement,
+
+          accepted_alternative_training_type_ids:
+            Array.from(
+              new Set(
+                requirement.accepted_alternative_training_type_ids ??
+                  [],
+              ),
+            ),
+
+          required_option_codes:
+            Array.from(
+              new Set(
+                requirement.required_option_codes ??
+                  [],
+              ),
+            ),
+        },
+      );
+
       continue;
     }
 
-    merged.set(requirement.training_type_id, {
-      ...current,
-      requirement_level:
-        current.requirement_level === "mandatory" ||
-        requirement.requirement_level === "mandatory"
-          ? "mandatory"
-          : current.requirement_level || requirement.requirement_level,
-      renewal_lead_days: Math.max(
-        Number(current.renewal_lead_days ?? 0),
-        Number(requirement.renewal_lead_days ?? 0),
-      ),
-      accepted_alternative_training_type_ids: Array.from(
-        new Set([
-          ...(current.accepted_alternative_training_type_ids ?? []),
-          ...(requirement.accepted_alternative_training_type_ids ?? []),
-        ]),
-      ),
-      required_option_codes: Array.from(
-        new Set([
-          ...(current.required_option_codes ?? []),
-          ...(requirement.required_option_codes ?? []),
-        ]),
-      ),
-    });
+    merged.set(
+      requirement.training_type_id,
+      {
+        ...current,
+
+        requirement_level:
+          current.requirement_level ===
+            "mandatory" ||
+          requirement.requirement_level ===
+            "mandatory"
+            ? "mandatory"
+            : current.requirement_level ||
+              requirement.requirement_level,
+
+        renewal_lead_days:
+          Math.max(
+            Number(
+              current.renewal_lead_days ??
+                0,
+            ),
+
+            Number(
+              requirement.renewal_lead_days ??
+                0,
+            ),
+          ),
+
+        accepted_alternative_training_type_ids:
+          Array.from(
+            new Set([
+              ...(current.accepted_alternative_training_type_ids ??
+                []),
+
+              ...(requirement.accepted_alternative_training_type_ids ??
+                []),
+            ]),
+          ),
+
+        required_option_codes:
+          Array.from(
+            new Set([
+              ...(current.required_option_codes ??
+                []),
+
+              ...(requirement.required_option_codes ??
+                []),
+            ]),
+          ),
+      },
+    );
   }
 
-  return Array.from(merged.values());
+  return Array.from(
+    merged.values(),
+  );
 }
 
 export function matrixStatusForTrainingType({
@@ -438,47 +645,98 @@ export function matrixStatusForTrainingType({
   leadDays?: number;
   required?: boolean;
 }): EvaluatedTrainingRequirement {
-  const matching = records.filter(
-    (record) =>
-      record.employee_id === employeeId &&
-      record.training_type_id === trainingTypeId,
-  );
+  const matching =
+    records.filter(
+      (record) =>
+        record.employee_id ===
+          employeeId &&
+        record.training_type_id ===
+          trainingTypeId,
+    );
 
-  if (!required && matching.length === 0) {
+  /*
+   * A revoked or superseded historical record does not count
+   * as a recorded ticket for the Company Matrix.
+   */
+  const hasLiveEvidence =
+    matching.some(
+      (record) =>
+        isTrainingRecordApproved(
+          record,
+        ) ||
+        isTrainingRecordPending(
+          record,
+        ),
+    );
+
+  /*
+   * An optional ticket with no live evidence should simply be
+   * blank / Not Required.
+   *
+   * This is the part that stops a deleted incorrect upload
+   * appearing as a red REV cell in the matrix.
+   */
+  if (
+    !required &&
+    !hasLiveEvidence
+  ) {
     return {
       status: "not_required",
       record: null,
-      matchedTrainingTypeId: null,
+      matchedTrainingTypeId:
+        null,
       daysRemaining: null,
-      requiredTrainingTypeId: trainingTypeId,
-      acceptedTrainingTypeIds: [trainingTypeId],
-      requirementLevel: "not_required",
+      requiredTrainingTypeId:
+        trainingTypeId,
+      acceptedTrainingTypeIds: [
+        trainingTypeId,
+      ],
+      requirementLevel:
+        "not_required",
       requiredOptionCodes: [],
     };
   }
 
   return evaluateTrainingRequirement({
     employeeId,
+
     requirement: {
-      training_type_id: trainingTypeId,
-      requirement_level: required ? "mandatory" : "recorded",
-      renewal_lead_days: leadDays,
+      training_type_id:
+        trainingTypeId,
+
+      requirement_level:
+        required
+          ? "mandatory"
+          : "recorded",
+
+      renewal_lead_days:
+        leadDays,
     },
+
     records,
-    defaultLeadDays: leadDays,
+
+    defaultLeadDays:
+      leadDays,
   });
 }
 
 export function isCompliantTrainingStatus(
   status: TrainingComplianceStatus,
 ) {
-  return status === "current" || status === "expiring";
+  return (
+    status === "current" ||
+    status === "expiring"
+  );
 }
 
 export function isBlockingTrainingStatus(
   status: TrainingComplianceStatus,
 ) {
-  return ["expired", "missing", "revoked"].includes(status);
+  return [
+    "expired",
+    "missing",
+    "revoked",
+  ].includes(status);
 }
 
 export function trainingComplianceLabel(
@@ -487,16 +745,22 @@ export function trainingComplianceLabel(
   switch (status) {
     case "current":
       return "Current";
+
     case "expiring":
       return "Expiring";
+
     case "expired":
       return "Expired";
+
     case "missing":
       return "Missing";
+
     case "pending_review":
       return "Pending Review";
+
     case "revoked":
       return "Revoked";
+
     case "not_required":
       return "Not Required";
   }

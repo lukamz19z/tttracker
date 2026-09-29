@@ -9,12 +9,15 @@ import {
 import Link from "next/link";
 import {
   ArrowLeft,
+  Check,
+  ChevronDown,
   Download,
   Grid3X3,
   Loader2,
   RefreshCw,
   Search,
   Users,
+  X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -63,6 +66,14 @@ type TrainingType = {
   active: boolean | null;
 };
 
+type TrainingOption = {
+  id: string;
+  training_type_id: string;
+  name: string;
+  code: string;
+  active: boolean | null;
+};
+
 type ProjectAccess = {
   project_id: string;
   user_id: string;
@@ -74,6 +85,20 @@ type PopulationOverride = {
   employee_id: string;
   included: boolean;
   source: string | null;
+};
+
+type ProjectRole = {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  active: boolean | null;
+};
+
+type ProjectRoleAssignment = {
+  id: string;
+  project_role_id: string;
+  employee_id: string;
 };
 
 type RoleRequirement = RoleTrainingRequirementLike & {
@@ -90,17 +115,29 @@ type TrainingRecord = TrainingRecordLike & {
 
 type MatrixRow = {
   employee: Employee;
+  projectRoleIds: string[];
+  projectRoleNames: string[];
   requirements: Map<string, TrainingRequirementLike>;
-  cells: Map<
-    string,
-    ReturnType<typeof evaluateTrainingRequirement>
-  >;
+  cells: Map<string, ReturnType<typeof evaluateTrainingRequirement>>;
   mandatoryTotal: number;
   mandatoryCompliant: number;
   blockers: number;
   pending: number;
   expiring: number;
   score: number;
+};
+
+type MatrixColumn = {
+  key: string;
+  trainingTypeId: string;
+  optionCode: string | null;
+  optionName: string | null;
+};
+
+type SelectOption = {
+  value: string;
+  label: string;
+  group?: string;
 };
 
 function clean(value: unknown) {
@@ -129,6 +166,10 @@ function isInactiveProject(project: Project) {
   );
 }
 
+function optionKey(trainingTypeId: string, code: string) {
+  return `${trainingTypeId}::${clean(code).toUpperCase()}`;
+}
+
 function cellClasses(status: TrainingComplianceStatus) {
   switch (status) {
     case "current":
@@ -139,8 +180,8 @@ function cellClasses(status: TrainingComplianceStatus) {
       return "border-blue-200 bg-blue-50 text-blue-800";
     case "missing":
     case "expired":
-    case "revoked":
       return "border-rose-200 bg-rose-50 text-rose-800";
+    case "revoked":
     case "not_required":
       return "border-slate-200 bg-slate-50 text-slate-400";
   }
@@ -159,7 +200,6 @@ function cellText(status: TrainingComplianceStatus) {
     case "expired":
       return "EXP";
     case "revoked":
-      return "REV";
     case "not_required":
       return "";
   }
@@ -176,14 +216,13 @@ export default function ProjectTrainingMatrixPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
   const [types, setTypes] = useState<TrainingType[]>([]);
+  const [options, setOptions] = useState<TrainingOption[]>([]);
   const [projectAccess, setProjectAccess] = useState<ProjectAccess[]>([]);
   const [overrides, setOverrides] = useState<PopulationOverride[]>([]);
-  const [roleRequirements, setRoleRequirements] = useState<
-    RoleRequirement[]
-  >([]);
-  const [projectRequirements, setProjectRequirements] = useState<
-    ProjectRequirement[]
-  >([]);
+  const [projectRoles, setProjectRoles] = useState<ProjectRole[]>([]);
+  const [projectRoleAssignments, setProjectRoleAssignments] = useState<ProjectRoleAssignment[]>([]);
+  const [roleRequirements, setRoleRequirements] = useState<RoleRequirement[]>([]);
+  const [projectRequirements, setProjectRequirements] = useState<ProjectRequirement[]>([]);
   const [records, setRecords] = useState<TrainingRecord[]>([]);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -191,11 +230,13 @@ export default function ProjectTrainingMatrixPage() {
   const [statusFilter, setStatusFilter] = useState<
     "all" | "ready" | "blocked" | "expiring" | "pending"
   >("all");
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedTypeIds, setSelectedTypeIds] = useState<string[]>([]);
+  const [selectedOptionKeys, setSelectedOptionKeys] = useState<string[]>([]);
   const [populationOpen, setPopulationOpen] = useState(false);
   const [populationSearch, setPopulationSearch] = useState("");
   const [savingPopulation, setSavingPopulation] = useState(false);
-  const [includeInactiveProjects, setIncludeInactiveProjects] =
-    useState(false);
+  const [includeInactiveProjects, setIncludeInactiveProjects] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -210,8 +251,11 @@ export default function ProjectTrainingMatrixPage() {
       employeeResult,
       crewResult,
       typeResult,
+      optionResult,
       accessResult,
       overrideResult,
+      projectRoleResult,
+      projectRoleAssignmentResult,
       roleRequirementResult,
       projectRequirementResult,
       recordResult,
@@ -222,9 +266,7 @@ export default function ProjectTrainingMatrixPage() {
         .order("name"),
       supabase
         .from("employees")
-        .select(
-          "id,payroll_id,full_name,role,crew_id,user_id,active",
-        )
+        .select("id,payroll_id,full_name,role,crew_id,user_id,active")
         .eq("active", true)
         .order("full_name"),
       supabase
@@ -237,11 +279,23 @@ export default function ProjectTrainingMatrixPage() {
         .eq("active", true)
         .order("name"),
       supabase
-        .from("project_access")
-        .select("project_id,user_id"),
+        .from("training_type_options")
+        .select("id,training_type_id,name,code,active")
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
+      supabase.from("project_access").select("project_id,user_id"),
       supabase
         .from("project_training_people")
         .select("id,project_id,employee_id,included,source"),
+      supabase
+        .from("project_training_roles")
+        .select("id,project_id,name,description,active")
+        .eq("active", true)
+        .order("name"),
+      supabase
+        .from("project_training_role_assignments")
+        .select("id,project_role_id,employee_id"),
       supabase
         .from("role_training_requirements")
         .select(
@@ -251,7 +305,7 @@ export default function ProjectTrainingMatrixPage() {
       supabase
         .from("project_training_requirements")
         .select(
-          "id,project_id,training_type_id,requirement_level,renewal_lead_days,accepted_alternative_training_type_ids,required_option_codes,applies_to_role,active",
+          "id,project_id,project_role_id,training_type_id,requirement_level,renewal_lead_days,accepted_alternative_training_type_ids,required_option_codes,applies_to_role,active",
         )
         .eq("active", true),
       supabase
@@ -266,8 +320,11 @@ export default function ProjectTrainingMatrixPage() {
       employeeResult.error,
       crewResult.error,
       typeResult.error,
+      optionResult.error,
       accessResult.error,
       overrideResult.error,
+      projectRoleResult.error,
+      projectRoleAssignmentResult.error,
       roleRequirementResult.error,
       projectRequirementResult.error,
       recordResult.error,
@@ -276,32 +333,29 @@ export default function ProjectTrainingMatrixPage() {
     if (firstError) throw new Error(firstError.message);
 
     const loadedProjects = (projectResult.data ?? []) as Project[];
-
     setProjects(loadedProjects);
     setEmployees((employeeResult.data ?? []) as Employee[]);
     setCrews((crewResult.data ?? []) as Crew[]);
     setTypes((typeResult.data ?? []) as TrainingType[]);
+    setOptions((optionResult.data ?? []) as TrainingOption[]);
     setProjectAccess((accessResult.data ?? []) as ProjectAccess[]);
     setOverrides((overrideResult.data ?? []) as PopulationOverride[]);
-    setRoleRequirements(
-      (roleRequirementResult.data ?? []) as RoleRequirement[],
+    setProjectRoles((projectRoleResult.data ?? []) as ProjectRole[]);
+    setProjectRoleAssignments(
+      (projectRoleAssignmentResult.data ?? []) as ProjectRoleAssignment[],
     );
+    setRoleRequirements((roleRequirementResult.data ?? []) as RoleRequirement[]);
     setProjectRequirements(
       (projectRequirementResult.data ?? []) as ProjectRequirement[],
     );
     setRecords((recordResult.data ?? []) as TrainingRecord[]);
 
     setSelectedProjectId((current) => {
-      if (
-        current &&
-        loadedProjects.some((project) => project.id === current)
-      ) {
+      if (current && loadedProjects.some((project) => project.id === current)) {
         return current;
       }
-
       return (
-        loadedProjects.find((project) => !isInactiveProject(project))
-          ?.id ??
+        loadedProjects.find((project) => !isInactiveProject(project))?.id ??
         loadedProjects[0]?.id ??
         ""
       );
@@ -330,15 +384,17 @@ export default function ProjectTrainingMatrixPage() {
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
   );
-
   const crewById = useMemo(
     () => new Map(crews.map((crew) => [crew.id, crew])),
     [crews],
   );
-
   const typeById = useMemo(
     () => new Map(types.map((type) => [type.id, type])),
     [types],
+  );
+  const roleById = useMemo(
+    () => new Map(projectRoles.map((role) => [role.id, role])),
+    [projectRoles],
   );
 
   const visibleProjects = useMemo(
@@ -349,25 +405,38 @@ export default function ProjectTrainingMatrixPage() {
     [includeInactiveProjects, projects],
   );
 
+  const selectedProjectRoles = useMemo(
+    () =>
+      projectRoles.filter(
+        (role) => role.project_id === selectedProjectId && role.active !== false,
+      ),
+    [projectRoles, selectedProjectId],
+  );
+
   const linkedUserIds = useMemo(
     () =>
       new Set(
         projectAccess
-          .filter(
-            (row) => row.project_id === selectedProjectId,
-          )
+          .filter((row) => row.project_id === selectedProjectId)
           .map((row) => row.user_id),
       ),
     [projectAccess, selectedProjectId],
   );
 
+  const projectRoleAssignedEmployeeIds = useMemo(() => {
+    const selectedRoleSet = new Set(selectedProjectRoles.map((role) => role.id));
+    return new Set(
+      projectRoleAssignments
+        .filter((assignment) => selectedRoleSet.has(assignment.project_role_id))
+        .map((assignment) => assignment.employee_id),
+    );
+  }, [projectRoleAssignments, selectedProjectRoles]);
+
   const overrideByEmployee = useMemo(
     () =>
       new Map(
         overrides
-          .filter(
-            (row) => row.project_id === selectedProjectId,
-          )
+          .filter((row) => row.project_id === selectedProjectId)
           .map((row) => [row.employee_id, row]),
       ),
     [overrides, selectedProjectId],
@@ -377,12 +446,13 @@ export default function ProjectTrainingMatrixPage() {
     (employee: Employee) => {
       const override = overrideByEmployee.get(employee.id);
       if (override) return override.included;
+      if (projectRoleAssignedEmployeeIds.has(employee.id)) return true;
 
       return Boolean(
         employee.user_id && linkedUserIds.has(employee.user_id),
       );
     },
-    [linkedUserIds, overrideByEmployee],
+    [linkedUserIds, overrideByEmployee, projectRoleAssignedEmployeeIds],
   );
 
   const includedEmployees = useMemo(
@@ -390,13 +460,27 @@ export default function ProjectTrainingMatrixPage() {
     [employees, isIncluded],
   );
 
+  const projectRoleIdsByEmployee = useMemo(() => {
+    const selectedRoleSet = new Set(selectedProjectRoles.map((role) => role.id));
+    const map = new Map<string, string[]>();
+    for (const assignment of projectRoleAssignments) {
+      if (!selectedRoleSet.has(assignment.project_role_id)) continue;
+      const current = map.get(assignment.employee_id) ?? [];
+      current.push(assignment.project_role_id);
+      map.set(assignment.employee_id, current);
+    }
+    return map;
+  }, [projectRoleAssignments, selectedProjectRoles]);
+
   const matrixRows = useMemo<MatrixRow[]>(() => {
     return includedEmployees.map((employee) => {
+      const projectRoleIds = projectRoleIdsByEmployee.get(employee.id) ?? [];
       const requirements = combinedRequirementsForEmployee({
         employee,
         projectId: selectedProjectId,
         roleRequirements,
         projectRequirements,
+        projectRoleIds,
       });
 
       const requirementMap = new Map(
@@ -405,12 +489,10 @@ export default function ProjectTrainingMatrixPage() {
           requirement,
         ]),
       );
-
       const cells = new Map<
         string,
         ReturnType<typeof evaluateTrainingRequirement>
       >();
-
       let mandatoryTotal = 0;
       let mandatoryCompliant = 0;
       let blockers = 0;
@@ -424,28 +506,23 @@ export default function ProjectTrainingMatrixPage() {
           records,
           defaultLeadDays: 60,
         });
-
         cells.set(requirement.training_type_id, cell);
 
         if (requirement.requirement_level !== "recommended") {
           mandatoryTotal += 1;
-          if (isCompliantTrainingStatus(cell.status)) {
-            mandatoryCompliant += 1;
-          }
-          if (isBlockingTrainingStatus(cell.status)) {
-            blockers += 1;
-          }
-          if (cell.status === "pending_review") {
-            pending += 1;
-          }
-          if (cell.status === "expiring") {
-            expiring += 1;
-          }
+          if (isCompliantTrainingStatus(cell.status)) mandatoryCompliant += 1;
+          if (isBlockingTrainingStatus(cell.status)) blockers += 1;
+          if (cell.status === "pending_review") pending += 1;
+          if (cell.status === "expiring") expiring += 1;
         }
       }
 
       return {
         employee,
+        projectRoleIds,
+        projectRoleNames: projectRoleIds
+          .map((id) => roleById.get(id)?.name)
+          .filter((name): name is string => Boolean(name)),
         requirements: requirementMap,
         cells,
         mandatoryTotal,
@@ -456,45 +533,167 @@ export default function ProjectTrainingMatrixPage() {
         score:
           mandatoryTotal === 0
             ? 100
-            : Math.round(
-                (mandatoryCompliant / mandatoryTotal) * 100,
-              ),
+            : Math.round((mandatoryCompliant / mandatoryTotal) * 100),
       };
     });
   }, [
     includedEmployees,
     projectRequirements,
+    projectRoleIdsByEmployee,
     records,
+    roleById,
     roleRequirements,
     selectedProjectId,
   ]);
 
-  const visibleColumnIds = useMemo(() => {
+  const requiredTypeIds = useMemo(() => {
     const ids = new Set<string>();
+    for (const row of matrixRows) {
+      for (const trainingTypeId of row.requirements.keys()) ids.add(trainingTypeId);
+    }
+    return ids;
+  }, [matrixRows]);
+
+  const ticketFilterOptions = useMemo<SelectOption[]>(
+    () =>
+      Array.from(requiredTypeIds)
+        .map((id) => typeById.get(id))
+        .filter((type): type is TrainingType => Boolean(type))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((type) => ({
+          value: type.id,
+          label: type.short_code ? `${type.short_code} · ${type.name}` : type.name,
+          group: clean(type.category) || "Other",
+        })),
+    [requiredTypeIds, typeById],
+  );
+
+  const classFilterOptions = useMemo<SelectOption[]>(() => {
+    const allowedTypeIds = new Set(
+      selectedTypeIds.length > 0 ? selectedTypeIds : Array.from(requiredTypeIds),
+    );
+    const requiredCodesByType = new Map<string, Set<string>>();
 
     for (const row of matrixRows) {
-      for (const trainingTypeId of row.requirements.keys()) {
-        ids.add(trainingTypeId);
+      for (const requirement of row.requirements.values()) {
+        const codes = requiredCodesByType.get(requirement.training_type_id) ?? new Set<string>();
+        for (const code of requirement.required_option_codes ?? []) {
+          codes.add(clean(code).toUpperCase());
+        }
+        requiredCodesByType.set(requirement.training_type_id, codes);
       }
     }
 
-    return Array.from(ids).sort((a, b) =>
-      (typeById.get(a)?.name ?? "").localeCompare(
-        typeById.get(b)?.name ?? "",
-      ),
+    return options
+      .filter((option) => {
+        if (!allowedTypeIds.has(option.training_type_id)) return false;
+        const requiredCodes = requiredCodesByType.get(option.training_type_id);
+        return Boolean(requiredCodes?.has(clean(option.code).toUpperCase()));
+      })
+      .map((option) => {
+        const type = typeById.get(option.training_type_id);
+        const typeLabel = type?.short_code || type?.name || "Training";
+        return {
+          value: optionKey(option.training_type_id, option.code),
+          label: `${typeLabel} · ${option.name} (${option.code})`,
+          group: type?.name || "Training",
+        };
+      });
+  }, [matrixRows, options, requiredTypeIds, selectedTypeIds, typeById]);
+
+  useEffect(() => {
+    const allowedTypes = new Set(ticketFilterOptions.map((option) => option.value));
+    setSelectedTypeIds((current) => current.filter((id) => allowedTypes.has(id)));
+  }, [ticketFilterOptions]);
+
+  useEffect(() => {
+    const allowedOptions = new Set(classFilterOptions.map((option) => option.value));
+    setSelectedOptionKeys((current) =>
+      current.filter((value) => allowedOptions.has(value)),
     );
-  }, [matrixRows, typeById]);
+  }, [classFilterOptions]);
+
+  useEffect(() => {
+    const allowedRoles = new Set(selectedProjectRoles.map((role) => role.id));
+    setSelectedRoleIds((current) => current.filter((id) => allowedRoles.has(id)));
+  }, [selectedProjectRoles]);
+
+  const columns = useMemo<MatrixColumn[]>(() => {
+    const selectedOptionSet = new Set(selectedOptionKeys);
+    const selectedTypeSet = new Set(selectedTypeIds);
+    const optionTypeIds = new Set(
+      selectedOptionKeys
+        .map((value) => value.split("::")[0])
+        .filter(Boolean),
+    );
+    const result: MatrixColumn[] = [];
+
+    for (const trainingTypeId of Array.from(requiredTypeIds).sort((a, b) =>
+      (typeById.get(a)?.name ?? "").localeCompare(typeById.get(b)?.name ?? ""),
+    )) {
+      if (selectedTypeSet.size > 0 && !selectedTypeSet.has(trainingTypeId)) continue;
+      if (selectedTypeSet.size === 0 && optionTypeIds.size > 0 && !optionTypeIds.has(trainingTypeId)) continue;
+
+      const requirementCodes = new Set<string>();
+      for (const row of matrixRows) {
+        const requirement = row.requirements.get(trainingTypeId);
+        for (const code of requirement?.required_option_codes ?? []) {
+          requirementCodes.add(clean(code).toUpperCase());
+        }
+      }
+
+      if (requirementCodes.size > 0) {
+        const configured = options.filter(
+          (option) =>
+            option.training_type_id === trainingTypeId &&
+            requirementCodes.has(clean(option.code).toUpperCase()),
+        );
+        const selectedConfigured = configured.filter((option) =>
+          selectedOptionSet.has(optionKey(trainingTypeId, option.code)),
+        );
+        const toShow = selectedConfigured.length > 0 ? selectedConfigured : configured;
+
+        for (const option of toShow) {
+          result.push({
+            key: optionKey(trainingTypeId, option.code),
+            trainingTypeId,
+            optionCode: option.code,
+            optionName: option.name,
+          });
+        }
+        continue;
+      }
+
+      result.push({
+        key: trainingTypeId,
+        trainingTypeId,
+        optionCode: null,
+        optionName: null,
+      });
+    }
+
+    return result;
+  }, [matrixRows, options, requiredTypeIds, selectedOptionKeys, selectedTypeIds, typeById]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
+    const selectedRoleSet = new Set(selectedRoleIds);
 
     return matrixRows.filter((row) => {
+      if (
+        selectedRoleSet.size > 0 &&
+        !row.projectRoleIds.some((id) => selectedRoleSet.has(id))
+      ) {
+        return false;
+      }
+
       if (
         query &&
         ![
           row.employee.full_name,
           row.employee.payroll_id,
           row.employee.role,
+          row.projectRoleNames.join(" "),
           crewLabel(
             row.employee.crew_id
               ? crewById.get(row.employee.crew_id)
@@ -509,52 +708,58 @@ export default function ProjectTrainingMatrixPage() {
         return false;
       }
 
-      if (statusFilter === "ready") {
-        return row.blockers === 0 && row.pending === 0;
-      }
-
-      if (statusFilter === "blocked") {
-        return row.blockers > 0;
-      }
-
-      if (statusFilter === "expiring") {
-        return row.expiring > 0;
-      }
-
-      if (statusFilter === "pending") {
-        return row.pending > 0;
-      }
-
+      if (statusFilter === "ready") return row.blockers === 0 && row.pending === 0;
+      if (statusFilter === "blocked") return row.blockers > 0;
+      if (statusFilter === "expiring") return row.expiring > 0;
+      if (statusFilter === "pending") return row.pending > 0;
       return true;
     });
-  }, [crewById, matrixRows, search, statusFilter]);
+  }, [crewById, matrixRows, search, selectedRoleIds, statusFilter]);
 
   const summary = useMemo(() => {
-    const ready = matrixRows.filter(
-      (row) => row.blockers === 0 && row.pending === 0,
-    ).length;
-
+    const rows = filteredRows;
+    const ready = rows.filter((row) => row.blockers === 0 && row.pending === 0).length;
     return {
-      people: matrixRows.length,
+      people: rows.length,
       ready,
-      blocked: matrixRows.filter((row) => row.blockers > 0).length,
-      expiring: matrixRows.filter((row) => row.expiring > 0).length,
-      pending: matrixRows.filter((row) => row.pending > 0).length,
+      blocked: rows.filter((row) => row.blockers > 0).length,
+      expiring: rows.filter((row) => row.expiring > 0).length,
+      pending: rows.filter((row) => row.pending > 0).length,
       compliance:
-        matrixRows.length === 0
+        rows.length === 0
           ? 0
-          : Math.round(
-              matrixRows.reduce((sum, row) => sum + row.score, 0) /
-                matrixRows.length,
-            ),
+          : Math.round(rows.reduce((sum, row) => sum + row.score, 0) / rows.length),
     };
-  }, [matrixRows]);
+  }, [filteredRows]);
+
+  function cellForColumn(row: MatrixRow, column: MatrixColumn) {
+    const requirement = row.requirements.get(column.trainingTypeId);
+    if (!requirement) return null;
+
+    if (column.optionCode) {
+      const requiredCodes = (requirement.required_option_codes ?? []).map((code) =>
+        clean(code).toUpperCase(),
+      );
+      if (!requiredCodes.includes(clean(column.optionCode).toUpperCase())) return null;
+
+      return evaluateTrainingRequirement({
+        employeeId: row.employee.id,
+        requirement: {
+          ...requirement,
+          required_option_codes: [column.optionCode],
+        },
+        records,
+        defaultLeadDays: 60,
+      });
+    }
+
+    return row.cells.get(column.trainingTypeId) ?? null;
+  }
 
   async function savePopulationRows(
     rows: Array<{ employee_id: string; included: boolean; source: string }>,
   ) {
     if (!selectedProjectId || rows.length === 0) return;
-
     setSavingPopulation(true);
     setMessage(null);
 
@@ -562,7 +767,6 @@ export default function ProjectTrainingMatrixPage() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
       const payload = rows.map((row) => ({
         project_id: selectedProjectId,
         employee_id: row.employee_id,
@@ -571,15 +775,10 @@ export default function ProjectTrainingMatrixPage() {
         updated_by: user?.id ?? null,
         updated_at: new Date().toISOString(),
       }));
-
       const { error } = await supabase
         .from("project_training_people")
-        .upsert(payload, {
-          onConflict: "project_id,employee_id",
-        });
-
+        .upsert(payload, { onConflict: "project_id,employee_id" });
       if (error) throw new Error(error.message);
-
       await loadData();
     } catch (error) {
       setMessage({
@@ -596,17 +795,11 @@ export default function ProjectTrainingMatrixPage() {
 
   async function toggleEmployee(employee: Employee, included: boolean) {
     await savePopulationRows([
-      {
-        employee_id: employee.id,
-        included,
-        source: "manual",
-      },
+      { employee_id: employee.id, included, source: "manual" },
     ]);
   }
 
-  async function applyPopulation(
-    mode: "all" | "none" | "project_access",
-  ) {
+  async function applyPopulation(mode: "all" | "none" | "project_access") {
     const rows = employees.map((employee) => ({
       employee_id: employee.id,
       included:
@@ -614,16 +807,9 @@ export default function ProjectTrainingMatrixPage() {
           ? true
           : mode === "none"
             ? false
-            : Boolean(
-                employee.user_id &&
-                  linkedUserIds.has(employee.user_id),
-              ),
-      source:
-        mode === "project_access"
-          ? "project_access"
-          : "manual",
+            : Boolean(employee.user_id && linkedUserIds.has(employee.user_id)),
+      source: mode === "project_access" ? "project_access" : "manual",
     }));
-
     await savePopulationRows(rows);
   }
 
@@ -635,45 +821,49 @@ export default function ProjectTrainingMatrixPage() {
     } catch (error) {
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to refresh the project matrix.",
+        text: error instanceof Error ? error.message : "Unable to refresh the project matrix.",
       });
     } finally {
       setRefreshing(false);
     }
   }
 
+  function clearMatrixFilters() {
+    setSelectedRoleIds([]);
+    setSelectedTypeIds([]);
+    setSelectedOptionKeys([]);
+  }
+
   function exportMatrix() {
     const headers = [
       "Employee",
       "Payroll ID",
-      "Role",
+      "Employee Role",
+      "Project Role",
       "Crew",
       "Compliance %",
       "Ready",
-      ...visibleColumnIds.map(
-        (id) => typeById.get(id)?.name ?? id,
-      ),
+      ...columns.map((column) => {
+        const type = typeById.get(column.trainingTypeId);
+        return column.optionCode
+          ? `${type?.name ?? "Training"} - ${column.optionName ?? column.optionCode} (${column.optionCode})`
+          : type?.name ?? column.trainingTypeId;
+      }),
     ];
 
     const rows = filteredRows.map((row) => [
       row.employee.full_name,
       row.employee.payroll_id,
       row.employee.role,
+      row.projectRoleNames.join("; "),
       crewLabel(
-        row.employee.crew_id
-          ? crewById.get(row.employee.crew_id)
-          : null,
+        row.employee.crew_id ? crewById.get(row.employee.crew_id) : null,
       ),
       row.score,
       row.blockers === 0 && row.pending === 0 ? "Yes" : "No",
-      ...visibleColumnIds.map((id) => {
-        const cell = row.cells.get(id);
-        return cell
-          ? trainingComplianceLabel(cell.status)
-          : "Not Required";
+      ...columns.map((column) => {
+        const cell = cellForColumn(row, column);
+        return cell ? trainingComplianceLabel(cell.status) : "Not Required";
       }),
     ]);
 
@@ -681,16 +871,11 @@ export default function ProjectTrainingMatrixPage() {
       headers.map(csv).join(","),
       ...rows.map((row) => row.map(csv).join(",")),
     ].join("\n");
-
-    const blob = new Blob([content], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `project-training-matrix-${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
+    link.download = `project-training-matrix-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -699,16 +884,11 @@ export default function ProjectTrainingMatrixPage() {
     const query = populationSearch.trim().toLowerCase();
     return employees.filter((employee) => {
       if (!query) return true;
-
       return [
         employee.full_name,
         employee.payroll_id,
         employee.role,
-        crewLabel(
-          employee.crew_id
-            ? crewById.get(employee.crew_id)
-            : null,
-        ),
+        crewLabel(employee.crew_id ? crewById.get(employee.crew_id) : null),
       ]
         .map(clean)
         .join(" ")
@@ -729,7 +909,7 @@ export default function ProjectTrainingMatrixPage() {
 
   return (
     <AppShell>
-      <main className="mx-auto w-full max-w-[1800px] space-y-6 px-4 py-6 sm:px-6">
+      <main className="mx-auto w-full max-w-[1800px] space-y-5 px-4 py-6 sm:px-6">
         <Link
           href="/people/training"
           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700"
@@ -749,9 +929,9 @@ export default function ProjectTrainingMatrixPage() {
                 Project Training Matrix
               </h1>
               <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-                Project requirements and role requirements are evaluated
-                against approved Training records. The population is adjustable:
-                tick or untick people without changing their employee profile.
+                Project roles and project-specific requirements are merged with
+                company role requirements. Ticket and class filters let you keep
+                the matrix narrow enough to use on site.
               </p>
             </div>
 
@@ -770,10 +950,7 @@ export default function ProjectTrainingMatrixPage() {
                 disabled={refreshing}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700 disabled:opacity-50"
               >
-                <RefreshCw
-                  size={16}
-                  className={refreshing ? "animate-spin" : ""}
-                />
+                <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
                 Refresh
               </button>
               <button
@@ -804,15 +981,14 @@ export default function ProjectTrainingMatrixPage() {
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
             <label>
-              <span className="mb-2 block text-sm font-black text-slate-700">
-                Project
-              </span>
+              <span className="mb-2 block text-sm font-black text-slate-700">Project</span>
               <select
                 className={inputClass}
                 value={selectedProjectId}
-                onChange={(event) =>
-                  setSelectedProjectId(event.target.value)
-                }
+                onChange={(event) => {
+                  setSelectedProjectId(event.target.value);
+                  clearMatrixFilters();
+                }}
               >
                 <option value="">Select project...</option>
                 {visibleProjects.map((project) => (
@@ -822,14 +998,11 @@ export default function ProjectTrainingMatrixPage() {
                 ))}
               </select>
             </label>
-
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
               <input
                 type="checkbox"
                 checked={includeInactiveProjects}
-                onChange={(event) =>
-                  setIncludeInactiveProjects(event.target.checked)
-                }
+                onChange={(event) => setIncludeInactiveProjects(event.target.checked)}
               />
               Include inactive projects
             </label>
@@ -840,16 +1013,12 @@ export default function ProjectTrainingMatrixPage() {
           <section className="rounded-3xl border border-blue-200 bg-blue-50/40 p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <h2 className="text-lg font-black text-slate-950">
-                  Project Training Population
-                </h2>
+                <h2 className="text-lg font-black text-slate-950">Project Training Population</h2>
                 <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                  Project access is used as the initial suggestion. Any manual
-                  tick/untick below overrides that suggestion for Training
-                  compliance only.
+                  Project access is the starting point. Manual inclusions or exclusions
+                  below affect Training compliance only.
                 </p>
               </div>
-
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -879,16 +1048,11 @@ export default function ProjectTrainingMatrixPage() {
             </div>
 
             <label className="relative mt-4 block">
-              <Search
-                size={16}
-                className="absolute left-3 top-3.5 text-slate-400"
-              />
+              <Search size={16} className="absolute left-3 top-3.5 text-slate-400" />
               <input
                 className={`${inputClass} pl-9`}
                 value={populationSearch}
-                onChange={(event) =>
-                  setPopulationSearch(event.target.value)
-                }
+                onChange={(event) => setPopulationSearch(event.target.value)}
                 placeholder="Search project people..."
               />
             </label>
@@ -905,10 +1069,7 @@ export default function ProjectTrainingMatrixPage() {
                     checked={isIncluded(employee)}
                     disabled={savingPopulation}
                     onChange={(event) =>
-                      void toggleEmployee(
-                        employee,
-                        event.target.checked,
-                      )
+                      void toggleEmployee(employee, event.target.checked)
                     }
                   />
                   <span>
@@ -916,11 +1077,9 @@ export default function ProjectTrainingMatrixPage() {
                       {employee.full_name}
                     </span>
                     <span className="mt-1 block text-xs text-slate-500">
-                      {employee.role || "No role"} ·{" "}
+                      {employee.role || "No employee role"} ·{" "}
                       {crewLabel(
-                        employee.crew_id
-                          ? crewById.get(employee.crew_id)
-                          : null,
+                        employee.crew_id ? crewById.get(employee.crew_id) : null,
                       )}
                     </span>
                   </span>
@@ -940,19 +1099,62 @@ export default function ProjectTrainingMatrixPage() {
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_240px]">
-            <label className="relative">
-              <Search
-                size={16}
-                className="absolute left-3 top-3.5 text-slate-400"
-              />
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="text-sm font-black text-slate-700">Matrix filters</div>
+            {(selectedRoleIds.length > 0 ||
+              selectedTypeIds.length > 0 ||
+              selectedOptionKeys.length > 0) && (
+              <button
+                type="button"
+                onClick={clearMatrixFilters}
+                className="inline-flex items-center gap-1.5 text-xs font-black text-slate-500 hover:text-slate-900"
+              >
+                <X size={14} />
+                Clear filters
+              </button>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <label className="relative xl:col-span-2">
+              <Search size={16} className="absolute left-3 top-3.5 text-slate-400" />
               <input
                 className={`${inputClass} pl-9`}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search project matrix..."
+                placeholder="Search employee, role or crew..."
               />
             </label>
+
+            <MultiSelectFilter
+              label="Project roles"
+              emptyLabel="All project roles"
+              selected={selectedRoleIds}
+              onChange={setSelectedRoleIds}
+              options={selectedProjectRoles.map((role) => ({
+                value: role.id,
+                label: role.name,
+              }))}
+              disabled={selectedProjectRoles.length === 0}
+            />
+
+            <MultiSelectFilter
+              label="Tickets"
+              emptyLabel="All required tickets"
+              selected={selectedTypeIds}
+              onChange={setSelectedTypeIds}
+              options={ticketFilterOptions}
+              disabled={ticketFilterOptions.length === 0}
+            />
+
+            <MultiSelectFilter
+              label="Classes / options"
+              emptyLabel="All required classes"
+              selected={selectedOptionKeys}
+              onChange={setSelectedOptionKeys}
+              options={classFilterOptions}
+              disabled={classFilterOptions.length === 0}
+            />
 
             <select
               className={inputClass}
@@ -983,22 +1185,27 @@ export default function ProjectTrainingMatrixPage() {
               <thead>
                 <tr>
                   <th className="sticky left-0 top-0 z-30 min-w-72 border-b border-r border-slate-200 bg-slate-100 px-4 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-600">
-                    Employee
+                    Employee / Project Role
                   </th>
-                  <th className="sticky top-0 z-20 min-w-28 border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-center text-xs font-black uppercase tracking-wide text-slate-600">
+                  <th className="sticky top-0 z-20 min-w-24 border-b border-r border-slate-200 bg-slate-100 px-2 py-3 text-center text-xs font-black uppercase tracking-wide text-slate-600">
                     Compliance
                   </th>
-                  {visibleColumnIds.map((trainingTypeId) => {
-                    const type = typeById.get(trainingTypeId);
+                  {columns.map((column) => {
+                    const type = typeById.get(column.trainingTypeId);
                     return (
                       <th
-                        key={trainingTypeId}
-                        className="sticky top-0 z-20 min-w-36 border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-center"
+                        key={column.key}
+                        className="sticky top-0 z-20 min-w-28 border-b border-r border-slate-200 bg-slate-100 px-2 py-3 text-center"
                       >
                         <div className="text-xs font-black text-slate-800">
                           {type?.short_code || type?.name || "Training"}
                         </div>
-                        {type?.short_code ? (
+                        {column.optionCode ? (
+                          <div className="mt-1 rounded-md bg-white/80 px-1.5 py-1 text-[10px] font-black text-slate-600">
+                            {column.optionName || column.optionCode}
+                            <span className="ml-1 text-slate-400">{column.optionCode}</span>
+                          </div>
+                        ) : type?.short_code ? (
                           <div className="mt-1 text-[10px] font-semibold text-slate-500">
                             {type.name}
                           </div>
@@ -1012,21 +1219,35 @@ export default function ProjectTrainingMatrixPage() {
                 {filteredRows.map((row) => (
                   <tr key={row.employee.id}>
                     <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-3">
-                      <div className="font-black text-slate-950">
-                        {row.employee.full_name}
-                      </div>
+                      <div className="font-black text-slate-950">{row.employee.full_name}</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {row.employee.role || "No role"} ·{" "}
+                        {row.employee.role || "No employee role"} ·{" "}
                         {crewLabel(
                           row.employee.crew_id
                             ? crewById.get(row.employee.crew_id)
                             : null,
                         )}
                       </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {row.projectRoleNames.length > 0 ? (
+                          row.projectRoleNames.map((name) => (
+                            <span
+                              key={name}
+                              className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-black text-blue-700"
+                            >
+                              {name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-400">
+                            No project role assigned
+                          </span>
+                        )}
+                      </div>
                     </td>
-                    <td className="border-b border-r border-slate-100 p-2 text-center">
+                    <td className="border-b border-r border-slate-100 p-1.5 text-center">
                       <div
-                        className={`mx-auto rounded-xl px-2 py-2 text-sm font-black ${
+                        className={`mx-auto rounded-lg px-2 py-2 text-sm font-black ${
                           row.blockers === 0 && row.pending === 0
                             ? "bg-emerald-50 text-emerald-800"
                             : "bg-rose-50 text-rose-800"
@@ -1036,41 +1257,36 @@ export default function ProjectTrainingMatrixPage() {
                       </div>
                     </td>
 
-                    {visibleColumnIds.map((trainingTypeId) => {
-                      const cell = row.cells.get(trainingTypeId);
-
+                    {columns.map((column) => {
+                      const cell = cellForColumn(row, column);
                       if (!cell) {
                         return (
                           <td
-                            key={trainingTypeId}
-                            className="border-b border-r border-slate-100 p-2"
+                            key={column.key}
+                            className="border-b border-r border-slate-100 p-1.5"
                           >
-                            <div className="mx-auto h-12 w-20 rounded-xl border border-slate-100 bg-slate-50" />
+                            <div className="mx-auto h-10 w-16 rounded-lg border border-slate-100 bg-slate-50" />
                           </td>
                         );
                       }
 
                       return (
                         <td
-                          key={trainingTypeId}
-                          className="border-b border-r border-slate-100 p-2 text-center"
+                          key={column.key}
+                          className="border-b border-r border-slate-100 p-1.5 text-center"
                         >
                           <Link
                             href={`/people/training/register?employeeId=${encodeURIComponent(
                               row.employee.id,
                             )}&trainingTypeId=${encodeURIComponent(
-                              trainingTypeId,
-                            )}&projectId=${encodeURIComponent(
-                              selectedProjectId,
-                            )}`}
-                            title={`${trainingComplianceLabel(
-                              cell.status,
-                            )}${
+                              column.trainingTypeId,
+                            )}&projectId=${encodeURIComponent(selectedProjectId)}`}
+                            title={`${trainingComplianceLabel(cell.status)}${
                               cell.daysRemaining !== null
                                 ? ` · ${cell.daysRemaining} days`
                                 : ""
                             }`}
-                            className={`mx-auto flex h-12 w-20 items-center justify-center rounded-xl border text-xs font-black ${cellClasses(
+                            className={`mx-auto flex h-10 w-16 items-center justify-center rounded-lg border text-[11px] font-black ${cellClasses(
                               cell.status,
                             )}`}
                           >
@@ -1085,19 +1301,24 @@ export default function ProjectTrainingMatrixPage() {
             </table>
           </div>
 
-          {filteredRows.length === 0 ? (
+          {columns.length === 0 ? (
             <div className="p-10 text-center text-sm font-semibold text-slate-500">
-              No employees are currently included in this project matrix or
-              match the selected filter.
+              No project Training requirements match the selected ticket filters.
+            </div>
+          ) : filteredRows.length === 0 ? (
+            <div className="p-10 text-center text-sm font-semibold text-slate-500">
+              No employees are currently included in this project matrix or match
+              the selected filters.
             </div>
           ) : null}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          <strong>Project:</strong>{" "}
-          {projectLabel(projectById.get(selectedProjectId))}. Role-specific
-          requirements are automatically merged with project requirements.
-          Recommended requirements are displayed but do not block mobilisation.
+          <strong>Project:</strong> {projectLabel(projectById.get(selectedProjectId))}.
+          Project-defined roles determine project-specific minimum tickets and
+          classes. Company role requirements still merge underneath as baseline
+          requirements. Removed/revoked evidence is treated as history; a required
+          qualification becomes Missing rather than leaving a stale REV cell.
         </section>
       </main>
     </AppShell>
@@ -1106,6 +1327,130 @@ export default function ProjectTrainingMatrixPage() {
 
 const inputClass =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
+
+function MultiSelectFilter({
+  label,
+  emptyLabel,
+  options,
+  selected,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  emptyLabel: string;
+  options: SelectOption[];
+  selected: string[];
+  onChange: (value: string[]) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const value = query.trim().toLowerCase();
+    if (!value) return options;
+    return options.filter((option) =>
+      `${option.label} ${option.group ?? ""}`.toLowerCase().includes(value),
+    );
+  }, [options, query]);
+
+  function toggle(value: string) {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((item) => item !== value)
+        : [...selected, value],
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className={`${inputClass} flex items-center justify-between gap-3 text-left disabled:bg-slate-50 disabled:text-slate-400`}
+      >
+        <span className="min-w-0 truncate">
+          {selected.length === 0 ? emptyLabel : `${label}: ${selected.length} selected`}
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-slate-400" />
+      </button>
+
+      {open && !disabled ? (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[min(440px,90vw)] rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search size={15} className="absolute left-3 top-3 text-slate-400" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={`Search ${label.toLowerCase()}...`}
+                className={`${inputClass} py-2.5 pl-9`}
+              />
+            </div>
+            {selected.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black text-slate-600"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-3 max-h-72 overflow-y-auto">
+            {filtered.map((option) => {
+              const checked = selected.includes(option.value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => toggle(option.value)}
+                  className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50"
+                >
+                  <span
+                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                      checked
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-300 bg-white text-transparent"
+                    }`}
+                  >
+                    <Check size={13} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-bold text-slate-800">
+                      {option.label}
+                    </span>
+                    {option.group ? (
+                      <span className="mt-0.5 block text-xs text-slate-400">
+                        {option.group}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+            {filtered.length === 0 ? (
+              <div className="px-3 py-6 text-center text-sm font-semibold text-slate-400">
+                No matches.
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="mt-3 w-full rounded-xl bg-slate-950 px-3 py-2.5 text-sm font-black text-white"
+          >
+            Done
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function Metric({
   label,
@@ -1119,9 +1464,7 @@ function Metric({
       <div className="text-xs font-black uppercase tracking-wide text-slate-500">
         {label}
       </div>
-      <div className="mt-2 text-3xl font-black text-slate-950">
-        {value}
-      </div>
+      <div className="mt-2 text-3xl font-black text-slate-950">{value}</div>
     </div>
   );
 }

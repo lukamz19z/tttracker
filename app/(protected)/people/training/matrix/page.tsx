@@ -9,12 +9,15 @@ import {
 import Link from "next/link";
 import {
   ArrowLeft,
+  Check,
+  ChevronDown,
   Download,
   Filter,
   Grid3X3,
   Loader2,
   RefreshCw,
   Search,
+  X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -28,6 +31,7 @@ import {
   type RoleTrainingRequirementLike,
   type TrainingComplianceStatus,
   type TrainingRecordLike,
+  type TrainingRequirementLike,
 } from "@/lib/training/compliance";
 
 type Employee = {
@@ -54,6 +58,14 @@ type TrainingType = {
   expiry_warning_days: number[] | null;
 };
 
+type TrainingOption = {
+  id: string;
+  training_type_id: string;
+  name: string;
+  code: string;
+  active: boolean | null;
+};
+
 type RoleRequirement = RoleTrainingRequirementLike & {
   id: string;
 };
@@ -61,6 +73,19 @@ type RoleRequirement = RoleTrainingRequirementLike & {
 type TrainingRecord = TrainingRecordLike & {
   training_name: string;
   category: string | null;
+};
+
+type MatrixColumn = {
+  key: string;
+  trainingTypeId: string;
+  optionCode: string | null;
+  optionName: string | null;
+};
+
+type SelectOption = {
+  value: string;
+  label: string;
+  group?: string;
 };
 
 function clean(value: unknown) {
@@ -76,6 +101,10 @@ function crewLabel(crew?: Crew | null) {
   return name || "Unassigned";
 }
 
+function optionKey(trainingTypeId: string, code: string) {
+  return `${trainingTypeId}::${clean(code).toUpperCase()}`;
+}
+
 function cellClasses(status: TrainingComplianceStatus) {
   switch (status) {
     case "current":
@@ -84,12 +113,13 @@ function cellClasses(status: TrainingComplianceStatus) {
       return "border-amber-200 bg-amber-50 text-amber-900";
     case "expired":
     case "missing":
-    case "revoked":
       return "border-rose-200 bg-rose-50 text-rose-800";
     case "pending_review":
       return "border-blue-200 bg-blue-50 text-blue-800";
-    case "not_required":
+    case "revoked":
       return "border-slate-200 bg-slate-50 text-slate-400";
+    case "not_required":
+      return "border-slate-100 bg-white text-slate-300";
   }
 }
 
@@ -106,7 +136,7 @@ function cellText(status: TrainingComplianceStatus) {
     case "pending_review":
       return "P";
     case "revoked":
-      return "REV";
+      return "";
     case "not_required":
       return "";
   }
@@ -122,6 +152,7 @@ export default function CompanyTrainingMatrixPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [crews, setCrews] = useState<Crew[]>([]);
   const [types, setTypes] = useState<TrainingType[]>([]);
+  const [options, setOptions] = useState<TrainingOption[]>([]);
   const [records, setRecords] = useState<TrainingRecord[]>([]);
   const [requirements, setRequirements] = useState<RoleRequirement[]>([]);
 
@@ -129,6 +160,8 @@ export default function CompanyTrainingMatrixPage() {
   const [crewFilter, setCrewFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [selectedTypeIds, setSelectedTypeIds] = useState<string[]>([]);
+  const [selectedOptionKeys, setSelectedOptionKeys] = useState<string[]>([]);
   const [gapsOnly, setGapsOnly] = useState(false);
   const [requiredColumnsOnly, setRequiredColumnsOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -140,6 +173,7 @@ export default function CompanyTrainingMatrixPage() {
       employeeResult,
       crewResult,
       typeResult,
+      optionResult,
       recordResult,
       requirementResult,
     ] = await Promise.all([
@@ -161,6 +195,12 @@ export default function CompanyTrainingMatrixPage() {
         .order("category")
         .order("name"),
       supabase
+        .from("training_type_options")
+        .select("id,training_type_id,name,code,active")
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
+      supabase
         .from("employee_training_records")
         .select(
           "id,employee_id,training_type_id,training_name,category,workflow_status,record_status,current_version,superseded_at,revoked_at,does_not_expire,expiry_date,issue_date,created_at,option_codes",
@@ -177,6 +217,7 @@ export default function CompanyTrainingMatrixPage() {
       employeeResult.error,
       crewResult.error,
       typeResult.error,
+      optionResult.error,
       recordResult.error,
       requirementResult.error,
     ].find(Boolean);
@@ -186,10 +227,9 @@ export default function CompanyTrainingMatrixPage() {
     setEmployees((employeeResult.data ?? []) as Employee[]);
     setCrews((crewResult.data ?? []) as Crew[]);
     setTypes((typeResult.data ?? []) as TrainingType[]);
+    setOptions((optionResult.data ?? []) as TrainingOption[]);
     setRecords((recordResult.data ?? []) as TrainingRecord[]);
-    setRequirements(
-      (requirementResult.data ?? []) as RoleRequirement[],
-    );
+    setRequirements((requirementResult.data ?? []) as RoleRequirement[]);
   }, [supabase]);
 
   useEffect(() => {
@@ -211,6 +251,11 @@ export default function CompanyTrainingMatrixPage() {
   const crewById = useMemo(
     () => new Map(crews.map((crew) => [crew.id, crew])),
     [crews],
+  );
+
+  const typeById = useMemo(
+    () => new Map(types.map((type) => [type.id, type])),
+    [types],
   );
 
   const roles = useMemo(
@@ -241,78 +286,195 @@ export default function CompanyTrainingMatrixPage() {
     [requirements],
   );
 
-  const visibleTypes = useMemo(
+  const baseTypes = useMemo(() => {
+    const optionTypeIds = new Set(
+      selectedOptionKeys
+        .map((value) => value.split("::")[0])
+        .filter(Boolean),
+    );
+
+    return types.filter((type) => {
+      if (
+        categoryFilter !== "all" &&
+        clean(type.category) !== categoryFilter
+      ) {
+        return false;
+      }
+
+      if (requiredColumnsOnly && !requiredTypeIds.has(type.id)) {
+        return false;
+      }
+
+      if (selectedTypeIds.length > 0) {
+        return selectedTypeIds.includes(type.id);
+      }
+
+      if (optionTypeIds.size > 0) {
+        return optionTypeIds.has(type.id);
+      }
+
+      return true;
+    });
+  }, [
+    categoryFilter,
+    requiredColumnsOnly,
+    requiredTypeIds,
+    selectedOptionKeys,
+    selectedTypeIds,
+    types,
+  ]);
+
+  const ticketFilterOptions = useMemo<SelectOption[]>(
     () =>
-      types.filter((type) => {
-        if (
-          categoryFilter !== "all" &&
-          clean(type.category) !== categoryFilter
-        ) {
-          return false;
-        }
-
-        if (requiredColumnsOnly && !requiredTypeIds.has(type.id)) {
-          return false;
-        }
-
-        return true;
-      }),
-    [
-      categoryFilter,
-      requiredColumnsOnly,
-      requiredTypeIds,
-      types,
-    ],
+      types.map((type) => ({
+        value: type.id,
+        label: type.short_code
+          ? `${type.short_code} · ${type.name}`
+          : type.name,
+        group: clean(type.category) || "Other",
+      })),
+    [types],
   );
 
-  const requiredForEmployee = useCallback(
-    (employee: Employee, trainingTypeId: string) => {
-      const employeeRequirements = roleRequirementsForEmployee({
+  const classFilterOptions = useMemo<SelectOption[]>(() => {
+    const allowedTypeIds = new Set(
+      selectedTypeIds.length > 0
+        ? selectedTypeIds
+        : baseTypes.map((type) => type.id),
+    );
+
+    return options
+      .filter((option) => allowedTypeIds.has(option.training_type_id))
+      .map((option) => {
+        const type = typeById.get(option.training_type_id);
+        const typeLabel = type?.short_code || type?.name || "Training";
+        return {
+          value: optionKey(option.training_type_id, option.code),
+          label: `${typeLabel} · ${option.name} (${option.code})`,
+          group: type?.name || "Training",
+        };
+      });
+  }, [baseTypes, options, selectedTypeIds, typeById]);
+
+  useEffect(() => {
+    const allowed = new Set(classFilterOptions.map((option) => option.value));
+    setSelectedOptionKeys((current) =>
+      current.filter((value) => allowed.has(value)),
+    );
+  }, [classFilterOptions]);
+
+  const columns = useMemo<MatrixColumn[]>(() => {
+    const selectedOptionSet = new Set(selectedOptionKeys);
+    const result: MatrixColumn[] = [];
+
+    for (const type of baseTypes) {
+      const selectedForType = options.filter(
+        (option) =>
+          option.training_type_id === type.id &&
+          selectedOptionSet.has(optionKey(type.id, option.code)),
+      );
+
+      if (selectedForType.length > 0) {
+        for (const option of selectedForType) {
+          result.push({
+            key: optionKey(type.id, option.code),
+            trainingTypeId: type.id,
+            optionCode: option.code,
+            optionName: option.name,
+          });
+        }
+        continue;
+      }
+
+      result.push({
+        key: type.id,
+        trainingTypeId: type.id,
+        optionCode: null,
+        optionName: null,
+      });
+    }
+
+    return result;
+  }, [baseTypes, options, selectedOptionKeys]);
+
+  const requirementForEmployee = useCallback(
+    (employee: Employee, trainingTypeId: string) =>
+      roleRequirementsForEmployee({
         employee,
         requirements,
-      });
-
-      return employeeRequirements.some(
-        (requirement) =>
-          requirement.training_type_id === trainingTypeId,
-      );
-    },
+      }).find((item) => item.training_type_id === trainingTypeId) ?? null,
     [requirements],
   );
 
-  const cellFor = useCallback(
-    (employee: Employee, type: TrainingType) => {
-      const employeeRequirements = roleRequirementsForEmployee({
+  const requiredForEmployee = useCallback(
+    (employee: Employee, column: MatrixColumn) => {
+      const requirement = requirementForEmployee(
         employee,
-        requirements,
-      });
-
-      const requirement = employeeRequirements.find(
-        (item) => item.training_type_id === type.id,
+        column.trainingTypeId,
       );
 
-      if (requirement) {
+      if (!requirement) return false;
+      if (!column.optionCode) return true;
+
+      const requiredCodes = (requirement.required_option_codes ?? []).map(
+        (code) => clean(code).toUpperCase(),
+      );
+
+      return requiredCodes.includes(clean(column.optionCode).toUpperCase());
+    },
+    [requirementForEmployee],
+  );
+
+  const cellFor = useCallback(
+    (employee: Employee, column: MatrixColumn) => {
+      const type = typeById.get(column.trainingTypeId);
+      const baseRequirement = requirementForEmployee(
+        employee,
+        column.trainingTypeId,
+      );
+      const leadDays =
+        Array.isArray(type?.expiry_warning_days) &&
+        type.expiry_warning_days.length > 0
+          ? Math.max(...type.expiry_warning_days)
+          : 60;
+
+      if (column.optionCode) {
+        const requirement: TrainingRequirementLike = {
+          ...(baseRequirement ?? {
+            training_type_id: column.trainingTypeId,
+            requirement_level: "recorded",
+            renewal_lead_days: leadDays,
+          }),
+          training_type_id: column.trainingTypeId,
+          required_option_codes: [column.optionCode],
+        };
+
         return evaluateTrainingRequirement({
           employeeId: employee.id,
           requirement,
           records,
-          defaultLeadDays: 60,
+          defaultLeadDays: leadDays,
+        });
+      }
+
+      if (baseRequirement) {
+        return evaluateTrainingRequirement({
+          employeeId: employee.id,
+          requirement: baseRequirement,
+          records,
+          defaultLeadDays: leadDays,
         });
       }
 
       return matrixStatusForTrainingType({
         employeeId: employee.id,
-        trainingTypeId: type.id,
+        trainingTypeId: column.trainingTypeId,
         records,
-        leadDays:
-          Array.isArray(type.expiry_warning_days) &&
-          type.expiry_warning_days.length > 0
-            ? Math.max(...type.expiry_warning_days)
-            : 60,
+        leadDays,
         required: false,
       });
     },
-    [records, requirements],
+    [records, requirementForEmployee, typeById],
   );
 
   const visibleEmployees = useMemo(() => {
@@ -355,9 +517,10 @@ export default function CompanyTrainingMatrixPage() {
       }
 
       if (gapsOnly) {
-        return visibleTypes.some((type) => {
-          const status = cellFor(employee, type).status;
-          return ["missing", "expired", "revoked"].includes(status);
+        return columns.some((column) => {
+          if (!requiredForEmployee(employee, column)) return false;
+          const status = cellFor(employee, column).status;
+          return ["missing", "expired"].includes(status);
         });
       }
 
@@ -365,13 +528,14 @@ export default function CompanyTrainingMatrixPage() {
     });
   }, [
     cellFor,
+    columns,
     crewById,
     crewFilter,
     employees,
     gapsOnly,
+    requiredForEmployee,
     roleFilter,
     search,
-    visibleTypes,
   ]);
 
   const gapCount = useMemo(
@@ -379,14 +543,15 @@ export default function CompanyTrainingMatrixPage() {
       employees.reduce(
         (total, employee) =>
           total +
-          visibleTypes.filter((type) => {
-            if (!requiredForEmployee(employee, type.id)) return false;
-            const status = cellFor(employee, type).status;
-            return ["missing", "expired", "revoked"].includes(status);
+          columns.filter((column) => {
+            if (!requiredForEmployee(employee, column)) return false;
+            return ["missing", "expired"].includes(
+              cellFor(employee, column).status,
+            );
           }).length,
         0,
       ),
-    [cellFor, employees, requiredForEmployee, visibleTypes],
+    [cellFor, columns, employees, requiredForEmployee],
   );
 
   async function refresh() {
@@ -405,13 +570,23 @@ export default function CompanyTrainingMatrixPage() {
     }
   }
 
+  function clearColumnFilters() {
+    setSelectedTypeIds([]);
+    setSelectedOptionKeys([]);
+  }
+
   function exportMatrix() {
     const headers = [
       "Employee",
       "Payroll ID",
       "Role",
       "Crew",
-      ...visibleTypes.map((type) => type.name),
+      ...columns.map((column) => {
+        const type = typeById.get(column.trainingTypeId);
+        return column.optionCode
+          ? `${type?.name ?? "Training"} - ${column.optionName ?? column.optionCode} (${column.optionCode})`
+          : type?.name ?? column.trainingTypeId;
+      }),
     ];
 
     const rows = visibleEmployees.map((employee) => [
@@ -421,8 +596,8 @@ export default function CompanyTrainingMatrixPage() {
       crewLabel(
         employee.crew_id ? crewById.get(employee.crew_id) : null,
       ),
-      ...visibleTypes.map((type) =>
-        trainingComplianceLabel(cellFor(employee, type).status),
+      ...columns.map((column) =>
+        trainingComplianceLabel(cellFor(employee, column).status),
       ),
     ]);
 
@@ -456,7 +631,7 @@ export default function CompanyTrainingMatrixPage() {
 
   return (
     <AppShell>
-      <main className="mx-auto w-full max-w-[1700px] space-y-6 px-4 py-6 sm:px-6">
+      <main className="mx-auto w-full max-w-[1700px] space-y-5 px-4 py-6 sm:px-6">
         <Link
           href="/people/training"
           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700"
@@ -475,10 +650,10 @@ export default function CompanyTrainingMatrixPage() {
               <h1 className="mt-2 text-3xl font-black text-slate-950">
                 Training Matrix
               </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Employees are rows and configured Training types are columns.
-                Role requirements make missing evidence visible instead of
-                hiding an empty cell.
+              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
+                Filter the matrix down to the tickets and configured classes you
+                actually need to review. Classes come directly from Training
+                Configuration; none are hard-coded into this page.
               </p>
             </div>
 
@@ -498,7 +673,8 @@ export default function CompanyTrainingMatrixPage() {
               <button
                 type="button"
                 onClick={exportMatrix}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700"
+                disabled={columns.length === 0}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700 disabled:opacity-50"
               >
                 <Download size={16} />
                 Export CSV
@@ -514,19 +690,31 @@ export default function CompanyTrainingMatrixPage() {
         ) : null}
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Employees" value={employees.length} />
-          <Metric label="Training Types" value={visibleTypes.length} />
-          <Metric label="Role Requirements" value={requirements.length} />
-          <Metric label="Current Gaps" value={gapCount} />
+          <Metric label="Employees" value={visibleEmployees.length} />
+          <Metric label="Visible columns" value={columns.length} />
+          <Metric label="Role requirements" value={requirements.length} />
+          <Metric label="Current gaps" value={gapCount} />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2 text-sm font-black text-slate-700">
-            <Filter size={16} />
-            Matrix filters
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-black text-slate-700">
+              <Filter size={16} />
+              Matrix filters
+            </div>
+            {(selectedTypeIds.length > 0 || selectedOptionKeys.length > 0) && (
+              <button
+                type="button"
+                onClick={clearColumnFilters}
+                className="inline-flex items-center gap-1.5 text-xs font-black text-slate-500 hover:text-slate-900"
+              >
+                <X size={14} />
+                Clear ticket filters
+              </button>
+            )}
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-6">
             <label className="relative xl:col-span-2">
               <Search
                 size={16}
@@ -539,6 +727,23 @@ export default function CompanyTrainingMatrixPage() {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
+
+            <MultiSelectFilter
+              label="Tickets"
+              emptyLabel="All tickets"
+              options={ticketFilterOptions}
+              selected={selectedTypeIds}
+              onChange={setSelectedTypeIds}
+            />
+
+            <MultiSelectFilter
+              label="Classes / options"
+              emptyLabel="All classes"
+              options={classFilterOptions}
+              selected={selectedOptionKeys}
+              onChange={setSelectedOptionKeys}
+              disabled={classFilterOptions.length === 0}
+            />
 
             <Select
               value={crewFilter}
@@ -557,11 +762,8 @@ export default function CompanyTrainingMatrixPage() {
               value={roleFilter}
               onChange={setRoleFilter}
               options={[
-                { value: "all", label: "All roles" },
-                ...roles.map((role) => ({
-                  value: role,
-                  label: role,
-                })),
+                { value: "all", label: "All employee roles" },
+                ...roles.map((role) => ({ value: role, label: role })),
               ]}
             />
 
@@ -577,25 +779,17 @@ export default function CompanyTrainingMatrixPage() {
               ]}
             />
 
-            <div className="flex flex-col gap-2">
-              <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={gapsOnly}
-                  onChange={(event) => setGapsOnly(event.target.checked)}
-                />
-                Gaps only
-              </label>
-              <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={requiredColumnsOnly}
-                  onChange={(event) =>
-                    setRequiredColumnsOnly(event.target.checked)
-                  }
-                />
-                Required columns only
-              </label>
+            <div className="flex flex-wrap gap-2 xl:col-span-3">
+              <Toggle
+                checked={gapsOnly}
+                onChange={setGapsOnly}
+                label="Required gaps only"
+              />
+              <Toggle
+                checked={requiredColumnsOnly}
+                onChange={setRequiredColumnsOnly}
+                label="Required tickets only"
+              />
             </div>
           </div>
         </section>
@@ -608,21 +802,31 @@ export default function CompanyTrainingMatrixPage() {
                   <th className="sticky left-0 top-0 z-30 min-w-64 border-b border-r border-slate-200 bg-slate-100 px-4 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-600">
                     Employee
                   </th>
-                  {visibleTypes.map((type) => (
-                    <th
-                      key={type.id}
-                      className="sticky top-0 z-20 min-w-36 border-b border-r border-slate-200 bg-slate-100 px-3 py-3 text-center align-bottom"
-                    >
-                      <div className="text-xs font-black text-slate-800">
-                        {type.short_code || type.name}
-                      </div>
-                      {type.short_code ? (
-                        <div className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
-                          {type.name}
+                  {columns.map((column) => {
+                    const type = typeById.get(column.trainingTypeId);
+                    return (
+                      <th
+                        key={column.key}
+                        className="sticky top-0 z-20 min-w-28 border-b border-r border-slate-200 bg-slate-100 px-2 py-3 text-center align-bottom"
+                      >
+                        <div className="text-xs font-black text-slate-800">
+                          {type?.short_code || type?.name || "Training"}
                         </div>
-                      ) : null}
-                    </th>
-                  ))}
+                        {column.optionCode ? (
+                          <div className="mt-1 rounded-md bg-white/80 px-1.5 py-1 text-[10px] font-black text-slate-600">
+                            {column.optionName || column.optionCode}
+                            <span className="ml-1 text-slate-400">
+                              {column.optionCode}
+                            </span>
+                          </div>
+                        ) : type?.short_code ? (
+                          <div className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
+                            {type.name}
+                          </div>
+                        ) : null}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -642,42 +846,39 @@ export default function CompanyTrainingMatrixPage() {
                       </div>
                     </td>
 
-                    {visibleTypes.map((type) => {
-                      const cell = cellFor(employee, type);
-                      const required = requiredForEmployee(
-                        employee,
-                        type.id,
-                      );
+                    {columns.map((column) => {
+                      const cell = cellFor(employee, column);
+                      const required = requiredForEmployee(employee, column);
 
                       return (
                         <td
-                          key={type.id}
-                          className="border-b border-r border-slate-100 p-2 text-center"
+                          key={column.key}
+                          className="border-b border-r border-slate-100 p-1.5 text-center"
                         >
                           <Link
                             href={`/people/training/register?employeeId=${encodeURIComponent(
                               employee.id,
                             )}&trainingTypeId=${encodeURIComponent(
-                              type.id,
+                              column.trainingTypeId,
                             )}`}
-                            title={`${type.name}: ${trainingComplianceLabel(
-                              cell.status,
-                            )}${
+                            title={`${
+                              typeById.get(column.trainingTypeId)?.name ??
+                              "Training"
+                            }${
+                              column.optionCode
+                                ? ` · ${column.optionName || column.optionCode}`
+                                : ""
+                            }: ${trainingComplianceLabel(cell.status)}${
                               cell.daysRemaining !== null
                                 ? ` (${cell.daysRemaining} days)`
                                 : ""
                             }`}
-                            className={`mx-auto flex min-h-12 w-20 items-center justify-center rounded-xl border px-2 text-xs font-black transition hover:ring-2 hover:ring-blue-200 ${cellClasses(
+                            className={`mx-auto flex h-10 w-16 items-center justify-center rounded-lg border px-1 text-[11px] font-black transition hover:ring-2 hover:ring-blue-200 ${cellClasses(
                               cell.status,
                             )}`}
                           >
-                            <span>
-                              {cellText(cell.status)}
-                              {required &&
-                              cell.status === "not_required"
-                                ? "—"
-                                : ""}
-                            </span>
+                            {cellText(cell.status)}
+                            {required && cell.status === "not_required" ? "—" : ""}
                           </Link>
                         </td>
                       );
@@ -688,7 +889,11 @@ export default function CompanyTrainingMatrixPage() {
             </table>
           </div>
 
-          {visibleEmployees.length === 0 ? (
+          {columns.length === 0 ? (
+            <div className="p-10 text-center text-sm font-semibold text-slate-500">
+              No Training columns match the selected ticket filters.
+            </div>
+          ) : visibleEmployees.length === 0 ? (
             <div className="p-10 text-center text-sm font-semibold text-slate-500">
               No employees match the selected filters.
             </div>
@@ -696,9 +901,10 @@ export default function CompanyTrainingMatrixPage() {
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          <strong>Legend:</strong> ✓ Current · ⚠ Expiring · EXP Expired ·
-          — Missing required Training · P Pending Review · REV Revoked · blank
-          means the Training type is not required and no record exists.
+          <strong>Legend:</strong> ✓ Current · ⚠ Expiring · EXP Expired · — Missing
+          required Training · P Pending Review · blank means the ticket/class is
+          not required or no live record exists. Removed/revoked uploads are
+          treated as history and no longer leave an optional matrix cell red.
         </section>
       </main>
     </AppShell>
@@ -732,21 +938,170 @@ function Select({
   );
 }
 
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+}) {
+  return (
+    <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+function MultiSelectFilter({
+  label,
+  emptyLabel,
+  options,
+  selected,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  emptyLabel: string;
+  options: SelectOption[];
+  selected: string[];
+  onChange: (value: string[]) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const value = query.trim().toLowerCase();
+    if (!value) return options;
+    return options.filter((option) =>
+      `${option.label} ${option.group ?? ""}`.toLowerCase().includes(value),
+    );
+  }, [options, query]);
+
+  function toggle(value: string) {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((item) => item !== value)
+        : [...selected, value],
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className={`${inputClass} flex items-center justify-between gap-3 text-left disabled:bg-slate-50 disabled:text-slate-400`}
+      >
+        <span className="min-w-0 truncate">
+          {selected.length === 0
+            ? emptyLabel
+            : `${label}: ${selected.length} selected`}
+        </span>
+        <ChevronDown size={16} className="shrink-0 text-slate-400" />
+      </button>
+
+      {open && !disabled ? (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[min(440px,90vw)] rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search
+                size={15}
+                className="absolute left-3 top-3 text-slate-400"
+              />
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={`Search ${label.toLowerCase()}...`}
+                className={`${inputClass} py-2.5 pl-9`}
+              />
+            </div>
+            {selected.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-black text-slate-600"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-3 max-h-72 overflow-y-auto">
+            {filtered.map((option) => {
+              const checked = selected.includes(option.value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => toggle(option.value)}
+                  className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50"
+                >
+                  <span
+                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                      checked
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-300 bg-white text-transparent"
+                    }`}
+                  >
+                    <Check size={13} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-bold text-slate-800">
+                      {option.label}
+                    </span>
+                    {option.group ? (
+                      <span className="mt-0.5 block text-xs text-slate-400">
+                        {option.group}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+
+            {filtered.length === 0 ? (
+              <div className="px-3 py-6 text-center text-sm font-semibold text-slate-400">
+                No matches.
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="mt-3 w-full rounded-xl bg-slate-950 px-3 py-2.5 text-sm font-black text-white"
+          >
+            Done
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Metric({
   label,
   value,
 }: {
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="text-xs font-black uppercase tracking-wide text-slate-500">
         {label}
       </div>
-      <div className="mt-2 text-3xl font-black text-slate-950">
-        {value}
-      </div>
+      <div className="mt-2 text-3xl font-black text-slate-950">{value}</div>
     </div>
   );
 }

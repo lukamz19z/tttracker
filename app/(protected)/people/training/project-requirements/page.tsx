@@ -18,12 +18,15 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Trash2,
+  UserPlus,
+  Users,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { normaliseTrainingRole } from "@/lib/training/compliance";
+
 
 type Project = {
   id: string;
@@ -32,8 +35,12 @@ type Project = {
   status: string | null;
 };
 
-type EmployeeRole = {
+type Employee = {
+  id: string;
+  payroll_id: string | null;
+  full_name: string;
   role: string | null;
+  active: boolean | null;
 };
 
 type TrainingType = {
@@ -52,9 +59,25 @@ type TrainingOption = {
   active: boolean | null;
 };
 
+type ProjectRole = {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  sort_order: number | null;
+  active: boolean | null;
+};
+
+type ProjectRoleAssignment = {
+  id: string;
+  project_role_id: string;
+  employee_id: string;
+};
+
 type Requirement = {
   id: string;
   project_id: string;
+  project_role_id: string | null;
   training_type_id: string;
   requirement_level: "mandatory" | "recommended";
   renewal_lead_days: number | null;
@@ -65,27 +88,39 @@ type Requirement = {
   active: boolean | null;
 };
 
-type FormState = {
+type RequirementForm = {
   projectId: string;
+  projectRoleId: string;
   trainingTypeId: string;
   requirementLevel: "mandatory" | "recommended";
   renewalLeadDays: string;
-  appliesToRole: string;
   acceptedAlternativeTrainingTypeIds: string[];
   requiredOptionCodes: string[];
   notes: string;
   active: boolean;
 };
 
-const EMPTY_FORM: FormState = {
+type RoleForm = {
+  name: string;
+  description: string;
+  active: boolean;
+};
+
+const EMPTY_REQUIREMENT: RequirementForm = {
   projectId: "",
+  projectRoleId: "",
   trainingTypeId: "",
   requirementLevel: "mandatory",
   renewalLeadDays: "60",
-  appliesToRole: "",
   acceptedAlternativeTrainingTypeIds: [],
   requiredOptionCodes: [],
   notes: "",
+  active: true,
+};
+
+const EMPTY_ROLE: RoleForm = {
+  name: "",
+  description: "",
   active: true,
 };
 
@@ -110,19 +145,28 @@ export default function ProjectTrainingRequirementsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [projects, setProjects] = useState<Project[]>([]);
-  const [roles, setRoles] = useState<string[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [types, setTypes] = useState<TrainingType[]>([]);
   const [options, setOptions] = useState<TrainingOption[]>([]);
+  const [projectRoles, setProjectRoles] = useState<ProjectRole[]>([]);
+  const [roleAssignments, setRoleAssignments] = useState<ProjectRoleAssignment[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [showArchived, setShowArchived] = useState(false);
-  const [includeInactiveProjects, setIncludeInactiveProjects] =
-    useState(false);
+  const [includeInactiveProjects, setIncludeInactiveProjects] = useState(false);
 
-  const [editing, setEditing] = useState<Requirement | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [requirementOpen, setRequirementOpen] = useState(false);
+  const [editingRequirement, setEditingRequirement] = useState<Requirement | null>(null);
+  const [requirementForm, setRequirementForm] = useState<RequirementForm>(EMPTY_REQUIREMENT);
+
+  const [roleOpen, setRoleOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<ProjectRole | null>(null);
+  const [roleForm, setRoleForm] = useState<RoleForm>(EMPTY_ROLE);
+
+  const [assignRole, setAssignRole] = useState<ProjectRole | null>(null);
+  const [assignmentSearch, setAssignmentSearch] = useState("");
+  const [assignmentSelection, setAssignmentSelection] = useState<string[]>([]);
 
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyTargetProjectId, setCopyTargetProjectId] = useState("");
@@ -138,9 +182,11 @@ export default function ProjectTrainingRequirementsPage() {
   const loadData = useCallback(async () => {
     const [
       projectResult,
-      roleResult,
+      employeeResult,
       typeResult,
       optionResult,
+      roleResult,
+      assignmentResult,
       requirementResult,
     ] = await Promise.all([
       supabase
@@ -149,8 +195,9 @@ export default function ProjectTrainingRequirementsPage() {
         .order("name"),
       supabase
         .from("employees")
-        .select("role")
-        .eq("active", true),
+        .select("id,payroll_id,full_name,role,active")
+        .eq("active", true)
+        .order("full_name"),
       supabase
         .from("training_types")
         .select("id,name,short_code,category,active")
@@ -164,52 +211,50 @@ export default function ProjectTrainingRequirementsPage() {
         .order("sort_order")
         .order("name"),
       supabase
+        .from("project_training_roles")
+        .select("id,project_id,name,description,sort_order,active")
+        .order("sort_order")
+        .order("name"),
+      supabase
+        .from("project_training_role_assignments")
+        .select("id,project_role_id,employee_id"),
+      supabase
         .from("project_training_requirements")
         .select(
-          "id,project_id,training_type_id,requirement_level,renewal_lead_days,accepted_alternative_training_type_ids,required_option_codes,applies_to_role,notes,active",
+          "id,project_id,project_role_id,training_type_id,requirement_level,renewal_lead_days,accepted_alternative_training_type_ids,required_option_codes,applies_to_role,notes,active",
         )
         .order("project_id"),
     ]);
 
     const firstError = [
       projectResult.error,
-      roleResult.error,
+      employeeResult.error,
       typeResult.error,
       optionResult.error,
+      roleResult.error,
+      assignmentResult.error,
       requirementResult.error,
     ].find(Boolean);
 
     if (firstError) throw new Error(firstError.message);
 
     const loadedProjects = (projectResult.data ?? []) as Project[];
-
     setProjects(loadedProjects);
-    setRoles(
-      Array.from(
-        new Set(
-          ((roleResult.data ?? []) as EmployeeRole[])
-            .map((row) => clean(row.role))
-            .filter(Boolean),
-        ),
-      ).sort(),
-    );
+    setEmployees((employeeResult.data ?? []) as Employee[]);
     setTypes((typeResult.data ?? []) as TrainingType[]);
     setOptions((optionResult.data ?? []) as TrainingOption[]);
-    setRequirements(
-      (requirementResult.data ?? []) as Requirement[],
+    setProjectRoles((roleResult.data ?? []) as ProjectRole[]);
+    setRoleAssignments(
+      (assignmentResult.data ?? []) as ProjectRoleAssignment[],
     );
+    setRequirements((requirementResult.data ?? []) as Requirement[]);
 
     setSelectedProjectId((current) => {
-      if (
-        current &&
-        loadedProjects.some((project) => project.id === current)
-      ) {
+      if (current && loadedProjects.some((project) => project.id === current)) {
         return current;
       }
-
       return (
-        loadedProjects.find((project) => !isInactiveProject(project))
-          ?.id ??
+        loadedProjects.find((project) => !isInactiveProject(project))?.id ??
         loadedProjects[0]?.id ??
         ""
       );
@@ -238,20 +283,37 @@ export default function ProjectTrainingRequirementsPage() {
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
   );
-
   const typeById = useMemo(
     () => new Map(types.map((type) => [type.id, type])),
     [types],
   );
-
+  const roleById = useMemo(
+    () => new Map(projectRoles.map((role) => [role.id, role])),
+    [projectRoles],
+  );
   const selectedProject = projectById.get(selectedProjectId);
-
   const visibleProjects = useMemo(
     () =>
       includeInactiveProjects
         ? projects
         : projects.filter((project) => !isInactiveProject(project)),
     [includeInactiveProjects, projects],
+  );
+
+  const selectedRoles = useMemo(
+    () =>
+      projectRoles
+        .filter(
+          (role) =>
+            role.project_id === selectedProjectId &&
+            (showArchived || role.active !== false),
+        )
+        .sort(
+          (a, b) =>
+            Number(a.sort_order ?? 100) - Number(b.sort_order ?? 100) ||
+            a.name.localeCompare(b.name),
+        ),
+    [projectRoles, selectedProjectId, showArchived],
   );
 
   const selectedRequirements = useMemo(
@@ -263,81 +325,288 @@ export default function ProjectTrainingRequirementsPage() {
             (showArchived || requirement.active !== false),
         )
         .sort((a, b) => {
-          if (a.active !== b.active) return a.active === false ? 1 : -1;
+          const roleA = clean(a.project_role_id ? roleById.get(a.project_role_id)?.name : "");
+          const roleB = clean(b.project_role_id ? roleById.get(b.project_role_id)?.name : "");
+          if (roleA !== roleB) return roleA.localeCompare(roleB);
           if (a.requirement_level !== b.requirement_level) {
             return a.requirement_level === "mandatory" ? -1 : 1;
           }
-
           return (
-            typeById
-              .get(a.training_type_id)
-              ?.name.localeCompare(
-                typeById.get(b.training_type_id)?.name ?? "",
-              ) ?? 0
+            typeById.get(a.training_type_id)?.name.localeCompare(
+              typeById.get(b.training_type_id)?.name ?? "",
+            ) ?? 0
           );
         }),
-    [
-      requirements,
-      selectedProjectId,
-      showArchived,
-      typeById,
-    ],
+    [requirements, roleById, selectedProjectId, showArchived, typeById],
   );
 
   const typeOptions = useMemo(
     () =>
       options.filter(
-        (option) => option.training_type_id === form.trainingTypeId,
+        (option) => option.training_type_id === requirementForm.trainingTypeId,
       ),
-    [form.trainingTypeId, options],
+    [options, requirementForm.trainingTypeId],
   );
 
-  function openNew() {
-    if (!selectedProjectId) return;
+  const assignmentFilteredEmployees = useMemo(() => {
+    const query = assignmentSearch.trim().toLowerCase();
+    if (!query) return employees;
+    return employees.filter((employee) =>
+      [employee.full_name, employee.payroll_id, employee.role]
+        .map(clean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [assignmentSearch, employees]);
 
-    setEditing(null);
-    setForm({
-      ...EMPTY_FORM,
-      projectId: selectedProjectId,
-    });
-    setFormOpen(true);
+  function roleAssignmentCount(roleId: string) {
+    return roleAssignments.filter((row) => row.project_role_id === roleId).length;
+  }
+
+  function roleRequirementCount(roleId: string) {
+    return requirements.filter(
+      (row) => row.project_role_id === roleId && row.active !== false,
+    ).length;
+  }
+
+  function openNewRole() {
+    if (!selectedProjectId) return;
+    setEditingRole(null);
+    setRoleForm(EMPTY_ROLE);
+    setRoleOpen(true);
     setMessage(null);
   }
 
-  function openEdit(requirement: Requirement) {
-    setEditing(requirement);
-    setForm({
+  function openEditRole(role: ProjectRole) {
+    setEditingRole(role);
+    setRoleForm({
+      name: role.name,
+      description: clean(role.description),
+      active: role.active !== false,
+    });
+    setRoleOpen(true);
+    setMessage(null);
+  }
+
+  async function saveRole() {
+    if (!selectedProjectId || !clean(roleForm.name)) {
+      setMessage({ tone: "error", text: "Enter a project role name." });
+      return;
+    }
+
+    setSaving(true);
+    setMessage(null);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const payload = {
+        project_id: selectedProjectId,
+        name: clean(roleForm.name),
+        description: clean(roleForm.description) || null,
+        active: roleForm.active,
+        updated_by: user?.id ?? null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const result = editingRole
+        ? await supabase
+            .from("project_training_roles")
+            .update(payload)
+            .eq("id", editingRole.id)
+        : await supabase.from("project_training_roles").insert({
+            ...payload,
+            created_by: user?.id ?? null,
+          });
+
+      if (result.error) throw new Error(result.error.message);
+      await loadData();
+      setRoleOpen(false);
+      setEditingRole(null);
+      setRoleForm(EMPTY_ROLE);
+      setMessage({
+        tone: "success",
+        text: editingRole ? "Project role updated." : "Project role created.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Unable to save project role.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setRoleActive(role: ProjectRole, active: boolean) {
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("project_training_roles")
+        .update({ active, updated_at: new Date().toISOString() })
+        .eq("id", role.id);
+      if (error) throw new Error(error.message);
+      await loadData();
+      setMessage({
+        tone: "success",
+        text: active ? "Project role restored." : "Project role archived.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Unable to update project role.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteRole(role: ProjectRole) {
+    const count = roleRequirementCount(role.id);
+    const confirmed = window.confirm(
+      count > 0
+        ? `Delete project role "${role.name}" and its ${count} linked requirement${count === 1 ? "" : "s"}?`
+        : `Delete project role "${role.name}"?`,
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("project_training_roles")
+        .delete()
+        .eq("id", role.id);
+      if (error) throw new Error(error.message);
+      await loadData();
+      setMessage({ tone: "success", text: "Project role deleted." });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Unable to delete project role.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openAssignments(role: ProjectRole) {
+    setAssignRole(role);
+    setAssignmentSearch("");
+    setAssignmentSelection(
+      roleAssignments
+        .filter((row) => row.project_role_id === role.id)
+        .map((row) => row.employee_id),
+    );
+  }
+
+  function toggleAssignment(employeeId: string) {
+    setAssignmentSelection((current) =>
+      current.includes(employeeId)
+        ? current.filter((id) => id !== employeeId)
+        : [...current, employeeId],
+    );
+  }
+
+  async function saveAssignments() {
+    if (!assignRole) return;
+    setSaving(true);
+    setMessage(null);
+
+    try {
+      const existing = roleAssignments.filter(
+        (row) => row.project_role_id === assignRole.id,
+      );
+      const existingIds = new Set(existing.map((row) => row.employee_id));
+      const selectedIds = new Set(assignmentSelection);
+      const removeIds = existing
+        .filter((row) => !selectedIds.has(row.employee_id))
+        .map((row) => row.id);
+      const addEmployeeIds = assignmentSelection.filter(
+        (employeeId) => !existingIds.has(employeeId),
+      );
+
+      if (removeIds.length > 0) {
+        const { error } = await supabase
+          .from("project_training_role_assignments")
+          .delete()
+          .in("id", removeIds);
+        if (error) throw new Error(error.message);
+      }
+
+      if (addEmployeeIds.length > 0) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const { error } = await supabase
+          .from("project_training_role_assignments")
+          .insert(
+            addEmployeeIds.map((employeeId) => ({
+              project_role_id: assignRole.id,
+              employee_id: employeeId,
+              assigned_by: user?.id ?? null,
+            })),
+          );
+        if (error) throw new Error(error.message);
+      }
+
+      await loadData();
+      setAssignRole(null);
+      setMessage({
+        tone: "success",
+        text: `People assigned to ${assignRole.name}.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Unable to save project role assignments.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openNewRequirement() {
+    if (!selectedProjectId) return;
+    setEditingRequirement(null);
+    setRequirementForm({
+      ...EMPTY_REQUIREMENT,
+      projectId: selectedProjectId,
+    });
+    setRequirementOpen(true);
+    setMessage(null);
+  }
+
+  function openEditRequirement(requirement: Requirement) {
+    setEditingRequirement(requirement);
+    setRequirementForm({
       projectId: requirement.project_id,
+      projectRoleId: clean(requirement.project_role_id),
       trainingTypeId: requirement.training_type_id,
       requirementLevel: requirement.requirement_level,
-      renewalLeadDays: String(
-        requirement.renewal_lead_days ?? 60,
-      ),
-      appliesToRole: clean(requirement.applies_to_role),
+      renewalLeadDays: String(requirement.renewal_lead_days ?? 60),
       acceptedAlternativeTrainingTypeIds:
         requirement.accepted_alternative_training_type_ids ?? [],
       requiredOptionCodes: requirement.required_option_codes ?? [],
       notes: clean(requirement.notes),
       active: requirement.active !== false,
     });
-    setFormOpen(true);
+    setRequirementOpen(true);
     setMessage(null);
   }
 
   function toggleAlternative(id: string) {
-    setForm((current) => ({
+    setRequirementForm((current) => ({
       ...current,
       acceptedAlternativeTrainingTypeIds:
         current.acceptedAlternativeTrainingTypeIds.includes(id)
-          ? current.acceptedAlternativeTrainingTypeIds.filter(
-              (item) => item !== id,
-            )
+          ? current.acceptedAlternativeTrainingTypeIds.filter((item) => item !== id)
           : [...current.acceptedAlternativeTrainingTypeIds, id],
     }));
   }
 
   function toggleRequiredOption(code: string) {
-    setForm((current) => ({
+    setRequirementForm((current) => ({
       ...current,
       requiredOptionCodes: current.requiredOptionCodes.includes(code)
         ? current.requiredOptionCodes.filter((item) => item !== code)
@@ -347,21 +616,13 @@ export default function ProjectTrainingRequirementsPage() {
 
   async function saveRequirement() {
     setMessage(null);
-
-    if (!form.projectId || !form.trainingTypeId) {
-      setMessage({
-        tone: "error",
-        text: "Select a project and Training type.",
-      });
+    if (!requirementForm.projectId || !requirementForm.trainingTypeId) {
+      setMessage({ tone: "error", text: "Select a project and Training type." });
       return;
     }
 
-    const leadDays = Number(form.renewalLeadDays);
-    if (
-      !Number.isInteger(leadDays) ||
-      leadDays < 0 ||
-      leadDays > 730
-    ) {
+    const leadDays = Number(requirementForm.renewalLeadDays);
+    if (!Number.isInteger(leadDays) || leadDays < 0 || leadDays > 730) {
       setMessage({
         tone: "error",
         text: "Renewal lead days must be between 0 and 730.",
@@ -371,104 +632,84 @@ export default function ProjectTrainingRequirementsPage() {
 
     const duplicate = requirements.some(
       (requirement) =>
-        requirement.id !== editing?.id &&
-        requirement.project_id === form.projectId &&
-        requirement.training_type_id === form.trainingTypeId &&
-        normaliseTrainingRole(requirement.applies_to_role) ===
-          normaliseTrainingRole(form.appliesToRole) &&
+        requirement.id !== editingRequirement?.id &&
+        requirement.project_id === requirementForm.projectId &&
+        requirement.training_type_id === requirementForm.trainingTypeId &&
+        clean(requirement.project_role_id) === clean(requirementForm.projectRoleId) &&
         requirement.active !== false,
     );
 
-    if (duplicate && form.active) {
+    if (duplicate && requirementForm.active) {
       setMessage({
         tone: "error",
-        text:
-          "An active requirement already exists for this project, Training type and role.",
+        text: "An active requirement already exists for this project, project role and Training type.",
       });
       return;
     }
 
     setSaving(true);
-
-    const payload = {
-      project_id: form.projectId,
-      training_type_id: form.trainingTypeId,
-      requirement_level: form.requirementLevel,
-      renewal_lead_days: leadDays,
-      applies_to_role: clean(form.appliesToRole) || null,
-      accepted_alternative_training_type_ids:
-        form.acceptedAlternativeTrainingTypeIds.filter(
-          (id) => id !== form.trainingTypeId,
-        ),
-      required_option_codes: form.requiredOptionCodes,
-      notes: clean(form.notes) || null,
-      active: form.active,
-    };
-
     try {
-      const result = editing
+      const payload = {
+        project_id: requirementForm.projectId,
+        project_role_id: clean(requirementForm.projectRoleId) || null,
+        training_type_id: requirementForm.trainingTypeId,
+        requirement_level: requirementForm.requirementLevel,
+        renewal_lead_days: leadDays,
+        applies_to_role: null,
+        accepted_alternative_training_type_ids:
+          requirementForm.acceptedAlternativeTrainingTypeIds.filter(
+            (id) => id !== requirementForm.trainingTypeId,
+          ),
+        required_option_codes: requirementForm.requiredOptionCodes,
+        notes: clean(requirementForm.notes) || null,
+        active: requirementForm.active,
+      };
+
+      const result = editingRequirement
         ? await supabase
             .from("project_training_requirements")
             .update(payload)
-            .eq("id", editing.id)
-        : await supabase
-            .from("project_training_requirements")
-            .insert(payload);
+            .eq("id", editingRequirement.id)
+        : await supabase.from("project_training_requirements").insert(payload);
 
       if (result.error) throw new Error(result.error.message);
-
       await loadData();
-      setFormOpen(false);
-      setEditing(null);
-      setForm(EMPTY_FORM);
+      setRequirementOpen(false);
+      setEditingRequirement(null);
+      setRequirementForm(EMPTY_REQUIREMENT);
       setMessage({
         tone: "success",
-        text: editing
+        text: editingRequirement
           ? "Project requirement updated."
           : "Project requirement added.",
       });
     } catch (error) {
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to save the project requirement.",
+        text: error instanceof Error ? error.message : "Unable to save project requirement.",
       });
     } finally {
       setSaving(false);
     }
   }
 
-  async function setRequirementActive(
-    requirement: Requirement,
-    active: boolean,
-  ) {
+  async function setRequirementActive(requirement: Requirement, active: boolean) {
     setSaving(true);
-    setMessage(null);
-
     try {
       const { error } = await supabase
         .from("project_training_requirements")
         .update({ active })
         .eq("id", requirement.id);
-
       if (error) throw new Error(error.message);
-
       await loadData();
       setMessage({
         tone: "success",
-        text: active
-          ? "Requirement restored."
-          : "Requirement archived.",
+        text: active ? "Requirement restored." : "Requirement archived.",
       });
     } catch (error) {
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to update the requirement.",
+        text: error instanceof Error ? error.message : "Unable to update the requirement.",
       });
     } finally {
       setSaving(false);
@@ -476,16 +717,8 @@ export default function ProjectTrainingRequirementsPage() {
   }
 
   async function deleteRequirement(requirement: Requirement) {
-    if (
-      !window.confirm(
-        `Permanently delete ${
-          typeById.get(requirement.training_type_id)?.name ??
-          "this requirement"
-        }?`,
-      )
-    ) {
-      return;
-    }
+    const typeName = typeById.get(requirement.training_type_id)?.name ?? "this requirement";
+    if (!window.confirm(`Permanently delete ${typeName}?`)) return;
 
     setSaving(true);
     try {
@@ -493,69 +726,90 @@ export default function ProjectTrainingRequirementsPage() {
         .from("project_training_requirements")
         .delete()
         .eq("id", requirement.id);
-
       if (error) throw new Error(error.message);
-
       await loadData();
-      setMessage({
-        tone: "success",
-        text: "Requirement deleted.",
-      });
+      setMessage({ tone: "success", text: "Requirement deleted." });
     } catch (error) {
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to delete the requirement.",
+        text: error instanceof Error ? error.message : "Unable to delete the requirement.",
       });
     } finally {
       setSaving(false);
     }
   }
 
-  async function copyRequirements() {
+  async function copyProjectSetup() {
     if (!selectedProjectId || !copyTargetProjectId) {
-      setMessage({
-        tone: "error",
-        text: "Select a target project.",
-      });
+      setMessage({ tone: "error", text: "Select a target project." });
       return;
     }
-
     if (selectedProjectId === copyTargetProjectId) {
-      setMessage({
-        tone: "error",
-        text: "Source and target projects must be different.",
-      });
-      return;
-    }
-
-    const source = requirements.filter(
-      (requirement) =>
-        requirement.project_id === selectedProjectId &&
-        requirement.active !== false,
-    );
-
-    if (source.length === 0) {
-      setMessage({
-        tone: "error",
-        text: "The source project has no active requirements.",
-      });
+      setMessage({ tone: "error", text: "Source and target projects must be different." });
       return;
     }
 
     setSaving(true);
-
+    setMessage(null);
     try {
-      if (replaceTarget) {
-        const { error } = await supabase
-          .from("project_training_requirements")
-          .update({ active: false })
-          .eq("project_id", copyTargetProjectId)
-          .eq("active", true);
+      const sourceRoles = projectRoles.filter(
+        (role) => role.project_id === selectedProjectId && role.active !== false,
+      );
+      const sourceRequirements = requirements.filter(
+        (requirement) =>
+          requirement.project_id === selectedProjectId && requirement.active !== false,
+      );
 
-        if (error) throw new Error(error.message);
+      if (replaceTarget) {
+        const [roleArchive, requirementArchive] = await Promise.all([
+          supabase
+            .from("project_training_roles")
+            .update({ active: false })
+            .eq("project_id", copyTargetProjectId)
+            .eq("active", true),
+          supabase
+            .from("project_training_requirements")
+            .update({ active: false })
+            .eq("project_id", copyTargetProjectId)
+            .eq("active", true),
+        ]);
+        if (roleArchive.error) throw new Error(roleArchive.error.message);
+        if (requirementArchive.error) throw new Error(requirementArchive.error.message);
+      }
+
+      const existingTargetRoles = projectRoles.filter(
+        (role) => role.project_id === copyTargetProjectId,
+      );
+      const roleIdMap = new Map<string, string>();
+
+      for (const sourceRole of sourceRoles) {
+        let targetRole = existingTargetRoles.find(
+          (role) => clean(role.name).toLowerCase() === clean(sourceRole.name).toLowerCase(),
+        );
+
+        if (!targetRole) {
+          const { data, error } = await supabase
+            .from("project_training_roles")
+            .insert({
+              project_id: copyTargetProjectId,
+              name: sourceRole.name,
+              description: sourceRole.description,
+              sort_order: sourceRole.sort_order ?? 100,
+              active: true,
+            })
+            .select("id,project_id,name,description,sort_order,active")
+            .single();
+          if (error) throw new Error(error.message);
+          targetRole = data as ProjectRole;
+        } else if (targetRole.active === false) {
+          const { error } = await supabase
+            .from("project_training_roles")
+            .update({ active: true })
+            .eq("id", targetRole.id);
+          if (error) throw new Error(error.message);
+        }
+
+        roleIdMap.set(sourceRole.id, targetRole.id);
       }
 
       const existingKeys = new Set(
@@ -567,42 +821,38 @@ export default function ProjectTrainingRequirementsPage() {
           )
           .map(
             (requirement) =>
-              `${requirement.training_type_id}|${normaliseTrainingRole(
-                requirement.applies_to_role,
-              )}`,
+              `${requirement.training_type_id}|${clean(requirement.project_role_id)}`,
           ),
       );
 
-      const rows = source
-        .filter(
-          (requirement) =>
-            replaceTarget ||
-            !existingKeys.has(
-              `${requirement.training_type_id}|${normaliseTrainingRole(
-                requirement.applies_to_role,
-              )}`,
-            ),
-        )
+      const rows = sourceRequirements
         .map((requirement) => ({
           project_id: copyTargetProjectId,
+          project_role_id: requirement.project_role_id
+            ? roleIdMap.get(requirement.project_role_id) ?? null
+            : null,
           training_type_id: requirement.training_type_id,
           requirement_level: requirement.requirement_level,
-          renewal_lead_days:
-            requirement.renewal_lead_days ?? 60,
+          renewal_lead_days: requirement.renewal_lead_days ?? 60,
           accepted_alternative_training_type_ids:
             requirement.accepted_alternative_training_type_ids ?? [],
-          required_option_codes:
-            requirement.required_option_codes ?? [],
-          applies_to_role: requirement.applies_to_role,
+          required_option_codes: requirement.required_option_codes ?? [],
+          applies_to_role: null,
           notes: requirement.notes,
           active: true,
-        }));
+        }))
+        .filter(
+          (row) =>
+            replaceTarget ||
+            !existingKeys.has(
+              `${row.training_type_id}|${clean(row.project_role_id)}`,
+            ),
+        );
 
       if (rows.length > 0) {
         const { error } = await supabase
           .from("project_training_requirements")
           .insert(rows);
-
         if (error) throw new Error(error.message);
       }
 
@@ -612,17 +862,12 @@ export default function ProjectTrainingRequirementsPage() {
       setReplaceTarget(false);
       setMessage({
         tone: "success",
-        text: `${rows.length} requirement${
-          rows.length === 1 ? "" : "s"
-        } copied.`,
+        text: `${sourceRoles.length} project role${sourceRoles.length === 1 ? "" : "s"} and ${rows.length} requirement${rows.length === 1 ? "" : "s"} copied. People were not copied.`,
       });
     } catch (error) {
       setMessage({
         tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Unable to copy project requirements.",
+        text: error instanceof Error ? error.message : "Unable to copy project Training setup.",
       });
     } finally {
       setSaving(false);
@@ -660,9 +905,11 @@ export default function ProjectTrainingRequirementsPage() {
               <h1 className="mt-2 text-3xl font-black text-slate-950">
                 Project Training Requirements
               </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Define project-wide and role-specific requirements. Required
-                option codes can be used for class-specific licences or VOCs.
+              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
+                Create project-specific roles, assign people to those roles, then
+                define the minimum tickets and configured classes required by
+                each role. The same employee can have a different project role
+                and different requirements on another project.
               </p>
             </div>
 
@@ -674,7 +921,7 @@ export default function ProjectTrainingRequirementsPage() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-700 disabled:opacity-50"
               >
                 <ClipboardCopy size={16} />
-                Copy Project
+                Copy Setup
               </button>
               <button
                 type="button"
@@ -683,15 +930,6 @@ export default function ProjectTrainingRequirementsPage() {
               >
                 <RefreshCw size={16} />
                 Refresh
-              </button>
-              <button
-                type="button"
-                onClick={openNew}
-                disabled={!selectedProjectId}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
-              >
-                <Plus size={16} />
-                Add Requirement
               </button>
             </div>
           </div>
@@ -718,9 +956,7 @@ export default function ProjectTrainingRequirementsPage() {
               <select
                 className={inputClass}
                 value={selectedProjectId}
-                onChange={(event) =>
-                  setSelectedProjectId(event.target.value)
-                }
+                onChange={(event) => setSelectedProjectId(event.target.value)}
               >
                 <option value="">Select project...</option>
                 {visibleProjects.map((project) => (
@@ -731,46 +967,155 @@ export default function ProjectTrainingRequirementsPage() {
               </select>
             </label>
 
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(event) =>
-                  setShowArchived(event.target.checked)
-                }
-              />
-              Show archived
-            </label>
+            <Toggle
+              checked={showArchived}
+              onChange={setShowArchived}
+              label="Show archived"
+            />
+            <Toggle
+              checked={includeInactiveProjects}
+              onChange={setIncludeInactiveProjects}
+              label="Inactive projects"
+            />
+          </div>
+        </section>
 
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
-              <input
-                type="checkbox"
-                checked={includeInactiveProjects}
-                onChange={(event) =>
-                  setIncludeInactiveProjects(event.target.checked)
-                }
-              />
-              Inactive projects
-            </label>
+        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 font-black text-slate-950">
+                <Users size={18} />
+                Project Roles
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                {selectedRoles.length} role{selectedRoles.length === 1 ? "" : "s"} for {selectedProject ? projectLabel(selectedProject) : "this project"}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={openNewRole}
+              disabled={!selectedProjectId}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
+            >
+              <Plus size={16} />
+              Add Project Role
+            </button>
+          </div>
+
+          <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+            {selectedRoles.map((role) => (
+              <div
+                key={role.id}
+                className={`rounded-2xl border p-4 ${
+                  role.active === false
+                    ? "border-slate-200 bg-slate-50 opacity-70"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-black text-slate-950">{role.name}</div>
+                    {role.description ? (
+                      <div className="mt-1 text-sm text-slate-500">
+                        {role.description}
+                      </div>
+                    ) : null}
+                  </div>
+                  {role.active === false ? (
+                    <span className="rounded-full bg-slate-200 px-2 py-1 text-[10px] font-black uppercase text-slate-600">
+                      Archived
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                      People
+                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-950">
+                      {roleAssignmentCount(role.id)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                      Requirements
+                    </div>
+                    <div className="mt-1 text-xl font-black text-slate-950">
+                      {roleRequirementCount(role.id)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openAssignments(role)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700"
+                  >
+                    <UserPlus size={14} />
+                    Assign People
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openEditRole(role)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700"
+                  >
+                    <Edit3 size={14} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void setRoleActive(role, role.active === false)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-700"
+                  >
+                    <RotateCcw size={14} />
+                    {role.active === false ? "Restore" : "Archive"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteRole(role)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black text-rose-700"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {selectedRoles.length === 0 ? (
+              <div className="md:col-span-2 xl:col-span-3 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm font-semibold text-slate-500">
+                No project roles yet. Create the roles required by this project, then assign people and Training requirements to them.
+              </div>
+            ) : null}
           </div>
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <div className="font-black text-slate-950">
-              {selectedProject
-                ? projectLabel(selectedProject)
-                : "Select a project"}
+          <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-black text-slate-950">Training Requirements</div>
+              <div className="mt-1 text-sm text-slate-500">
+                {selectedRequirements.length} requirement{selectedRequirements.length === 1 ? "" : "s"}
+              </div>
             </div>
-            <div className="mt-1 text-sm text-slate-500">
-              {selectedRequirements.length} requirement
-              {selectedRequirements.length === 1 ? "" : "s"}
-            </div>
+            <button
+              type="button"
+              onClick={openNewRequirement}
+              disabled={!selectedProjectId}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white disabled:opacity-50"
+            >
+              <Plus size={16} />
+              Add Requirement
+            </button>
           </div>
 
           <div className="divide-y divide-slate-100">
             {selectedRequirements.map((requirement) => {
               const type = typeById.get(requirement.training_type_id);
+              const role = requirement.project_role_id
+                ? roleById.get(requirement.project_role_id)
+                : null;
 
               return (
                 <div
@@ -797,29 +1142,21 @@ export default function ProjectTrainingRequirementsPage() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      {clean(requirement.applies_to_role) ||
-                        "All project personnel"}
+                    <div className="mt-1 text-sm font-bold text-slate-600">
+                      {role?.name || clean(requirement.applies_to_role) || "All project personnel"}
                     </div>
                   </div>
 
                   <div className="text-sm text-slate-600">
                     <div>
-                      Renewal lead:{" "}
-                      <strong>
-                        {requirement.renewal_lead_days ?? 60} days
-                      </strong>
+                      Renewal lead: <strong>{requirement.renewal_lead_days ?? 60} days</strong>
                     </div>
                     {requirement.required_option_codes?.length ? (
                       <div className="mt-1">
-                        Required classes:{" "}
-                        <strong>
-                          {requirement.required_option_codes.join(", ")}
-                        </strong>
+                        Required classes: <strong>{requirement.required_option_codes.join(", ")}</strong>
                       </div>
                     ) : null}
-                    {requirement.accepted_alternative_training_type_ids
-                      ?.length ? (
+                    {requirement.accepted_alternative_training_type_ids?.length ? (
                       <div className="mt-1">
                         Alternatives:{" "}
                         <strong>
@@ -835,7 +1172,7 @@ export default function ProjectTrainingRequirementsPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => openEdit(requirement)}
+                      onClick={() => openEditRequirement(requirement)}
                       className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-700"
                     >
                       <Edit3 size={15} />
@@ -843,24 +1180,15 @@ export default function ProjectTrainingRequirementsPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
-                        void setRequirementActive(
-                          requirement,
-                          requirement.active === false,
-                        )
-                      }
+                      onClick={() => void setRequirementActive(requirement, requirement.active === false)}
                       className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-black text-slate-700"
                     >
                       <RotateCcw size={15} />
-                      {requirement.active === false
-                        ? "Restore"
-                        : "Archive"}
+                      {requirement.active === false ? "Restore" : "Archive"}
                     </button>
                     <button
                       type="button"
-                      onClick={() =>
-                        void deleteRequirement(requirement)
-                      }
+                      onClick={() => void deleteRequirement(requirement)}
                       className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700"
                     >
                       <Trash2 size={15} />
@@ -879,18 +1207,151 @@ export default function ProjectTrainingRequirementsPage() {
           </div>
         </section>
 
-        {formOpen ? (
+        {roleOpen ? (
           <Modal
-            title={editing ? "Edit Project Requirement" : "Add Project Requirement"}
-            onClose={() => !saving && setFormOpen(false)}
+            title={editingRole ? "Edit Project Role" : "Add Project Role"}
+            onClose={() => !saving && setRoleOpen(false)}
           >
             <div className="space-y-4">
+              <Field label="Role Name">
+                <input
+                  className={inputClass}
+                  value={roleForm.name}
+                  onChange={(event) =>
+                    setRoleForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Enter project role name"
+                />
+              </Field>
+              <Field label="Description">
+                <textarea
+                  className={`${inputClass} min-h-24`}
+                  value={roleForm.description}
+                  onChange={(event) =>
+                    setRoleForm((current) => ({ ...current, description: event.target.value }))
+                  }
+                  placeholder="What this role does on this project..."
+                />
+              </Field>
+              <Toggle
+                checked={roleForm.active}
+                onChange={(active) => setRoleForm((current) => ({ ...current, active }))}
+                label="Active role"
+              />
+              <PrimaryButton saving={saving} onClick={() => void saveRole()}>
+                Save Project Role
+              </PrimaryButton>
+            </div>
+          </Modal>
+        ) : null}
+
+        {assignRole ? (
+          <Modal
+            title={`Assign People · ${assignRole.name}`}
+            onClose={() => !saving && setAssignRole(null)}
+          >
+            <div className="space-y-4">
+              <label className="relative block">
+                <Search size={16} className="absolute left-3 top-3.5 text-slate-400" />
+                <input
+                  className={`${inputClass} pl-9`}
+                  value={assignmentSearch}
+                  onChange={(event) => setAssignmentSearch(event.target.value)}
+                  placeholder="Search employees..."
+                />
+              </label>
+
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-bold text-slate-600">
+                  {assignmentSelection.length} selected
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentSelection(employees.map((employee) => employee.id))}
+                    className="font-black text-blue-700"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentSelection([])}
+                    className="font-black text-slate-500"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[50vh] overflow-y-auto rounded-2xl border border-slate-200 p-2">
+                {assignmentFilteredEmployees.map((employee) => (
+                  <label
+                    key={employee.id}
+                    className="flex items-start gap-3 rounded-xl px-3 py-2.5 hover:bg-slate-50"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={assignmentSelection.includes(employee.id)}
+                      onChange={() => toggleAssignment(employee.id)}
+                    />
+                    <span>
+                      <span className="block text-sm font-black text-slate-900">
+                        {employee.full_name}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        {[employee.payroll_id, employee.role].filter(Boolean).join(" · ") || "Employee"}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              <PrimaryButton saving={saving} onClick={() => void saveAssignments()}>
+                Save Assignments
+              </PrimaryButton>
+            </div>
+          </Modal>
+        ) : null}
+
+        {requirementOpen ? (
+          <Modal
+            title={editingRequirement ? "Edit Project Requirement" : "Add Project Requirement"}
+            onClose={() => !saving && setRequirementOpen(false)}
+          >
+            <div className="space-y-4">
+              <Field label="Applies To">
+                <select
+                  className={inputClass}
+                  value={requirementForm.projectRoleId}
+                  onChange={(event) =>
+                    setRequirementForm((current) => ({
+                      ...current,
+                      projectRoleId: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">All project personnel</option>
+                  {projectRoles
+                    .filter(
+                      (role) =>
+                        role.project_id === selectedProjectId && role.active !== false,
+                    )
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((role) => (
+                      <option key={role.id} value={role.id}>
+                        {role.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+
               <Field label="Training Type">
                 <select
                   className={inputClass}
-                  value={form.trainingTypeId}
+                  value={requirementForm.trainingTypeId}
                   onChange={(event) =>
-                    setForm((current) => ({
+                    setRequirementForm((current) => ({
                       ...current,
                       trainingTypeId: event.target.value,
                       requiredOptionCodes: [],
@@ -900,7 +1361,7 @@ export default function ProjectTrainingRequirementsPage() {
                   <option value="">Select Training type...</option>
                   {types.map((type) => (
                     <option key={type.id} value={type.id}>
-                      {type.name}
+                      {type.short_code ? `${type.short_code} · ` : ""}{type.name}
                     </option>
                   ))}
                 </select>
@@ -910,13 +1371,11 @@ export default function ProjectTrainingRequirementsPage() {
                 <Field label="Requirement Level">
                   <select
                     className={inputClass}
-                    value={form.requirementLevel}
+                    value={requirementForm.requirementLevel}
                     onChange={(event) =>
-                      setForm((current) => ({
+                      setRequirementForm((current) => ({
                         ...current,
-                        requirementLevel: event.target.value as
-                          | "mandatory"
-                          | "recommended",
+                        requirementLevel: event.target.value as "mandatory" | "recommended",
                       }))
                     }
                   >
@@ -931,9 +1390,9 @@ export default function ProjectTrainingRequirementsPage() {
                     min={0}
                     max={730}
                     className={inputClass}
-                    value={form.renewalLeadDays}
+                    value={requirementForm.renewalLeadDays}
                     onChange={(event) =>
-                      setForm((current) => ({
+                      setRequirementForm((current) => ({
                         ...current,
                         renewalLeadDays: event.target.value,
                       }))
@@ -942,29 +1401,9 @@ export default function ProjectTrainingRequirementsPage() {
                 </Field>
               </div>
 
-              <Field label="Applies To Role">
-                <select
-                  className={inputClass}
-                  value={form.appliesToRole}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      appliesToRole: event.target.value,
-                    }))
-                  }
-                >
-                  <option value="">All project personnel</option>
-                  {roles.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
               {typeOptions.length > 0 ? (
                 <Field label="Required Classes / Options">
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid max-h-56 gap-2 overflow-y-auto sm:grid-cols-2">
                     {typeOptions.map((option) => (
                       <label
                         key={option.id}
@@ -972,12 +1411,8 @@ export default function ProjectTrainingRequirementsPage() {
                       >
                         <input
                           type="checkbox"
-                          checked={form.requiredOptionCodes.includes(
-                            option.code,
-                          )}
-                          onChange={() =>
-                            toggleRequiredOption(option.code)
-                          }
+                          checked={requirementForm.requiredOptionCodes.includes(option.code)}
+                          onChange={() => toggleRequiredOption(option.code)}
                         />
                         {option.name} ({option.code})
                       </label>
@@ -989,9 +1424,7 @@ export default function ProjectTrainingRequirementsPage() {
               <Field label="Accepted Alternative Training Types">
                 <div className="max-h-48 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-3">
                   {types
-                    .filter(
-                      (type) => type.id !== form.trainingTypeId,
-                    )
+                    .filter((type) => type.id !== requirementForm.trainingTypeId)
                     .map((type) => (
                       <label
                         key={type.id}
@@ -999,9 +1432,7 @@ export default function ProjectTrainingRequirementsPage() {
                       >
                         <input
                           type="checkbox"
-                          checked={form.acceptedAlternativeTrainingTypeIds.includes(
-                            type.id,
-                          )}
+                          checked={requirementForm.acceptedAlternativeTrainingTypeIds.includes(type.id)}
                           onChange={() => toggleAlternative(type.id)}
                         />
                         {type.name}
@@ -1013,9 +1444,9 @@ export default function ProjectTrainingRequirementsPage() {
               <Field label="Notes">
                 <textarea
                   className={`${inputClass} min-h-24`}
-                  value={form.notes}
+                  value={requirementForm.notes}
                   onChange={(event) =>
-                    setForm((current) => ({
+                    setRequirementForm((current) => ({
                       ...current,
                       notes: event.target.value,
                     }))
@@ -1023,60 +1454,36 @@ export default function ProjectTrainingRequirementsPage() {
                 />
               </Field>
 
-              <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={form.active}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      active: event.target.checked,
-                    }))
-                  }
-                />
-                Active requirement
-              </label>
+              <Toggle
+                checked={requirementForm.active}
+                onChange={(active) =>
+                  setRequirementForm((current) => ({ ...current, active }))
+                }
+                label="Active requirement"
+              />
 
-              <button
-                type="button"
-                onClick={() => void saveRequirement()}
-                disabled={saving}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
-              >
-                {saving ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <CheckCircle2 size={16} />
-                )}
+              <PrimaryButton saving={saving} onClick={() => void saveRequirement()}>
                 Save Requirement
-              </button>
+              </PrimaryButton>
             </div>
           </Modal>
         ) : null}
 
         {copyOpen ? (
-          <Modal
-            title="Copy Project Requirements"
-            onClose={() => !saving && setCopyOpen(false)}
-          >
+          <Modal title="Copy Project Training Setup" onClose={() => !saving && setCopyOpen(false)}>
             <div className="space-y-4">
               <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
-                Source: <strong>{projectLabel(selectedProject)}</strong>
+                Source: <strong>{projectLabel(selectedProject)}</strong>. Project roles and their requirements are copied; employee assignments are intentionally not copied.
               </div>
-
               <Field label="Target Project">
                 <select
                   className={inputClass}
                   value={copyTargetProjectId}
-                  onChange={(event) =>
-                    setCopyTargetProjectId(event.target.value)
-                  }
+                  onChange={(event) => setCopyTargetProjectId(event.target.value)}
                 >
                   <option value="">Select target...</option>
                   {projects
-                    .filter(
-                      (project) => project.id !== selectedProjectId,
-                    )
+                    .filter((project) => project.id !== selectedProjectId)
                     .map((project) => (
                       <option key={project.id} value={project.id}>
                         {projectLabel(project)}
@@ -1084,31 +1491,18 @@ export default function ProjectTrainingRequirementsPage() {
                     ))}
                 </select>
               </Field>
-
-              <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={replaceTarget}
-                  onChange={(event) =>
-                    setReplaceTarget(event.target.checked)
-                  }
-                />
-                Archive existing target requirements before copying
-              </label>
-
-              <button
-                type="button"
-                onClick={() => void copyRequirements()}
-                disabled={saving || !copyTargetProjectId}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+              <Toggle
+                checked={replaceTarget}
+                onChange={setReplaceTarget}
+                label="Archive existing target roles and requirements before copying"
+              />
+              <PrimaryButton
+                saving={saving}
+                disabled={!copyTargetProjectId}
+                onClick={() => void copyProjectSetup()}
               >
-                {saving ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <ClipboardCopy size={16} />
-                )}
-                Copy Requirements
-              </button>
+                Copy Setup
+              </PrimaryButton>
             </div>
           </Modal>
         ) : null}
@@ -1120,20 +1514,61 @@ export default function ProjectTrainingRequirementsPage() {
 const inputClass =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
 
-function Field({
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-black text-slate-700">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
   label,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+}) {
+  return (
+    <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+function PrimaryButton({
+  saving,
+  disabled = false,
+  onClick,
   children,
 }: {
-  label: string;
+  saving: boolean;
+  disabled?: boolean;
+  onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-black text-slate-700">
-        {label}
-      </span>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={saving || disabled}
+      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+    >
+      {saving ? (
+        <Loader2 size={16} className="animate-spin" />
+      ) : (
+        <CheckCircle2 size={16} />
+      )}
       {children}
-    </label>
+    </button>
   );
 }
 
@@ -1149,7 +1584,7 @@ function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
-        <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
           <h2 className="text-xl font-black text-slate-950">{title}</h2>
           <button
             type="button"
