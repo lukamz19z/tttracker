@@ -925,17 +925,17 @@ export default function TrainingRegisterPage() {
           <Metric label="Awaiting review" value={counts.pending} />
         </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2 text-sm font-black text-slate-700">
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-700">
             <Filter size={16} />
             Search & filters
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-3 xl:grid-cols-6">
-            <label className="relative lg:col-span-2">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-12">
+            <label className="relative md:col-span-2 xl:col-span-4">
               <Search
                 size={16}
-                className="absolute left-3 top-3.5 text-slate-400"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
               />
               <input
                 className={`${inputClass} pl-9`}
@@ -945,7 +945,9 @@ export default function TrainingRegisterPage() {
               />
             </label>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={employeeFilter}
               onChange={setEmployeeFilter}
               options={[
@@ -958,8 +960,11 @@ export default function TrainingRegisterPage() {
                   })),
               ]}
             />
+            </div>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={trainingTypeFilter}
               onChange={setTrainingTypeFilter}
               options={[
@@ -970,8 +975,11 @@ export default function TrainingRegisterPage() {
                 })),
               ]}
             />
+            </div>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={statusFilter}
               onChange={setStatusFilter}
               options={[
@@ -986,8 +994,11 @@ export default function TrainingRegisterPage() {
                 { value: "superseded", label: "Superseded" },
               ]}
             />
+            </div>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={historyMode}
               onChange={(value) =>
                 setHistoryMode(value as "current" | "all")
@@ -997,8 +1008,11 @@ export default function TrainingRegisterPage() {
                 { value: "all", label: "Include history" },
               ]}
             />
+            </div>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={projectFilter}
               onChange={setProjectFilter}
               options={[
@@ -1013,8 +1027,11 @@ export default function TrainingRegisterPage() {
                 })),
               ]}
             />
+            </div>
 
-            <Select
+            <div className="xl:col-span-2">
+
+              <Select
               value={categoryFilter}
               onChange={setCategoryFilter}
               options={[
@@ -1025,6 +1042,7 @@ export default function TrainingRegisterPage() {
                 })),
               ]}
             />
+            </div>
           </div>
         </section>
 
@@ -1039,7 +1057,7 @@ export default function TrainingRegisterPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-[1500px] w-full text-left text-sm">
+            <table className="min-w-[1320px] w-full table-fixed text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="w-14 px-4 py-3">Select</th>
@@ -1053,7 +1071,7 @@ export default function TrainingRegisterPage() {
                   <th className="px-4 py-3">Project</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Evidence</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
+                  
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1077,7 +1095,7 @@ export default function TrainingRegisterPage() {
 
                   return (
                     <tr key={record.id} className="align-top hover:bg-slate-50">
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-3.5">
                         <button
                           type="button"
                           disabled={!published || downloading}
@@ -1104,7 +1122,7 @@ export default function TrainingRegisterPage() {
                           )}
                         </button>
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-3.5">
                         <div className="font-black text-slate-950">
                           {employee?.full_name ?? "Unknown employee"}
                         </div>
@@ -1113,7 +1131,7 @@ export default function TrainingRegisterPage() {
                           {crewLabel(crew)}
                         </div>
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-3.5">
                         <div className="font-bold text-slate-900">
                           {record.training_name}
                         </div>
@@ -1124,26 +1142,26 @@ export default function TrainingRegisterPage() {
                             : ""}
                         </div>
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
+                      <td className="px-4 py-3.5 text-slate-700">
                         {record.certificate_number || "—"}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
+                      <td className="px-4 py-3.5 text-slate-700">
                         {record.provider || "—"}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
+                      <td className="px-4 py-3.5 text-slate-700">
                         {dateLabel(record.issue_date)}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
+                      <td className="px-4 py-3.5 text-slate-700">
                         {record.does_not_expire
                           ? "Does not expire"
                           : dateLabel(record.expiry_date)}
                       </td>
-                      <td className="px-4 py-4 font-bold text-slate-700">
+                      <td className="px-4 py-3.5 text-center font-bold text-slate-700">
                         {record.does_not_expire
                           ? "—"
                           : days ?? "—"}
                       </td>
-                      <td className="px-4 py-4 text-slate-700">
+                      <td className="px-4 py-3.5 text-slate-700">
                         {project
                           ? `${
                               project.project_number
@@ -1152,7 +1170,7 @@ export default function TrainingRegisterPage() {
                             }${project.name}`
                           : "—"}
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-3.5">
                         <span
                           className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-black ${statusClasses(
                             status,
@@ -1161,7 +1179,7 @@ export default function TrainingRegisterPage() {
                           {statusLabel(status)}
                         </span>
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-3.5">
                         {record.sharepoint_web_url ? (
                           <div className="flex flex-wrap items-center gap-3">
                             <a
@@ -1186,34 +1204,52 @@ export default function TrainingRegisterPage() {
                               <Download size={15} />
                               Download
                             </button>
+                            {canDeleteIncorrectUploads &&
+                            record.current_version !== false &&
+                            !record.superseded_at &&
+                            !record.revoked_at ? (
+                              <button
+                                type="button"
+                                onClick={() => void deleteIncorrectUpload(record)}
+                                disabled={deletingRecordId === record.id}
+                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
+                                title="Remove incorrect upload"
+                                aria-label={`Remove incorrect upload for ${employee?.full_name ?? "employee"}`}
+                              >
+                                {deletingRecordId === record.id ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <Trash2 size={14} />
+                                )}
+                              </button>
+                            ) : null}
                           </div>
                         ) : (
-                          <span className="text-slate-400">Not published</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400">Not published</span>
+                            {canDeleteIncorrectUploads &&
+                            record.current_version !== false &&
+                            !record.superseded_at &&
+                            !record.revoked_at ? (
+                              <button
+                                type="button"
+                                onClick={() => void deleteIncorrectUpload(record)}
+                                disabled={deletingRecordId === record.id}
+                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
+                                title="Remove incorrect upload"
+                                aria-label={`Remove incorrect upload for ${employee?.full_name ?? "employee"}`}
+                              >
+                                {deletingRecordId === record.id ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <Trash2 size={14} />
+                                )}
+                              </button>
+                            ) : null}
+                          </div>
                         )}
                       </td>
-                      <td className="px-4 py-4 text-right">
-                        {canDeleteIncorrectUploads &&
-                        record.current_version !== false &&
-                        !record.superseded_at &&
-                        !record.revoked_at ? (
-                          <button
-                            type="button"
-                            onClick={() => void deleteIncorrectUpload(record)}
-                            disabled={deletingRecordId === record.id}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
-                            title="Remove an incorrect Training upload"
-                          >
-                            {deletingRecordId === record.id ? (
-                              <Loader2 size={14} className="animate-spin" />
-                            ) : (
-                              <Trash2 size={14} />
-                            )}
-                            Remove wrong upload
-                          </button>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </td>
+
                     </tr>
                   );
                 })}
@@ -1221,7 +1257,7 @@ export default function TrainingRegisterPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={12}
+                      colSpan={11}
                       className="px-5 py-12 text-center text-sm font-semibold text-slate-500"
                     >
                       No Training records match the selected filters.
@@ -1238,7 +1274,7 @@ export default function TrainingRegisterPage() {
 }
 
 const inputClass =
-  "w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
+  "h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
 
 function Select({
   value,
