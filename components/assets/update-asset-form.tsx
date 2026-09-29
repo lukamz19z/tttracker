@@ -43,9 +43,26 @@ type PlantAsset = AssetRecord & {
   rego: string | null;
 };
 
+type ProjectOption = {
+  id: string;
+  name: string;
+  project_number: string | null;
+  status: string | null;
+};
+
+type CrewOption = {
+  id: string;
+  crew_number: string | null;
+  crew_name: string | null;
+  leading_hand: string | null;
+  active: boolean | null;
+};
+
 type BootstrapPayload = {
   vehicles: VehicleAsset[];
   plant: PlantAsset[];
+  projects: ProjectOption[];
+  crews: CrewOption[];
   documentTypes: AssetDocumentTypeRow[];
   canManage: boolean;
   error?: string;
@@ -148,6 +165,25 @@ function assetLabel(type: AssetType, asset: AssetRecord) {
   const rego = type === "vehicle" ? asset.vehicle_rego : asset.rego;
   const makeModel = [asset.make, asset.model].map(clean).filter(Boolean).join(" ");
   return [clean(code), makeModel, clean(rego)].filter(Boolean).join(" - ");
+}
+
+function projectLabel(project: ProjectOption) {
+  const number = clean(project.project_number);
+  const name = clean(project.name);
+  return number ? `${number} · ${name}` : name;
+}
+
+function crewLabel(crew: CrewOption) {
+  return [crew.crew_number, crew.crew_name, crew.leading_hand]
+    .map(clean)
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function isCurrentProject(project: ProjectOption) {
+  return !["completed", "closed", "archived", "inactive"].includes(
+    clean(project.status).toLowerCase(),
+  );
 }
 
 export function UpdateAssetForm({
@@ -282,6 +318,28 @@ export function UpdateAssetForm({
     return rows?.find((asset) => asset.id === assetId) ?? null;
   }, [assetId, assetType, bootstrap]);
 
+  const currentProjects = useMemo(
+    () =>
+      (bootstrap?.projects ?? [])
+        .filter(isCurrentProject)
+        .sort((a, b) => projectLabel(a).localeCompare(projectLabel(b))),
+    [bootstrap],
+  );
+
+  const crewOptions = useMemo(
+    () =>
+      (bootstrap?.crews ?? [])
+        .filter((row) => row.active !== false)
+        .map((row) => ({
+          id: row.id,
+          value: crewLabel(row),
+          label: crewLabel(row),
+        }))
+        .filter((row) => Boolean(row.value))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [bootstrap],
+  );
+
   const documentTypes = useMemo(
     () =>
       (bootstrap?.documentTypes ?? []).filter(
@@ -327,10 +385,18 @@ export function UpdateAssetForm({
   ]);
 
   function chooseAsset(type: AssetType, id: string) {
+    const rows = type === "vehicle" ? bootstrap?.vehicles : bootstrap?.plant;
+    const nextAsset = rows?.find((asset) => asset.id === id) ?? null;
+
     setAssetType(type);
     setAssetId(id);
     setSelectedOption(null);
     setDocumentTypeId("");
+    setStatus(
+      clean(type === "vehicle" ? nextAsset?.status : nextAsset?.asset_status),
+    );
+    setProject(clean(nextAsset?.project));
+    setCrew(clean(nextAsset?.crew));
     setError("");
   }
 
@@ -595,18 +661,62 @@ export function UpdateAssetForm({
             ) : null}
 
             {selectedOption.updateType === "status" ? (
-              <Field label="New status">
-                <Input value={status} onChange={setStatus} placeholder="Active, In Service, Off Hire, Inactive..." />
-              </Field>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="New status">
+                  <Input
+                    value={status}
+                    onChange={setStatus}
+                    placeholder="Enter status..."
+                  />
+                </Field>
+
+                <Field label="Crew / allocation">
+                  <select
+                    value={crew}
+                    onChange={(event) => setCrew(event.target.value)}
+                    className="input"
+                  >
+                    <option value="">Unassigned</option>
+                    {crewOptions.map((row) => (
+                      <option key={row.id} value={row.value}>
+                        {row.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
             ) : null}
 
             {selectedOption.updateType === "project_transfer" ? (
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Project">
-                  <Input value={project} onChange={setProject} />
+                  <select
+                    value={project}
+                    onChange={(event) => setProject(event.target.value)}
+                    className="input"
+                  >
+                    <option value="">No project</option>
+                    {currentProjects.map((row) => (
+                      <option key={row.id} value={row.name}>
+                        {projectLabel(row)}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
+
                 <Field label="Crew">
-                  <Input value={crew} onChange={setCrew} />
+                  <select
+                    value={crew}
+                    onChange={(event) => setCrew(event.target.value)}
+                    className="input"
+                  >
+                    <option value="">Unassigned</option>
+                    {crewOptions.map((row) => (
+                      <option key={row.id} value={row.value}>
+                        {row.label}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
               </div>
             ) : null}

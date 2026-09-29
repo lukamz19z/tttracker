@@ -37,38 +37,105 @@ export async function GET(request: Request) {
       plantResult,
       fleetResult,
       projectResult,
+      crewResult,
       employeeResult,
       settingsResult,
       documentTypesResult,
     ] = await Promise.all([
-      service.from("vehicle_assets").select("*").order("vehicle_id"),
-      service.from("plant_assets").select("*").order("asset_id"),
-      service.from("fleet_jobs").select("*").order("created_at", { ascending: false }),
-      service.from("projects").select("id,name,project_number,status").order("name"),
-      service.from("employees").select("id,full_name,user_id,role,active").eq("active", true).order("full_name"),
-      service.from("asset_settings").select("*").eq("id", true).single(),
-      service.from("asset_document_types").select("*").eq("active", true).order("sort_order").order("name"),
+      service
+        .from("vehicle_assets")
+        .select("*")
+        .order("vehicle_id"),
+
+      service
+        .from("plant_assets")
+        .select("*")
+        .order("asset_id"),
+
+      service
+        .from("fleet_jobs")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
+
+      service
+        .from("projects")
+        .select("id,name,project_number,status")
+        .order("name"),
+
+      service
+        .from("crews")
+        .select("id,crew_number,crew_name,leading_hand,active")
+        .order("crew_number"),
+
+      service
+        .from("employees")
+        .select("id,full_name,user_id,role,active")
+        .eq("active", true)
+        .order("full_name"),
+
+      service
+        .from("asset_settings")
+        .select("*")
+        .eq("id", true)
+        .single(),
+
+      service
+        .from("asset_document_types")
+        .select("*")
+        .eq("active", true)
+        .order("sort_order")
+        .order("name"),
     ]);
 
-    if (vehicleResult.error) throw new Error(vehicleResult.error.message);
-    if (plantResult.error) throw new Error(plantResult.error.message);
-    if (fleetResult.error) throw new Error(fleetResult.error.message);
-    if (projectResult.error) throw new Error(projectResult.error.message);
-    if (employeeResult.error) throw new Error(employeeResult.error.message);
-    if (settingsResult.error) throw new Error(settingsResult.error.message);
-    if (documentTypesResult.error) throw new Error(documentTypesResult.error.message);
+    if (vehicleResult.error) {
+      throw new Error(vehicleResult.error.message);
+    }
 
-    const fleetJobs = ((fleetResult.data ?? []) as FleetJobRaw[]).map((job) => ({
-      ...job,
-      vehicle_asset_id: clean(job.vehicle_asset_id) || null,
-      plant_asset_id: clean(job.plant_asset_id || job.plant_id) || null,
-    }));
+    if (plantResult.error) {
+      throw new Error(plantResult.error.message);
+    }
+
+    if (fleetResult.error) {
+      throw new Error(fleetResult.error.message);
+    }
+
+    if (projectResult.error) {
+      throw new Error(projectResult.error.message);
+    }
+
+    if (crewResult.error) {
+      throw new Error(crewResult.error.message);
+    }
+
+    if (employeeResult.error) {
+      throw new Error(employeeResult.error.message);
+    }
+
+    if (settingsResult.error) {
+      throw new Error(settingsResult.error.message);
+    }
+
+    if (documentTypesResult.error) {
+      throw new Error(documentTypesResult.error.message);
+    }
+
+    const fleetJobs = ((fleetResult.data ?? []) as FleetJobRaw[]).map(
+      (job) => ({
+        ...job,
+        vehicle_asset_id: clean(job.vehicle_asset_id) || null,
+        plant_asset_id:
+          clean(job.plant_asset_id || job.plant_id) || null,
+      }),
+    );
 
     return NextResponse.json({
       vehicles: vehicleResult.data ?? [],
       plant: plantResult.data ?? [],
       fleetJobs,
       projects: projectResult.data ?? [],
+      crews: crewResult.data ?? [],
       employees: employeeResult.data ?? [],
       settings: settingsResult.data,
       documentTypes: documentTypesResult.data ?? [],
@@ -77,6 +144,14 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const apiError = assetApiError(error);
-    return NextResponse.json({ error: apiError.message }, { status: apiError.status });
+
+    return NextResponse.json(
+      {
+        error: apiError.message,
+      },
+      {
+        status: apiError.status,
+      },
+    );
   }
 }
