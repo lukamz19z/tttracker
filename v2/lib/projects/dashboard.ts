@@ -1,30 +1,13 @@
 import "server-only";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { aggregateMhPerTonne } from "@/lib/dockets/calculations";
 
 function n(value: unknown, fallback = 0) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function clamp(value: number) {
-  return Math.max(0, Math.min(100, value));
-}
-
-async function firstSuccessfulSelect<T>(
-  candidates: Array<() => PromiseLike<{ data: unknown; error: unknown }>>,
-): Promise<T[]> {
-  for (const candidate of candidates) {
-    try {
-      const result = await candidate();
-      if (!result.error && Array.isArray(result.data)) {
-        return result.data as T[];
-      }
-    } catch {
-      // Try next compatible source.
-    }
-  }
-  return [];
+  return Number.isFinite(parsed)
+    ? parsed
+    : fallback;
 }
 
 export type ProjectDashboardData = {
@@ -42,22 +25,10 @@ export type ProjectDashboardData = {
   totalDockets: number;
   rawHours: number;
   productionHours: number;
+  earnedTonnes: number;
   rawMhPerTonne: number | null;
   productionMhPerTonne: number | null;
   latestDocketDate: string | null;
-};
-
-type DocketRow = {
-  tower_id?: string | null;
-  docket_date?: string | null;
-  assembly_percent?: number | null;
-  erection_percent?: number | null;
-  raw_manhours?: number | null;
-  production_manhours?: number | null;
-};
-
-type DefectRow = {
-  status?: string | null;
 };
 
 export async function getProjectDashboardData(
@@ -65,8 +36,13 @@ export async function getProjectDashboardData(
 ): Promise<ProjectDashboardData> {
   const admin = createSupabaseAdmin();
 
-  const { data: towersData, error: towerError } =
-    await admin
+  const [
+    { data: towers, error: towerError },
+    { data: dockets, error: docketError },
+    { data: defects, error: defectError },
+    { data: profile, error: profileError },
+  ] = await Promise.all([
+    admin
       .from("v2_towers")
       .select(`
         id,
@@ -74,93 +50,83 @@ export async function getProjectDashboardData(
         assembly_percent,
         erection_percent
       `)
-      .eq("project_id", projectId);
+      .eq("project_id", projectId),
+
+    admin
+      .from("v2_daily_dockets")
+      .select(`
+        id,
+        docket_date,
+        raw_manhours,
+        production_manhours
+      `)
+      .eq("project_id", projectId)
+      .order("docket_date", {
+        ascending: false,
+      }),
+
+    admin
+      .from("v2_defects")
+      .select("id, status")
+      .eq("project_id", projectId),
+
+    admin
+      .from("v2_project_progress_profiles")
+      .select("assembly_share, erection_share")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+  ]);
 
   if (towerError) {
     throw new Error(towerError.message);
   }
 
-  const dockets =
-    await firstSuccessfulSelect<DocketRow>([
-      () =>
-        admin
-          .from("v2_tower_daily_dockets")
-          .select(`
-            tower_id,
-            docket_date,
-            assembly_percent,
-            erection_percent,
-            raw_manhours,
-            production_manhours
-          `)
-          .eq("project_id", projectId),
-      () =>
-        admin
-          .from("tower_daily_dockets")
-          .select(`
-            tower_id,
-            docket_date,
-            assembly_percent,
-            erection_percent,
-            raw_manhours,
-            production_manhours
-          `)
-          .eq("project_id", projectId),
-    ]);
+  if (docketError) {
+    throw new Error(docketError.message);
+  }
 
-  const towerIds =
-    (towersData ?? []).map(
-      (tower) => tower.id,
+  if (defectError) {
+    throw new Error(defectError.message);
+  }
+
+  if (profileError) {
+    throw new Error(profileError.message);
+  }
+
+  const phaseTotal =
+    Math.max(0, n(profile?.assembly_share, 50)) +
+    Math.max(0, n(profile?.erection_share, 50));
+
+  const assemblyFraction =
+    phaseTotal > 0
+      ? Math.max(0, n(profile?.assembly_share, 50)) / phaseTotal
+      : 0.5;
+
+  const erectionFraction =
+    phaseTotal > 0
+      ? Math.max(0, n(profile?.erection_share, 50)) / phaseTotal
+      : 0.5;
+
+  const docketIds =
+    (dockets ?? []).map(
+      (docket) => docket.id,
     );
 
-  const defects =
-    towerIds.length > 0
-      ? await firstSuccessfulSelect<DefectRow>([
-          () =>
-            admin
-              .from("v2_tower_defects")
-              .select("status")
-              .in("tower_id", towerIds),
-          () =>
-            admin
-              .from("tower_defects")
-              .select("status")
-              .in("tower_id", towerIds),
-        ])
-      : [];
+  const { data: allocations, error: allocationError } =
+    docketIds.length > 0
+      ? await admin
+          .from("v2_docket_tower_allocations")
+          .select(`
+            docket_id,
+            raw_hours,
+            production_hours,
+            earned_tonnes
+          `)
+          .in("docket_id", docketIds)
+      : { data: [], error: null };
 
-  const liveByTower = new Map<
-    string,
-    {
-      assembly: number;
-      erection: number;
-    }
-  >();
-
-  for (const docket of dockets) {
-    if (!docket.tower_id) continue;
-
-    const existing =
-      liveByTower.get(
-        docket.tower_id,
-      ) ?? {
-        assembly: 0,
-        erection: 0,
-      };
-
-    liveByTower.set(
-      docket.tower_id,
-      {
-        assembly: Math.max(
-          existing.assembly,
-          n(docket.assembly_percent),
-        ),
-        erection: Math.max(
-          existing.erection,
-          n(docket.erection_percent),
-        ),
-      },
-    );
+  if (allocationError) {
+    throw new Error(allocationError.message);
   }
 
   let completeCount = 0;
@@ -171,23 +137,26 @@ export async function getProjectDashboardData(
   let totalWeight = 0;
   let completedTonnes = 0;
 
-  for (const tower of towersData ?? []) {
-    const live = liveByTower.get(
-      tower.id,
-    );
-
-    const assembly = clamp(
-      live?.assembly ??
+  for (const tower of towers ?? []) {
+    const assembly = Math.max(
+      0,
+      Math.min(
+        100,
         n(tower.assembly_percent),
+      ),
     );
 
-    const erection = clamp(
-      live?.erection ??
+    const erection = Math.max(
+      0,
+      Math.min(
+        100,
         n(tower.erection_percent),
+      ),
     );
 
-    const progress =
-      (assembly + erection) / 2;
+    const overall =
+      assembly * assemblyFraction +
+      erection * erectionFraction;
 
     const weight = n(
       tower.tower_weight_t,
@@ -197,11 +166,11 @@ export async function getProjectDashboardData(
     erectionTotal += erection;
     totalWeight += weight;
     completedTonnes +=
-      weight * (progress / 100);
+      weight * (overall / 100);
 
-    if (progress >= 100) {
+    if (overall >= 100) {
       completeCount += 1;
-    } else if (progress > 0) {
+    } else if (overall > 0) {
       inProgressCount += 1;
     } else {
       notStartedCount += 1;
@@ -209,78 +178,62 @@ export async function getProjectDashboardData(
   }
 
   const towerCount =
-    (towersData ?? []).length;
+    (towers ?? []).length;
 
   const assemblyAverage =
     towerCount > 0
-      ? assemblyTotal / towerCount
+      ? assemblyTotal /
+        towerCount
       : 0;
 
   const erectionAverage =
     towerCount > 0
-      ? erectionTotal / towerCount
+      ? erectionTotal /
+        towerCount
       : 0;
 
   const overallProgress =
     totalWeight > 0
-      ? (completedTonnes / totalWeight) *
+      ? (completedTonnes /
+          totalWeight) *
         100
       : towerCount > 0
-        ? (assemblyAverage +
-            erectionAverage) /
-          2
+        ? assemblyAverage * assemblyFraction +
+          erectionAverage * erectionFraction
         : 0;
 
-  const rawHours = dockets.reduce(
-    (sum, docket) =>
-      sum +
-      n(docket.raw_manhours),
-    0,
-  );
-
-  const productionHours =
-    dockets.reduce(
-      (sum, docket) =>
-        sum +
-        n(
-          docket.production_manhours,
-          n(docket.raw_manhours),
-        ),
-      0,
+  const mhT =
+    aggregateMhPerTonne(
+      (allocations ?? []).map(
+        (row) => ({
+          rawHours: n(
+            row.raw_hours,
+          ),
+          productionHours: n(
+            row.production_hours,
+          ),
+          earnedTonnes: n(
+            row.earned_tonnes,
+          ),
+        }),
+      ),
     );
 
-  const latestDocketDate =
-    dockets
-      .map(
-        (docket) =>
-          docket.docket_date,
-      )
-      .filter(
-        (value): value is string =>
-          Boolean(value),
-      )
-      .sort((a, b) =>
-        b.localeCompare(a),
-      )[0] ?? null;
-
-  const isOpen = (status: unknown) => {
-    const value = String(
-      status ?? "",
-    )
-      .trim()
-      .toLowerCase();
-
-    return ![
+  const closedStatuses =
+    new Set([
       "closed",
-      "complete",
-      "completed",
       "resolved",
-    ].includes(value);
-  };
+      "completed",
+    ]);
 
   const openDefects =
-    defects.filter((defect) =>
-      isOpen(defect.status),
+    (defects ?? []).filter(
+      (defect) =>
+        !closedStatuses.has(
+          String(
+            defect.status ?? "",
+          ).toLowerCase(),
+        ),
     ).length;
 
   return {
@@ -294,20 +247,21 @@ export async function getProjectDashboardData(
     totalWeight,
     completedTonnes,
     openDefects,
-    totalDefects: defects.length,
-    totalDockets: dockets.length,
-    rawHours,
-    productionHours,
+    totalDefects:
+      (defects ?? []).length,
+    totalDockets:
+      (dockets ?? []).length,
+    rawHours: mhT.rawHours,
+    productionHours:
+      mhT.productionHours,
+    earnedTonnes:
+      mhT.earnedTonnes,
     rawMhPerTonne:
-      completedTonnes > 0
-        ? rawHours /
-          completedTonnes
-        : null,
+      mhT.rawMhPerTonne,
     productionMhPerTonne:
-      completedTonnes > 0
-        ? productionHours /
-          completedTonnes
-        : null,
-    latestDocketDate,
+      mhT.productionMhPerTonne,
+    latestDocketDate:
+      dockets?.[0]?.docket_date ??
+      null,
   };
 }

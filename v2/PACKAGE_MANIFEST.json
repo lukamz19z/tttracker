@@ -1,0 +1,26 @@
+{
+  "package": "TTTracker V2 Project Operations Foundation",
+  "date": "2026-09-29",
+  "files": [
+    "DAILY_DOCKET_EDITOR_INTEGRATION.md",
+    "README_INSTALL.md",
+    "SIDEBAR_INTEGRATION.md",
+    "app/(protected)/project/[projectId]/daily-dockets/new/page.tsx",
+    "app/(protected)/project/[projectId]/daily-dockets/page.tsx",
+    "app/(protected)/project/[projectId]/defects/page.tsx",
+    "app/(protected)/project/[projectId]/materials/page.tsx",
+    "components/settings/DailyDocketReviewSettingsPanel.tsx",
+    "components/settings/OperationalDropdownSettingsPanel.tsx",
+    "lib/operations/config.ts",
+    "lib/projects/project-section-ui.ts",
+    "supabase/migrations/20260929_012_operations_control_foundation.sql"
+  ],
+  "notes": [
+    "Project-wide Daily Dockets register",
+    "Project-level new docket launcher",
+    "Materials Control Centre",
+    "Project-wide Defects register",
+    "Organisation/project review settings foundation",
+    "Configurable operational dropdown foundation"
+  ]
+}

@@ -1,6 +1,7 @@
 import {
   Plus,
   Search,
+  SlidersHorizontal,
   Upload,
 } from "lucide-react";
 
@@ -16,26 +17,36 @@ import { requireProjectContext } from "@/lib/projects/project-context";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 type Props = {
-  params: Promise<{
-    projectId: string;
-  }>;
+  params: Promise<{ projectId: string }>;
   searchParams: Promise<{
     organisation?: string;
     q?: string;
+    type?: string;
+    line?: string;
+    completion?: string;
+    sort?: string;
+    direction?: string;
+    minProgress?: string;
+    maxProgress?: string;
   }>;
 };
 
-function natural(
-  a: string,
-  b: string,
+function natural(a: string, b: string) {
+  return a.localeCompare(b, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function overallProgress(
+  assembly: number | null | undefined,
+  erection: number | null | undefined,
+  assemblyFraction: number,
+  erectionFraction: number,
 ) {
-  return a.localeCompare(
-    b,
-    undefined,
-    {
-      numeric: true,
-      sensitivity: "base",
-    },
+  return (
+    Number(assembly ?? 0) * assemblyFraction +
+    Number(erection ?? 0) * erectionFraction
   );
 }
 
@@ -54,8 +65,11 @@ export default async function TowersPage({
 
   const admin = createSupabaseAdmin();
 
-  const { data: towers, error } =
-    await admin
+  const [
+    { data: towers, error },
+    { data: progressProfile, error: profileError },
+  ] = await Promise.all([
+    admin
       .from("v2_towers")
       .select(`
         id,
@@ -66,34 +80,95 @@ export default async function TowersPage({
         tower_weight_t,
         assembly_percent,
         erection_percent,
+        tower_type_id,
         v2_tower_types (
+          id,
           name,
           type_code
         )
       `)
-      .eq("project_id", projectId);
+      .eq("project_id", projectId),
+
+    admin
+      .from("v2_project_progress_profiles")
+      .select("assembly_share, erection_share")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+  ]);
 
   if (error) {
     throw new Error(error.message);
   }
 
-  const search =
-    String(query.q ?? "")
-      .trim()
-      .toLowerCase();
+  if (profileError) {
+    throw new Error(profileError.message);
+  }
 
-  const filtered =
-    (towers ?? [])
-      .filter((tower) => {
-        if (!search) return true;
+  const phaseTotal =
+    Math.max(0, Number(progressProfile?.assembly_share ?? 50)) +
+    Math.max(0, Number(progressProfile?.erection_share ?? 50));
 
-        const type = Array.isArray(
-          tower.v2_tower_types,
-        )
-          ? tower.v2_tower_types[0]
-          : tower.v2_tower_types;
+  const assemblyFraction =
+    phaseTotal > 0
+      ? Math.max(0, Number(progressProfile?.assembly_share ?? 50)) /
+        phaseTotal
+      : 0.5;
 
-        return [
+  const erectionFraction =
+    phaseTotal > 0
+      ? Math.max(0, Number(progressProfile?.erection_share ?? 50)) /
+        phaseTotal
+      : 0.5;
+
+  const q = String(query.q ?? "")
+    .trim()
+    .toLowerCase();
+
+  const typeFilter =
+    String(query.type ?? "").trim();
+  const lineFilter =
+    String(query.line ?? "").trim();
+  const completion =
+    String(query.completion ?? "").trim();
+
+  const minProgress =
+    query.minProgress === undefined ||
+    query.minProgress === ""
+      ? null
+      : Number(query.minProgress);
+
+  const maxProgress =
+    query.maxProgress === undefined ||
+    query.maxProgress === ""
+      ? null
+      : Number(query.maxProgress);
+
+  const sort =
+    String(query.sort ?? "tower").trim();
+
+  const direction =
+    query.direction === "desc"
+      ? "desc"
+      : "asc";
+
+  const rows = (towers ?? [])
+    .filter((tower) => {
+      const type = Array.isArray(
+        tower.v2_tower_types,
+      )
+        ? tower.v2_tower_types[0]
+        : tower.v2_tower_types;
+
+      const overall = overallProgress(
+        tower.assembly_percent,
+        tower.erection_percent,
+        assemblyFraction,
+        erectionFraction,
+      );
+
+      if (
+        q &&
+        ![
           tower.tower_identifier,
           tower.line,
           tower.status,
@@ -103,27 +178,207 @@ export default async function TowersPage({
           .filter(Boolean)
           .join(" ")
           .toLowerCase()
-          .includes(search);
-      })
-      .sort((a, b) =>
-        natural(
+          .includes(q)
+      ) {
+        return false;
+      }
+
+      if (
+        typeFilter &&
+        tower.tower_type_id !==
+          typeFilter
+      ) {
+        return false;
+      }
+
+      if (
+        lineFilter &&
+        tower.line !== lineFilter
+      ) {
+        return false;
+      }
+
+      if (
+        completion === "not_started" &&
+        overall > 0
+      ) {
+        return false;
+      }
+
+      if (
+        completion === "in_progress" &&
+        (overall <= 0 ||
+          overall >= 100)
+      ) {
+        return false;
+      }
+
+      if (
+        completion === "complete" &&
+        overall < 100
+      ) {
+        return false;
+      }
+
+      if (
+        minProgress !== null &&
+        Number.isFinite(minProgress) &&
+        overall < minProgress
+      ) {
+        return false;
+      }
+
+      if (
+        maxProgress !== null &&
+        Number.isFinite(maxProgress) &&
+        overall > maxProgress
+      ) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      const typeA = Array.isArray(
+        a.v2_tower_types,
+      )
+        ? a.v2_tower_types[0]
+        : a.v2_tower_types;
+
+      const typeB = Array.isArray(
+        b.v2_tower_types,
+      )
+        ? b.v2_tower_types[0]
+        : b.v2_tower_types;
+
+      let result = 0;
+
+      if (sort === "sequence") {
+        result =
+          Number(
+            a.sequence_number ??
+              Number.MAX_SAFE_INTEGER,
+          ) -
+          Number(
+            b.sequence_number ??
+              Number.MAX_SAFE_INTEGER,
+          );
+      } else if (sort === "type") {
+        result = natural(
+          String(
+            typeA?.type_code ??
+              typeA?.name ??
+              "",
+          ),
+          String(
+            typeB?.type_code ??
+              typeB?.name ??
+              "",
+          ),
+        );
+      } else if (sort === "weight") {
+        result =
+          Number(a.tower_weight_t ?? 0) -
+          Number(b.tower_weight_t ?? 0);
+      } else if (sort === "assembly") {
+        result =
+          Number(
+            a.assembly_percent ?? 0,
+          ) -
+          Number(
+            b.assembly_percent ?? 0,
+          );
+      } else if (sort === "erection") {
+        result =
+          Number(
+            a.erection_percent ?? 0,
+          ) -
+          Number(
+            b.erection_percent ?? 0,
+          );
+      } else if (
+        sort === "progress"
+      ) {
+        result =
+          overallProgress(
+            a.assembly_percent,
+            a.erection_percent,
+            assemblyFraction,
+            erectionFraction,
+          ) -
+          overallProgress(
+            b.assembly_percent,
+            b.erection_percent,
+            assemblyFraction,
+            erectionFraction,
+          );
+      } else {
+        result = natural(
           a.tower_identifier,
           b.tower_identifier,
+        );
+      }
+
+      return direction === "desc"
+        ? -result
+        : result;
+    });
+
+  const typeOptionMap = new Map<string, string>();
+
+  for (const tower of towers ?? []) {
+    const type = Array.isArray(
+      tower.v2_tower_types,
+    )
+      ? tower.v2_tower_types[0]
+      : tower.v2_tower_types;
+
+    if (type?.id) {
+      typeOptionMap.set(
+        String(type.id),
+        String(
+          type.type_code ??
+            type.name ??
+            "",
         ),
       );
+    }
+  }
+
+  const typeOptions = Array.from(
+    typeOptionMap.entries(),
+  ).sort((a, b) =>
+    natural(a[1], b[1]),
+  );
+
+  const lineOptions = Array.from(
+    new Set<string>(
+      (towers ?? [])
+        .map((tower) => String(tower.line ?? ""))
+        .filter(Boolean),
+    ),
+  ).sort(natural);
 
   const orgId =
-    context.workspace.organisation.organisationId;
+    context.workspace.organisation
+      .organisationId;
+
+  const activeFilterCount = [
+    q,
+    typeFilter,
+    lineFilter,
+    completion,
+    query.minProgress,
+    query.maxProgress,
+  ].filter(Boolean).length;
 
   return (
     <Page>
       <PageHeader
         title="Towers"
-        subtitle={`${filtered.length} ${
-          filtered.length === 1
-            ? "Tower"
-            : "Towers"
-        } in ${context.project.name}.`}
+        subtitle={`${rows.length} of ${
+          (towers ?? []).length
+        } towers shown.`}
         actions={
           <>
             <ButtonLink
@@ -148,33 +403,266 @@ export default async function TowersPage({
         }
       />
 
-
-      <div
-        className={tt.toolbar}
-        style={{ margin: "18px 0" }}
+      <form
+        className={tt.card}
+        style={{
+          padding: 16,
+          marginBottom: 18,
+        }}
       >
-        <form className={tt.search}>
-          <input
-            type="hidden"
-            name="organisation"
-            value={orgId}
-          />
+        <input
+          type="hidden"
+          name="organisation"
+          value={orgId}
+        />
 
-          <Search
-            size={16}
-            className={tt.searchIcon}
-          />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "minmax(220px,1.4fr) minmax(150px,.8fr) minmax(150px,.8fr) minmax(150px,.8fr) minmax(140px,.8fr) 110px auto",
+            gap: 10,
+            alignItems: "end",
+          }}
+        >
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Search
+            </span>
 
-          <input
-            name="q"
-            defaultValue={query.q ?? ""}
-            placeholder="Search tower, line, type or status..."
-            className={tt.searchInput}
-          />
-        </form>
-      </div>
+            <div
+              style={{
+                position: "relative",
+              }}
+            >
+              <Search
+                size={15}
+                style={{
+                  position: "absolute",
+                  left: 11,
+                  top: "50%",
+                  transform:
+                    "translateY(-50%)",
+                  color: "#64748b",
+                }}
+              />
 
-      {filtered.length > 0 ? (
+              <input
+                className="tt-input"
+                style={{
+                  paddingLeft: 34,
+                }}
+                name="q"
+                defaultValue={
+                  query.q ?? ""
+                }
+                placeholder="Tower, line, type or status..."
+              />
+            </div>
+          </label>
+
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Tower type
+            </span>
+
+            <select
+              className="tt-select"
+              name="type"
+              defaultValue={typeFilter}
+            >
+              <option value="">
+                All types
+              </option>
+              {typeOptions.map(
+                ([id, label]) => (
+                  <option
+                    key={id}
+                    value={id}
+                  >
+                    {label}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
+
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Line
+            </span>
+
+            <select
+              className="tt-select"
+              name="line"
+              defaultValue={lineFilter}
+            >
+              <option value="">
+                All lines
+              </option>
+              {lineOptions.map(
+                (line) => (
+                  <option
+                    key={line}
+                    value={line}
+                  >
+                    {line}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
+
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Completion
+            </span>
+
+            <select
+              className="tt-select"
+              name="completion"
+              defaultValue={completion}
+            >
+              <option value="">
+                Any progress
+              </option>
+              <option value="not_started">
+                Not started
+              </option>
+              <option value="in_progress">
+                In progress
+              </option>
+              <option value="complete">
+                Complete
+              </option>
+            </select>
+          </label>
+
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Sort
+            </span>
+
+            <select
+              className="tt-select"
+              name="sort"
+              defaultValue={sort}
+            >
+              <option value="tower">
+                Tower
+              </option>
+              <option value="sequence">
+                Sequence
+              </option>
+              <option value="type">
+                Type
+              </option>
+              <option value="weight">
+                Weight
+              </option>
+              <option value="assembly">
+                Assembly %
+              </option>
+              <option value="erection">
+                Erection %
+              </option>
+              <option value="progress">
+                Overall %
+              </option>
+            </select>
+          </label>
+
+          <label className={tt.field}>
+            <span className={tt.label}>
+              Direction
+            </span>
+
+            <select
+              className="tt-select"
+              name="direction"
+              defaultValue={direction}
+            >
+              <option value="asc">
+                Ascending
+              </option>
+              <option value="desc">
+                Descending
+              </option>
+            </select>
+          </label>
+
+          <button
+            className={`${tt.button} ${tt.buttonPrimary}`}
+          >
+            <SlidersHorizontal
+              size={14}
+            />
+            Apply
+          </button>
+        </div>
+
+        <details
+          style={{
+            marginTop: 12,
+            color: "#94a3b8",
+          }}
+        >
+          <summary
+            style={{
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 750,
+            }}
+          >
+            More filters
+            {activeFilterCount > 0
+              ? ` · ${activeFilterCount} active`
+              : ""}
+          </summary>
+
+          <div
+            className={tt.formGrid}
+            style={{
+              marginTop: 12,
+              maxWidth: 520,
+            }}
+          >
+            <label className={tt.field}>
+              <span className={tt.label}>
+                Minimum overall %
+              </span>
+              <input
+                className="tt-input"
+                type="number"
+                min={0}
+                max={100}
+                name="minProgress"
+                defaultValue={
+                  query.minProgress ?? ""
+                }
+              />
+            </label>
+
+            <label className={tt.field}>
+              <span className={tt.label}>
+                Maximum overall %
+              </span>
+              <input
+                className="tt-input"
+                type="number"
+                min={0}
+                max={100}
+                name="maxProgress"
+                defaultValue={
+                  query.maxProgress ?? ""
+                }
+              />
+            </label>
+          </div>
+        </details>
+      </form>
+
+      {rows.length > 0 ? (
         <div className={tt.card}>
           <div
             className={`${tt.tableWrap} ${tt.desktopTable}`}
@@ -187,21 +675,34 @@ export default async function TowersPage({
               <thead>
                 <tr>
                   <th>Tower</th>
-                  <th>Type / Line</th>
+                  <th>
+                    Type / Line
+                  </th>
                   <th>Weight</th>
                   <th>Assembly</th>
                   <th>Erection</th>
+                  <th>Overall</th>
                   <th>Status</th>
                 </tr>
               </thead>
 
               <tbody>
-                {filtered.map((tower) => {
-                  const type = Array.isArray(
-                    tower.v2_tower_types,
-                  )
-                    ? tower.v2_tower_types[0]
-                    : tower.v2_tower_types;
+                {rows.map((tower) => {
+                  const type =
+                    Array.isArray(
+                      tower.v2_tower_types,
+                    )
+                      ? tower
+                          .v2_tower_types[0]
+                      : tower.v2_tower_types;
+
+                  const overall =
+                    overallProgress(
+                      tower.assembly_percent,
+                      tower.erection_percent,
+                      assemblyFraction,
+                      erectionFraction,
+                    );
 
                   return (
                     <tr key={tower.id}>
@@ -210,11 +711,20 @@ export default async function TowersPage({
                           href={`/workspace/projects/${projectId}/towers/${tower.id}?organisation=${encodeURIComponent(
                             orgId,
                           )}`}
-                          className={tt.tableLink}
+                          className={
+                            tt.tableLink
+                          }
                         >
-                          {tower.tower_identifier}
+                          {
+                            tower.tower_identifier
+                          }
                         </a>
-                        <div className={tt.secondary}>
+
+                        <div
+                          className={
+                            tt.secondary
+                          }
+                        >
                           Sequence{" "}
                           {tower.sequence_number ??
                             "-"}
@@ -224,7 +734,8 @@ export default async function TowersPage({
                       <td>
                         <div
                           style={{
-                            color: "#e2e8f0",
+                            color:
+                              "#e2e8f0",
                             fontWeight: 700,
                           }}
                         >
@@ -232,8 +743,14 @@ export default async function TowersPage({
                             type?.name ||
                             "-"}
                         </div>
-                        <div className={tt.secondary}>
-                          {tower.line || "No line set"}
+
+                        <div
+                          className={
+                            tt.secondary
+                          }
+                        >
+                          {tower.line ||
+                            "No line set"}
                         </div>
                       </td>
 
@@ -262,8 +779,14 @@ export default async function TowersPage({
                       </td>
 
                       <td>
+                        {overall.toFixed(0)}%
+                      </td>
+
+                      <td>
                         <StatusBadge
-                          status={tower.status}
+                          status={
+                            tower.status
+                          }
                         />
                       </td>
                     </tr>
@@ -273,13 +796,24 @@ export default async function TowersPage({
             </table>
           </div>
 
-          <div className={tt.mobileList}>
-            {filtered.map((tower) => {
-              const type = Array.isArray(
-                tower.v2_tower_types,
-              )
-                ? tower.v2_tower_types[0]
-                : tower.v2_tower_types;
+          <div
+            className={tt.mobileList}
+          >
+            {rows.map((tower) => {
+              const type =
+                Array.isArray(
+                  tower.v2_tower_types,
+                )
+                  ? tower.v2_tower_types[0]
+                  : tower.v2_tower_types;
+
+              const overall =
+                overallProgress(
+                  tower.assembly_percent,
+                  tower.erection_percent,
+                  assemblyFraction,
+                  erectionFraction,
+                );
 
               return (
                 <a
@@ -289,17 +823,29 @@ export default async function TowersPage({
                   )}`}
                   className={tt.mobileRow}
                 >
-                  <div className={tt.mobileRowHeader}>
+                  <div
+                    className={
+                      tt.mobileRowHeader
+                    }
+                  >
                     <div>
                       <div
                         style={{
-                          color: "#f8fafc",
+                          color:
+                            "#f8fafc",
                           fontWeight: 800,
                         }}
                       >
-                        {tower.tower_identifier}
+                        {
+                          tower.tower_identifier
+                        }
                       </div>
-                      <div className={tt.secondary}>
+
+                      <div
+                        className={
+                          tt.secondary
+                        }
+                      >
                         {type?.type_code ||
                           type?.name ||
                           "Type not set"}
@@ -311,10 +857,16 @@ export default async function TowersPage({
                     />
                   </div>
 
-                  <div className={tt.mobileRowMeta}>
+                  <div
+                    className={
+                      tt.mobileRowMeta
+                    }
+                  >
                     <Meta
                       label="Line"
-                      value={tower.line || "-"}
+                      value={
+                        tower.line || "-"
+                      }
                     />
                     <Meta
                       label="Weight"
@@ -338,6 +890,12 @@ export default async function TowersPage({
                           0,
                       ).toFixed(0)}%`}
                     />
+                    <Meta
+                      label="Overall"
+                      value={`${overall.toFixed(
+                        0,
+                      )}%`}
+                    />
                   </div>
                 </a>
               );
@@ -346,9 +904,7 @@ export default async function TowersPage({
         </div>
       ) : (
         <EmptyState title="No towers found">
-          {search
-            ? "No towers match your search."
-            : "Import the tower schedule or add an individual tower."}
+          Change the filters or import the project tower schedule.
         </EmptyState>
       )}
     </Page>
@@ -364,10 +920,19 @@ function Meta({
 }) {
   return (
     <div>
-      <div className={tt.mobileMetaLabel}>
+      <div
+        className={
+          tt.mobileMetaLabel
+        }
+      >
         {label}
       </div>
-      <div className={tt.mobileMetaValue}>
+
+      <div
+        className={
+          tt.mobileMetaValue
+        }
+      >
         {value}
       </div>
     </div>

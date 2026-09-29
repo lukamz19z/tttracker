@@ -144,8 +144,15 @@ export async function requireProjectContext(
       .eq("project_id", project.id),
   ]);
 
-  const overrideMap = new Map(
-    (overrides ?? []).map((row) => [
+  type SectionOverride = {
+    section_key: string;
+    enabled: boolean;
+    label_override: string | null;
+    sort_order_override: number | null;
+  };
+
+  const overrideMap = new Map<string, SectionOverride>(
+    ((overrides ?? []) as SectionOverride[]).map((row) => [
       row.section_key,
       row,
     ]),

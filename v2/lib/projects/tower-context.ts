@@ -159,8 +159,15 @@ export async function requireTowerContext(
     ),
   );
 
-  const orgMap = new Map(
-    (orgOverrides ?? []).map(
+  type SectionOverride = {
+    section_key: string;
+    enabled: boolean;
+    label_override: string | null;
+    sort_order_override: number | null;
+  };
+
+  const orgMap = new Map<string, SectionOverride>(
+    ((orgOverrides ?? []) as SectionOverride[]).map(
       (row) => [
         row.section_key,
         row,
@@ -168,8 +175,8 @@ export async function requireTowerContext(
     ),
   );
 
-  const projectMap = new Map(
-    (projectOverrides ?? []).map(
+  const projectMap = new Map<string, SectionOverride>(
+    ((projectOverrides ?? []) as SectionOverride[]).map(
       (row) => [
         row.section_key,
         row,

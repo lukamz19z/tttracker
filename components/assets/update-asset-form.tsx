@@ -429,7 +429,14 @@ export function UpdateAssetForm({
       setError("Select the configured document type for the attachment.");
       return;
     }
-
+if (file && file.size > 4.3 * 1024 * 1024) {
+  setError(
+    `The selected file is ${(file.size / 1024 / 1024).toFixed(
+      1,
+    )} MB. The current server upload path supports files up to approximately 4.5 MB.`,
+  );
+  return;
+}
     setSaving(true);
     setError("");
 
@@ -461,15 +468,40 @@ export function UpdateAssetForm({
 
       if (file) formData.set("file", file);
 
-      const response = await apiFetch("/api/assets/updates", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = (await response.json()) as { error?: string };
+const response = await apiFetch("/api/assets/updates", {
+  method: "POST",
+  body: formData,
+});
 
-      if (!response.ok) {
-        throw new Error(payload.error || "Asset update could not be saved.");
-      }
+const responseText = await response.text();
+
+let payload: {
+  error?: string;
+} = {};
+
+if (responseText) {
+  try {
+    payload = JSON.parse(responseText) as {
+      error?: string;
+    };
+  } catch {
+    payload = {};
+  }
+}
+
+if (!response.ok) {
+  if (response.status === 413) {
+    throw new Error(
+      "The attached file is too large to upload through TTTracker's current server route. Files above approximately 4.5 MB need to use the direct SharePoint upload workflow.",
+    );
+  }
+
+  throw new Error(
+    payload.error ||
+      responseText ||
+      "Asset update could not be saved.",
+  );
+}
 
       router.push(
         assetType === "vehicle"
