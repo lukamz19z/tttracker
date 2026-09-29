@@ -33,39 +33,45 @@ export async function POST(
   const { invitationId } = await context.params;
   const admin = createSupabaseAdmin();
 
-  const { data: invitation, error: invitationError } = await admin
-    .from("v2_organisation_invitations")
-    .select(`
-      id,
-      organisation_id,
-      status,
-      auth_user_id,
-      intended_role_code
-    `)
-    .eq("id", invitationId)
-    .maybeSingle();
+  const { data: invitation, error: invitationError } =
+    await admin
+      .from("v2_organisation_invitations")
+      .select(`
+        id,
+        organisation_id,
+        status,
+        auth_user_id
+      `)
+      .eq("id", invitationId)
+      .maybeSingle();
 
   if (invitationError || !invitation) {
     return NextResponse.json(
-      { error: invitationError?.message ?? "Invitation not found." },
+      {
+        error:
+          invitationError?.message ??
+          "Invitation not found.",
+      },
       { status: 404 },
     );
   }
 
-  if (invitation.status === "accepted") {
-    return NextResponse.json({ ok: true });
-  }
-
-  if (invitation.status !== "pending") {
+  if (invitation.status === "cancelled") {
     return NextResponse.json(
-      { error: "This invitation is no longer active." },
+      { error: "This invitation has been cancelled." },
       { status: 400 },
     );
   }
 
-  if (invitation.auth_user_id && invitation.auth_user_id !== userId) {
+  if (
+    invitation.auth_user_id &&
+    invitation.auth_user_id !== userId
+  ) {
     return NextResponse.json(
-      { error: "This invitation belongs to a different user." },
+      {
+        error:
+          "This invitation belongs to a different account.",
+      },
       { status: 403 },
     );
   }
@@ -78,7 +84,10 @@ export async function POST(
       status: "active",
       joined_at: now,
     })
-    .eq("organisation_id", invitation.organisation_id)
+    .eq(
+      "organisation_id",
+      invitation.organisation_id,
+    )
     .eq("user_id", userId);
 
   if (membershipError) {
@@ -88,14 +97,16 @@ export async function POST(
     );
   }
 
-  const { error: invitationUpdateError } = await admin
-    .from("v2_organisation_invitations")
-    .update({
-      status: "accepted",
-      accepted_user_id: userId,
-      auth_user_id: userId,
-    })
-    .eq("id", invitation.id);
+  const { error: invitationUpdateError } =
+    await admin
+      .from("v2_organisation_invitations")
+      .update({
+        status: "accepted",
+        accepted_user_id: userId,
+        accepted_at: now,
+        auth_user_id: userId,
+      })
+      .eq("id", invitation.id);
 
   if (invitationUpdateError) {
     return NextResponse.json(
@@ -104,5 +115,24 @@ export async function POST(
     );
   }
 
-  return NextResponse.json({ ok: true });
+  await admin
+    .from("v2_organisation_setup_state")
+    .upsert(
+      {
+        organisation_id:
+          invitation.organisation_id,
+        status: "not_started",
+        started_at: null,
+        completed_at: null,
+      },
+      {
+        onConflict: "organisation_id",
+      },
+    );
+
+  return NextResponse.json({
+    ok: true,
+    organisationId:
+      invitation.organisation_id,
+  });
 }

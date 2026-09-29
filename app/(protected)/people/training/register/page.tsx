@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   Square,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 
@@ -87,6 +88,12 @@ type RegisterStatus =
   | "changes_required"
   | "rejected"
   | "superseded";
+
+type AccessMePayload = {
+  roles?: Array<{
+    grants_all?: boolean | null;
+  }>;
+};
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -235,6 +242,11 @@ export default function TrainingRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(
+    null,
+  );
+  const [canDeleteIncorrectUploads, setCanDeleteIncorrectUploads] =
+    useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>(
     [],
   );
@@ -290,10 +302,28 @@ export default function TrainingRegisterPage() {
     setRecords((recordResult.data ?? []) as TrainingRecord[]);
   }, [supabase]);
 
+  const loadDeleteAccess = useCallback(async () => {
+    try {
+      const response = await apiFetch("/api/access/me");
+      const payload = (await response.json().catch(() => null)) as
+        | AccessMePayload
+        | null;
+
+      setCanDeleteIncorrectUploads(
+        Boolean(
+          response.ok &&
+            payload?.roles?.some((role) => role.grants_all === true),
+        ),
+      );
+    } catch {
+      setCanDeleteIncorrectUploads(false);
+    }
+  }, [apiFetch]);
+
   useEffect(() => {
     void (async () => {
       try {
-        await loadData();
+        await Promise.all([loadData(), loadDeleteAccess()]);
       } catch (loadError) {
         setError(
           loadError instanceof Error
@@ -304,7 +334,7 @@ export default function TrainingRegisterPage() {
         setLoading(false);
       }
     })();
-  }, [loadData]);
+  }, [loadData, loadDeleteAccess]);
 
   useEffect(() => {
     if (loading) return;
@@ -491,7 +521,7 @@ export default function TrainingRegisterPage() {
     setRefreshing(true);
     setError("");
     try {
-      await loadData();
+      await Promise.all([loadData(), loadDeleteAccess()]);
     } catch (refreshError) {
       setError(
         refreshError instanceof Error
@@ -609,6 +639,93 @@ export default function TrainingRegisterPage() {
       );
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function deleteIncorrectUpload(record: TrainingRecord) {
+    if (!canDeleteIncorrectUploads) {
+      setError("Full Administrator access is required to remove an incorrect Training upload.");
+      return;
+    }
+
+    const employee = employeeById.get(record.employee_id);
+    const reasonPrompt = window.prompt(
+      `Why are you removing ${record.training_name} for ${
+        employee?.full_name ?? "this employee"
+      }?`,
+      "Wrong document uploaded",
+    );
+
+    if (reasonPrompt === null) return;
+
+    const reason = reasonPrompt.trim();
+    if (!reason) {
+      setError("Enter a reason before removing the Training upload.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove this incorrect Training upload?\n\n${
+        employee?.full_name ?? "Employee"
+      } · ${record.training_name}\n\nThe published SharePoint evidence will be removed and the record will remain in TTTracker as revoked audit history.`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingRecordId(record.id);
+    setError("");
+
+    try {
+      const response = await apiFetch(
+        `/api/training/records/${encodeURIComponent(record.id)}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ reason }),
+        },
+      );
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            error?: string;
+            restoredPreviousRecord?: boolean;
+            restoredPreviousTrainingName?: string | null;
+            warning?: string | null;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          payload?.error || "The incorrect Training upload could not be removed.",
+        );
+      }
+
+      setSelectedRecordIds((current) =>
+        current.filter((id) => id !== record.id),
+      );
+
+      await loadData();
+
+      const restoredText = payload?.restoredPreviousRecord
+        ? ` The previous ${
+            payload.restoredPreviousTrainingName || "Training"
+          } record was restored as the current record.`
+        : "";
+      const warningText = payload?.warning ? ` ${payload.warning}` : "";
+
+      window.alert(
+        `Incorrect Training upload removed.${restoredText}${warningText}`,
+      );
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Unable to remove the incorrect Training upload.",
+      );
+    } finally {
+      setDeletingRecordId(null);
     }
   }
 
@@ -922,7 +1039,7 @@ export default function TrainingRegisterPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-[1400px] w-full text-left text-sm">
+            <table className="min-w-[1500px] w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="w-14 px-4 py-3">Select</th>
@@ -936,6 +1053,7 @@ export default function TrainingRegisterPage() {
                   <th className="px-4 py-3">Project</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Evidence</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1073,6 +1191,29 @@ export default function TrainingRegisterPage() {
                           <span className="text-slate-400">Not published</span>
                         )}
                       </td>
+                      <td className="px-4 py-4 text-right">
+                        {canDeleteIncorrectUploads &&
+                        record.current_version !== false &&
+                        !record.superseded_at &&
+                        !record.revoked_at ? (
+                          <button
+                            type="button"
+                            onClick={() => void deleteIncorrectUpload(record)}
+                            disabled={deletingRecordId === record.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                            title="Remove an incorrect Training upload"
+                          >
+                            {deletingRecordId === record.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Trash2 size={14} />
+                            )}
+                            Remove wrong upload
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -1080,7 +1221,7 @@ export default function TrainingRegisterPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={12}
                       className="px-5 py-12 text-center text-sm font-semibold text-slate-500"
                     >
                       No Training records match the selected filters.

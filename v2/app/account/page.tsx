@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import AccountClient from "./account-client";
+import MfaPanel from "./mfa-panel";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 export default async function AccountPage() {
@@ -35,7 +36,10 @@ export default async function AccountPage() {
           Account
         </h1>
 
-        <AccountClient email={email} />
+        <div style={{ display: "grid", gap: 20 }}>
+          <AccountClient email={email} />
+          <MfaPanel />
+        </div>
       </div>
     </main>
   );

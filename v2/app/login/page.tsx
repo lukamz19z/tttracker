@@ -2,20 +2,26 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { createSupabaseBrowser } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] =
+    useState<string | null>(null);
 
-  async function signIn(event: FormEvent<HTMLFormElement>) {
+  const next = searchParams.get("next") || "/";
+
+  async function signIn(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
 
     setSubmitting(true);
@@ -33,7 +39,10 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace("/");
+    router.replace(
+      `/security-check?next=${encodeURIComponent(next)}`,
+    );
+
     router.refresh();
   }
 
@@ -80,18 +89,8 @@ export default function LoginPage() {
           </div>
         ) : null}
 
-        <label
-          style={{
-            display: "block",
-            marginBottom: 16,
-          }}
-        >
-          <div
-            style={{
-              marginBottom: 6,
-              fontSize: 14,
-            }}
-          >
+        <label style={{ display: "block", marginBottom: 16 }}>
+          <div style={{ marginBottom: 6, fontSize: 14 }}>
             Email
           </div>
 
@@ -107,18 +106,8 @@ export default function LoginPage() {
           />
         </label>
 
-        <label
-          style={{
-            display: "block",
-            marginBottom: 10,
-          }}
-        >
-          <div
-            style={{
-              marginBottom: 6,
-              fontSize: 14,
-            }}
-          >
+        <label style={{ display: "block", marginBottom: 10 }}>
+          <div style={{ marginBottom: 6, fontSize: 14 }}>
             Password
           </div>
 
@@ -158,7 +147,9 @@ export default function LoginPage() {
           disabled={submitting}
           style={{ width: "100%" }}
         >
-          {submitting ? "Signing in..." : "Sign in"}
+          {submitting
+            ? "Signing in..."
+            : "Sign in"}
         </button>
       </form>
     </main>
