@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-
 import { NextResponse } from "next/server";
 
 import {
@@ -12,8 +11,11 @@ import {
 } from "@/lib/training/server";
 
 import {
+  archiveSupersededTrainingRecord,
+  deleteTrainingRecordEvidence,
   ensureEmployeeBaseTrainingFolder,
   publishApprovedTrainingRecord,
+  restoreSupersededTrainingRecordEvidence,
 } from "@/lib/training/sharepoint";
 
 import {
@@ -296,16 +298,21 @@ async function configuredFilename({
       {
         p_employee_id:
           employeeId,
+
         p_training_type_id:
           trainingTypeId,
+
         p_class_codes:
           classCodes,
+
         p_expiry_date:
           expiryDate,
+
         p_document_side:
           side === "other"
             ? null
             : side,
+
         p_extension:
           extension,
       },
@@ -519,6 +526,7 @@ async function stageFile({
         contentType:
           file.type ||
           "application/octet-stream",
+
         upsert: false,
       },
     );
@@ -539,12 +547,16 @@ async function stageFile({
     .insert({
       training_record_id:
         recordId,
+
       document_type_name:
         "Training Document",
+
       document_type_code:
         "TRAINING_EVIDENCE",
+
       document_side:
         documentSide,
+
       document_label:
         documentSide ===
         "front"
@@ -553,27 +565,39 @@ async function stageFile({
               "back"
             ? "Back"
             : "Document",
+
       sequence_number:
         sequence,
+
       original_file_name:
         file.name,
+
       source_file_name:
         file.name,
+
       generated_file_name:
         generatedFileName,
+
       file_extension:
         extension || null,
+
       mime_type:
         file.type || null,
+
       file_size_bytes:
         file.size,
+
       file_hash_sha256:
         hash,
+
       staging_bucket:
         bucket,
+
       staging_path:
         stagingPath,
+
       active: true,
+
       uploaded_by:
         uploadedBy,
     })
@@ -613,6 +637,19 @@ export async function POST(
   let service:
     | TrainingService
     | null = null;
+
+  let replacementRecordId:
+    | string
+    | null = null;
+
+  let replacementEvidenceArchived =
+    false;
+
+  let replacementCommitted =
+    false;
+
+  let newEvidencePublished =
+    false;
 
   try {
     const auth =
@@ -721,6 +758,9 @@ export async function POST(
         ),
       ) || null;
 
+    replacementRecordId =
+      supersedesRecordId;
+
     if (!employeeId) {
       return NextResponse.json(
         {
@@ -746,9 +786,7 @@ export async function POST(
     }
 
     /**
-     * THIS is the key dynamic Admin check.
-     *
-     * A grants_all Administrator does not rely on user_roles.
+     * Dynamic full-access Admin check.
      */
     const fullAccessUploader =
       await userHasFullAccessRole(
@@ -939,10 +977,12 @@ export async function POST(
       expiryDate =
         addInterval(
           issueDate,
+
           Number(
             trainingType.validity_interval_value ??
               0,
           ) || null,
+
           clean(
             trainingType.validity_interval_unit,
           ) || null,
@@ -1249,16 +1289,15 @@ export async function POST(
     );
 
     /**
-     * IMPORTANT:
-     *
-     * Dynamic full-access Admin uploads NEVER enter verification.
+     * Dynamic full-access Administrator uploads never
+     * enter verification.
      */
     const autoApproveFullAccessUpload =
       fullAccessUploader;
 
     /**
-     * Other authorised Training managers can also auto-approve
-     * when the configurable setting is enabled.
+     * Other authorised Training managers can auto approve
+     * if the organisation setting is enabled.
      */
     const autoApproveAuthorisedUpload =
       !autoApproveFullAccessUpload &&
@@ -1475,6 +1514,7 @@ export async function POST(
             clean(
               employee.full_name,
             ),
+
           trainingCode:
             clean(
               trainingType.short_code,
@@ -1482,15 +1522,18 @@ export async function POST(
             clean(
               trainingType.name,
             ),
+
           side:
             item.side ===
             "other"
               ? null
               : item.side,
+
           expiryDate:
             doesNotExpire
               ? null
               : expiryDate,
+
           originalName:
             item.file.name,
         });
@@ -1502,15 +1545,21 @@ export async function POST(
             service,
             employeeId,
             trainingTypeId,
+
             classCodes:
               selectedOptionCodes,
+
             expiryDate:
               doesNotExpire
                 ? null
                 : expiryDate,
-            side: item.side,
+
+            side:
+              item.side,
+
             originalName:
               item.file.name,
+
             fallback:
               fallbackName,
           },
@@ -1519,18 +1568,26 @@ export async function POST(
       const document =
         await stageFile({
           service,
+
           bucket:
             stagingBucket,
+
           recordId:
             record.id,
+
           employeeId,
+
           file:
             item.file,
+
           generatedFileName,
+
           documentSide:
             item.side,
+
           sequence:
             index + 1,
+
           uploadedBy:
             identity.userId,
         });
@@ -1545,11 +1602,39 @@ export async function POST(
     }
 
     /**
-     * Auto-approved record:
-     *
-     * Publish immediately and never enter the Verification Queue.
+     * Auto-approved record.
      */
     if (!requiresReview) {
+      /**
+       * IMPORTANT:
+       *
+       * Move the old SharePoint evidence into the employee's
+       * Superseded folder BEFORE publishing the replacement.
+       *
+       * This also prevents Microsoft Graph from replacing the old
+       * physical file in place if the old and new records generate
+       * the same filename.
+       */
+      if (
+        supersedesRecordId
+      ) {
+        await archiveSupersededTrainingRecord(
+          {
+            service,
+
+            recordId:
+              supersedesRecordId,
+          },
+        );
+
+        replacementEvidenceArchived =
+          true;
+      }
+
+      /**
+       * New evidence can now safely publish into the live
+       * Training category.
+       */
       if (
         actualFiles.length >
         0
@@ -1557,12 +1642,20 @@ export async function POST(
         await publishApprovedTrainingRecord(
           {
             service,
+
             recordId:
               record.id,
           },
         );
+
+        newEvidencePublished =
+          true;
       }
 
+      /**
+       * Only after SharePoint succeeds do we supersede the
+       * previous database record.
+       */
       if (
         supersedesRecordId
       ) {
@@ -1604,6 +1697,9 @@ export async function POST(
             supersedeError.message,
           );
         }
+
+        replacementCommitted =
+          true;
       }
 
       let notificationWarning:
@@ -1719,6 +1815,7 @@ export async function POST(
       await reviewerRecipientsFor(
         {
           service,
+
           trainingTypeId,
 
           categoryId:
@@ -1741,10 +1838,13 @@ export async function POST(
         fallbackIds.map(
           (userId) => ({
             userId,
+
             receivesInApp:
               true,
+
             receivesPush:
               true,
+
             receivesEmail:
               false,
           }),
@@ -1752,8 +1852,7 @@ export async function POST(
     }
 
     /**
-     * Do not notify the user who uploaded the record
-     * about their own submission.
+     * Do not notify the uploader about their own submission.
      */
     const notificationRecipients =
       reviewerRecipients.filter(
@@ -1893,6 +1992,66 @@ export async function POST(
       notificationWarning,
     });
   } catch (error) {
+    /**
+     * If new SharePoint evidence was already published before
+     * a later supersede step failed, remove that incomplete
+     * replacement evidence.
+     */
+    if (
+      service &&
+      createdRecordId &&
+      newEvidencePublished &&
+      !replacementCommitted
+    ) {
+      try {
+        await deleteTrainingRecordEvidence(
+          {
+            service,
+
+            recordId:
+              createdRecordId,
+          },
+        );
+      } catch (
+        cleanupError
+      ) {
+        console.error(
+          "Could not clean up failed replacement evidence",
+          cleanupError,
+        );
+      }
+    }
+
+    /**
+     * If the previous evidence was already moved into
+     * Superseded but the replacement failed, restore it
+     * to its configured category folder.
+     */
+    if (
+      service &&
+      replacementRecordId &&
+      replacementEvidenceArchived &&
+      !replacementCommitted
+    ) {
+      try {
+        await restoreSupersededTrainingRecordEvidence(
+          {
+            service,
+
+            recordId:
+              replacementRecordId,
+          },
+        );
+      } catch (
+        restoreError
+      ) {
+        console.error(
+          "Could not restore previous Training evidence after failed replacement",
+          restoreError,
+        );
+      }
+    }
+
     if (
       service &&
       stagedPaths.length > 0
@@ -1912,7 +2071,8 @@ export async function POST(
 
     if (
       service &&
-      createdRecordId
+      createdRecordId &&
+      !replacementCommitted
     ) {
       try {
         await service
