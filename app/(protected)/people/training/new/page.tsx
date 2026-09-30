@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
+  Search,
   ShieldCheck,
   UploadCloud,
   UserRound,
@@ -210,6 +211,7 @@ export default function AddTrainingRecordPage() {
   const [options, setOptions] = useState<TrainingOption[]>([]);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [employeeId, setEmployeeId] = useState("");
+  const [employeeSearch, setEmployeeSearch] = useState("");
   const [trainingTypeId, setTrainingTypeId] = useState("");
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [projectId, setProjectId] = useState("");
@@ -352,6 +354,24 @@ export default function AddTrainingRecordPage() {
   const selectedEmployee = employees.find((item) => item.id === employeeId) ?? null;
   const selectedType = types.find((item) => item.id === trainingTypeId) ?? null;
   const canChooseEmployee = canManageOtherEmployees(currentRole);
+  const filteredEmployees = useMemo(() => {
+    const query = employeeSearch.trim().toLowerCase();
+    if (!query) return [];
+
+    return employees
+      .filter((employee) =>
+        [
+          employee.full_name,
+          employee.payroll_id,
+          employee.role,
+        ]
+          .map(clean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      )
+      .slice(0, 12);
+  }, [employeeSearch, employees]);
   const typeOptions = useMemo(
     () => options.filter((item) => item.training_type_id === trainingTypeId),
     [options, trainingTypeId],
@@ -735,16 +755,80 @@ export default function AddTrainingRecordPage() {
           <section className="space-y-6">
             <Card title="1. Employee" description={canChooseEmployee ? "Select the employee or leave yourself selected." : "Your linked employee profile is used automatically."}>
               {canChooseEmployee ? (
-                <Field label="Employee" required>
-                  <select className={inputClass} value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
-                    <option value="">Select...</option>
-                    {employees.map((employee) => (
-                      <option key={employee.id} value={employee.id}>
-                        {employee.payroll_id ? `${employee.payroll_id} - ` : ""}{employee.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <div className="space-y-3">
+                  <Field label="Employee" required>
+                    <div className="relative">
+                      <Search
+                        size={18}
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                      />
+                      <input
+                        className={`${inputClass} pl-10`}
+                        value={employeeSearch}
+                        onChange={(event) => setEmployeeSearch(event.target.value)}
+                        placeholder="Search employee name, payroll ID or role..."
+                        autoComplete="off"
+                      />
+                    </div>
+                  </Field>
+
+                  {employeeSearch.trim() ? (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      {filteredEmployees.length > 0 ? (
+                        <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                          {filteredEmployees.map((employee) => (
+                            <button
+                              key={employee.id}
+                              type="button"
+                              onClick={() => {
+                                setEmployeeId(employee.id);
+                                setEmployeeSearch("");
+                              }}
+                              className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-slate-50"
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate font-black text-slate-950">
+                                  {employee.full_name}
+                                </div>
+                                <div className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                                  {[employee.payroll_id, employee.role].filter(Boolean).join(" · ") || "No payroll ID"}
+                                </div>
+                              </div>
+                              {employee.id === employeeId ? (
+                                <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />
+                              ) : null}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-4 text-sm font-semibold text-slate-500">
+                          No employees match that search.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {selectedEmployee ? (
+                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                      <div className="min-w-0">
+                        <div className="text-xs font-black uppercase tracking-[0.12em] text-blue-500">
+                          Selected employee
+                        </div>
+                        <div className="mt-1 truncate font-black text-slate-950">
+                          {selectedEmployee.full_name}
+                        </div>
+                        <div className="mt-1 truncate text-sm font-semibold text-slate-600">
+                          {[selectedEmployee.payroll_id, selectedEmployee.role].filter(Boolean).join(" · ") || "No payroll ID"}
+                        </div>
+                      </div>
+                      <CheckCircle2 size={22} className="shrink-0 text-blue-700" />
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                      Search for and select an employee.
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <div className="font-black text-slate-950">{selectedEmployee?.full_name || "No linked employee"}</div>
