@@ -37,6 +37,9 @@ export type AssetDocumentTypeRow = {
   requires_supplier: boolean;
   requires_invoice_number: boolean;
   requires_cost: boolean;
+  required_by_default: boolean;
+  vehicle_categories: string[];
+  plant_types: string[];
   active: boolean;
   sort_order: number;
   created_at: string;
@@ -55,10 +58,10 @@ export type AssetSettings = {
   sharepoint_base_folder: string;
   vehicle_folder_name: string;
   plant_folder_name: string;
-  equipment_folder_name: string;
   superseded_folder_name: string;
   document_folders: Record<string, string>;
   max_file_size_mb: number;
+  staging_bucket?: string | null;
   notifications_enabled: boolean;
   updated_at: string;
   updated_by: string | null;
@@ -117,6 +120,7 @@ export type AssetRecord = {
 
   created_at?: string | null;
   updated_at?: string | null;
+
   [key: string]: unknown;
 };
 

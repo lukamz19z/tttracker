@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { createAssetFinanceInvoice } from "@/lib/assets/finance";
 import { notifyAssetManagers } from "@/lib/assets/notifications";
+
 import {
   assetApiError,
   assetDetailRoute,
@@ -11,6 +12,7 @@ import {
   parseAssetType,
   requireAssetUser,
 } from "@/lib/assets/server";
+
 import {
   assetLabel,
   loadAssetDocumentTypeById,
@@ -18,6 +20,7 @@ import {
   loadAssetSettings,
   publishAssetDocument,
 } from "@/lib/assets/sharepoint";
+
 import type { AssetDocumentRow } from "@/lib/assets/types";
 
 export const runtime = "nodejs";
@@ -53,6 +56,19 @@ type UpdatePayload = {
   createFinanceRecord?: boolean;
 };
 
+type StagedFileRef = {
+  bucket?: string;
+  path?: string;
+  originalFileName?: string;
+  contentType?: string;
+  size?: number;
+};
+
+type UpdateRequestBody = {
+  payload?: UpdatePayload;
+  stagedFile?: StagedFileRef | null;
+};
+
 const UPDATE_TYPES = new Set<UpdateKind>([
   "modification",
   "meter",
@@ -73,9 +89,63 @@ function numberOrNull(value: unknown) {
 
   const parsed = Number(value);
 
-  return Number.isFinite(parsed)
-    ? parsed
-    : null;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalised(value: unknown) {
+  return clean(value).toLowerCase();
+}
+
+function documentTypeAppliesToAsset({
+  documentType,
+  assetType,
+  asset,
+}: {
+  documentType: {
+    applies_to?: string | null;
+    vehicle_categories?: string[] | null;
+    plant_types?: string[] | null;
+    name?: string | null;
+  };
+  assetType: "vehicle" | "plant";
+  asset: Record<string, unknown>;
+}) {
+  if (
+    documentType.applies_to !== "both" &&
+    documentType.applies_to !== assetType
+  ) {
+    return false;
+  }
+
+  if (assetType === "vehicle") {
+    const categories = Array.isArray(documentType.vehicle_categories)
+      ? documentType.vehicle_categories
+          .map(normalised)
+          .filter(Boolean)
+      : [];
+
+    if (categories.length > 0) {
+      return categories.includes(
+        normalised(asset.category),
+      );
+    }
+  }
+
+  if (assetType === "plant") {
+    const plantTypes = Array.isArray(documentType.plant_types)
+      ? documentType.plant_types
+          .map(normalised)
+          .filter(Boolean)
+      : [];
+
+    if (plantTypes.length > 0) {
+      return plantTypes.includes(
+        normalised(asset.plant_type),
+      );
+    }
+  }
+
+  return true;
 }
 
 export async function POST(request: Request) {
@@ -87,64 +157,93 @@ export async function POST(request: Request) {
       throw new Error("ASSET_MANAGE_FORBIDDEN");
     }
 
-    const formData =
-      await request.formData();
+    const requestContentType = clean(
+      request.headers.get("content-type"),
+    ).toLowerCase();
 
-    const payloadRaw =
-      clean(
+    let payload: UpdatePayload;
+    let stagedFile: StagedFileRef | null = null;
+    let directFile: File | null = null;
+
+    if (requestContentType.includes("application/json")) {
+      const body =
+        (await request.json()) as UpdateRequestBody;
+
+      if (
+        !body?.payload ||
+        typeof body.payload !== "object"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Asset update details are required.",
+          },
+          {
+            status: 400,
+          },
+        );
+      }
+
+      payload = body.payload;
+      stagedFile = body.stagedFile ?? null;
+    } else {
+      /**
+       * Backwards compatibility for any older callers
+       * still sending FormData.
+       */
+      const formData = await request.formData();
+
+      const payloadRaw = clean(
         formData.get("payload"),
       );
 
-    if (!payloadRaw) {
-      return NextResponse.json(
-        {
-          error:
-            "Asset update details are required.",
-        },
-        {
-          status: 400,
-        },
-      );
-    }
+      if (!payloadRaw) {
+        return NextResponse.json(
+          {
+            error:
+              "Asset update details are required.",
+          },
+          {
+            status: 400,
+          },
+        );
+      }
 
-    let payload: UpdatePayload;
+      try {
+        payload =
+          JSON.parse(payloadRaw) as UpdatePayload;
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              "The Asset update form data is invalid.",
+          },
+          {
+            status: 400,
+          },
+        );
+      }
 
-    try {
-      payload =
-        JSON.parse(
-          payloadRaw,
-        ) as UpdatePayload;
-    } catch {
-      return NextResponse.json(
-        {
-          error:
-            "The Asset update form data is invalid.",
-        },
-        {
-          status: 400,
-        },
-      );
+      const fileValue =
+        formData.get("file");
+
+      directFile =
+        fileValue instanceof File &&
+        fileValue.size > 0
+          ? fileValue
+          : null;
     }
 
     const assetType =
-      parseAssetType(
-        payload.assetType,
-      );
+      parseAssetType(payload.assetType);
 
     const assetId =
-      clean(
-        payload.assetId,
-      );
+      clean(payload.assetId);
 
     const updateType =
-      clean(
-        payload.updateType,
-      ) as UpdateKind;
+      clean(payload.updateType) as UpdateKind;
 
-    if (
-      !assetType ||
-      !assetId
-    ) {
+    if (!assetType || !assetId) {
       return NextResponse.json(
         {
           error:
@@ -156,11 +255,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (
-      !UPDATE_TYPES.has(
-        updateType,
-      )
-    ) {
+    if (!UPDATE_TYPES.has(updateType)) {
       return NextResponse.json(
         {
           error:
@@ -173,17 +268,13 @@ export async function POST(request: Request) {
     }
 
     const eventDate =
-      clean(
-        payload.eventDate,
-      ) ||
+      clean(payload.eventDate) ||
       new Date()
         .toISOString()
         .slice(0, 10);
 
     const title =
-      clean(
-        payload.title,
-      );
+      clean(payload.title);
 
     if (!title) {
       return NextResponse.json(
@@ -197,10 +288,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const [
-      asset,
-      settings,
-    ] =
+    const [asset, settings] =
       await Promise.all([
         loadAssetRecord({
           service,
@@ -208,22 +296,14 @@ export async function POST(request: Request) {
           assetId,
         }),
 
-        loadAssetSettings(
-          service,
-        ),
+        loadAssetSettings(service),
       ]);
 
     const masterUpdate:
       Record<string, unknown> = {};
 
-    if (
-      updateType ===
-      "meter"
-    ) {
-      if (
-        assetType ===
-        "vehicle"
-      ) {
+    if (updateType === "meter") {
+      if (assetType === "vehicle") {
         masterUpdate.current_odometer_km =
           numberOrNull(
             payload.odometerKm,
@@ -236,166 +316,85 @@ export async function POST(request: Request) {
       }
     }
 
-    if (
-      updateType ===
-      "status"
-    ) {
-      if (
-        assetType ===
-        "vehicle"
-      ) {
+    if (updateType === "status") {
+      if (assetType === "vehicle") {
         masterUpdate.status =
-          clean(
-            payload.status,
-          ) ||
-          null;
+          clean(payload.status) || null;
       } else {
         masterUpdate.asset_status =
-          clean(
-            payload.status,
-          ) ||
-          null;
+          clean(payload.status) || null;
       }
 
-      /*
-       * Status / Allocation also updates the Asset's
-       * currently assigned Crew.
-       */
       masterUpdate.crew =
-        clean(
-          payload.crew,
-        ) ||
-        null;
+        clean(payload.crew) || null;
     }
 
-    if (
-      updateType ===
-      "project_transfer"
-    ) {
+    if (updateType === "project_transfer") {
       masterUpdate.project =
-        clean(
-          payload.project,
-        ) ||
-        null;
+        clean(payload.project) || null;
 
       masterUpdate.crew =
-        clean(
-          payload.crew,
-        ) ||
-        null;
+        clean(payload.crew) || null;
     }
 
     if (
-      Object.keys(
-        masterUpdate,
-      ).length >
-      0
+      Object.keys(masterUpdate).length > 0
     ) {
-      const {
-        error,
-      } = await service
-        .from(
-          assetTable(
-            assetType,
-          ),
-        )
-        .update(
-          masterUpdate,
-        )
-        .eq(
-          "id",
-          assetId,
-        );
+      const { error } = await service
+        .from(assetTable(assetType))
+        .update(masterUpdate)
+        .eq("id", assetId);
 
       if (error) {
-        throw new Error(
-          error.message,
-        );
+        throw new Error(error.message);
       }
     }
 
-    if (
-      updateType ===
-      "project_transfer"
-    ) {
+    if (updateType === "project_transfer") {
       const historyTable =
-        assetType ===
-        "vehicle"
+        assetType === "vehicle"
           ? "vehicle_project_history"
           : "plant_project_history";
 
       const historyAssetColumn =
-        assetType ===
-        "vehicle"
+        assetType === "vehicle"
           ? "vehicle_asset_id"
           : "plant_asset_id";
 
       const {
-        error:
-          projectHistoryError,
+        error: projectHistoryError,
       } = await service
-        .from(
-          historyTable,
-        )
+        .from(historyTable)
         .insert({
-          [historyAssetColumn]:
-            assetId,
-
+          [historyAssetColumn]: assetId,
           project:
-            clean(
-              payload.project,
-            ) ||
-            null,
-
+            clean(payload.project) || null,
           crew:
-            clean(
-              payload.crew,
-            ) ||
-            null,
-
+            clean(payload.crew) || null,
           project_onboard_date:
             eventDate,
-
           project_offboard_date:
             null,
-
           notes:
-            clean(
-              payload.description,
-            ) ||
+            clean(payload.description) ||
             null,
         });
 
-      if (
-        projectHistoryError
-      ) {
+      if (projectHistoryError) {
         throw new Error(
           projectHistoryError.message,
         );
       }
     }
 
-    const file =
-      formData.get(
-        "file",
-      );
-
     let document:
-      | AssetDocumentRow
-      | null = null;
+      AssetDocumentRow | null = null;
 
-    if (
-      file instanceof File &&
-      file.size > 0
-    ) {
+    if (directFile || stagedFile) {
       const documentTypeId =
-        clean(
-          payload.documentTypeId,
-        );
+        clean(payload.documentTypeId);
 
-      if (
-        !documentTypeId
-      ) {
+      if (!documentTypeId) {
         return NextResponse.json(
           {
             error:
@@ -407,102 +406,285 @@ export async function POST(request: Request) {
         );
       }
 
+      const documentType =
+        await loadAssetDocumentTypeById({
+          service,
+          documentTypeId,
+        });
+
+      if (
+        !documentTypeAppliesToAsset({
+          documentType,
+          assetType,
+          asset:
+            asset as unknown as Record<
+              string,
+              unknown
+            >,
+        })
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              `${documentType.name} is not configured for this Asset type / category.`,
+          },
+          {
+            status: 400,
+          },
+        );
+      }
+
       const maxBytes =
         Math.max(
           1,
           Number(
-            settings.max_file_size_mb ||
-              50,
+            settings.max_file_size_mb || 50,
           ),
         ) *
         1024 *
         1024;
 
-      if (
-        file.size >
-        maxBytes
-      ) {
-        return NextResponse.json(
-          {
+      let originalFileName = "";
+      let contentType =
+        "application/octet-stream";
+      let content: Uint8Array;
+
+      /**
+       * Preferred flow:
+       *
+       * Browser uploads directly to private Supabase
+       * staging storage. This API receives only a tiny
+       * JSON reference and therefore avoids Vercel's
+       * request-body limit.
+       */
+      if (stagedFile) {
+        const expectedBucket =
+          clean(
+            settings.staging_bucket,
+          ) || "asset-staging";
+
+        const bucket =
+          clean(stagedFile.bucket) ||
+          expectedBucket;
+
+        const path =
+          clean(stagedFile.path);
+
+        if (bucket !== expectedBucket) {
+          return NextResponse.json(
+            {
+              error:
+                "The staged Asset upload bucket is not valid.",
+            },
+            {
+              status: 400,
+            },
+          );
+        }
+
+        /**
+         * Each user can only finish uploads staged
+         * underneath their own user-ID prefix.
+         */
+        if (
+          !path ||
+          !path.startsWith(
+            `${identity.userId}/`,
+          )
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "The staged Asset document reference is not valid.",
+            },
+            {
+              status: 400,
+            },
+          );
+        }
+
+        if (
+          Number(stagedFile.size ?? 0) > 0 &&
+          Number(stagedFile.size) >
+            maxBytes
+        ) {
+          await service.storage
+            .from(bucket)
+            .remove([path]);
+
+          return NextResponse.json(
+            {
+              error:
+                `The file is larger than the configured ${settings.max_file_size_mb} MB limit.`,
+            },
+            {
+              status: 413,
+            },
+          );
+        }
+
+        try {
+          const {
+            data: stagedBlob,
             error:
+              stagedDownloadError,
+          } = await service.storage
+            .from(bucket)
+            .download(path);
+
+          if (
+            stagedDownloadError ||
+            !stagedBlob
+          ) {
+            throw new Error(
+              stagedDownloadError?.message ||
+                "The staged Asset document could not be loaded.",
+            );
+          }
+
+          if (
+            stagedBlob.size > maxBytes
+          ) {
+            throw new Error(
               `The file is larger than the configured ${settings.max_file_size_mb} MB limit.`,
-          },
-          {
-            status: 413,
-          },
-        );
-      }
+            );
+          }
 
-      const documentType =
-        await loadAssetDocumentTypeById(
-          {
-            service,
-            documentTypeId,
-          },
-        );
+          originalFileName =
+            clean(
+              stagedFile.originalFileName,
+            ) ||
+            "asset-document";
 
-      document =
-        await publishAssetDocument(
-          {
+          contentType =
+            clean(
+              stagedFile.contentType,
+            ) ||
+            stagedBlob.type ||
+            "application/octet-stream";
+
+          content =
+            new Uint8Array(
+              await stagedBlob.arrayBuffer(),
+            );
+
+          document =
+            await publishAssetDocument({
+              service,
+              identity,
+              assetType,
+              assetId,
+              documentType,
+              originalFileName,
+              content,
+              contentType,
+              title,
+              documentDate:
+                clean(
+                  payload.documentDate,
+                ) || eventDate,
+              expiryDate:
+                clean(
+                  payload.expiryDate,
+                ) || null,
+              supplier:
+                clean(
+                  payload.supplier,
+                ) || null,
+              invoiceNumber:
+                clean(
+                  payload.invoiceNumber,
+                ) || null,
+              amountIncGst:
+                numberOrNull(
+                  payload.cost,
+                ),
+              source:
+                "assets",
+              generatedByModule:
+                "update_asset",
+              createTimelineEvent:
+                false,
+            });
+        } finally {
+          /**
+           * This bucket is only temporary.
+           * SharePoint remains the controlled file store.
+           */
+          await service.storage
+            .from(bucket)
+            .remove([path])
+            .catch(() => null);
+        }
+      } else if (directFile) {
+        /**
+         * Backwards-compatible small direct uploads.
+         */
+        if (
+          directFile.size > maxBytes
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                `The file is larger than the configured ${settings.max_file_size_mb} MB limit.`,
+            },
+            {
+              status: 413,
+            },
+          );
+        }
+
+        originalFileName =
+          directFile.name;
+
+        contentType =
+          directFile.type ||
+          "application/octet-stream";
+
+        content =
+          new Uint8Array(
+            await directFile.arrayBuffer(),
+          );
+
+        document =
+          await publishAssetDocument({
             service,
             identity,
             assetType,
             assetId,
             documentType,
-
-            originalFileName:
-              file.name,
-
-            content:
-              new Uint8Array(
-                await file.arrayBuffer(),
-              ),
-
-            contentType:
-              file.type ||
-              "application/octet-stream",
-
+            originalFileName,
+            content,
+            contentType,
             title,
-
             documentDate:
               clean(
                 payload.documentDate,
-              ) ||
-              eventDate,
-
+              ) || eventDate,
             expiryDate:
               clean(
                 payload.expiryDate,
-              ) ||
-              null,
-
+              ) || null,
             supplier:
               clean(
                 payload.supplier,
-              ) ||
-              null,
-
+              ) || null,
             invoiceNumber:
               clean(
                 payload.invoiceNumber,
-              ) ||
-              null,
-
+              ) || null,
             amountIncGst:
               numberOrNull(
                 payload.cost,
               ),
-
             source:
               "assets",
-
             generatedByModule:
               "update_asset",
-
             createTimelineEvent:
               false,
-          },
-        );
+          });
+      }
     }
 
     let finance: {
@@ -513,83 +695,59 @@ export async function POST(request: Request) {
     } | null = null;
 
     const cost =
-      numberOrNull(
-        payload.cost,
-      ) ??
-      0;
+      numberOrNull(payload.cost) ?? 0;
 
     if (
-      payload.createFinanceRecord ===
-        true &&
+      payload.createFinanceRecord === true &&
       cost > 0
     ) {
       finance =
-        await createAssetFinanceInvoice(
-          {
-            service,
-            identity,
-            assetType,
-            assetId,
-
-            supplier:
-              clean(
-                payload.supplier,
-              ) ||
-              null,
-
-            invoiceNumber:
-              clean(
-                payload.invoiceNumber,
-              ) ||
-              null,
-
-            invoiceDate:
-              eventDate,
-
-            description:
-              title,
-
-            amountExGst:
-              cost,
-
-            gstAmount:
-              0,
-
-            amountIncGst:
-              cost,
-
-            document:
-              document?.document_category ===
-              "invoice"
-                ? document
-                : null,
-          },
-        );
+        await createAssetFinanceInvoice({
+          service,
+          identity,
+          assetType,
+          assetId,
+          supplier:
+            clean(payload.supplier) ||
+            null,
+          invoiceNumber:
+            clean(
+              payload.invoiceNumber,
+            ) || null,
+          invoiceDate:
+            eventDate,
+          description:
+            title,
+          amountExGst:
+            cost,
+          gstAmount:
+            0,
+          amountIncGst:
+            cost,
+          document:
+            document?.document_category ===
+            "invoice"
+              ? document
+              : null,
+        });
     }
 
     const {
-      data:
-        event,
-
-      error:
-        eventError,
+      data: event,
+      error: eventError,
     } = await service
-      .from(
-        "asset_events",
-      )
+      .from("asset_events")
       .insert({
         asset_type:
           assetType,
 
         vehicle_asset_id:
-          assetType ===
-          "vehicle"
+          assetType === "vehicle"
             ? assetId
             : null,
 
         plant_asset_id:
-          assetType ===
-          "plant"
+          assetType === "plant"
             ? assetId
             : null,
 
@@ -604,18 +762,15 @@ export async function POST(request: Request) {
         description:
           clean(
             payload.description,
-          ) ||
-          null,
+          ) || null,
 
         supplier:
           clean(
             payload.supplier,
-          ) ||
-          null,
+          ) || null,
 
         cost:
-          cost ||
-          null,
+          cost || null,
 
         odometer_km:
           numberOrNull(
@@ -634,8 +789,7 @@ export async function POST(request: Request) {
           null,
 
         document_id:
-          document?.id ??
-          null,
+          document?.id ?? null,
 
         financial_submission_id:
           finance?.submissionId ??
@@ -651,34 +805,28 @@ export async function POST(request: Request) {
           status:
             clean(
               payload.status,
-            ) ||
-            null,
+            ) || null,
 
           project:
             clean(
               payload.project,
-            ) ||
-            null,
+            ) || null,
 
           crew:
             clean(
               payload.crew,
-            ) ||
-            null,
+            ) || null,
 
           invoice_number:
             clean(
               payload.invoiceNumber,
-            ) ||
-            null,
+            ) || null,
         },
       })
       .select("*")
       .single();
 
-    if (
-      eventError
-    ) {
+    if (eventError) {
       throw new Error(
         eventError.message,
       );
@@ -701,6 +849,7 @@ export async function POST(request: Request) {
           `${identity.name} recorded ${title}.`,
 
         assetType,
+
         assetId,
 
         actionRoute:
@@ -729,9 +878,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const apiError =
-      assetApiError(
-        error,
-      );
+      assetApiError(error);
 
     return NextResponse.json(
       {

@@ -42,22 +42,14 @@ export async function GET(request: Request) {
       settingsResult,
       documentTypesResult,
     ] = await Promise.all([
-      service
-        .from("vehicle_assets")
-        .select("*")
-        .order("vehicle_id"),
+      service.from("vehicle_assets").select("*").order("vehicle_id"),
 
-      service
-        .from("plant_assets")
-        .select("*")
-        .order("asset_id"),
+      service.from("plant_assets").select("*").order("asset_id"),
 
       service
         .from("fleet_jobs")
         .select("*")
-        .order("created_at", {
-          ascending: false,
-        }),
+        .order("created_at", { ascending: false }),
 
       service
         .from("projects")
@@ -125,8 +117,7 @@ export async function GET(request: Request) {
       (job) => ({
         ...job,
         vehicle_asset_id: clean(job.vehicle_asset_id) || null,
-        plant_asset_id:
-          clean(job.plant_asset_id || job.plant_id) || null,
+        plant_asset_id: clean(job.plant_asset_id || job.plant_id) || null,
       }),
     );
 
