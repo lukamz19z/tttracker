@@ -50,19 +50,34 @@ export type AssetDocumentTypeRow = {
 
 export type AssetSettings = {
   id: boolean;
+
   sharepoint_site_id: string | null;
   sharepoint_site_name: string | null;
   sharepoint_site_url: string | null;
+
   sharepoint_drive_id: string | null;
   sharepoint_drive_name: string | null;
+
   sharepoint_base_folder: string;
+
   vehicle_folder_name: string;
   plant_folder_name: string;
+
+  // Root SharePoint folder for Equipment registers.
+  equipment_folder_name: string;
+
   superseded_folder_name: string;
+
   document_folders: Record<string, string>;
+
   max_file_size_mb: number;
+
+  // Temporary browser → Supabase staging bucket used for
+  // large Asset uploads before publishing into SharePoint.
   staging_bucket?: string | null;
+
   notifications_enabled: boolean;
+
   updated_at: string;
   updated_by: string | null;
 };
