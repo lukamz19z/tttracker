@@ -18,7 +18,6 @@ import {
   Search,
   ShieldCheck,
   UploadCloud,
-  UserRound,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -269,28 +268,6 @@ async function prepareTrainingUploadFile(file: File) {
   }
 }
 
-function normaliseRole(value: unknown) {
-  return clean(value)
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-}
-
-/**
- * Existing compatibility behaviour.
- *
- * Server-side Training permissions remain authoritative.
- */
-function canManageOtherEmployees(role: string) {
-  return [
-    "admin",
-    "administrator",
-    "site_admin",
-    "hseq",
-    "safety",
-    "safety_officer",
-  ].includes(normaliseRole(role));
-}
-
 function addInterval(
   issueDate: string,
   value: number | null,
@@ -361,7 +338,6 @@ export default function AddTrainingRecordPage() {
     [],
   );
 
-  const [currentRole, setCurrentRole] = useState("");
   const [selfEmployeeId, setSelfEmployeeId] = useState("");
 
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -478,19 +454,12 @@ export default function AddTrainingRecordPage() {
     }
 
     const [
-      roleResult,
       employeeResult,
       projectResult,
       typeResult,
       optionResult,
       fieldResult,
     ] = await Promise.all([
-      supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .maybeSingle(),
-
       supabase
         .from("employees")
         .select(
@@ -534,7 +503,6 @@ export default function AddTrainingRecordPage() {
     ]);
 
     const errors = [
-      roleResult.error,
       employeeResult.error,
       projectResult.error,
       typeResult.error,
@@ -552,15 +520,10 @@ export default function AddTrainingRecordPage() {
     const loadedEmployees =
       (employeeResult.data ?? []) as Employee[];
 
-    const role = normaliseRole(
-      roleResult.data?.role,
-    );
-
     const self = loadedEmployees.find(
       (item) => item.user_id === user.id,
     );
 
-    setCurrentRole(role);
     setSelfEmployeeId(self?.id ?? "");
 
     setEmployees(loadedEmployees);
@@ -591,15 +554,9 @@ export default function AddTrainingRecordPage() {
         return current;
       }
 
-      if (self?.id) {
-        return self.id;
-      }
-
-      if (canManageOtherEmployees(role)) {
-        return loadedEmployees[0]?.id ?? "";
-      }
-
-      return "";
+      // Default to the signed-in employee when linked, but the
+      // employee search remains available to every authenticated user.
+      return self?.id ?? "";
     });
   }, [supabase]);
 
@@ -634,9 +591,6 @@ export default function AddTrainingRecordPage() {
     types.find(
       (item) => item.id === trainingTypeId,
     ) ?? null;
-
-  const canChooseEmployee =
-    canManageOtherEmployees(currentRole);
 
   /**
    * SEARCHABLE EMPLOYEE SELECTOR
@@ -877,14 +831,6 @@ export default function AddTrainingRecordPage() {
 
     if (!selectedType) {
       return "Select the Training Type.";
-    }
-
-    if (
-      !canChooseEmployee &&
-      selectedEmployee.id !==
-        selfEmployeeId
-    ) {
-      return "You can only upload Training evidence for your own employee profile.";
     }
 
     if (
@@ -1374,10 +1320,9 @@ export default function AddTrainingRecordPage() {
               </h1>
 
               <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-                Employees can upload their own evidence. Admin/HSEQ
-                can search for an employee and upload on their behalf.
-                Type-specific rules and required fields come from
-                Training Configuration.
+                Search for any active employee and upload Training evidence
+                against the correct employee profile. Review, approval and
+                Training administration permissions remain controlled separately.
               </p>
             </div>
 
@@ -1388,15 +1333,6 @@ export default function AddTrainingRecordPage() {
               >
                 Training Register
               </Link>
-
-              {canChooseEmployee ? (
-                <Link
-                  href="/people/training/bulk-upload"
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
-                >
-                  Bulk Upload
-                </Link>
-              ) : null}
 
               <button
                 type="button"
@@ -1441,31 +1377,6 @@ export default function AddTrainingRecordPage() {
           </section>
         ) : null}
 
-        {/* Missing linked employee */}
-        {!selfEmployeeId &&
-        !canChooseEmployee ? (
-          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-            <div className="flex items-start gap-3">
-              <UserRound
-                size={22}
-                className="mt-0.5"
-              />
-
-              <div>
-                <div className="font-black">
-                  No employee profile is linked to your login
-                </div>
-
-                <div className="mt-1 text-sm font-semibold leading-6">
-                  Ask an administrator to link your TTTracker login
-                  to your existing employee profile before using
-                  self-service Training upload.
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
         <form
           onSubmit={submit}
           className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
@@ -1477,152 +1388,119 @@ export default function AddTrainingRecordPage() {
 
             <Card
               title="1. Employee"
-              description={
-                canChooseEmployee
-                  ? "Search and select the employee."
-                  : "Your linked employee profile is used automatically."
-              }
+              description="Search and select the employee this Training record belongs to."
             >
-              {canChooseEmployee ? (
-                <div className="space-y-3">
-                  <Field
-                    label="Employee"
-                    required
-                  >
-                    <div className="relative">
-                      <Search
-                        size={18}
-                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                      />
+              <div className="space-y-3">
+                <Field
+                  label="Employee"
+                  required
+                >
+                  <div className="relative">
+                    <Search
+                      size={18}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
 
-                      <input
-                        className={`${inputClass} pl-10`}
-                        value={
-                          employeeSearch
-                        }
-                        onChange={(event) =>
-                          setEmployeeSearch(
-                            event.target.value,
-                          )
-                        }
-                        placeholder="Search employee name, payroll ID or role..."
-                        autoComplete="off"
-                      />
-                    </div>
-                  </Field>
+                    <input
+                      className={`${inputClass} pl-10`}
+                      value={employeeSearch}
+                      onChange={(event) =>
+                        setEmployeeSearch(
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Search employee name, payroll ID or role..."
+                      autoComplete="off"
+                    />
+                  </div>
+                </Field>
 
-                  {/* Search results */}
-                  {employeeSearch.trim() ? (
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                      {filteredEmployees.length >
-                      0 ? (
-                        <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
-                          {filteredEmployees.map(
-                            (employee) => (
-                              <button
-                                key={employee.id}
-                                type="button"
-                                onClick={() => {
-                                  setEmployeeId(
-                                    employee.id,
-                                  );
-
-                                  setEmployeeSearch(
-                                    "",
-                                  );
-                                }}
-                                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-slate-50"
-                              >
-                                <div className="min-w-0">
-                                  <div className="truncate font-black text-slate-950">
-                                    {
-                                      employee.full_name
-                                    }
-                                  </div>
-
-                                  <div className="mt-0.5 truncate text-xs font-semibold text-slate-500">
-                                    {[
-                                      employee.payroll_id,
-                                      employee.role,
-                                    ]
-                                      .filter(
-                                        Boolean,
-                                      )
-                                      .join(
-                                        " · ",
-                                      ) ||
-                                      "No payroll ID"}
-                                  </div>
+                {employeeSearch.trim() ? (
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    {filteredEmployees.length > 0 ? (
+                      <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                        {filteredEmployees.map(
+                          (employee) => (
+                            <button
+                              key={employee.id}
+                              type="button"
+                              onClick={() => {
+                                setEmployeeId(
+                                  employee.id,
+                                );
+                                setEmployeeSearch(
+                                  "",
+                                );
+                              }}
+                              className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition hover:bg-slate-50"
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate font-black text-slate-950">
+                                  {employee.full_name}
                                 </div>
 
-                                {employee.id ===
-                                employeeId ? (
-                                  <CheckCircle2
-                                    size={18}
-                                    className="shrink-0 text-emerald-600"
-                                  />
-                                ) : null}
-                              </button>
-                            ),
-                          )}
-                        </div>
-                      ) : (
-                        <div className="px-4 py-4 text-sm font-semibold text-slate-500">
-                          No employees match that search.
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
+                                <div className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                                  {[
+                                    employee.payroll_id,
+                                    employee.role,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ") ||
+                                    "No payroll ID"}
+                                </div>
+                              </div>
 
-                  {/* Selected employee */}
-                  {selectedEmployee ? (
-                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                      <div className="min-w-0">
-                        <div className="text-xs font-black uppercase tracking-[0.12em] text-blue-500">
-                          Selected employee
-                        </div>
+                              {employee.id === employeeId ? (
+                                <CheckCircle2
+                                  size={18}
+                                  className="shrink-0 text-emerald-600"
+                                />
+                              ) : null}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                    ) : (
+                      <div className="px-4 py-4 text-sm font-semibold text-slate-500">
+                        No employees match that search.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
-                        <div className="mt-1 truncate font-black text-slate-950">
-                          {
-                            selectedEmployee.full_name
-                          }
-                        </div>
-
-                        <div className="mt-1 truncate text-sm font-semibold text-slate-600">
-                          {[
-                            selectedEmployee.payroll_id,
-                            selectedEmployee.role,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") ||
-                            "No payroll ID"}
-                        </div>
+                {selectedEmployee ? (
+                  <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                    <div className="min-w-0">
+                      <div className="text-xs font-black uppercase tracking-[0.12em] text-blue-500">
+                        Selected employee
                       </div>
 
-                      <CheckCircle2
-                        size={22}
-                        className="shrink-0 text-blue-700"
-                      />
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
-                      Search for and select an employee.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <div className="font-black text-slate-950">
-                    {selectedEmployee?.full_name ||
-                      "No linked employee"}
-                  </div>
+                      <div className="mt-1 truncate font-black text-slate-950">
+                        {selectedEmployee.full_name}
+                      </div>
 
-                  <div className="mt-1 text-sm font-semibold text-slate-500">
-                    {selectedEmployee?.payroll_id ||
-                      "No Payroll ID"}
+                      <div className="mt-1 truncate text-sm font-semibold text-slate-600">
+                        {[
+                          selectedEmployee.payroll_id,
+                          selectedEmployee.role,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") ||
+                          "No payroll ID"}
+                      </div>
+                    </div>
+
+                    <CheckCircle2
+                      size={22}
+                      className="shrink-0 text-blue-700"
+                    />
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                    Search for and select an employee.
+                  </div>
+                )}
+              </div>
             </Card>
 
             {/* =================================================
