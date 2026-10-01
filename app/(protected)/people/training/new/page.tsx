@@ -361,6 +361,8 @@ export default function AddTrainingRecordPage() {
 
   const [issueDate, setIssueDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  const [expiryManuallyOverridden, setExpiryManuallyOverridden] =
+    useState(false);
 
   const [notes, setNotes] = useState("");
 
@@ -647,6 +649,44 @@ export default function AddTrainingRecordPage() {
       ),
     );
 
+  /**
+   * Automatic validity remains the default for a Training Type,
+   * but an expiry date printed on the actual certificate / VOC
+   * takes precedence.
+   *
+   * Example:
+   * - configured VOC validity = 5 years
+   * - issue date = 01/10/2026
+   * - calculated expiry = 01/10/2031
+   * - certificate says 01/10/2028
+   *
+   * The user can enter 01/10/2028 and TTTracker will preserve it.
+   */
+  const calculatedExpiryDate = useMemo(() => {
+    if (
+      !selectedType ||
+      selectedType.validity_mode !==
+        "automatic" ||
+      !issueDate
+    ) {
+      return "";
+    }
+
+    return addInterval(
+      issueDate,
+      selectedType.validity_interval_value,
+      selectedType.validity_interval_unit,
+    );
+  }, [issueDate, selectedType]);
+
+  const expiryIsManualOverride =
+    selectedType?.validity_mode ===
+      "automatic" &&
+    expiryManuallyOverridden &&
+    Boolean(expiryDate) &&
+    expiryDate !==
+      calculatedExpiryDate;
+
   /* =======================================================
      Reset type-specific fields
      ======================================================= */
@@ -659,6 +699,7 @@ export default function AddTrainingRecordPage() {
     setCertificateNumber("");
     setIssueDate("");
     setExpiryDate("");
+    setExpiryManuallyOverridden(false);
     setNotes("");
 
     setSingleFile(null);
@@ -687,23 +728,35 @@ export default function AddTrainingRecordPage() {
       "never"
     ) {
       setExpiryDate("");
+      setExpiryManuallyOverridden(false);
       return;
     }
 
     if (
-      selectedType.validity_mode ===
-        "automatic" &&
-      issueDate
+      selectedType.validity_mode !==
+      "automatic"
     ) {
-      setExpiryDate(
-        addInterval(
-          issueDate,
-          selectedType.validity_interval_value,
-          selectedType.validity_interval_unit,
-        ),
-      );
+      setExpiryManuallyOverridden(false);
+      return;
     }
-  }, [issueDate, selectedType]);
+
+    /**
+     * Automatic validity provides the default expiry only.
+     * Once the user enters the expiry printed on the document,
+     * changing issue date must not overwrite that manual value.
+     */
+    if (expiryManuallyOverridden) {
+      return;
+    }
+
+    setExpiryDate(
+      calculatedExpiryDate,
+    );
+  }, [
+    calculatedExpiryDate,
+    expiryManuallyOverridden,
+    selectedType,
+  ]);
 
   /* =======================================================
      Existing current records / replacement
@@ -1017,7 +1070,23 @@ export default function AddTrainingRecordPage() {
 
       form.set(
         "metadata",
-        JSON.stringify(metadata),
+        JSON.stringify({
+          ...metadata,
+
+          ...(selectedType.validity_mode ===
+          "automatic"
+            ? {
+                expiry_date_source:
+                  expiryIsManualOverride
+                    ? "document_override"
+                    : "configured_interval",
+
+                configured_expiry_date:
+                  calculatedExpiryDate ||
+                  null,
+              }
+            : {}),
+        }),
       );
 
       form.set(
@@ -1248,6 +1317,7 @@ export default function AddTrainingRecordPage() {
       setCertificateNumber("");
       setIssueDate("");
       setExpiryDate("");
+      setExpiryManuallyOverridden(false);
       setNotes("");
       setMetadata({});
 
@@ -1756,30 +1826,112 @@ export default function AddTrainingRecordPage() {
 
                   {selectedType.validity_mode !==
                     "never" &&
-                  selectedType.requires_expiry_date ? (
-                    <Field
-                      label="Expiry Date"
-                      required
-                    >
-                      <input
-                        type="date"
-                        className={
-                          inputClass
-                        }
-                        value={
-                          expiryDate
-                        }
-                        readOnly={
+                  (selectedType.requires_expiry_date ||
+                    selectedType.validity_mode ===
+                      "automatic") ? (
+                    <div>
+                      <Field
+                        label="Expiry Date"
+                        required={
+                          selectedType.requires_expiry_date ===
+                            true ||
                           selectedType.validity_mode ===
-                          "automatic"
+                            "automatic"
                         }
-                        onChange={(event) =>
-                          setExpiryDate(
-                            event.target.value,
-                          )
-                        }
-                      />
-                    </Field>
+                      >
+                        <input
+                          type="date"
+                          className={
+                            inputClass
+                          }
+                          value={
+                            expiryDate
+                          }
+                          onChange={(event) => {
+                            const nextExpiry =
+                              event.target.value;
+
+                            setExpiryDate(
+                              nextExpiry,
+                            );
+
+                            if (
+                              selectedType.validity_mode ===
+                              "automatic"
+                            ) {
+                              setExpiryManuallyOverridden(
+                                nextExpiry !==
+                                  calculatedExpiryDate,
+                              );
+                            }
+                          }}
+                        />
+                      </Field>
+
+                      {selectedType.validity_mode ===
+                      "automatic" ? (
+                        <div
+                          className={`mt-2 rounded-xl border px-3 py-2.5 text-xs font-semibold leading-5 ${
+                            expiryIsManualOverride
+                              ? "border-amber-200 bg-amber-50 text-amber-900"
+                              : "border-blue-200 bg-blue-50 text-blue-900"
+                          }`}
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              {expiryIsManualOverride ? (
+                                <>
+                                  <span className="font-black">
+                                    Document expiry override in use.
+                                  </span>{" "}
+                                  The expiry printed on the VOC / certificate will be saved instead of the configured standard validity.
+                                  {calculatedExpiryDate ? (
+                                    <>
+                                      {" "}
+                                      The configured calculation would be {
+                                        formatDate(
+                                          calculatedExpiryDate,
+                                        )
+                                      }.
+                                    </>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <>
+                                  <span className="font-black">
+                                    Automatically calculated.
+                                  </span>{" "}
+                                  {calculatedExpiryDate
+                                    ? `Based on the configured validity, the default expiry is ${formatDate(
+                                        calculatedExpiryDate,
+                                      )}. `
+                                    : "Enter the issue date to calculate the default expiry. "}
+                                  If the actual VOC / certificate shows a different expiry, enter that date above and it will override the automatic calculation.
+                                </>
+                              )}
+                            </div>
+
+                            {expiryManuallyOverridden ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpiryManuallyOverridden(
+                                    false,
+                                  );
+
+                                  setExpiryDate(
+                                    calculatedExpiryDate,
+                                  );
+                                }}
+                                className="shrink-0 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-[11px] font-black text-amber-900 transition hover:bg-amber-100"
+                              >
+                                Use calculated date
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
 
@@ -2226,9 +2378,16 @@ export default function AddTrainingRecordPage() {
                   "never"
                     ? "Does not expire"
                     : expiryDate
-                      ? formatDate(
+                      ? `${formatDate(
                           expiryDate,
-                        )
+                        )}${
+                          expiryIsManualOverride
+                            ? " · document override"
+                            : selectedType?.validity_mode ===
+                                "automatic"
+                              ? " · calculated"
+                              : ""
+                        }`
                       : "Not set"
                 }
               />
