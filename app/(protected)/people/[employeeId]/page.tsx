@@ -17,11 +17,14 @@ import {
   HardHat,
   Link2,
   Loader2,
+  Paperclip,
   Plus,
   RefreshCw,
   Save,
   ShieldCheck,
   Shirt,
+  Trash2,
+  Upload,
   UserCheck,
   UserRoundX,
   UsersRound,
@@ -36,6 +39,7 @@ type TrainingStatus =
   | "expiring"
   | "expired"
   | "missing"
+  | "pending"
   | "revoked"
   | "superseded";
 
@@ -97,6 +101,7 @@ type LoginAccount = {
 
 type TrainingType = {
   id: string;
+  category_id: string | null;
   name: string;
   short_code: string | null;
   category: string | null;
@@ -109,6 +114,42 @@ type TrainingType = {
   supports_class_codes: boolean | null;
   supports_provider: boolean | null;
   active: boolean | null;
+  validity_mode: string | null;
+  validity_interval_value: number | null;
+  validity_interval_unit: string | null;
+  requires_issuer: boolean | null;
+  requires_project: boolean | null;
+  requires_document: boolean | null;
+  document_upload_type: string | null;
+  allows_multiple_current: boolean | null;
+  subtype_mode: string | null;
+  requires_review: boolean | null;
+  allowed_extensions?: string[] | null;
+  max_file_size_mb?: number | null;
+};
+
+type TrainingOption = {
+  id: string;
+  training_type_id: string;
+  name: string;
+  code: string;
+  description: string | null;
+  active: boolean | null;
+  sort_order: number | null;
+};
+
+type CustomField = {
+  id: string;
+  training_type_id: string;
+  field_key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  options: unknown;
+  placeholder: string | null;
+  help_text: string | null;
+  active: boolean;
+  sort_order: number;
 };
 
 type TrainingRecord = {
@@ -121,6 +162,7 @@ type TrainingRecord = {
   record_kind: string | null;
   certificate_number: string | null;
   class_codes: string[] | null;
+  option_codes: string[] | null;
   provider: string | null;
   issuing_authority: string | null;
   issue_date: string | null;
@@ -132,6 +174,12 @@ type TrainingRecord = {
   superseded_at: string | null;
   revoked_at: string | null;
   revoked_reason: string | null;
+  workflow_status: string | null;
+  current_version: boolean | null;
+  project_id: string | null;
+  deleted_at: string | null;
+  deleted_by_user_id: string | null;
+  deleted_reason: string | null;
   created_at: string | null;
 };
 
@@ -197,6 +245,142 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+
+const TRAINING_IMAGE_TARGET_BYTES = 1_400_000;
+const TRAINING_REQUEST_SAFE_BYTES = 4_000_000;
+
+function replaceFileExtension(fileName: string, extension: string) {
+  const base = fileName.replace(/\.[^.]+$/, "") || "training-evidence";
+  return `${base}.${extension}`;
+}
+
+function canvasBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality?: number,
+) {
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, type, quality);
+  });
+}
+
+async function prepareTrainingUploadFile(file: File) {
+  if (!file.type.startsWith("image/")) return file;
+  if (file.size <= TRAINING_IMAGE_TARGET_BYTES) return file;
+
+  let bitmap: ImageBitmap;
+
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error(
+      `${file.name} could not be prepared. Save the photo as JPG or PNG and try again.`,
+    );
+  }
+
+  try {
+    const longestSide = Math.max(bitmap.width, bitmap.height);
+    const initialScale = Math.min(1, 2200 / Math.max(longestSide, 1));
+    let bestBlob: Blob | null = null;
+
+    for (let sizePass = 0; sizePass < 5; sizePass += 1) {
+      const passScale = initialScale * Math.pow(0.84, sizePass);
+      const width = Math.max(1, Math.round(bitmap.width * passScale));
+      const height = Math.max(1, Math.round(bitmap.height * passScale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) {
+        throw new Error("This browser could not prepare the Training photo.");
+      }
+
+      context.drawImage(bitmap, 0, 0, width, height);
+
+      for (const quality of [0.86, 0.76, 0.66, 0.56]) {
+        const blob = await canvasBlob(canvas, "image/jpeg", quality);
+        if (!blob) continue;
+        if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+
+        if (blob.size <= TRAINING_IMAGE_TARGET_BYTES) {
+          return new File(
+            [blob],
+            replaceFileExtension(file.name, "jpg"),
+            { type: "image/jpeg", lastModified: file.lastModified },
+          );
+        }
+      }
+    }
+
+    if (!bestBlob) throw new Error(`${file.name} could not be compressed.`);
+
+    return new File(
+      [bestBlob],
+      replaceFileExtension(file.name, "jpg"),
+      { type: "image/jpeg", lastModified: file.lastModified },
+    );
+  } finally {
+    bitmap.close();
+  }
+}
+
+function fieldOptions(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => clean(item)).filter(Boolean);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => clean(item))
+      .filter(Boolean);
+  }
+
+  const raw = clean(value);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => clean(item)).filter(Boolean);
+    }
+  } catch {
+    // Fall back to comma/newline parsing.
+  }
+
+  return raw
+    .split(/[,;\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function configuredExpiryDate(
+  issueDate: string,
+  type: TrainingType | null,
+) {
+  if (!issueDate || !type) return "";
+  if (clean(type.validity_mode) === "never") return "";
+
+  const amount = Number(type.validity_interval_value ?? 0);
+  const unit = clean(type.validity_interval_unit).toLowerCase();
+
+  if (!amount || !unit) {
+    return type.default_expiry_months
+      ? addMonths(issueDate, type.default_expiry_months)
+      : "";
+  }
+
+  const date = new Date(`${issueDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+
+  if (unit.startsWith("day")) date.setDate(date.getDate() + amount);
+  else if (unit.startsWith("week")) date.setDate(date.getDate() + amount * 7);
+  else if (unit.startsWith("year")) date.setFullYear(date.getFullYear() + amount);
+  else date.setMonth(date.getMonth() + amount);
+
+  return date.toISOString().slice(0, 10);
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "Not recorded";
 
@@ -251,6 +435,10 @@ function daysUntil(value?: string | null) {
 }
 
 function calculateTrainingStatus(record: TrainingRecord): TrainingStatus {
+  if (record.deleted_at) return "revoked";
+  if (["pending_review", "changes_required"].includes(clean(record.workflow_status))) {
+    return "pending";
+  }
   if (record.revoked_at || record.record_status === "revoked") return "revoked";
   if (record.superseded_at || record.record_status === "superseded") {
     return "superseded";
@@ -270,6 +458,7 @@ function trainingStatusLabel(status: TrainingStatus) {
   if (status === "current") return "Current";
   if (status === "expiring") return "Expiring";
   if (status === "expired") return "Expired";
+  if (status === "pending") return "Pending review";
   if (status === "revoked") return "Revoked";
   if (status === "superseded") return "Superseded";
   return "Missing expiry";
@@ -278,6 +467,7 @@ function trainingStatusLabel(status: TrainingStatus) {
 function trainingStatusClasses(status: TrainingStatus) {
   if (status === "current") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "expiring") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (status === "pending") return "border-blue-200 bg-blue-50 text-blue-700";
   if (status === "expired" || status === "revoked") {
     return "border-rose-200 bg-rose-50 text-rose-700";
   }
@@ -327,6 +517,8 @@ export default function EmployeeProfilePage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [trainingTypes, setTrainingTypes] = useState<TrainingType[]>([]);
+  const [trainingOptions, setTrainingOptions] = useState<TrainingOption[]>([]);
+  const [trainingFields, setTrainingFields] = useState<CustomField[]>([]);
   const [trainingRecords, setTrainingRecords] = useState<TrainingRecord[]>([]);
   const [trainingDocuments, setTrainingDocuments] = useState<TrainingDocument[]>([]);
 
@@ -337,6 +529,8 @@ export default function EmployeeProfilePage() {
   const [refreshingTraining, setRefreshingTraining] = useState(false);
 
   const [trainingModalOpen, setTrainingModalOpen] = useState(false);
+  const [trainingUploadModalOpen, setTrainingUploadModalOpen] = useState(false);
+  const [deletingTrainingRecordId, setDeletingTrainingRecordId] = useState("");
   const [editingTrainingRecord, setEditingTrainingRecord] =
     useState<TrainingRecord | null>(null);
   const [trainingSaving, setTrainingSaving] = useState(false);
@@ -385,6 +579,7 @@ export default function EmployeeProfilePage() {
     () =>
       trainingRecords.filter(
         (record) =>
+          !record.deleted_at &&
           !record.superseded_at &&
           !record.revoked_at &&
           record.record_status !== "superseded" &&
@@ -484,6 +679,8 @@ export default function EmployeeProfilePage() {
       crewResult,
       projectResult,
       trainingTypeResult,
+      trainingOptionResult,
+      trainingFieldResult,
       trainingRecordResult,
     ] = await Promise.all([
       supabase
@@ -497,14 +694,29 @@ export default function EmployeeProfilePage() {
       supabase
         .from("training_types")
         .select(
-          "id, name, short_code, category, record_kind, default_expiry_months, allows_no_expiry, requires_issue_date, requires_expiry_date, requires_certificate_number, supports_class_codes, supports_provider, active",
+          "id, category_id, name, short_code, category, record_kind, default_expiry_months, allows_no_expiry, requires_issue_date, requires_expiry_date, requires_certificate_number, supports_class_codes, supports_provider, active, validity_mode, validity_interval_value, validity_interval_unit, requires_issuer, requires_project, requires_document, document_upload_type, allows_multiple_current, subtype_mode, requires_review, allowed_extensions, max_file_size_mb",
         )
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true }),
       supabase
+        .from("training_type_options")
+        .select(
+          "id, training_type_id, name, code, description, active, sort_order",
+        )
+        .eq("active", true)
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true }),
+      supabase
+        .from("training_type_fields")
+        .select(
+          "id, training_type_id, field_key, label, field_type, required, options, placeholder, help_text, active, sort_order",
+        )
+        .eq("active", true)
+        .order("sort_order", { ascending: true }),
+      supabase
         .from("employee_training_records")
         .select(
-          "id, employee_id, training_type_id, training_name, training_short_code, category, record_kind, certificate_number, class_codes, provider, issuing_authority, issue_date, expiry_date, does_not_expire, record_status, notes, supersedes_record_id, superseded_at, revoked_at, revoked_reason, created_at",
+          "id, employee_id, training_type_id, training_name, training_short_code, category, record_kind, certificate_number, class_codes, option_codes, provider, issuing_authority, issue_date, expiry_date, does_not_expire, record_status, notes, supersedes_record_id, superseded_at, revoked_at, revoked_reason, workflow_status, current_version, project_id, deleted_at, deleted_by_user_id, deleted_reason, created_at",
         )
         .eq("employee_id", employeeId)
         .order("created_at", { ascending: false }),
@@ -514,6 +726,12 @@ export default function EmployeeProfilePage() {
     if (projectResult.error) throw new Error(projectResult.error.message);
     if (trainingTypeResult.error) {
       throw new Error(trainingTypeResult.error.message);
+    }
+    if (trainingOptionResult.error) {
+      throw new Error(trainingOptionResult.error.message);
+    }
+    if (trainingFieldResult.error) {
+      throw new Error(trainingFieldResult.error.message);
     }
     if (trainingRecordResult.error) {
       throw new Error(trainingRecordResult.error.message);
@@ -559,6 +777,8 @@ export default function EmployeeProfilePage() {
     setProjects((projectResult.data ?? []) as Project[]);
     setProjectIds(loadedProjectIds);
     setTrainingTypes((trainingTypeResult.data ?? []) as TrainingType[]);
+    setTrainingOptions((trainingOptionResult.data ?? []) as TrainingOption[]);
+    setTrainingFields((trainingFieldResult.data ?? []) as CustomField[]);
     setTrainingRecords(loadedTrainingRecords);
     setTrainingDocuments(loadedDocuments);
 
@@ -698,10 +918,81 @@ export default function EmployeeProfilePage() {
     }
   }
 
+
+  async function deleteTrainingRecord(record: TrainingRecord) {
+    const reason = window.prompt(
+      `Delete ${record.training_name}?\n\nUse this only for a duplicate or incorrectly created record. Enter the reason for deletion:`,
+      "Duplicate record",
+    );
+
+    if (reason === null) return;
+    if (!reason.trim()) {
+      setMessage({ tone: "error", text: "Enter a reason before deleting the Training record." });
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete ${record.training_name} from ${employee?.full_name ?? "this employee"}?\n\nThe record will disappear from the employee profile and active Training registers. Linked incorrect evidence will also be removed through the controlled Training workflow.`,
+      )
+    ) {
+      return;
+    }
+
+    setDeletingTrainingRecordId(record.id);
+    setMessage(null);
+
+    try {
+      const response = await apiFetch(`/api/training/records/${record.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+
+      const responseText = await response.text();
+      let payload: { error?: string; warning?: string | null } | null = null;
+
+      if (responseText) {
+        try {
+          payload = JSON.parse(responseText) as {
+            error?: string;
+            warning?: string | null;
+          };
+        } catch {
+          payload = null;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          clean(payload?.error) ||
+            clean(responseText) ||
+            "Unable to delete the Training record.",
+        );
+      }
+
+      await loadData();
+      setMessage({
+        tone: payload?.warning ? "error" : "success",
+        text: payload?.warning
+          ? `Training record removed. ${payload.warning}`
+          : "Training record removed from the employee profile.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Unable to delete the Training record.",
+      });
+    } finally {
+      setDeletingTrainingRecordId("");
+    }
+  }
+
   function openAddTraining() {
-    setEditingTrainingRecord(null);
-    setTrainingForm(EMPTY_TRAINING_FORM);
-    setTrainingModalOpen(true);
+    setTrainingUploadModalOpen(true);
     setMessage(null);
   }
 
@@ -1082,7 +1373,7 @@ export default function EmployeeProfilePage() {
 
             {activeTab === "training" ? (
               <TrainingTab
-                records={trainingRecords}
+                records={activeTrainingRecords}
                 documentsByRecord={trainingDocumentsByRecord}
                 currentCount={currentTrainingCount}
                 expiringCount={expiringTrainingCount}
@@ -1092,6 +1383,8 @@ export default function EmployeeProfilePage() {
                 onRefresh={() => void refreshTraining()}
                 onAdd={openAddTraining}
                 onEdit={openEditTraining}
+                onDelete={(record) => void deleteTrainingRecord(record)}
+                deletingRecordId={deletingTrainingRecordId}
               />
             ) : null}
 
@@ -1115,6 +1408,24 @@ export default function EmployeeProfilePage() {
           </div>
         </section>
       </div>
+
+      {trainingUploadModalOpen ? (
+        <TrainingUploadModal
+          employee={employee}
+          projects={projects}
+          trainingTypes={trainingTypes.filter((type) => type.active !== false)}
+          trainingOptions={trainingOptions}
+          trainingFields={trainingFields}
+          existingRecords={activeTrainingRecords}
+          apiFetch={apiFetch}
+          onClose={() => setTrainingUploadModalOpen(false)}
+          onSuccess={async (messageText) => {
+            await loadData();
+            setTrainingUploadModalOpen(false);
+            setMessage({ tone: "success", text: messageText });
+          }}
+        />
+      ) : null}
 
       {trainingModalOpen ? (
         <TrainingRecordModal
@@ -1153,6 +1464,8 @@ function TrainingTab({
   onRefresh,
   onAdd,
   onEdit,
+  onDelete,
+  deletingRecordId,
 }: {
   records: TrainingRecord[];
   documentsByRecord: Map<string, TrainingDocument[]>;
@@ -1164,6 +1477,8 @@ function TrainingTab({
   onRefresh: () => void;
   onAdd: () => void;
   onEdit: (record: TrainingRecord) => void;
+  onDelete: (record: TrainingRecord) => void;
+  deletingRecordId: string;
 }) {
   return (
     <div className="space-y-5">
@@ -1373,14 +1688,30 @@ function TrainingTab({
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onEdit(record)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    <Edit3 size={15} />
-                    Edit
-                  </button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onEdit(record)}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Edit3 size={15} />
+                      Edit
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onDelete(record)}
+                      disabled={deletingRecordId === record.id}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                    >
+                      {deletingRecordId === record.id ? (
+                        <Loader2 size={15} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={15} />
+                      )}
+                      Delete
+                    </button>
+                  </div>
                 </div>
 
                 {record.notes ? (
@@ -1407,6 +1738,884 @@ function TrainingTab({
         profile.
       </div>
     </div>
+  );
+}
+
+
+function TrainingUploadModal({
+  employee,
+  projects,
+  trainingTypes,
+  trainingOptions,
+  trainingFields,
+  existingRecords,
+  apiFetch,
+  onClose,
+  onSuccess,
+}: {
+  employee: Employee;
+  projects: Project[];
+  trainingTypes: TrainingType[];
+  trainingOptions: TrainingOption[];
+  trainingFields: CustomField[];
+  existingRecords: TrainingRecord[];
+  apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  onClose: () => void;
+  onSuccess: (message: string) => Promise<void> | void;
+}) {
+  const [trainingTypeId, setTrainingTypeId] = useState("");
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [issuer, setIssuer] = useState("");
+  const [certificateNumber, setCertificateNumber] = useState("");
+  const [issueDate, setIssueDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [metadata, setMetadata] = useState<Record<string, unknown>>({});
+  const [singleFile, setSingleFile] = useState<File | null>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [flexibleEvidenceMode, setFlexibleEvidenceMode] = useState<"single" | "front_back">("single");
+  const [replaceChoice, setReplaceChoice] = useState<"replace" | "add" | "">("");
+  const [replaceRecordId, setReplaceRecordId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [localMessage, setLocalMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+
+  const selectedType = useMemo(
+    () => trainingTypes.find((type) => type.id === trainingTypeId) ?? null,
+    [trainingTypeId, trainingTypes],
+  );
+
+  const typeOptions = useMemo(
+    () =>
+      trainingOptions
+        .filter(
+          (option) =>
+            option.training_type_id === trainingTypeId && option.active !== false,
+        )
+        .sort(
+          (a, b) =>
+            Number(a.sort_order ?? 100) - Number(b.sort_order ?? 100) ||
+            a.name.localeCompare(b.name),
+        ),
+    [trainingOptions, trainingTypeId],
+  );
+
+  const typeFields = useMemo(
+    () =>
+      trainingFields
+        .filter(
+          (field) =>
+            field.training_type_id === trainingTypeId && field.active !== false,
+        )
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [trainingFields, trainingTypeId],
+  );
+
+  const selectedOptions = useMemo(
+    () => typeOptions.filter((option) => selectedOptionIds.includes(option.id)),
+    [selectedOptionIds, typeOptions],
+  );
+
+  const sameTypeRecords = useMemo(
+    () =>
+      existingRecords.filter(
+        (record) =>
+          record.training_type_id === trainingTypeId &&
+          !record.deleted_at &&
+          !record.superseded_at &&
+          !record.revoked_at &&
+          record.current_version !== false,
+      ),
+    [existingRecords, trainingTypeId],
+  );
+
+  useEffect(() => {
+    setSelectedOptionIds([]);
+    setProjectId("");
+    setIssuer("");
+    setCertificateNumber("");
+    setIssueDate("");
+    setExpiryDate("");
+    setNotes("");
+    setMetadata({});
+    setSingleFile(null);
+    setFrontFile(null);
+    setBackFile(null);
+    setFlexibleEvidenceMode("single");
+    setReplaceChoice("");
+    setReplaceRecordId("");
+    setLocalMessage(null);
+  }, [trainingTypeId]);
+
+  useEffect(() => {
+    if (!selectedType || sameTypeRecords.length === 0) return;
+
+    if (selectedType.allows_multiple_current === false) {
+      setReplaceChoice("replace");
+      if (sameTypeRecords.length === 1) setReplaceRecordId(sameTypeRecords[0].id);
+    }
+  }, [sameTypeRecords, selectedType]);
+
+  function updateIssueDate(value: string) {
+    setIssueDate(value);
+    if (!selectedType) return;
+
+    const configured = configuredExpiryDate(value, selectedType);
+    if (configured) setExpiryDate(configured);
+    if (clean(selectedType.validity_mode) === "never") setExpiryDate("");
+  }
+
+  function customFieldMissing(field: CustomField) {
+    const value = metadata[field.field_key];
+    return (
+      value === undefined ||
+      value === null ||
+      value === "" ||
+      (Array.isArray(value) && value.length === 0) ||
+      (field.field_type === "checkbox" && value !== true)
+    );
+  }
+
+  function validate() {
+    if (!selectedType) return "Select the Training Type.";
+
+    if (selectedType.requires_project && !projectId) {
+      return "Select the project.";
+    }
+
+    if (selectedType.requires_issuer && !issuer.trim()) {
+      return "Enter the provider / issuing organisation.";
+    }
+
+    if (selectedType.requires_certificate_number && !certificateNumber.trim()) {
+      return "Enter the certificate or licence number.";
+    }
+
+    if (selectedType.requires_issue_date && !issueDate) {
+      return "Enter the issue date.";
+    }
+
+    if (
+      clean(selectedType.validity_mode) !== "never" &&
+      selectedType.requires_expiry_date &&
+      !expiryDate
+    ) {
+      return "Enter the expiry date.";
+    }
+
+    if (selectedType.subtype_mode === "single" && typeOptions.length > 0 && selectedOptionIds.length !== 1) {
+      return "Select one class / endorsement.";
+    }
+
+    for (const field of typeFields) {
+      if (field.required && customFieldMissing(field)) {
+        return `Enter ${field.label}.`;
+      }
+    }
+
+    if (selectedType.requires_document) {
+      if (selectedType.document_upload_type === "front_back") {
+        if (!frontFile || !backFile) return "Upload both the front and back files.";
+      } else if (selectedType.document_upload_type === "single_or_front_back") {
+        if (flexibleEvidenceMode === "front_back") {
+          if (!frontFile || !backFile) return "Upload both the front and back files.";
+        } else if (!singleFile) {
+          return "Upload the complete certificate / licence evidence.";
+        }
+      } else if (!singleFile) {
+        return "Upload the required certificate / licence evidence.";
+      }
+    }
+
+    if (sameTypeRecords.length > 0) {
+      if (!replaceChoice) {
+        return "Choose whether this replaces a current record or is another current record.";
+      }
+      if (replaceChoice === "replace" && !replaceRecordId) {
+        return "Select the current record being replaced.";
+      }
+      if (replaceChoice === "add" && selectedType.allows_multiple_current === false) {
+        return "This Training Type does not allow multiple current records.";
+      }
+    }
+
+    return null;
+  }
+
+  async function submit() {
+    const validation = validate();
+    if (validation) {
+      setLocalMessage({ tone: "error", text: validation });
+      return;
+    }
+
+    if (!selectedType) return;
+
+    setSubmitting(true);
+    setLocalMessage(null);
+
+    try {
+      const form = new FormData();
+      form.set("employeeId", employee.id);
+      form.set("trainingTypeId", selectedType.id);
+      form.set("projectId", projectId);
+      form.set("issuer", issuer.trim());
+      form.set("certificateNumber", certificateNumber.trim());
+      form.set("issueDate", issueDate);
+      form.set("expiryDate", expiryDate);
+      form.set("notes", notes.trim());
+      form.set("metadata", JSON.stringify(metadata));
+      form.set("selectedOptionIds", JSON.stringify(selectedOptionIds));
+      form.set(
+        "selectedOptionCodes",
+        JSON.stringify(selectedOptions.map((option) => option.code)),
+      );
+      form.set(
+        "documentUploadType",
+        selectedType.document_upload_type === "single_or_front_back"
+          ? flexibleEvidenceMode
+          : selectedType.document_upload_type || "single",
+      );
+      form.set("replacementMode", replaceChoice || "none");
+      form.set("supersedesRecordId", replaceRecordId);
+      form.set("source", "website_admin");
+
+      const [preparedSingleFile, preparedFrontFile, preparedBackFile] =
+        await Promise.all([
+          singleFile ? prepareTrainingUploadFile(singleFile) : null,
+          frontFile ? prepareTrainingUploadFile(frontFile) : null,
+          backFile ? prepareTrainingUploadFile(backFile) : null,
+        ]);
+
+      const preparedFiles = [
+        preparedSingleFile,
+        preparedFrontFile,
+        preparedBackFile,
+      ].filter((item): item is File => Boolean(item));
+
+      const requestFileBytes = preparedFiles.reduce(
+        (total, item) => total + item.size,
+        0,
+      );
+
+      if (requestFileBytes > TRAINING_REQUEST_SAFE_BYTES) {
+        throw new Error(
+          `The selected evidence is still ${(requestFileBytes / 1024 / 1024).toFixed(
+            1,
+          )} MB after photo compression. Use a smaller PDF or split the evidence before uploading.`,
+        );
+      }
+
+      if (preparedSingleFile) form.set("file", preparedSingleFile);
+      if (preparedFrontFile) form.set("frontFile", preparedFrontFile);
+      if (preparedBackFile) form.set("backFile", preparedBackFile);
+
+      const response = await apiFetch("/api/training/records/upload", {
+        method: "POST",
+        body: form,
+      });
+
+      const responseText = await response.text();
+      let result: {
+        error?: string;
+        workflowStatus?: string;
+        notificationWarning?: string | null;
+      } | null = null;
+
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText) as {
+            error?: string;
+            workflowStatus?: string;
+            notificationWarning?: string | null;
+          };
+        } catch {
+          result = null;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          clean(result?.error) ||
+            (clean(responseText) && !clean(responseText).startsWith("<")
+              ? `Upload failed (${response.status}): ${clean(responseText).slice(0, 500)}`
+              : `Upload failed (${response.status} ${response.statusText}).`),
+        );
+      }
+
+      const baseMessage =
+        result?.workflowStatus === "approved"
+          ? `${selectedType.name} added for ${employee.full_name} and published through the Training workflow.`
+          : `${selectedType.name} submitted for ${employee.full_name} and is waiting for Training review.`;
+
+      await onSuccess(
+        result?.notificationWarning
+          ? `${baseMessage} ${result.notificationWarning}`
+          : baseMessage,
+      );
+    } catch (error) {
+      setLocalMessage({
+        tone: "error",
+        text:
+          error instanceof Error
+            ? error.message
+            : "Training record could not be uploaded.",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const evidenceType = clean(selectedType?.document_upload_type) || "single";
+  const acceptedExtensions = selectedType?.allowed_extensions?.length
+    ? selectedType.allowed_extensions.map((item) => `.${clean(item).replace(/^\./, "")}`).join(",")
+    : "application/pdf,image/*";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-4 sm:p-8">
+      <div className="my-auto w-full max-w-5xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <div className="text-xs font-black uppercase tracking-[0.12em] text-blue-600">
+              {employee.full_name}
+            </div>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">
+              Add Training Record
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Add the record directly to this employee using the same configured Training workflow, evidence rules and SharePoint publishing process as the main Training upload page.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-60"
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="max-h-[82vh] space-y-6 overflow-y-auto p-6">
+          {localMessage ? (
+            <div
+              className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
+                localMessage.tone === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-rose-200 bg-rose-50 text-rose-800"
+              }`}
+            >
+              {localMessage.text}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <UploadField label="Training Type" required>
+              <SelectField
+                value={trainingTypeId}
+                onChange={setTrainingTypeId}
+                options={[
+                  { value: "", label: "Select Training Type..." },
+                  ...trainingTypes.map((type) => ({
+                    value: type.id,
+                    label: `${type.name}${type.short_code ? ` (${type.short_code})` : ""}`,
+                  })),
+                ]}
+              />
+            </UploadField>
+
+            {selectedType?.requires_project ? (
+              <UploadField label="Project" required>
+                <SelectField
+                  value={projectId}
+                  onChange={setProjectId}
+                  options={[
+                    { value: "", label: "Select project..." },
+                    ...projects.map((project) => ({
+                      value: project.id,
+                      label: `${project.project_number ? `${project.project_number} · ` : ""}${project.name}`,
+                    })),
+                  ]}
+                />
+              </UploadField>
+            ) : null}
+
+            {selectedType?.requires_issuer || selectedType?.supports_provider ? (
+              <UploadField
+                label="Provider / Issuing Organisation"
+                required={selectedType.requires_issuer === true}
+              >
+                <input
+                  value={issuer}
+                  onChange={(event) => setIssuer(event.target.value)}
+                  className={trainingInputClass}
+                  placeholder="Training provider or issuing authority"
+                />
+              </UploadField>
+            ) : null}
+
+            {selectedType?.requires_certificate_number ? (
+              <UploadField label="Certificate / Licence Number" required>
+                <input
+                  value={certificateNumber}
+                  onChange={(event) => setCertificateNumber(event.target.value)}
+                  className={trainingInputClass}
+                  placeholder="Enter number"
+                />
+              </UploadField>
+            ) : null}
+
+            {selectedType?.requires_issue_date ? (
+              <UploadField label="Issue Date" required>
+                <input
+                  type="date"
+                  value={issueDate}
+                  onChange={(event) => updateIssueDate(event.target.value)}
+                  className={trainingInputClass}
+                />
+              </UploadField>
+            ) : null}
+
+            {selectedType && clean(selectedType.validity_mode) !== "never" ? (
+              <UploadField
+                label="Expiry Date"
+                required={selectedType.requires_expiry_date === true}
+              >
+                <input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(event) => setExpiryDate(event.target.value)}
+                  className={trainingInputClass}
+                />
+              </UploadField>
+            ) : null}
+          </div>
+
+          {selectedType && typeOptions.length > 0 ? (
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="font-bold text-slate-900">Classes / Endorsements</div>
+              <p className="mt-1 text-xs text-slate-500">
+                These options come from the configured Training Type, so HRWL and Driver Licence classes stay consistent across TTTracker.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {typeOptions.map((option) => {
+                  const checked = selectedOptionIds.includes(option.id);
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedOptionIds((current) => {
+                          if (selectedType.subtype_mode === "single") {
+                            return checked ? [] : [option.id];
+                          }
+                          return checked
+                            ? current.filter((id) => id !== option.id)
+                            : [...current, option.id];
+                        });
+                      }}
+                      className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                        checked
+                          ? "border-blue-300 bg-blue-50 text-blue-800"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      {option.code ? `${option.code} · ` : ""}{option.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {typeFields.length > 0 ? (
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+              <div className="font-bold text-slate-900">Configured Details</div>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {typeFields.map((field) => (
+                  <TrainingDynamicField
+                    key={field.id}
+                    field={field}
+                    value={metadata[field.field_key]}
+                    onChange={(value) =>
+                      setMetadata((current) => ({
+                        ...current,
+                        [field.field_key]: value,
+                      }))
+                    }
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {selectedType?.requires_document ? (
+            <section className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+              <div className="flex items-center gap-2 font-bold text-blue-950">
+                <Paperclip size={18} />
+                Evidence / Attachments
+              </div>
+              <p className="mt-1 text-xs leading-5 text-blue-800">
+                Photos are automatically compressed before upload. The approved evidence continues through the existing Training SharePoint workflow.
+              </p>
+
+              {evidenceType === "single_or_front_back" ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFlexibleEvidenceMode("single")}
+                    className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                      flexibleEvidenceMode === "single"
+                        ? "bg-blue-700 text-white"
+                        : "border border-blue-200 bg-white text-blue-800"
+                    }`}
+                  >
+                    Single / Combined File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFlexibleEvidenceMode("front_back")}
+                    className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                      flexibleEvidenceMode === "front_back"
+                        ? "bg-blue-700 text-white"
+                        : "border border-blue-200 bg-white text-blue-800"
+                    }`}
+                  >
+                    Front + Back
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {evidenceType === "front_back" ||
+                (evidenceType === "single_or_front_back" && flexibleEvidenceMode === "front_back") ? (
+                  <>
+                    <TrainingFileInput
+                      label="Front"
+                      file={frontFile}
+                      accept={acceptedExtensions}
+                      onChange={setFrontFile}
+                    />
+                    <TrainingFileInput
+                      label="Back"
+                      file={backFile}
+                      accept={acceptedExtensions}
+                      onChange={setBackFile}
+                    />
+                  </>
+                ) : (
+                  <div className="md:col-span-2">
+                    <TrainingFileInput
+                      label="Certificate / Licence Evidence"
+                      file={singleFile}
+                      accept={acceptedExtensions}
+                      onChange={setSingleFile}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+          ) : selectedType ? (
+            <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+              This Training Type does not require an attachment.
+            </section>
+          ) : null}
+
+          {selectedType && sameTypeRecords.length > 0 ? (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <div className="font-bold text-amber-950">Existing current record found</div>
+              <p className="mt-1 text-sm text-amber-800">
+                Choose whether this upload replaces an existing record or is another current record.
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReplaceChoice("replace")}
+                  className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                    replaceChoice === "replace"
+                      ? "bg-amber-700 text-white"
+                      : "border border-amber-200 bg-white text-amber-900"
+                  }`}
+                >
+                  Replace Current
+                </button>
+
+                {selectedType.allows_multiple_current !== false ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplaceChoice("add");
+                      setReplaceRecordId("");
+                    }}
+                    className={`rounded-xl px-3 py-2 text-sm font-bold ${
+                      replaceChoice === "add"
+                        ? "bg-amber-700 text-white"
+                        : "border border-amber-200 bg-white text-amber-900"
+                    }`}
+                  >
+                    Add Another Current Record
+                  </button>
+                ) : null}
+              </div>
+
+              {replaceChoice === "replace" ? (
+                <div className="mt-4">
+                  <UploadField label="Record being replaced" required>
+                    <SelectField
+                      value={replaceRecordId}
+                      onChange={setReplaceRecordId}
+                      options={[
+                        { value: "", label: "Select current record..." },
+                        ...sameTypeRecords.map((record) => ({
+                          value: record.id,
+                          label: `${record.certificate_number || record.training_name} · ${
+                            record.expiry_date ? formatDate(record.expiry_date) : "No expiry"
+                          }`,
+                        })),
+                      ]}
+                    />
+                  </UploadField>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {selectedType ? (
+            <UploadField label="Notes">
+              <textarea
+                rows={3}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                placeholder="Operational Training notes"
+                className={`${trainingInputClass} resize-none`}
+              />
+            </UploadField>
+          ) : null}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={submitting || !selectedType}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {submitting ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Upload size={16} />
+              )}
+              {submitting ? "Uploading..." : "Add Training Record"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const trainingInputClass =
+  "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2";
+
+function UploadField({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-800">
+        {label}
+        {required ? <span className="ml-1 text-rose-600">*</span> : null}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function TrainingFileInput({
+  label,
+  file,
+  accept,
+  onChange,
+}: {
+  label: string;
+  file: File | null;
+  accept: string;
+  onChange: (file: File | null) => void;
+}) {
+  return (
+    <label className="block rounded-2xl border border-dashed border-blue-300 bg-white p-4">
+      <div className="flex items-center gap-2 font-bold text-slate-900">
+        <Upload size={16} />
+        {label}
+      </div>
+      <input
+        type="file"
+        accept={accept}
+        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+        className="mt-3 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-white"
+      />
+      {file ? (
+        <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+          {file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB
+        </div>
+      ) : null}
+    </label>
+  );
+}
+
+function TrainingDynamicField({
+  field,
+  value,
+  onChange,
+}: {
+  field: CustomField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  const options = fieldOptions(field.options);
+
+  if (field.field_type === "checkbox") {
+    return (
+      <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 md:col-span-2">
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(event) => onChange(event.target.checked)}
+          className="h-5 w-5 rounded border-slate-300"
+        />
+        <span className="text-sm font-black text-slate-800">
+          {field.label}
+          {field.required ? <span className="ml-1 text-rose-600">*</span> : null}
+        </span>
+      </label>
+    );
+  }
+
+  if (field.field_type === "select") {
+    return (
+      <UploadField label={field.label} required={field.required}>
+        <select
+          className={trainingInputClass}
+          value={clean(value)}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          <option value="">Select...</option>
+          {options.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+        {field.help_text ? (
+          <div className="mt-1 text-xs text-slate-500">{field.help_text}</div>
+        ) : null}
+      </UploadField>
+    );
+  }
+
+  if (field.field_type === "multiselect") {
+    const selected = Array.isArray(value) ? value.map(String) : [];
+    return (
+      <div className="md:col-span-2">
+        <div className="mb-2 text-sm font-black text-slate-800">
+          {field.label}
+          {field.required ? <span className="ml-1 text-rose-600">*</span> : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {options.map((option) => {
+            const checked = selected.includes(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() =>
+                  onChange(
+                    checked
+                      ? selected.filter((item) => item !== option)
+                      : [...selected, option],
+                  )
+                }
+                className={`rounded-xl border px-3 py-2 text-sm font-bold ${
+                  checked
+                    ? "border-blue-300 bg-blue-50 text-blue-800"
+                    : "border-slate-200 bg-white text-slate-700"
+                }`}
+              >
+                {option}
+              </button>
+            );
+          })}
+        </div>
+        {field.help_text ? (
+          <div className="mt-1 text-xs text-slate-500">{field.help_text}</div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (field.field_type === "textarea") {
+    return (
+      <div className="md:col-span-2">
+        <UploadField label={field.label} required={field.required}>
+          <textarea
+            rows={3}
+            className={`${trainingInputClass} resize-none`}
+            placeholder={field.placeholder ?? ""}
+            value={clean(value)}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          {field.help_text ? (
+            <div className="mt-1 text-xs text-slate-500">{field.help_text}</div>
+          ) : null}
+        </UploadField>
+      </div>
+    );
+  }
+
+  const type =
+    field.field_type === "number"
+      ? "number"
+      : field.field_type === "date"
+        ? "date"
+        : "text";
+
+  return (
+    <UploadField label={field.label} required={field.required}>
+      <input
+        type={type}
+        className={trainingInputClass}
+        placeholder={field.placeholder ?? ""}
+        value={clean(value)}
+        onChange={(event) =>
+          onChange(
+            field.field_type === "number"
+              ? event.target.value === ""
+                ? ""
+                : Number(event.target.value)
+              : event.target.value,
+          )
+        }
+      />
+      {field.help_text ? (
+        <div className="mt-1 text-xs text-slate-500">{field.help_text}</div>
+      ) : null}
+    </UploadField>
   );
 }
 
@@ -1626,9 +2835,7 @@ function TrainingRecordModal({
               Documents
             </div>
             <p className="mt-2 text-sm leading-6 text-blue-800">
-              Save the record now. Front, back, combined PDF and certificate
-              uploads will be connected to SharePoint later through the
-              employee_training_documents table.
+              Evidence / attachments are added through the Add Record workflow on this employee profile. Existing record edits here only update the record details.
             </p>
           </div>
 
@@ -2009,10 +3216,11 @@ function HistoryTab({
 }) {
   const historicalTraining = trainingRecords.filter(
     (record) =>
-      record.superseded_at ||
+      !record.deleted_at &&
+      (record.superseded_at ||
       record.revoked_at ||
       record.record_status === "superseded" ||
-      record.record_status === "revoked",
+      record.record_status === "revoked"),
   );
 
   return (
