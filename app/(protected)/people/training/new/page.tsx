@@ -69,6 +69,13 @@ type TrainingType = {
   allows_multiple_current: boolean | null;
   subtype_mode: string | null;
   requires_review: boolean | null;
+
+  /**
+   * Optional additional Training Types that may be created from the same
+   * course evidence and issue date. The linked Training Type still keeps
+   * its own expiry, review and replacement configuration.
+   */
+  linked_evidence_training_type_ids: string[] | null;
 };
 
 type TrainingOption = {
@@ -384,6 +391,15 @@ export default function AddTrainingRecordPage() {
     setFlexibleEvidenceMode,
   ] = useState<"single" | "front_back">("single");
 
+  /**
+   * Additional qualifications completed on the same course and supported by
+   * the selected Training Type's linked-evidence configuration.
+   */
+  const [
+    linkedEvidenceTypeIds,
+    setLinkedEvidenceTypeIds,
+  ] = useState<string[]>([]);
+
   const [existingRecords, setExistingRecords] =
     useState<ExistingRecord[]>([]);
 
@@ -480,7 +496,7 @@ export default function AddTrainingRecordPage() {
       supabase
         .from("training_types")
         .select(
-          "id,category_id,name,short_code,category,active,requires_issue_date,requires_expiry_date,allows_no_expiry,validity_mode,validity_interval_value,validity_interval_unit,requires_certificate_number,requires_issuer,requires_project,requires_document,document_upload_type,allows_multiple_current,subtype_mode,requires_review",
+          "id,category_id,name,short_code,category,active,requires_issue_date,requires_expiry_date,allows_no_expiry,validity_mode,validity_interval_value,validity_interval_unit,requires_certificate_number,requires_issuer,requires_project,requires_document,document_upload_type,allows_multiple_current,subtype_mode,requires_review,linked_evidence_training_type_ids",
         )
         .eq("active", true)
         .order("sort_order")
@@ -650,6 +666,46 @@ export default function AddTrainingRecordPage() {
     );
 
   /**
+   * Linked evidence is configuration-driven. No Training Type names are
+   * hard-coded here, so First Aid -> CPR is only one possible configuration.
+   */
+  const linkedEvidenceTypes = useMemo(() => {
+    const linkedIds = Array.isArray(
+      selectedType?.linked_evidence_training_type_ids,
+    )
+      ? selectedType.linked_evidence_training_type_ids
+      : [];
+
+    return linkedIds
+      .map((id) =>
+        types.find((item) => item.id === id),
+      )
+      .filter(
+        (item): item is TrainingType =>
+          Boolean(item?.active),
+      );
+  }, [selectedType, types]);
+
+  const selectedLinkedEvidenceTypes =
+    linkedEvidenceTypes.filter((item) =>
+      linkedEvidenceTypeIds.includes(item.id),
+    );
+
+  /**
+   * The selected physical evidence format is reused by linked records.
+   * A linked Training Type can still require its own configured document mode;
+   * validation below prevents incompatible combinations.
+   */
+  const selectedEvidenceMode =
+    selectedType?.document_upload_type ===
+    "single_or_front_back"
+      ? flexibleEvidenceMode
+      : selectedType?.document_upload_type ||
+        (selectedType?.requires_document
+          ? "single"
+          : "none");
+
+  /**
    * Automatic validity remains the default for a Training Type,
    * but an expiry date printed on the actual certificate / VOC
    * takes precedence.
@@ -707,6 +763,7 @@ export default function AddTrainingRecordPage() {
     setBackFile(null);
 
     setFlexibleEvidenceMode("single");
+    setLinkedEvidenceTypeIds([]);
 
     setExistingRecords([]);
 
@@ -877,6 +934,118 @@ export default function AddTrainingRecordPage() {
     );
   }
 
+  function validateLinkedEvidenceType(
+    linkedType: TrainingType,
+  ) {
+    if (
+      linkedType.requires_project &&
+      !projectId
+    ) {
+      return `${linkedType.name} also requires a project.`;
+    }
+
+    if (
+      linkedType.requires_issuer &&
+      !issuer.trim()
+    ) {
+      return `${linkedType.name} also requires the provider / issuing organisation.`;
+    }
+
+    if (
+      linkedType.requires_certificate_number &&
+      !certificateNumber.trim()
+    ) {
+      return `${linkedType.name} also requires a certificate / licence number.`;
+    }
+
+    if (
+      (linkedType.requires_issue_date ||
+        linkedType.validity_mode ===
+          "automatic") &&
+      !issueDate
+    ) {
+      return `${linkedType.name} also requires an issue date.`;
+    }
+
+    /**
+     * A linked record deliberately does not copy the primary Training Type's
+     * expiry date. Automatic validity is recalculated by the existing upload
+     * API from the linked Training Type's own configuration. Manual validity
+     * would need its own date input, so require a separate upload instead.
+     */
+    if (
+      linkedType.validity_mode !== "never" &&
+      linkedType.validity_mode !==
+        "automatic" &&
+      linkedType.requires_expiry_date
+    ) {
+      return `${linkedType.name} uses a manual expiry date. Configure it as Automatic or Never to use linked evidence without entering a second expiry date.`;
+    }
+
+    const requiredLinkedFields =
+      customFields.filter(
+        (field) =>
+          field.training_type_id ===
+            linkedType.id &&
+          field.active &&
+          field.required,
+      );
+
+    if (requiredLinkedFields.length > 0) {
+      return `${linkedType.name} has its own required custom fields (${requiredLinkedFields
+        .map((field) => field.label)
+        .join(
+          ", ",
+        )}). Complete it as a separate Training record or remove those required fields before linking it.`;
+    }
+
+    if (
+      linkedType.subtype_mode &&
+      linkedType.subtype_mode !== "none" &&
+      options.some(
+        (option) =>
+          option.training_type_id ===
+            linkedType.id &&
+          option.active !== false,
+      )
+    ) {
+      return `${linkedType.name} requires its own class / option selection, so it cannot be created silently from the shared course evidence.`;
+    }
+
+    if (linkedType.requires_document) {
+      if (selectedEvidenceMode === "none") {
+        return `${linkedType.name} requires evidence, but the primary Training Type has no document to reuse.`;
+      }
+
+      const linkedMode =
+        linkedType.document_upload_type ===
+        "single_or_front_back"
+          ? selectedEvidenceMode
+          : linkedType.document_upload_type ||
+            "single";
+
+      if (linkedMode === "front_back") {
+        if (
+          selectedEvidenceMode !==
+            "front_back" ||
+          !frontFile ||
+          !backFile
+        ) {
+          return `${linkedType.name} requires front and back evidence, but the selected shared evidence is not front + back.`;
+        }
+      } else if (linkedMode === "single") {
+        if (
+          selectedEvidenceMode !== "single" ||
+          !singleFile
+        ) {
+          return `${linkedType.name} requires a single document, but the selected shared evidence is not a single document.`;
+        }
+      }
+    }
+
+    return null;
+  }
+
   function validate() {
     if (!selectedEmployee) {
       return "Select the employee.";
@@ -965,6 +1134,18 @@ export default function AddTrainingRecordPage() {
       }
     }
 
+    for (const linkedType of
+      selectedLinkedEvidenceTypes) {
+      const linkedError =
+        validateLinkedEvidenceType(
+          linkedType,
+        );
+
+      if (linkedError) {
+        return linkedError;
+      }
+    }
+
     if (
       existingRecords.length > 0
     ) {
@@ -990,6 +1171,371 @@ export default function AddTrainingRecordPage() {
     }
 
     return null;
+  }
+
+  /* =======================================================
+     Submit helpers
+     ======================================================= */
+
+  async function replacementForLinkedType(
+    linkedType: TrainingType,
+  ) {
+    const { data, error } = await supabase
+      .from("employee_training_records")
+      .select(
+        "id,employee_id,training_type_id,workflow_status,current_version,superseded_at,revoked_at,created_at",
+      )
+      .eq(
+        "employee_id",
+        selectedEmployee?.id ?? "",
+      )
+      .eq(
+        "training_type_id",
+        linkedType.id,
+      )
+      .eq("current_version", true)
+      .is("superseded_at", null)
+      .is("revoked_at", null)
+      .order("created_at", {
+        ascending: false,
+      });
+
+    if (error) {
+      throw new Error(
+        `Unable to check the current ${linkedType.name} record: ${error.message}`,
+      );
+    }
+
+    const currentApproved =
+      (data ?? []).filter(
+        (row) =>
+          clean(row.workflow_status) ===
+          "approved",
+      );
+
+    if (currentApproved.length === 0) {
+      return {
+        replacementMode:
+          "none" as const,
+        supersedesRecordId: "",
+      };
+    }
+
+    if (linkedType.allows_multiple_current) {
+      return {
+        replacementMode:
+          "add" as const,
+        supersedesRecordId: "",
+      };
+    }
+
+    return {
+      replacementMode:
+        "replace" as const,
+      supersedesRecordId:
+        clean(currentApproved[0]?.id),
+    };
+  }
+
+  type PreparedEvidence = {
+    singleFile: File | null;
+    frontFile: File | null;
+    backFile: File | null;
+  };
+
+  function appendPreparedEvidence(
+    form: FormData,
+    trainingType: TrainingType,
+    preparedEvidence: PreparedEvidence,
+  ) {
+    const uploadMode =
+      trainingType.document_upload_type ===
+      "single_or_front_back"
+        ? selectedEvidenceMode
+        : trainingType.document_upload_type ||
+          (trainingType.requires_document
+            ? "single"
+            : "none");
+
+    form.set(
+      "documentUploadType",
+      uploadMode,
+    );
+
+    if (!trainingType.requires_document) {
+      return;
+    }
+
+    if (uploadMode === "front_back") {
+      if (preparedEvidence.frontFile) {
+        form.set(
+          "frontFile",
+          preparedEvidence.frontFile,
+        );
+      }
+
+      if (preparedEvidence.backFile) {
+        form.set(
+          "backFile",
+          preparedEvidence.backFile,
+        );
+      }
+
+      return;
+    }
+
+    if (preparedEvidence.singleFile) {
+      form.set(
+        "file",
+        preparedEvidence.singleFile,
+      );
+    }
+  }
+
+  async function uploadTrainingRecord({
+    trainingType,
+    linkedFromTypeId = null,
+    replacementMode,
+    supersedesRecordId,
+    primary,
+    preparedEvidence,
+  }: {
+    trainingType: TrainingType;
+    linkedFromTypeId?: string | null;
+    replacementMode:
+      | "replace"
+      | "add"
+      | "none";
+    supersedesRecordId: string;
+    primary: boolean;
+    preparedEvidence: PreparedEvidence;
+  }) {
+    const form = new FormData();
+
+    form.set(
+      "employeeId",
+      selectedEmployee?.id ?? "",
+    );
+
+    form.set(
+      "trainingTypeId",
+      trainingType.id,
+    );
+
+    form.set(
+      "projectId",
+      projectId,
+    );
+
+    form.set(
+      "issuer",
+      issuer.trim(),
+    );
+
+    form.set(
+      "certificateNumber",
+      certificateNumber.trim(),
+    );
+
+    form.set(
+      "issueDate",
+      issueDate,
+    );
+
+    /**
+     * Critical linked-evidence rule:
+     *
+     * - the primary record keeps the visible expiry, including a document
+     *   override when the certificate explicitly prints a different date;
+     * - linked records leave expiry blank so the existing upload API calculates
+     *   expiry from THAT linked Training Type's own validity configuration.
+     *
+     * Example: same issue date, First Aid = 3 years, CPR = 1 year.
+     */
+    form.set(
+      "expiryDate",
+      primary ? expiryDate : "",
+    );
+
+    form.set(
+      "notes",
+      notes.trim(),
+    );
+
+    const linkedCalculatedExpiry =
+      !primary &&
+      trainingType.validity_mode ===
+        "automatic" &&
+      issueDate
+        ? addInterval(
+            issueDate,
+            trainingType.validity_interval_value,
+            trainingType.validity_interval_unit,
+          )
+        : "";
+
+    form.set(
+      "metadata",
+      JSON.stringify({
+        ...(primary ? metadata : {}),
+
+        ...(primary &&
+        selectedType?.validity_mode ===
+          "automatic"
+          ? {
+              expiry_date_source:
+                expiryIsManualOverride
+                  ? "document_override"
+                  : "configured_interval",
+
+              configured_expiry_date:
+                calculatedExpiryDate ||
+                null,
+            }
+          : {}),
+
+        ...(linkedFromTypeId
+          ? {
+              linked_evidence: true,
+              linked_from_training_type_id:
+                linkedFromTypeId,
+              linked_course_issue_date:
+                issueDate || null,
+
+              expiry_date_source:
+                trainingType.validity_mode ===
+                "automatic"
+                  ? "configured_interval"
+                  : trainingType.validity_mode ===
+                      "never"
+                    ? "does_not_expire"
+                    : null,
+
+              configured_expiry_date:
+                linkedCalculatedExpiry ||
+                null,
+            }
+          : {}),
+      }),
+    );
+
+    form.set(
+      "selectedOptionIds",
+      JSON.stringify(
+        primary ? selectedOptionIds : [],
+      ),
+    );
+
+    form.set(
+      "selectedOptionCodes",
+      JSON.stringify(
+        primary
+          ? selectedOptions.map(
+              (option) => option.code,
+            )
+          : [],
+      ),
+    );
+
+    form.set(
+      "replacementMode",
+      replacementMode,
+    );
+
+    form.set(
+      "supersedesRecordId",
+      supersedesRecordId,
+    );
+
+    form.set(
+      "source",
+      selectedEmployee?.id ===
+        selfEmployeeId
+        ? "employee_self_service"
+        : "website_admin",
+    );
+
+    appendPreparedEvidence(
+      form,
+      trainingType,
+      preparedEvidence,
+    );
+
+    const response = await apiFetch(
+      "/api/training/records/upload",
+      {
+        method: "POST",
+        body: form,
+      },
+    );
+
+    /**
+     * Do NOT blindly call response.json(). Deployment/platform errors can
+     * return plain text or HTML.
+     */
+    const responseText =
+      await response.text();
+
+    let result: {
+      error?: string;
+      workflowStatus?: string;
+      notificationWarning?:
+        | string
+        | null;
+      recordId?: string;
+    } | null = null;
+
+    if (responseText) {
+      try {
+        result = JSON.parse(
+          responseText,
+        ) as {
+          error?: string;
+          workflowStatus?: string;
+          notificationWarning?:
+            | string
+            | null;
+          recordId?: string;
+        };
+      } catch {
+        result = null;
+      }
+    }
+
+    if (!response.ok) {
+      const serverMessage =
+        clean(result?.error);
+
+      const rawMessage =
+        clean(responseText);
+
+      console.error(
+        "Training upload failed",
+        {
+          trainingTypeId:
+            trainingType.id,
+          trainingTypeName:
+            trainingType.name,
+          status: response.status,
+          statusText:
+            response.statusText,
+          response: rawMessage,
+        },
+      );
+
+      throw new Error(
+        serverMessage ||
+          (rawMessage &&
+          !rawMessage.startsWith("<")
+            ? `Upload failed (${response.status}): ${rawMessage.slice(
+                0,
+                500,
+              )}`
+            : `Upload failed (${response.status} ${response.statusText}). The upload API did not return a valid TTTracker error response.`),
+      );
+    }
+
+    return result;
   }
 
   /* =======================================================
@@ -1024,116 +1570,16 @@ export default function AddTrainingRecordPage() {
 
     setSubmitting(true);
 
+    const completedNames: string[] = [];
+    const warnings: string[] = [];
+    const linkedFailures: string[] = [];
+
     try {
-      const form =
-        new FormData();
-
-      form.set(
-        "employeeId",
-        selectedEmployee.id,
-      );
-
-      form.set(
-        "trainingTypeId",
-        selectedType.id,
-      );
-
-      form.set(
-        "projectId",
-        projectId,
-      );
-
-      form.set(
-        "issuer",
-        issuer.trim(),
-      );
-
-      form.set(
-        "certificateNumber",
-        certificateNumber.trim(),
-      );
-
-      form.set(
-        "issueDate",
-        issueDate,
-      );
-
-      form.set(
-        "expiryDate",
-        expiryDate,
-      );
-
-      form.set(
-        "notes",
-        notes.trim(),
-      );
-
-      form.set(
-        "metadata",
-        JSON.stringify({
-          ...metadata,
-
-          ...(selectedType.validity_mode ===
-          "automatic"
-            ? {
-                expiry_date_source:
-                  expiryIsManualOverride
-                    ? "document_override"
-                    : "configured_interval",
-
-                configured_expiry_date:
-                  calculatedExpiryDate ||
-                  null,
-              }
-            : {}),
-        }),
-      );
-
-      form.set(
-        "selectedOptionIds",
-        JSON.stringify(
-          selectedOptionIds,
-        ),
-      );
-
-      form.set(
-        "selectedOptionCodes",
-        JSON.stringify(
-          selectedOptions.map(
-            (option) => option.code,
-          ),
-        ),
-      );
-
-      form.set(
-        "documentUploadType",
-        selectedType.document_upload_type ===
-          "single_or_front_back"
-          ? flexibleEvidenceMode
-          : selectedType.document_upload_type ||
-              "single",
-      );
-
-      form.set(
-        "replacementMode",
-        replaceChoice ?? "none",
-      );
-
-      form.set(
-        "supersedesRecordId",
-        replaceRecordId,
-      );
-
-      form.set(
-        "source",
-        selectedEmployee.id ===
-          selfEmployeeId
-          ? "employee_self_service"
-          : "website_admin",
-      );
-
       /**
-       * Compress phone photos before creating the request.
+       * Compress/prepare the physical evidence only once. The same prepared
+       * File objects can then be attached to the primary and any selected
+       * linked Training record requests without asking the user to upload them
+       * again.
        */
       const [
         preparedSingleFile,
@@ -1190,128 +1636,133 @@ export default function AddTrainingRecordPage() {
         );
       }
 
-      if (preparedSingleFile) {
-        form.set(
-          "file",
+      const preparedEvidence: PreparedEvidence = {
+        singleFile:
           preparedSingleFile,
-        );
-      }
-
-      if (preparedFrontFile) {
-        form.set(
-          "frontFile",
+        frontFile:
           preparedFrontFile,
-        );
-      }
-
-      if (preparedBackFile) {
-        form.set(
-          "backFile",
+        backFile:
           preparedBackFile,
+      };
+
+      const primaryResult =
+        await uploadTrainingRecord({
+          trainingType: selectedType,
+          replacementMode:
+            replaceChoice ?? "none",
+          supersedesRecordId:
+            replaceRecordId,
+          primary: true,
+          preparedEvidence,
+        });
+
+      completedNames.push(
+        selectedType.name,
+      );
+
+      if (
+        primaryResult?.notificationWarning
+      ) {
+        warnings.push(
+          primaryResult.notificationWarning,
         );
       }
 
-      const response =
-        await apiFetch(
-          "/api/training/records/upload",
-          {
-            method: "POST",
-            body: form,
-          },
-        );
-
-      /**
-       * Do NOT blindly call response.json().
-       * Deployment/platform errors can return plain text or HTML.
-       */
-      const responseText =
-        await response.text();
-
-      let result: {
-        error?: string;
-        workflowStatus?: string;
-        notificationWarning?:
-          | string
-          | null;
-      } | null = null;
-
-      if (responseText) {
+      for (const linkedType of
+        selectedLinkedEvidenceTypes) {
         try {
-          result = JSON.parse(
-            responseText,
-          ) as {
-            error?: string;
-            workflowStatus?: string;
-            notificationWarning?:
-              | string
-              | null;
-          };
-        } catch {
-          result = null;
+          const replacement =
+            await replacementForLinkedType(
+              linkedType,
+            );
+
+          const linkedResult =
+            await uploadTrainingRecord({
+              trainingType:
+                linkedType,
+              linkedFromTypeId:
+                selectedType.id,
+              replacementMode:
+                replacement.replacementMode,
+              supersedesRecordId:
+                replacement.supersedesRecordId,
+              primary: false,
+              preparedEvidence,
+            });
+
+          completedNames.push(
+            linkedType.name,
+          );
+
+          if (
+            linkedResult?.notificationWarning
+          ) {
+            warnings.push(
+              `${linkedType.name}: ${linkedResult.notificationWarning}`,
+            );
+          }
+        } catch (linkedError) {
+          linkedFailures.push(
+            `${linkedType.name}: ${
+              linkedError instanceof Error
+                ? linkedError.message
+                : "linked Training record could not be created"
+            }`,
+          );
         }
       }
 
-      if (!response.ok) {
-        const serverMessage =
-          clean(result?.error);
+      if (linkedFailures.length > 0) {
+        setMessage({
+          tone: "error",
+          text: `${completedNames.join(
+            ", ",
+          )} saved successfully. The following linked record(s) were not created: ${linkedFailures.join(
+            " | ",
+          )}. The successful records have not been rolled back.`,
+        });
+      } else if (
+        selectedLinkedEvidenceTypes.length > 0
+      ) {
+        setMessage({
+          tone:
+            warnings.length > 0
+              ? "error"
+              : "success",
+          text: `${completedNames.join(
+            " + ",
+          )} submitted using the same evidence and issue date. Each Training Type keeps its own configured expiry and review rules.${
+            warnings.length > 0
+              ? ` ${warnings.join(" ")}`
+              : ""
+          }`,
+        });
+      } else {
+        const successText =
+          primaryResult?.workflowStatus ===
+          "approved"
+            ? "Training record approved automatically and published to SharePoint."
+            : "Training record submitted. The document will be published to SharePoint after approval.";
 
-        const rawMessage =
-          clean(responseText);
-
-        console.error(
-          "Training upload failed",
-          {
-            status:
-              response.status,
-
-            statusText:
-              response.statusText,
-
-            response:
-              rawMessage,
-          },
-        );
-
-        throw new Error(
-          serverMessage ||
-            (
-              rawMessage &&
-              !rawMessage.startsWith(
-                "<",
-              )
-                ? `Upload failed (${response.status}): ${rawMessage.slice(
-                    0,
-                    500,
-                  )}`
-                : `Upload failed (${response.status} ${response.statusText}). The upload API did not return a valid TTTracker error response.`
-            ),
-        );
+        setMessage({
+          tone:
+            primaryResult?.notificationWarning
+              ? "error"
+              : "success",
+          text:
+            primaryResult?.notificationWarning
+              ? `${successText} ${primaryResult.notificationWarning}`
+              : successText,
+        });
       }
 
-      const successText =
-        result?.workflowStatus ===
-        "approved"
-          ? "Training record approved automatically and published to SharePoint."
-          : "Training record submitted. The document will be published to SharePoint after approval.";
-
-      setMessage({
-        tone:
-          result?.notificationWarning
-            ? "error"
-            : "success",
-
-        text:
-          result?.notificationWarning
-            ? `${successText} ${result.notificationWarning}`
-            : successText,
-      });
-
       /**
-       * Keep selected employee so repetitive Admin uploads
-       * for one employee are quicker.
+       * Keep selected employee so repetitive Admin uploads for one employee are
+       * quicker. Everything specific to the submitted Training record resets.
        */
       setTrainingTypeId("");
       setSelectedOptionIds([]);
+      setLinkedEvidenceTypeIds([]);
       setProjectId("");
       setIssuer("");
       setCertificateNumber("");
@@ -1324,9 +1775,9 @@ export default function AddTrainingRecordPage() {
       setSingleFile(null);
       setFrontFile(null);
       setBackFile(null);
+      setFlexibleEvidenceMode("single");
 
       setExistingRecords([]);
-
       setReplaceChoice(null);
       setReplaceRecordId("");
     } catch (error) {
@@ -1983,13 +2434,130 @@ export default function AddTrainingRecordPage() {
             ) : null}
 
             {/* =================================================
+                Combined course / linked evidence
+                ================================================= */}
+
+            {linkedEvidenceTypes.length > 0 ? (
+              <Card
+                title="4. Combined Course"
+                description="Tick any additional configured qualification completed on the same course. TTTracker reuses the same evidence and issue date, while each linked Training Type keeps its own configured expiry and review rules."
+              >
+                <div className="space-y-3">
+                  {linkedEvidenceTypes.map(
+                    (linkedType) => {
+                      const checked =
+                        linkedEvidenceTypeIds.includes(
+                          linkedType.id,
+                        );
+
+                      const linkedExpiry =
+                        linkedType.validity_mode ===
+                        "never"
+                          ? "Does not expire"
+                          : linkedType.validity_mode ===
+                                "automatic" &&
+                              issueDate
+                            ? formatDate(
+                                addInterval(
+                                  issueDate,
+                                  linkedType.validity_interval_value,
+                                  linkedType.validity_interval_unit,
+                                ),
+                              )
+                            : linkedType.validity_mode ===
+                                "automatic"
+                              ? "Set issue date to calculate"
+                              : "Manual expiry — separate upload required";
+
+                      const manualExpiryBlocked =
+                        linkedType.validity_mode !==
+                          "automatic" &&
+                        linkedType.validity_mode !==
+                          "never" &&
+                        Boolean(
+                          linkedType.requires_expiry_date,
+                        );
+
+                      return (
+                        <label
+                          key={linkedType.id}
+                          className={`flex items-start gap-3 rounded-2xl border p-4 transition ${
+                            manualExpiryBlocked
+                              ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-70"
+                              : checked
+                                ? "cursor-pointer border-blue-300 bg-blue-50 ring-2 ring-blue-100"
+                                : "cursor-pointer border-slate-200 bg-white hover:bg-slate-50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4"
+                            checked={checked}
+                            disabled={
+                              manualExpiryBlocked
+                            }
+                            onChange={(event) =>
+                              setLinkedEvidenceTypeIds(
+                                (current) =>
+                                  event.target.checked
+                                    ? Array.from(
+                                        new Set([
+                                          ...current,
+                                          linkedType.id,
+                                        ]),
+                                      )
+                                    : current.filter(
+                                        (id) =>
+                                          id !==
+                                          linkedType.id,
+                                      ),
+                              )
+                            }
+                          />
+
+                          <div className="min-w-0 flex-1">
+                            <div className="font-black text-slate-900">
+                              Also record {linkedType.name}
+                              {linkedType.short_code
+                                ? ` (${linkedType.short_code})`
+                                : ""}
+                            </div>
+
+                            <div className="mt-1 text-sm font-semibold text-slate-600">
+                              Same evidence · Same issue date · Expiry: {linkedExpiry}
+                            </div>
+
+                            {linkedType.validity_mode ===
+                            "automatic" ? (
+                              <div className="mt-1 text-xs font-semibold leading-5 text-blue-700">
+                                Uses {linkedType.name}&apos;s own configured validity. A manual expiry override entered for {selectedType?.name ?? "the primary record"} is not copied across.
+                              </div>
+                            ) : null}
+                          </div>
+                        </label>
+                      );
+                    },
+                  )}
+                </div>
+              </Card>
+            ) : null}
+
+            {/* =================================================
                 Evidence
                 ================================================= */}
 
             {selectedType?.requires_document ? (
               <Card
-                title="4. Evidence"
-                description="Upload the certificate, licence or card evidence required by this Training Type."
+                title={
+                  linkedEvidenceTypes.length > 0
+                    ? "5. Evidence"
+                    : "4. Evidence"
+                }
+                description={
+                  linkedEvidenceTypes.length > 0
+                    ? "Upload the certificate, licence or card once. Any ticked linked qualification reuses this prepared evidence automatically."
+                    : "Upload the certificate, licence or card evidence required by this Training Type."
+                }
               >
                 {selectedType.document_upload_type ===
                 "single_or_front_back" ? (
@@ -2196,7 +2764,15 @@ export default function AddTrainingRecordPage() {
             {existingRecords.length >
             0 ? (
               <Card
-                title="5. Existing Current Record"
+                title={`${
+                  4 +
+                  (linkedEvidenceTypes.length > 0
+                    ? 1
+                    : 0) +
+                  (selectedType?.requires_document
+                    ? 1
+                    : 0)
+                }. Existing Current Record`}
                 description="Choose the current record that this upload replaces. Once the new record is approved, the previous evidence is moved into the employee's Superseded folder."
               >
                 <div className="space-y-3">
@@ -2359,6 +2935,62 @@ export default function AddTrainingRecordPage() {
                     : "None"
                 }
               />
+
+              {selectedLinkedEvidenceTypes.length >
+              0 ? (
+                <>
+                  <SummaryRow
+                    label="Also creates"
+                    value={
+                      selectedLinkedEvidenceTypes
+                        .map(
+                          (item) =>
+                            item.name,
+                        )
+                        .join(", ")
+                    }
+                  />
+
+                  <SummaryRow
+                    label="Linked expiry"
+                    value={
+                      selectedLinkedEvidenceTypes
+                        .map((item) => {
+                          if (
+                            item.validity_mode ===
+                            "never"
+                          ) {
+                            return `${item.short_code || item.name}: No expiry`;
+                          }
+
+                          if (
+                            item.validity_mode ===
+                              "automatic" &&
+                            issueDate
+                          ) {
+                            const linkedExpiry =
+                              addInterval(
+                                issueDate,
+                                item.validity_interval_value,
+                                item.validity_interval_unit,
+                              );
+
+                            return `${item.short_code || item.name}: ${
+                              linkedExpiry
+                                ? formatDate(
+                                    linkedExpiry,
+                                  )
+                                : "Not set"
+                            }`;
+                          }
+
+                          return `${item.short_code || item.name}: Not set`;
+                        })
+                        .join(" · ")
+                    }
+                  />
+                </>
+              ) : null}
 
               <SummaryRow
                 label="Issue"
