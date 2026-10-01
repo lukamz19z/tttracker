@@ -1,884 +1,779 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
+  ChevronDown,
+  FileCog,
+  FolderCog,
   Loader2,
+  Pencil,
+  Plus,
   RefreshCw,
-  ShieldCheck,
-  UploadCloud,
-  UserRound,
+  Save,
+  Search,
+  Settings2,
+  Tag,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  X,
 } from "lucide-react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 
-type Employee = {
-  id: string;
-  payroll_id: string | null;
-  full_name: string;
-  role: string | null;
-  user_id: string | null;
-  active: boolean | null;
-};
-
-type Project = {
+type Category = {
   id: string;
   name: string;
-  project_number: string | null;
-  status: string | null;
+  code: string;
+  sharepoint_folder_name: string;
+  description: string | null;
+  sort_order: number;
+  active: boolean;
 };
 
-type TrainingType = {
+type DocumentUploadType =
+  | "none"
+  | "single"
+  | "front_back"
+  | "single_or_front_back";
+
+type RecordType = {
   id: string;
   category_id: string | null;
   name: string;
-  short_code: string | null;
+  code: string;
   category: string | null;
-  active: boolean | null;
-  requires_issue_date: boolean | null;
-  requires_expiry_date: boolean | null;
-  allows_no_expiry: boolean | null;
-  validity_mode: string | null;
+  description: string | null;
+  active: boolean;
+  requires_issue_date: boolean;
+  requires_expiry_date: boolean;
+  allows_no_expiry: boolean;
+  validity_mode: "never" | "manual" | "automatic";
   validity_interval_value: number | null;
-  validity_interval_unit: string | null;
-  requires_certificate_number: boolean | null;
-  requires_issuer: boolean | null;
-  requires_project: boolean | null;
-  requires_document: boolean | null;
-  document_upload_type: string | null;
-  allows_multiple_current: boolean | null;
-  subtype_mode: string | null;
-  requires_review: boolean | null;
-  linked_evidence_training_type_ids: string[] | null;
+  validity_interval_unit: "days" | "weeks" | "months" | "years" | null;
+  filename_date_field: "none" | "issue_date" | "expiry_date";
+  requires_certificate_number: boolean;
+  requires_issuer: boolean;
+  requires_project: boolean;
+  requires_document: boolean;
+  document_upload_type: DocumentUploadType;
+  allows_multiple_current: boolean;
+  subtype_mode: "none" | "single" | "multiple";
+  linked_evidence_training_type_ids: string[];
+  filename_components: string[];
+  sort_order: number;
 };
 
-type TrainingOption = {
+type RecordOption = {
   id: string;
   training_type_id: string;
   name: string;
   code: string;
   description: string | null;
-  active: boolean | null;
-  sort_order: number | null;
-};
-
-type CustomField = {
-  id: string;
-  training_type_id: string;
-  field_key: string;
-  label: string;
-  field_type: string;
-  required: boolean;
-  options: unknown;
-  placeholder: string | null;
-  help_text: string | null;
-  active: boolean;
   sort_order: number;
-};
-
-type ExistingRecord = {
-  id: string;
-  employee_id: string;
-  training_type_id: string | null;
-  certificate_number: string | null;
-  option_codes: string[] | null;
-  class_codes: string[] | null;
-  issue_date: string | null;
-  expiry_date: string | null;
-  workflow_status: string | null;
-  current_version: boolean | null;
-  superseded_at: string | null;
-  revoked_at: string | null;
+  active: boolean;
 };
 
 type Message = { tone: "success" | "error"; text: string };
 
-function clean(value: unknown) {
-  return String(value ?? "").trim();
+const DEFAULT_FILENAME_COMPONENTS = [
+  "employee_id",
+  "employee_name",
+  "record_code",
+  "option_code",
+  "issue_date",
+  "expiry_date",
+  "project_code",
+  "document_side",
+];
+
+function normaliseFilenameComponents(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_FILENAME_COMPONENTS];
+  return value.filter((item): item is string => typeof item === "string");
 }
 
-function normaliseRole(value: unknown) {
-  return clean(value).toLowerCase().replace(/\s+/g, "_");
+function normaliseLinkedEvidenceTypeIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .map((item) => clean(item))
+        .filter(Boolean),
+    ),
+  );
 }
 
-function canManageOtherEmployees(role: string) {
+function validitySummary(recordType: RecordType): string {
+  if (recordType.validity_mode === "never") {
+    return "Does not expire";
+  }
+
+  if (recordType.validity_mode === "automatic") {
+    const value = recordType.validity_interval_value;
+    const unit = clean(recordType.validity_interval_unit);
+
+    return value && unit
+      ? `Automatic · ${value} ${unit}`
+      : "Automatic expiry";
+  }
+
+  return "Manual expiry";
+}
+
+function buildFilenamePreview(recordType: RecordType): string[] {
+  const previewValues: Record<string, string> = {
+    employee_id: "EMP000001",
+    employee_name: "EMPLOYEE_NAME",
+    record_code: clean(recordType.code) || "RECORD_CODE",
+    option_code:
+      recordType.subtype_mode === "multiple"
+        ? "CLASS-CLASS-CLASS"
+        : recordType.subtype_mode === "single"
+          ? "CLASS"
+          : "",
+    project_code: recordType.requires_project ? "PROJECT_CODE" : "",
+    issue_date:
+      recordType.filename_date_field === "issue_date" ? "ISSUE_DATE" : "",
+    expiry_date:
+      recordType.filename_date_field === "expiry_date" ? "EXPIRY_DATE" : "",
+    document_side: "",
+  };
+
+  const build = (side: "FRONT" | "BACK" | "") => {
+    const values: Record<string, string> = {
+      ...previewValues,
+      document_side: side,
+    };
+
+    const parts = filenameComponentsFor(recordType)
+      .map((component) => values[component] ?? "")
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    const extension =
+      side === "FRONT" || side === "BACK" ? "jpg" : "pdf";
+
+    return `${parts.join("_") || "EMP000001_EMPLOYEE_NAME_RECORD_CODE"}.${extension}`;
+  };
+
+  if (recordType.document_upload_type === "none") return [];
+
+  if (recordType.document_upload_type === "front_back") {
+    return [build("FRONT"), build("BACK")];
+  }
+
+  if (recordType.document_upload_type === "single_or_front_back") {
+    return [
+      `${build("")} (single-document option)`,
+      `${build("FRONT")} (front/back option)`,
+      `${build("BACK")} (front/back option)`,
+    ];
+  }
+
+  return [build("")];
+}
+
+function filenameComponentsFor(recordType: RecordType): string[] {
   return [
-    "admin",
-    "administrator",
-    "site_admin",
-    "hseq",
-    "safety",
-    "safety_officer",
-    "training_officer",
-    "training_admin",
-  ].includes(normaliseRole(role));
+    "employee_id",
+    "employee_name",
+    "record_code",
+    recordType.subtype_mode === "none" ? null : "option_code",
+    recordType.requires_project ? "project_code" : null,
+    recordType.filename_date_field === "issue_date" ? "issue_date" : null,
+    recordType.filename_date_field === "expiry_date" ? "expiry_date" : null,
+    recordType.document_upload_type === "front_back" ||
+    recordType.document_upload_type === "single_or_front_back"
+      ? "document_side"
+      : null,
+  ].filter((item): item is string => Boolean(item));
 }
 
-function addInterval(
-  issueDate: string,
-  value: number | null,
-  unit: string | null,
-) {
-  if (!issueDate || !value || !unit) return "";
+const clean = (value: unknown) => String(value ?? "").trim();
 
-  const date = new Date(`${issueDate}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return "";
+const makeCode = (value: string) =>
+  value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
 
-  if (unit === "days") date.setDate(date.getDate() + value);
-  if (unit === "weeks") date.setDate(date.getDate() + value * 7);
-  if (unit === "months") date.setMonth(date.getMonth() + value);
-  if (unit === "years") date.setFullYear(date.getFullYear() + value);
+// Used while typing in a code field. Unlike makeCode(), this deliberately
+// keeps a trailing hyphen so codes such as HL-WV-VOC can be entered normally.
+// makeCode() still performs the final cleanup when the form is saved.
+const editCode = (value: string) =>
+  value
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "")
+    .slice(0, 40);
 
-  return date.toISOString().slice(0, 10);
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
-
-function fieldOptions(value: unknown) {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-export default function AddTrainingRecordPage() {
+export default function TrainingConfigurationPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
-  const [currentRole, setCurrentRole] = useState("");
-  const [selfEmployeeId, setSelfEmployeeId] = useState("");
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [recordTypes, setRecordTypes] = useState<RecordType[]>([]);
+  const [recordOptions, setRecordOptions] = useState<RecordOption[]>([]);
 
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [types, setTypes] = useState<TrainingType[]>([]);
-  const [options, setOptions] = useState<TrainingOption[]>([]);
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
-
-  const [employeeId, setEmployeeId] = useState("");
-  const [trainingTypeId, setTrainingTypeId] = useState("");
-  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [issuer, setIssuer] = useState("");
-  const [certificateNumber, setCertificateNumber] = useState("");
-  const [issueDate, setIssueDate] = useState("");
-  const [expiryDate, setExpiryDate] = useState("");
-  const [notes, setNotes] = useState("");
-  const [metadata, setMetadata] = useState<Record<string, unknown>>({});
-  const [singleFile, setSingleFile] = useState<File | null>(null);
-  const [frontFile, setFrontFile] = useState<File | null>(null);
-  const [backFile, setBackFile] = useState<File | null>(null);
-  const [flexibleEvidenceMode, setFlexibleEvidenceMode] = useState<"single" | "front_back">("single");
-  const [linkedEvidenceTypeIds, setLinkedEvidenceTypeIds] = useState<string[]>([]);
-
-  const [existingRecords, setExistingRecords] = useState<ExistingRecord[]>([]);
-  const [replaceChoice, setReplaceChoice] = useState<"replace" | "add" | null>(null);
-  const [replaceRecordId, setReplaceRecordId] = useState("");
+  const [tab, setTab] = useState<"types" | "categories" | "options">("types");
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [showInactive, setShowInactive] = useState(false);
 
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
 
-  const apiFetch = useCallback(
-    async (url: string, init: RequestInit = {}) => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+  const [categoryForm, setCategoryForm] = useState<Category | null>(null);
+  const [typeForm, setTypeForm] = useState<RecordType | null>(null);
+  const [optionForm, setOptionForm] = useState<RecordOption | null>(null);
 
-      if (!session?.access_token) {
-        throw new Error("Your session has expired. Please sign in again.");
-      }
-
-      const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${session.access_token}`);
-
-      return fetch(url, {
-        ...init,
-        headers,
-        cache: "no-store",
-      });
-    },
-    [supabase],
-  );
-
-  const loadReferenceData = useCallback(async () => {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError) throw userError;
-    if (!user) throw new Error("You must be signed in.");
-
-    const [
-      roleResult,
-      employeeResult,
-      projectResult,
-      typeResult,
-      optionResult,
-      fieldResult,
-    ] = await Promise.all([
+  const loadData = useCallback(async () => {
+    const [categoryResult, typeResult, optionResult] = await Promise.all([
       supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .maybeSingle(),
-      supabase
-        .from("employees")
-        .select("id,payroll_id,full_name,role,user_id,active")
-        .eq("active", true)
-        .order("full_name"),
-      supabase
-        .from("projects")
-        .select("id,name,project_number,status")
+        .from("training_categories")
+        .select(
+          "id, name, code, sharepoint_folder_name, description, sort_order, active",
+        )
+        .order("sort_order")
         .order("name"),
       supabase
         .from("training_types")
         .select(
-          "id,category_id,name,short_code,category,active,requires_issue_date,requires_expiry_date,allows_no_expiry,validity_mode,validity_interval_value,validity_interval_unit,requires_certificate_number,requires_issuer,requires_project,requires_document,document_upload_type,allows_multiple_current,subtype_mode,requires_review,linked_evidence_training_type_ids",
+          "id, category_id, name, code:short_code, category, description, active, requires_issue_date, requires_expiry_date, allows_no_expiry, validity_mode, validity_interval_value, validity_interval_unit, filename_date_field, requires_certificate_number, requires_issuer, requires_project, requires_document, document_upload_type, allows_multiple_current, subtype_mode, linked_evidence_training_type_ids, filename_components, sort_order",
         )
-        .eq("active", true)
         .order("sort_order")
         .order("name"),
       supabase
         .from("training_type_options")
         .select(
-          "id,training_type_id,name,code,description,active,sort_order",
+          "id, training_type_id, name, code, description, sort_order, active",
         )
-        .eq("active", true)
         .order("sort_order")
         .order("name"),
-      supabase
-        .from("training_type_fields")
-        .select(
-          "id,training_type_id,field_key,label,field_type,required,options,placeholder,help_text,active,sort_order",
-        )
-        .eq("active", true)
-        .order("sort_order"),
     ]);
 
-    const errors = [
-      roleResult.error,
-      employeeResult.error,
-      projectResult.error,
-      typeResult.error,
-      optionResult.error,
-      fieldResult.error,
-    ].filter(Boolean);
+    const error =
+      categoryResult.error ?? typeResult.error ?? optionResult.error;
+    if (error) throw new Error(error.message);
 
-    if (errors.length > 0) {
-      throw new Error(errors[0]?.message || "Unable to load Training form.");
-    }
-
-    const loadedEmployees = (employeeResult.data ?? []) as Employee[];
-    const role = normaliseRole(roleResult.data?.role);
-    const self = loadedEmployees.find((item) => item.user_id === user.id);
-
-    setCurrentRole(role);
-    setSelfEmployeeId(self?.id ?? "");
-    setEmployees(loadedEmployees);
-    setProjects((projectResult.data ?? []) as Project[]);
-    setTypes((typeResult.data ?? []) as TrainingType[]);
-    setOptions((optionResult.data ?? []) as TrainingOption[]);
-    setCustomFields((fieldResult.data ?? []) as CustomField[]);
-
-    setEmployeeId((current) => {
-      if (current && loadedEmployees.some((item) => item.id === current)) {
-        return current;
-      }
-
-      if (self?.id) return self.id;
-      if (canManageOtherEmployees(role)) return loadedEmployees[0]?.id ?? "";
-      return "";
-    });
+    setCategories((categoryResult.data ?? []) as Category[]);
+    setRecordTypes(
+      (typeResult.data ?? []).map((item) => ({
+        ...(item as Omit<
+          RecordType,
+          "filename_components" | "linked_evidence_training_type_ids"
+        >),
+        validity_mode:
+          (item as { validity_mode?: RecordType["validity_mode"] }).validity_mode ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "manual"
+            : "never"),
+        validity_interval_value:
+          (item as { validity_interval_value?: number | null })
+            .validity_interval_value ?? null,
+        validity_interval_unit:
+          (item as { validity_interval_unit?: RecordType["validity_interval_unit"] })
+            .validity_interval_unit ?? null,
+        filename_date_field:
+          (item as { filename_date_field?: RecordType["filename_date_field"] })
+            .filename_date_field ??
+          ((item as { requires_expiry_date?: boolean }).requires_expiry_date
+            ? "expiry_date"
+            : "none"),
+        document_upload_type:
+          (item as { document_upload_type?: DocumentUploadType | null })
+            .document_upload_type ??
+          ((item as { requires_document?: boolean }).requires_document
+            ? "single"
+            : "none"),
+        linked_evidence_training_type_ids: normaliseLinkedEvidenceTypeIds(
+          (item as { linked_evidence_training_type_ids?: unknown })
+            .linked_evidence_training_type_ids,
+        ),
+        filename_components: normaliseFilenameComponents(
+          (item as { filename_components?: unknown }).filename_components,
+        ),
+      })),
+    );
+    setRecordOptions((optionResult.data ?? []) as RecordOption[]);
   }, [supabase]);
 
   useEffect(() => {
     void (async () => {
       try {
-        await loadReferenceData();
+        await loadData();
       } catch (error) {
         setMessage({
           tone: "error",
           text:
             error instanceof Error
               ? error.message
-              : "Unable to load Training form.",
+              : "Unable to load training configuration.",
         });
       } finally {
         setLoading(false);
       }
     })();
-  }, [loadReferenceData]);
+  }, [loadData]);
 
-  const selectedEmployee = employees.find((item) => item.id === employeeId) ?? null;
-  const selectedType = types.find((item) => item.id === trainingTypeId) ?? null;
-  const canChooseEmployee = canManageOtherEmployees(currentRole);
-
-  const typeOptions = useMemo(
-    () => options.filter((item) => item.training_type_id === trainingTypeId),
-    [options, trainingTypeId],
+  const categoryById = useMemo(
+    () => new Map(categories.map((item) => [item.id, item])),
+    [categories],
   );
 
-  const typeFields = useMemo(
-    () => customFields.filter((item) => item.training_type_id === trainingTypeId),
-    [customFields, trainingTypeId],
+  const typeById = useMemo(
+    () => new Map(recordTypes.map((item) => [item.id, item])),
+    [recordTypes],
   );
 
-  const selectedOptions = typeOptions.filter((option) =>
-    selectedOptionIds.includes(option.id),
-  );
+  const filteredTypes = useMemo(() => {
+    const query = search.toLowerCase().trim();
 
-  const linkedEvidenceTypes = useMemo(() => {
-    const linkedIds = Array.isArray(selectedType?.linked_evidence_training_type_ids)
-      ? selectedType.linked_evidence_training_type_ids
-      : [];
-
-    return linkedIds
-      .map((id) => types.find((item) => item.id === id))
-      .filter((item): item is TrainingType => Boolean(item?.active));
-  }, [selectedType, types]);
-
-  const selectedLinkedEvidenceTypes = linkedEvidenceTypes.filter((item) =>
-    linkedEvidenceTypeIds.includes(item.id),
-  );
-
-  const selectedEvidenceMode =
-    selectedType?.document_upload_type === "single_or_front_back"
-      ? flexibleEvidenceMode
-      : selectedType?.document_upload_type || (selectedType?.requires_document ? "single" : "none");
-
-  useEffect(() => {
-    setSelectedOptionIds([]);
-    setMetadata({});
-    setProjectId("");
-    setIssuer("");
-    setCertificateNumber("");
-    setIssueDate("");
-    setExpiryDate("");
-    setNotes("");
-    setSingleFile(null);
-    setFrontFile(null);
-    setBackFile(null);
-    setFlexibleEvidenceMode("single");
-    setLinkedEvidenceTypeIds([]);
-    setExistingRecords([]);
-    setReplaceChoice(null);
-    setReplaceRecordId("");
-  }, [trainingTypeId]);
-
-  useEffect(() => {
-    if (!selectedType) return;
-
-    if (selectedType.validity_mode === "never") {
-      setExpiryDate("");
-      return;
-    }
-
-    if (selectedType.validity_mode === "automatic" && issueDate) {
-      setExpiryDate(
-        addInterval(
-          issueDate,
-          selectedType.validity_interval_value,
-          selectedType.validity_interval_unit,
-        ),
-      );
-    }
-  }, [issueDate, selectedType]);
-
-  useEffect(() => {
-    if (!employeeId || !trainingTypeId) {
-      setExistingRecords([]);
-      return;
-    }
-
-    void (async () => {
-      const { data, error } = await supabase
-        .from("employee_training_records")
-        .select(
-          "id,employee_id,training_type_id,certificate_number,option_codes,class_codes,issue_date,expiry_date,workflow_status,current_version,superseded_at,revoked_at",
-        )
-        .eq("employee_id", employeeId)
-        .eq("training_type_id", trainingTypeId)
-        .eq("current_version", true)
-        .is("superseded_at", null)
-        .is("revoked_at", null)
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.warn("Existing Training records could not be loaded", error);
-        setExistingRecords([]);
-        return;
+    return recordTypes.filter((item) => {
+      if (!showInactive && !item.active) return false;
+      if (categoryFilter !== "all" && item.category_id !== categoryFilter) {
+        return false;
       }
 
-      const rows = ((data ?? []) as ExistingRecord[]).filter(
-        (record) => clean(record.workflow_status) === "approved",
-      );
+      if (!query) return true;
 
-      setExistingRecords(rows);
-
-      if (rows.length === 0) {
-        setReplaceChoice(null);
-        setReplaceRecordId("");
-      } else if (rows.length === 1 && selectedType?.allows_multiple_current === false) {
-        setReplaceChoice("replace");
-        setReplaceRecordId(rows[0].id);
-      }
-    })();
-  }, [employeeId, selectedType?.allows_multiple_current, supabase, trainingTypeId]);
-
-  function customFieldMissing(field: CustomField) {
-    const value = metadata[field.field_key];
-    return (
-      value === undefined ||
-      value === null ||
-      value === "" ||
-      (Array.isArray(value) && value.length === 0) ||
-      (field.field_type === "checkbox" && value !== true)
-    );
-  }
-
-  function validateLinkedEvidenceType(linkedType: TrainingType) {
-    if (linkedType.requires_project && !projectId) {
-      return `${linkedType.name} also requires a project.`;
-    }
-
-    if (linkedType.requires_issuer && !issuer.trim()) {
-      return `${linkedType.name} also requires the provider / issuing organisation.`;
-    }
-
-    if (linkedType.requires_certificate_number && !certificateNumber.trim()) {
-      return `${linkedType.name} also requires a certificate / licence number.`;
-    }
-
-    if (
-      (linkedType.requires_issue_date ||
-        linkedType.validity_mode === "automatic") &&
-      !issueDate
-    ) {
-      return `${linkedType.name} also requires an issue date.`;
-    }
-
-    if (
-      linkedType.validity_mode !== "never" &&
-      linkedType.validity_mode !== "automatic" &&
-      linkedType.requires_expiry_date
-    ) {
-      return `${linkedType.name} uses a manual expiry date. Configure it as Automatic or Never to use linked evidence without entering a second expiry date.`;
-    }
-
-    const requiredLinkedFields = customFields.filter(
-      (field) =>
-        field.training_type_id === linkedType.id &&
-        field.active &&
-        field.required,
-    );
-
-    if (requiredLinkedFields.length > 0) {
-      return `${linkedType.name} has its own required custom fields (${requiredLinkedFields
-        .map((field) => field.label)
-        .join(", ")}). Complete it as a separate Training record or remove those required fields before linking it.`;
-    }
-
-    if (
-      linkedType.subtype_mode &&
-      linkedType.subtype_mode !== "none" &&
-      options.some(
-        (option) =>
-          option.training_type_id === linkedType.id &&
-          option.active !== false,
-      )
-    ) {
-      return `${linkedType.name} requires its own class / option selection, so it cannot be silently created from the shared course evidence.`;
-    }
-
-    if (linkedType.requires_document) {
-      const linkedMode =
-        linkedType.document_upload_type === "single_or_front_back"
-          ? selectedEvidenceMode
-          : linkedType.document_upload_type || "single";
-
-      if (linkedMode === "front_back") {
-        if (!frontFile || !backFile) {
-          return `${linkedType.name} requires front and back evidence, but the selected shared evidence is not front + back.`;
-        }
-      } else if (linkedMode === "single") {
-        if (!singleFile) {
-          return `${linkedType.name} requires a single document, but the selected shared evidence is not a single document.`;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  function validate() {
-    if (!selectedEmployee) return "Select the employee.";
-    if (!selectedType) return "Select the Training Type.";
-
-    if (!canChooseEmployee && selectedEmployee.id !== selfEmployeeId) {
-      return "You can only upload Training evidence for your own employee profile.";
-    }
-
-    if (selectedType.requires_project && !projectId) {
-      return "Select the project.";
-    }
-
-    if (selectedType.requires_issuer && !issuer.trim()) {
-      return "Enter the provider / issuing organisation.";
-    }
-
-    if (selectedType.requires_certificate_number && !certificateNumber.trim()) {
-      return "Enter the certificate or licence number.";
-    }
-
-    if (selectedType.requires_issue_date && !issueDate) {
-      return "Enter the issue date.";
-    }
-
-    if (
-      selectedType.validity_mode !== "never" &&
-      selectedType.requires_expiry_date &&
-      !expiryDate
-    ) {
-      return "Enter the expiry date.";
-    }
-
-    for (const field of typeFields) {
-      if (field.required && customFieldMissing(field)) {
-        return `Enter ${field.label}.`;
-      }
-    }
-
-    if (selectedType.requires_document) {
-      if (selectedEvidenceMode === "front_back") {
-        if (!frontFile || !backFile) {
-          return "Upload both the front and back files.";
-        }
-      } else if (!singleFile) {
-        return "Upload the required certificate / licence evidence.";
-      }
-    }
-
-    for (const linkedType of selectedLinkedEvidenceTypes) {
-      const linkedError = validateLinkedEvidenceType(linkedType);
-      if (linkedError) return linkedError;
-    }
-
-    if (existingRecords.length > 0) {
-      if (!replaceChoice) {
-        return "Choose whether this upload replaces a current record or is added as another current record.";
-      }
-
-      if (replaceChoice === "replace" && !replaceRecordId) {
-        return "Select the current record being replaced.";
-      }
-
-      if (replaceChoice === "add" && selectedType.allows_multiple_current === false) {
-        return "This Training Type does not allow multiple current records.";
-      }
-    }
-
-    return null;
-  }
-
-  async function replacementForLinkedType(linkedType: TrainingType) {
-    const { data, error } = await supabase
-      .from("employee_training_records")
-      .select(
-        "id,employee_id,training_type_id,workflow_status,current_version,superseded_at,revoked_at,created_at",
-      )
-      .eq("employee_id", selectedEmployee?.id ?? "")
-      .eq("training_type_id", linkedType.id)
-      .eq("current_version", true)
-      .is("superseded_at", null)
-      .is("revoked_at", null)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      throw new Error(
-        `Unable to check the current ${linkedType.name} record: ${error.message}`,
-      );
-    }
-
-    const currentApproved = (data ?? []).filter(
-      (row) => clean(row.workflow_status) === "approved",
-    );
-
-    if (currentApproved.length === 0) {
-      return { replacementMode: "none", supersedesRecordId: "" };
-    }
-
-    if (linkedType.allows_multiple_current) {
-      return { replacementMode: "add", supersedesRecordId: "" };
-    }
-
-    return {
-      replacementMode: "replace",
-      supersedesRecordId: clean(currentApproved[0]?.id),
-    };
-  }
-
-  function appendEvidence(form: FormData, trainingType: TrainingType) {
-    const uploadMode =
-      trainingType.document_upload_type === "single_or_front_back"
-        ? selectedEvidenceMode
-        : trainingType.document_upload_type ||
-          (trainingType.requires_document ? "single" : "none");
-
-    form.set("documentUploadType", uploadMode);
-
-    if (!trainingType.requires_document) return;
-
-    if (uploadMode === "front_back") {
-      if (frontFile) form.set("frontFile", frontFile);
-      if (backFile) form.set("backFile", backFile);
-      return;
-    }
-
-    if (singleFile) form.set("file", singleFile);
-  }
-
-  async function uploadTrainingRecord({
-    trainingType,
-    linkedFromTypeId = null,
-    replacementMode,
-    supersedesRecordId,
-    primary,
-  }: {
-    trainingType: TrainingType;
-    linkedFromTypeId?: string | null;
-    replacementMode: "replace" | "add" | "none";
-    supersedesRecordId: string;
-    primary: boolean;
-  }) {
-    const form = new FormData();
-
-    form.set("employeeId", selectedEmployee?.id ?? "");
-    form.set("trainingTypeId", trainingType.id);
-    form.set("projectId", projectId);
-    form.set("issuer", issuer.trim());
-    form.set("certificateNumber", certificateNumber.trim());
-    form.set("issueDate", issueDate);
-
-    // Critical: only the primary record sends the visible expiry field.
-    // Linked evidence leaves expiry blank so the existing API recalculates it
-    // from the linked Training Type's own configured validity rule.
-    form.set("expiryDate", primary ? expiryDate : "");
-
-    form.set("notes", notes.trim());
-    form.set(
-      "metadata",
-      JSON.stringify({
-        ...(primary ? metadata : {}),
-        ...(linkedFromTypeId
-          ? {
-              linked_evidence: true,
-              linked_from_training_type_id: linkedFromTypeId,
-              linked_course_issue_date: issueDate || null,
-            }
-          : {}),
-      }),
-    );
-
-    form.set(
-      "selectedOptionIds",
-      JSON.stringify(primary ? selectedOptionIds : []),
-    );
-    form.set(
-      "selectedOptionCodes",
-      JSON.stringify(
-        primary ? selectedOptions.map((option) => option.code) : [],
-      ),
-    );
-
-    form.set("replacementMode", replacementMode);
-    form.set("supersedesRecordId", supersedesRecordId);
-    form.set(
-      "source",
-      selectedEmployee?.id === selfEmployeeId
-        ? "employee_self_service"
-        : "website_admin",
-    );
-
-    appendEvidence(form, trainingType);
-
-    const response = await apiFetch("/api/training/records/upload", {
-      method: "POST",
-      body: form,
+      return [
+        item.name,
+        item.code,
+        item.description,
+        item.category_id
+          ? categoryById.get(item.category_id)?.name
+          : item.category,
+      ]
+        .map(clean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
     });
+  }, [categoryById, categoryFilter, recordTypes, search, showInactive]);
 
-    const responseText = await response.text();
+  const filteredCategories = useMemo(() => {
+    const query = search.toLowerCase().trim();
 
-    let result: {
-      error?: string;
-      workflowStatus?: string;
-      notificationWarning?: string | null;
-      recordId?: string;
-    } | null = null;
+    return categories.filter((item) => {
+      if (!showInactive && !item.active) return false;
+      if (!query) return true;
 
-    if (responseText) {
-      try {
-        result = JSON.parse(responseText) as {
-          error?: string;
-          workflowStatus?: string;
-          notificationWarning?: string | null;
-          recordId?: string;
-        };
-      } catch {
-        result = null;
+      return [
+        item.name,
+        item.code,
+        item.sharepoint_folder_name,
+        item.description,
+      ]
+        .map(clean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [categories, search, showInactive]);
+
+  const filteredOptions = useMemo(() => {
+    const query = search.toLowerCase().trim();
+
+    return recordOptions.filter((item) => {
+      if (!showInactive && !item.active) return false;
+
+      const parent = typeById.get(item.training_type_id);
+      if (
+        categoryFilter !== "all" &&
+        parent?.category_id !== categoryFilter
+      ) {
+        return false;
       }
-    }
 
-    if (!response.ok) {
-      const serverMessage = clean(result?.error);
-      const rawMessage = clean(responseText);
+      if (!query) return true;
 
-      console.error("Training upload failed", {
-        trainingTypeId: trainingType.id,
-        trainingTypeName: trainingType.name,
-        status: response.status,
-        statusText: response.statusText,
-        response: rawMessage,
-      });
+      return [item.name, item.code, item.description, parent?.name]
+        .map(clean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [categoryFilter, recordOptions, search, showInactive, typeById]);
 
-      throw new Error(
-        serverMessage ||
-          (rawMessage && !rawMessage.startsWith("<")
-            ? `Upload failed (${response.status}): ${rawMessage.slice(0, 500)}`
-            : `Upload failed (${response.status} ${response.statusText}). The upload API did not return a valid TTTracker error response.`),
-      );
-    }
-
-    return result;
-  }
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function refresh() {
+    setRefreshing(true);
     setMessage(null);
 
-    const error = validate();
-    if (error) {
-      setMessage({ tone: "error", text: error });
-      return;
+    try {
+      await loadData();
+      setMessage({ tone: "success", text: "Configuration refreshed." });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Unable to refresh data.",
+      });
+    } finally {
+      setRefreshing(false);
     }
+  }
 
-    if (!selectedEmployee || !selectedType) return;
+  function newCategory() {
+    setCategoryForm({
+      id: "",
+      name: "",
+      code: "",
+      sharepoint_folder_name: "",
+      description: "",
+      sort_order:
+        Math.max(0, ...categories.map((item) => item.sort_order || 0)) + 10,
+      active: true,
+    });
+  }
 
-    setSubmitting(true);
+  function newType() {
+    setTypeForm({
+      id: "",
+      category_id:
+        categoryFilter !== "all"
+          ? categoryFilter
+          : categories.find((item) => item.active)?.id ?? "",
+      name: "",
+      code: "",
+      category: null,
+      description: "",
+      active: true,
+      requires_issue_date: true,
+      requires_expiry_date: true,
+      allows_no_expiry: false,
+      validity_mode: "manual",
+      validity_interval_value: null,
+      validity_interval_unit: null,
+      filename_date_field: "expiry_date",
+      requires_certificate_number: false,
+      requires_issuer: false,
+      requires_project: false,
+      requires_document: true,
+      document_upload_type: "single",
+      allows_multiple_current: false,
+      subtype_mode: "none",
+      linked_evidence_training_type_ids: [],
+      filename_components: [...DEFAULT_FILENAME_COMPONENTS],
+      sort_order:
+        Math.max(0, ...recordTypes.map((item) => item.sort_order || 0)) + 10,
+    });
+  }
 
-    const completedNames: string[] = [];
-    const warnings: string[] = [];
-    const linkedFailures: string[] = [];
+  function newOption(trainingTypeId = "") {
+    setOptionForm({
+      id: "",
+      training_type_id:
+        trainingTypeId || recordTypes.find((item) => item.active)?.id || "",
+      name: "",
+      code: "",
+      description: "",
+      sort_order:
+        Math.max(
+          0,
+          ...recordOptions
+            .filter((item) =>
+              trainingTypeId
+                ? item.training_type_id === trainingTypeId
+                : true,
+            )
+            .map((item) => item.sort_order || 0),
+        ) + 10,
+      active: true,
+    });
+  }
+
+  async function saveCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!categoryForm) return;
+
+    setSaving(true);
+    setMessage(null);
 
     try {
-      const primaryResult = await uploadTrainingRecord({
-        trainingType: selectedType,
-        replacementMode: replaceChoice ?? "none",
-        supersedesRecordId: replaceRecordId,
-        primary: true,
+      const payload = {
+        name: clean(categoryForm.name),
+        code: makeCode(categoryForm.code || categoryForm.name),
+        sharepoint_folder_name: clean(
+          categoryForm.sharepoint_folder_name || categoryForm.name,
+        ),
+        description: clean(categoryForm.description) || null,
+        sort_order: categoryForm.sort_order || 0,
+        active: categoryForm.active,
+      };
+
+      if (!payload.name) throw new Error("Category name is required.");
+      if (!payload.code) throw new Error("Category code is required.");
+      if (!payload.sharepoint_folder_name) {
+        throw new Error("SharePoint folder name is required.");
+      }
+
+      const result = categoryForm.id
+        ? await supabase
+            .from("training_categories")
+            .update(payload)
+            .eq("id", categoryForm.id)
+        : await supabase.from("training_categories").insert(payload);
+
+      if (result.error) throw new Error(result.error.message);
+
+      await loadData();
+      setCategoryForm(null);
+      setMessage({
+        tone: "success",
+        text: categoryForm.id ? "Category updated." : "Category created.",
       });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Unable to save category.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
-      completedNames.push(selectedType.name);
-      if (primaryResult?.notificationWarning) {
-        warnings.push(primaryResult.notificationWarning);
+  async function saveType(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!typeForm) return;
+
+    setSaving(true);
+    setMessage(null);
+
+    try {
+      const category = categoryById.get(typeForm.category_id ?? "");
+      if (!category) throw new Error("Select a valid category.");
+
+      const payload = {
+        category_id: category.id,
+        category: category.name,
+        name: clean(typeForm.name),
+        short_code: makeCode(typeForm.code || typeForm.name),
+        description: clean(typeForm.description) || null,
+        active: typeForm.active,
+        requires_issue_date:
+          typeForm.validity_mode === "automatic"
+            ? true
+            : typeForm.requires_issue_date,
+        requires_expiry_date: typeForm.validity_mode !== "never",
+        allows_no_expiry: typeForm.validity_mode === "never",
+        validity_mode: typeForm.validity_mode,
+        validity_interval_value:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_value
+            : null,
+        validity_interval_unit:
+          typeForm.validity_mode === "automatic"
+            ? typeForm.validity_interval_unit
+            : null,
+        filename_date_field: typeForm.filename_date_field,
+        requires_certificate_number: typeForm.requires_certificate_number,
+        requires_issuer: typeForm.requires_issuer,
+        requires_project: typeForm.requires_project,
+        requires_document: typeForm.document_upload_type !== "none",
+        document_upload_type: typeForm.document_upload_type,
+        allows_multiple_current: typeForm.allows_multiple_current,
+        subtype_mode: typeForm.subtype_mode,
+        linked_evidence_training_type_ids: Array.from(
+          new Set(typeForm.linked_evidence_training_type_ids),
+        ).filter(
+          (id) =>
+            id !== typeForm.id &&
+            recordTypes.some((recordType) => recordType.id === id),
+        ),
+        supports_class_codes: typeForm.subtype_mode !== "none",
+        supersede_scope: "never",
+        filename_components: filenameComponentsFor(typeForm),
+        sort_order: typeForm.sort_order || 0,
+      };
+
+      if (!payload.name) throw new Error("Record type name is required.");
+      if (!payload.short_code) throw new Error("Record type code is required.");
+      if (
+        payload.validity_mode === "automatic" &&
+        (!payload.validity_interval_value || payload.validity_interval_value < 1)
+      ) {
+        throw new Error("Enter a renewal interval greater than zero.");
+      }
+      if (
+        payload.validity_mode === "automatic" &&
+        !payload.validity_interval_unit
+      ) {
+        throw new Error("Select a renewal interval unit.");
+      }
+      if (
+        payload.filename_date_field === "expiry_date" &&
+        payload.validity_mode === "never"
+      ) {
+        throw new Error(
+          "A record that never expires cannot show an expiry date in its filename.",
+        );
       }
 
-      for (const linkedType of selectedLinkedEvidenceTypes) {
-        try {
-          const replacement = await replacementForLinkedType(linkedType);
+      const result = typeForm.id
+        ? await supabase
+            .from("training_types")
+            .update(payload)
+            .eq("id", typeForm.id)
+        : await supabase.from("training_types").insert(payload);
 
-          const linkedResult = await uploadTrainingRecord({
-            trainingType: linkedType,
-            linkedFromTypeId: selectedType.id,
-            replacementMode: replacement.replacementMode as
-              | "replace"
-              | "add"
-              | "none",
-            supersedesRecordId: replacement.supersedesRecordId,
-            primary: false,
-          });
+      if (result.error) throw new Error(result.error.message);
 
-          completedNames.push(linkedType.name);
-
-          if (linkedResult?.notificationWarning) {
-            warnings.push(
-              `${linkedType.name}: ${linkedResult.notificationWarning}`,
-            );
-          }
-        } catch (linkedError) {
-          linkedFailures.push(
-            `${linkedType.name}: ${
-              linkedError instanceof Error
-                ? linkedError.message
-                : "linked Training record could not be created"
-            }`,
-          );
-        }
-      }
-
-      if (linkedFailures.length > 0) {
-        setMessage({
-          tone: "error",
-          text: `${completedNames.join(
-            ", ",
-          )} saved successfully. The following linked record(s) were not created: ${linkedFailures.join(
-            " | ",
-          )}. The successful records have not been rolled back.`,
-        });
-      } else {
-        setMessage({
-          tone: warnings.length > 0 ? "error" : "success",
-          text: `${completedNames.join(
-            " + ",
-          )} submitted using the same evidence. Each Training Type keeps its own configured expiry and review rules.${
-            warnings.length > 0 ? ` ${warnings.join(" ")}` : ""
-          }`,
-        });
-      }
-
-      setTrainingTypeId("");
-      setSelectedOptionIds([]);
-      setLinkedEvidenceTypeIds([]);
-      setProjectId("");
-      setIssuer("");
-      setCertificateNumber("");
-      setIssueDate("");
-      setExpiryDate("");
-      setNotes("");
-      setMetadata({});
-      setSingleFile(null);
-      setFrontFile(null);
-      setBackFile(null);
-      setFlexibleEvidenceMode("single");
-      setExistingRecords([]);
-      setReplaceChoice(null);
-      setReplaceRecordId("");
+      await loadData();
+      setTypeForm(null);
+      setMessage({
+        tone: "success",
+        text: typeForm.id ? "Record type updated." : "Record type created.",
+      });
     } catch (error) {
       setMessage({
         tone: "error",
         text:
           error instanceof Error
             ? error.message
-            : "The Training record could not be uploaded.",
+            : "Unable to save record type.",
       });
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
+  }
+
+  async function saveOption(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!optionForm) return;
+
+    setSaving(true);
+    setMessage(null);
+
+    try {
+      if (!typeById.has(optionForm.training_type_id)) {
+        throw new Error("Select a valid record type.");
+      }
+
+      const payload = {
+        training_type_id: optionForm.training_type_id,
+        name: clean(optionForm.name),
+        code: makeCode(optionForm.code || optionForm.name),
+        description: clean(optionForm.description) || null,
+        sort_order: optionForm.sort_order || 0,
+        active: optionForm.active,
+      };
+
+      if (!payload.name) throw new Error("Option name is required.");
+      if (!payload.code) throw new Error("Option code is required.");
+
+      const result = optionForm.id
+        ? await supabase
+            .from("training_type_options")
+            .update(payload)
+            .eq("id", optionForm.id)
+        : await supabase.from("training_type_options").insert(payload);
+
+      if (result.error) throw new Error(result.error.message);
+
+      await loadData();
+      setOptionForm(null);
+      setMessage({
+        tone: "success",
+        text: optionForm.id ? "Option updated." : "Option created.",
+      });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text:
+          error instanceof Error ? error.message : "Unable to save option.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleRow(
+    table: "training_categories" | "training_types" | "training_type_options",
+    id: string,
+    active: boolean,
+  ) {
+    const result = await supabase.from(table).update({ active: !active }).eq("id", id);
+
+    if (result.error) {
+      setMessage({ tone: "error", text: result.error.message });
+      return;
+    }
+
+    await loadData();
+  }
+
+  async function moveItem(
+    table: "training_categories" | "training_types" | "training_type_options",
+    items: Array<{ id: string; sort_order: number }>,
+    itemId: string,
+    direction: "up" | "down",
+  ) {
+    const ordered = [...items].sort(
+      (a, b) => (a.sort_order || 0) - (b.sort_order || 0),
+    );
+    const index = ordered.findIndex((item) => item.id === itemId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+
+    if (index < 0 || targetIndex < 0 || targetIndex >= ordered.length) return;
+
+    const current = ordered[index];
+    const target = ordered[targetIndex];
+
+    const currentOrder = current.sort_order || (index + 1) * 10;
+    const targetOrder = target.sort_order || (targetIndex + 1) * 10;
+
+    const [currentResult, targetResult] = await Promise.all([
+      supabase.from(table).update({ sort_order: targetOrder }).eq("id", current.id),
+      supabase.from(table).update({ sort_order: currentOrder }).eq("id", target.id),
+    ]);
+
+    const error = currentResult.error ?? targetResult.error;
+    if (error) {
+      setMessage({ tone: "error", text: error.message });
+      return;
+    }
+
+    await loadData();
+  }
+
+  async function deleteOption(item: RecordOption) {
+    if (
+      !window.confirm(
+        `Delete "${item.name}"? Deactivate it instead if existing records may use it.`,
+      )
+    ) {
+      return;
+    }
+
+    const result = await supabase
+      .from("training_type_options")
+      .delete()
+      .eq("id", item.id);
+
+    if (result.error) {
+      setMessage({ tone: "error", text: result.error.message });
+      return;
+    }
+
+    await loadData();
+    setMessage({ tone: "success", text: "Option deleted." });
   }
 
   if (loading) {
     return (
       <AppShell>
-        <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="flex min-h-[65vh] items-center justify-center">
           <Loader2 size={30} className="animate-spin text-slate-400" />
         </div>
       </AppShell>
@@ -887,254 +782,731 @@ export default function AddTrainingRecordPage() {
 
   return (
     <AppShell>
-      <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-        <div>
-          <Link
-            href="/people/training"
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
-          >
-            <ArrowLeft size={16} />
-            Back to Training
-          </Link>
-        </div>
-
+      <div className="mx-auto max-w-7xl space-y-6">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.16em] text-blue-700">
-                <UploadCloud size={17} />
-                Training records
+              <Link
+                href="/people/training"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <ArrowLeft size={16} />
+                Back to Training
+              </Link>
+
+              <div className="mt-5 flex items-center gap-2 text-slate-400">
+                <Settings2 size={18} />
+                <span className="text-sm font-semibold uppercase tracking-wider">
+                  Training Administration
+                </span>
               </div>
-              <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
-                Upload Training Record
+
+              <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+                Training Configuration
               </h1>
-              <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-                Employees can upload their own evidence. Admin/HSEQ can select an
-                employee and upload on their behalf. Type-specific rules and
-                required fields come from Training Configuration.
+
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                Manage categories, record types, selectable classes and
+                SharePoint folder destinations. Use the arrow buttons in each
+                table to control display order. Filenames include the employee’s
+                full name and are generated from applicable fields.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Link
-                href="/people/training"
-                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
-              >
-                Training Register
-              </Link>
-              {canChooseEmployee ? (
-                <Link
-                  href="/people/training/bulk-upload"
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
-                >
-                  Bulk Upload
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => void loadReferenceData()}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700"
-              >
-                <RefreshCw size={16} />
-                Refresh
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCw
+                size={16}
+                className={refreshing ? "animate-spin" : ""}
+              />
+              Refresh
+            </button>
           </div>
         </section>
 
         {message ? (
           <section
-            className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${
+            className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
               message.tone === "success"
                 ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                 : "border-rose-200 bg-rose-50 text-rose-800"
             }`}
           >
-            <div className="flex items-start gap-2">
+            <div className="flex items-center gap-2">
               {message.tone === "success" ? (
-                <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+                <CheckCircle2 size={17} />
               ) : (
-                <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                <AlertTriangle size={17} />
               )}
               {message.text}
             </div>
           </section>
         ) : null}
 
-        {!selfEmployeeId && !canChooseEmployee ? (
-          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-            <div className="flex items-start gap-3">
-              <UserRound size={22} className="mt-0.5" />
-              <div>
-                <div className="font-black">No employee profile is linked to your login</div>
-                <div className="mt-1 text-sm font-semibold leading-6">
-                  Ask an administrator to link your TTTracker login to your existing employee profile before using self-service Training upload.
-                </div>
-              </div>
+        <section className="grid gap-4 sm:grid-cols-3">
+          <MetricCard
+            label="Categories"
+            value={categories.length}
+            detail={`${categories.filter((item) => item.active).length} active`}
+            icon={<FolderCog size={20} />}
+          />
+          <MetricCard
+            label="Record Types"
+            value={recordTypes.length}
+            detail={`${recordTypes.filter((item) => item.active).length} active`}
+            icon={<FileCog size={20} />}
+          />
+          <MetricCard
+            label="Options"
+            value={recordOptions.length}
+            detail={`${recordOptions.filter((item) => item.active).length} active`}
+            icon={<Tag size={20} />}
+          />
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 pt-5">
+            <div className="flex flex-wrap gap-2">
+              <Tab
+                active={tab === "types"}
+                onClick={() => setTab("types")}
+                label="Record Types"
+              />
+              <Tab
+                active={tab === "categories"}
+                onClick={() => setTab("categories")}
+                label="Categories"
+              />
+              <Tab
+                active={tab === "options"}
+                onClick={() => setTab("options")}
+                label="Options"
+              />
             </div>
-          </section>
-        ) : null}
+          </div>
 
-        <form onSubmit={submit} className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <section className="space-y-6">
-            <Card title="1. Employee" description={canChooseEmployee ? "Select the employee or leave yourself selected." : "Your linked employee profile is used automatically."}>
-              {canChooseEmployee ? (
-                <Field label="Employee" required>
-                  <select className={inputClass} value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
-                    <option value="">Select...</option>
-                    {employees.map((employee) => (
-                      <option key={employee.id} value={employee.id}>
-                        {employee.payroll_id ? `${employee.payroll_id} - ` : ""}{employee.full_name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              ) : (
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <div className="font-black text-slate-950">{selectedEmployee?.full_name || "No linked employee"}</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-500">{selectedEmployee?.payroll_id || "No Payroll ID"}</div>
-                </div>
-              )}
-            </Card>
+          <div className="border-b border-slate-200 p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-1 flex-col gap-3 sm:flex-row">
+                <label className="relative block flex-1">
+                  <Search
+                    size={17}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search configuration..."
+                    className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none ring-slate-200 focus:ring-2"
+                  />
+                </label>
 
-            <Card title="2. Training Type" description="The selected type controls the fields, expiry logic and document requirements.">
-              <Field label="Training Type" required>
-                <select className={inputClass} value={trainingTypeId} onChange={(event) => setTrainingTypeId(event.target.value)}>
-                  <option value="">Select...</option>
-                  {types.map((type) => (
-                    <option key={type.id} value={type.id}>
-                      {type.name}{type.short_code ? ` (${type.short_code})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              {typeOptions.length > 0 ? (
-                <div className="mt-4">
-                  <div className="mb-2 text-sm font-black text-slate-800">Classes / endorsements</div>
-                  <div className="flex flex-wrap gap-2">
-                    {typeOptions.map((option) => {
-                      const checked = selectedOptionIds.includes(option.id);
-                      const single = selectedType?.subtype_mode === "single";
-
-                      return (
-                        <label key={option.id} className={`cursor-pointer rounded-xl border px-3 py-2 text-sm font-bold ${checked ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700"}`}>
-                          <input
-                            type={single ? "radio" : "checkbox"}
-                            name={single ? "training-option" : undefined}
-                            className="mr-2"
-                            checked={checked}
-                            onChange={() => {
-                              setSelectedOptionIds((current) => {
-                                if (single) return [option.id];
-                                return checked ? current.filter((id) => id !== option.id) : [...current, option.id];
-                              });
-                            }}
-                          />
-                          {option.code || option.name}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </Card>
-
-            {selectedType ? (
-              <Card title="3. Record Details" description="Only the fields enabled by this Training Type are shown.">
-                <div className="grid gap-4 md:grid-cols-2">
-                  {selectedType.requires_project ? (
-                    <Field label="Project" required>
-                      <select className={inputClass} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                        <option value="">Select...</option>
-                        {projects.map((project) => (
-                          <option key={project.id} value={project.id}>
-                            {project.project_number ? `${project.project_number} - ` : ""}{project.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                  ) : null}
-
-                  {selectedType.requires_issuer ? (
-                    <Field label="Provider / Issuer" required>
-                      <input className={inputClass} value={issuer} onChange={(event) => setIssuer(event.target.value)} />
-                    </Field>
-                  ) : null}
-
-                  {selectedType.requires_certificate_number ? (
-                    <Field label="Certificate / Licence Number" required>
-                      <input className={inputClass} value={certificateNumber} onChange={(event) => setCertificateNumber(event.target.value)} />
-                    </Field>
-                  ) : null}
-
-                  {(selectedType.requires_issue_date || selectedType.validity_mode === "automatic") ? (
-                    <Field label="Issue Date" required>
-                      <input type="date" className={inputClass} value={issueDate} onChange={(event) => setIssueDate(event.target.value)} />
-                    </Field>
-                  ) : null}
-
-                  {selectedType.validity_mode !== "never" && selectedType.requires_expiry_date ? (
-                    <Field label="Expiry Date" required>
-                      <input
-                        type="date"
-                        className={inputClass}
-                        value={expiryDate}
-                        readOnly={selectedType.validity_mode === "automatic"}
-                        onChange={(event) => setExpiryDate(event.target.value)}
-                      />
-                    </Field>
-                  ) : null}
-                </div>
-
-                {typeFields.length > 0 ? (
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    {typeFields.map((field) => (
-                      <DynamicField
-                        key={field.id}
-                        field={field}
-                        value={metadata[field.field_key]}
-                        onChange={(value) => setMetadata((current) => ({ ...current, [field.field_key]: value }))}
-                      />
-                    ))}
-                  </div>
+                {tab !== "categories" ? (
+                  <Select
+                    value={categoryFilter}
+                    onChange={setCategoryFilter}
+                    options={[
+                      { value: "all", label: "All categories" },
+                      ...categories.map((item) => ({
+                        value: item.id,
+                        label: item.name,
+                      })),
+                    ]}
+                  />
                 ) : null}
 
-                <div className="mt-4">
-                  <Field label="Notes">
-                    <textarea className={`${inputClass} min-h-24`} value={notes} onChange={(event) => setNotes(event.target.value)} />
-                  </Field>
-                </div>
-              </Card>
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={showInactive}
+                    onChange={(event) => setShowInactive(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Show inactive
+                </label>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (tab === "types") newType();
+                  if (tab === "categories") newCategory();
+                  if (tab === "options") newOption();
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                <Plus size={16} />
+                {tab === "types"
+                  ? "Add Record Type"
+                  : tab === "categories"
+                    ? "Add Category"
+                    : "Add Option"}
+              </button>
+            </div>
+          </div>
+
+          {tab === "types" ? (
+            <TypesTable
+              items={filteredTypes}
+              categoryById={categoryById}
+              optionCount={(id) =>
+                recordOptions.filter((item) => item.training_type_id === id)
+                  .length
+              }
+              onEdit={setTypeForm}
+              onToggle={(item) =>
+                void toggleRow("training_types", item.id, item.active)
+              }
+              onAddOption={newOption}
+              onMove={(item, direction) =>
+                void moveItem("training_types", recordTypes, item.id, direction)
+              }
+            />
+          ) : null}
+
+          {tab === "categories" ? (
+            <CategoriesTable
+              items={filteredCategories}
+              typeCount={(id) =>
+                recordTypes.filter((item) => item.category_id === id).length
+              }
+              onEdit={setCategoryForm}
+              onToggle={(item) =>
+                void toggleRow("training_categories", item.id, item.active)
+              }
+              onMove={(item, direction) =>
+                void moveItem("training_categories", categories, item.id, direction)
+              }
+            />
+          ) : null}
+
+          {tab === "options" ? (
+            <OptionsTable
+              items={filteredOptions}
+              typeById={typeById}
+              onEdit={setOptionForm}
+              onToggle={(item) =>
+                void toggleRow(
+                  "training_type_options",
+                  item.id,
+                  item.active,
+                )
+              }
+              onDelete={(item) => void deleteOption(item)}
+              onMove={(item, direction) =>
+                void moveItem(
+                  "training_type_options",
+                  recordOptions.filter(
+                    (option) =>
+                      option.training_type_id === item.training_type_id,
+                  ),
+                  item.id,
+                  direction,
+                )
+              }
+            />
+          ) : null}
+        </section>
+
+        <section className="rounded-3xl border border-blue-200 bg-blue-50 p-5 text-sm text-blue-900">
+          <div className="flex items-start gap-3">
+            <FileCog size={20} className="mt-0.5 shrink-0" />
+            <div>
+              <h2 className="font-bold">Next step: SharePoint connection</h2>
+              <p className="mt-1 leading-6 text-blue-800">
+                This page defines record fields and classes. The Add Record
+                and Renewals workflows will generate the filename, detect
+                existing current records and ask the user whether the upload
+                should supersede a previous document before anything is moved
+                into the Superseded folder.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {categoryForm ? (
+        <Modal
+          title={categoryForm.id ? "Edit Category" : "Add Category"}
+          onClose={() => setCategoryForm(null)}
+        >
+          <form onSubmit={saveCategory} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Category name"
+                value={categoryForm.name}
+                onChange={(value) =>
+                  setCategoryForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          name: value,
+                          code: current.code || makeCode(value),
+                          sharepoint_folder_name:
+                            current.sharepoint_folder_name || value,
+                        }
+                      : current,
+                  )
+                }
+                required
+              />
+              <Field
+                label="Code"
+                value={categoryForm.code}
+                onChange={(value) =>
+                  setCategoryForm((current) =>
+                    current
+                      ? { ...current, code: editCode(value) }
+                      : current,
+                  )
+                }
+                required
+              />
+            </div>
+
+            <Field
+              label="SharePoint folder name"
+              value={categoryForm.sharepoint_folder_name}
+              onChange={(value) =>
+                setCategoryForm((current) =>
+                  current
+                    ? { ...current, sharepoint_folder_name: value }
+                    : current,
+                )
+              }
+              required
+            />
+
+            <Area
+              label="Description"
+              value={categoryForm.description ?? ""}
+              onChange={(value) =>
+                setCategoryForm((current) =>
+                  current ? { ...current, description: value } : current,
+                )
+              }
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Toggle
+                label="Active"
+                description="Available when adding a record"
+                checked={categoryForm.active}
+                onChange={(value) =>
+                  setCategoryForm((current) =>
+                    current ? { ...current, active: value } : current,
+                  )
+                }
+              />
+            </div>
+
+            <Actions
+              saving={saving}
+              onCancel={() => setCategoryForm(null)}
+              label={categoryForm.id ? "Save Changes" : "Create Category"}
+            />
+          </form>
+        </Modal>
+      ) : null}
+
+      {typeForm ? (
+        <Modal
+          wide
+          title={typeForm.id ? "Edit Record Type" : "Add Record Type"}
+          onClose={() => setTypeForm(null)}
+        >
+          <form onSubmit={saveType} className="space-y-6">
+            <Section
+              title="Basic details"
+              description="Controls the display name, record code and category."
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <LabeledSelect
+                label="Category"
+                value={typeForm.category_id ?? ""}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current ? { ...current, category_id: value } : current,
+                  )
+                }
+                options={[
+                  { value: "", label: "Select category" },
+                  ...categories
+                    .filter((item) => item.active)
+                    .map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    })),
+                ]}
+                required
+              />
+              <Field
+                label="Record type name"
+                value={typeForm.name}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          name: value,
+                          code: current.code || makeCode(value),
+                        }
+                      : current,
+                  )
+                }
+                required
+              />
+              <Field
+                label="Record code"
+                value={typeForm.code}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? { ...current, code: editCode(value) }
+                      : current,
+                  )
+                }
+                required
+              />
+            </div>
+
+            <Area
+              label="Description"
+              value={typeForm.description ?? ""}
+              onChange={(value) =>
+                setTypeForm((current) =>
+                  current ? { ...current, description: value } : current,
+                )
+              }
+            />
+
+            <Section
+              title="Validity and renewal"
+              description="Choose how expiry is handled for this record type. Automatic expiry is calculated from the issue date during upload."
+            />
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <LabeledSelect
+                label="Expiry handling"
+                value={typeForm.validity_mode}
+                onChange={(value) =>
+                  setTypeForm((current) => {
+                    if (!current) return current;
+                    const mode = value as RecordType["validity_mode"];
+                    return {
+                      ...current,
+                      validity_mode: mode,
+                      requires_issue_date:
+                        mode === "automatic" ? true : current.requires_issue_date,
+                      requires_expiry_date: mode !== "never",
+                      allows_no_expiry: mode === "never",
+                      validity_interval_value:
+                        mode === "automatic"
+                          ? current.validity_interval_value ?? 1
+                          : null,
+                      validity_interval_unit:
+                        mode === "automatic"
+                          ? current.validity_interval_unit ?? "years"
+                          : null,
+                      filename_date_field:
+                        mode === "never" &&
+                        current.filename_date_field === "expiry_date"
+                          ? "none"
+                          : current.filename_date_field,
+                    };
+                  })
+                }
+                options={[
+                  { value: "never", label: "Never expires" },
+                  { value: "manual", label: "Enter expiry date manually" },
+                  {
+                    value: "automatic",
+                    label: "Calculate expiry from issue date",
+                  },
+                ]}
+              />
+
+              <LabeledSelect
+                label="Date shown in filename"
+                value={typeForm.filename_date_field}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          filename_date_field:
+                            value as RecordType["filename_date_field"],
+                        }
+                      : current,
+                  )
+                }
+                options={[
+                  { value: "none", label: "No date" },
+                  { value: "issue_date", label: "Issue date" },
+                  ...(typeForm.validity_mode !== "never"
+                    ? [{ value: "expiry_date", label: "Expiry date" }]
+                    : []),
+                ]}
+              />
+            </div>
+
+            {typeForm.validity_mode === "automatic" ? (
+              <div className="grid gap-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <Field
+                  label="Renewal interval"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={String(typeForm.validity_interval_value ?? 1)}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_value:
+                              Number.parseInt(value, 10) || 1,
+                          }
+                        : current,
+                    )
+                  }
+                  required
+                />
+                <LabeledSelect
+                  label="Interval unit"
+                  value={typeForm.validity_interval_unit ?? "years"}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            validity_interval_unit:
+                              value as NonNullable<
+                                RecordType["validity_interval_unit"]
+                              >,
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "days", label: "Days" },
+                    { value: "weeks", label: "Weeks" },
+                    { value: "months", label: "Months" },
+                    { value: "years", label: "Years" },
+                  ]}
+                />
+                <p className="sm:col-span-2 text-xs leading-5 text-blue-800">
+                  Upload example: entering the issue date automatically calculates
+                  the expiry date using this interval. The calculated expiry is
+                  saved to Supabase and used in the filename when Expiry date is
+                  selected above.
+                </p>
+              </div>
             ) : null}
 
-            {linkedEvidenceTypes.length > 0 ? (
-              <Card
-                title="4. Combined Course"
-                description="Tick any additional configured qualification completed on the same course. TTTracker will reuse the same evidence and issue date, but calculate each qualification's expiry independently from Training Configuration."
-              >
-                <div className="space-y-3">
-                  {linkedEvidenceTypes.map((linkedType) => {
-                    const checked = linkedEvidenceTypeIds.includes(linkedType.id);
-                    const linkedExpiry =
-                      linkedType.validity_mode === "never"
-                        ? "Does not expire"
-                        : linkedType.validity_mode === "automatic" && issueDate
-                          ? formatDate(
-                              addInterval(
-                                issueDate,
-                                linkedType.validity_interval_value,
-                                linkedType.validity_interval_unit,
-                              ),
-                            )
-                          : linkedType.validity_mode === "automatic"
-                            ? "Set issue date to calculate"
-                            : "Manual expiry — separate upload required";
+            {typeForm.validity_mode !== "automatic" ? (
+              <Toggle
+                label="Issue date"
+                description={
+                  typeForm.validity_mode === "manual"
+                    ? "Ask for an issue date as well as the manually entered expiry date"
+                    : "Ask for an issue date even though this record never expires"
+                }
+                checked={typeForm.requires_issue_date}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? { ...current, requires_issue_date: value }
+                      : current,
+                  )
+                }
+              />
+            ) : null}
+
+            <Section
+              title="Dynamic form fields"
+              description="Only enabled fields will appear on Add Record."
+            />
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+
+              <Toggle
+                label="Certificate number"
+                description="Ask for licence or certificate number"
+                checked={typeForm.requires_certificate_number}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          requires_certificate_number: value,
+                        }
+                      : current,
+                  )
+                }
+              />
+              <Toggle
+                label="Issuer"
+                description="Ask for RTO or issuing authority"
+                checked={typeForm.requires_issuer}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current ? { ...current, requires_issuer: value } : current,
+                  )
+                }
+              />
+              <Toggle
+                label="Project"
+                description="Require project or client"
+                checked={typeForm.requires_project}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current ? { ...current, requires_project: value } : current,
+                  )
+                }
+              />
+              <div className="sm:col-span-2 lg:col-span-1">
+                <LabeledSelect
+                  label="Document upload"
+                  value={typeForm.document_upload_type}
+                  onChange={(value) =>
+                    setTypeForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            document_upload_type: value as DocumentUploadType,
+                            requires_document: value !== "none",
+                          }
+                        : current,
+                    )
+                  }
+                  options={[
+                    { value: "none", label: "No document required" },
+                    { value: "single", label: "Single document" },
+                    {
+                      value: "front_back",
+                      label: "Front and back documents",
+                    },
+                    {
+                      value: "single_or_front_back",
+                      label: "Single document OR front + back",
+                    },
+                  ]}
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Single document accepts one original file, including a
+                  multi-page PDF. Front and back requires two separate files.
+                  Single document OR front + back lets the uploader choose either
+                  one complete document (for example, a Statement of Attainment)
+                  or separate FRONT and BACK files (for example, a two-sided
+                  licence or card).
+                </p>
+              </div>
+              <Toggle
+                label="Multiple current"
+                description="Allow more than one current record"
+                checked={typeForm.allows_multiple_current}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? { ...current, allows_multiple_current: value }
+                      : current,
+                  )
+                }
+              />
+              <Toggle
+                label="Active"
+                description="Available when adding a record"
+                checked={typeForm.active}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current ? { ...current, active: value } : current,
+                  )
+                }
+              />
+            </div>
+
+            <Section
+              title="Classes and current records"
+              description="Choose whether the record has no classes, one class, or several classes on the same document."
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <LabeledSelect
+                label="Class selection"
+                value={typeForm.subtype_mode}
+                onChange={(value) =>
+                  setTypeForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          subtype_mode: value as RecordType["subtype_mode"],
+                        }
+                      : current,
+                  )
+                }
+                options={[
+                  { value: "none", label: "No classes or endorsements" },
+                  { value: "single", label: "One class per record" },
+                  {
+                    value: "multiple",
+                    label: "Multiple classes on one record",
+                  },
+                ]}
+              />
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-bold text-slate-800">
+                  Existing record handling
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  When a document is uploaded, TTTracker will show any current
+                  matching records and ask whether the new upload should renew
+                  and supersede one of them or be added as another current
+                  record.
+                </p>
+              </div>
+            </div>
+
+            <Section
+              title="Linked evidence / combined courses"
+              description="Optionally let one uploaded course document create additional Training records from the same evidence and issue date. Each linked record keeps its own configured expiry, review and renewal rules."
+            />
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-bold text-slate-800">
+                Training records available from the same evidence
+              </div>
+
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Example: configure First Aid to offer CPR. When First Aid is
+                uploaded, the uploader can tick CPR and TTTracker will use the
+                same evidence and issue date for both records. CPR still uses
+                CPR&apos;s own configured validity, so its expiry is calculated
+                independently from First Aid.
+              </p>
+
+              <div className="mt-4 space-y-2">
+                {recordTypes
+                  .filter(
+                    (item) =>
+                      item.active &&
+                      item.id !== typeForm.id,
+                  )
+                  .map((item) => {
+                    const checked =
+                      typeForm.linked_evidence_training_type_ids.includes(
+                        item.id,
+                      );
 
                     return (
                       <label
-                        key={linkedType.id}
-                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${
+                        key={item.id}
+                        className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
                           checked
                             ? "border-blue-300 bg-blue-50"
                             : "border-slate-200 bg-white hover:bg-slate-50"
@@ -1142,326 +1514,878 @@ export default function AddTrainingRecordPage() {
                       >
                         <input
                           type="checkbox"
-                          className="mt-1 h-4 w-4"
                           checked={checked}
-                          disabled={
-                            linkedType.validity_mode !== "automatic" &&
-                            linkedType.validity_mode !== "never" &&
-                            Boolean(linkedType.requires_expiry_date)
-                          }
                           onChange={(event) =>
-                            setLinkedEvidenceTypeIds((current) =>
-                              event.target.checked
-                                ? Array.from(new Set([...current, linkedType.id]))
-                                : current.filter((id) => id !== linkedType.id),
-                            )
+                            setTypeForm((current) => {
+                              if (!current) return current;
+
+                              const nextIds = event.target.checked
+                                ? Array.from(
+                                    new Set([
+                                      ...current.linked_evidence_training_type_ids,
+                                      item.id,
+                                    ]),
+                                  )
+                                : current.linked_evidence_training_type_ids.filter(
+                                    (id) => id !== item.id,
+                                  );
+
+                              return {
+                                ...current,
+                                linked_evidence_training_type_ids: nextIds,
+                              };
+                            })
                           }
+                          className="mt-1 h-4 w-4 rounded border-slate-300"
                         />
 
-                        <div className="min-w-0">
-                          <div className="font-black text-slate-900">
-                            Also record {linkedType.name}
-                            {linkedType.short_code
-                              ? ` (${linkedType.short_code})`
-                              : ""}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-900">
+                              {item.name}
+                            </span>
+                            {item.code ? (
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                                {item.code}
+                              </span>
+                            ) : null}
                           </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-600">
-                            Same document · Same issue date · Expiry: {linkedExpiry}
-                          </div>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-              </Card>
-            ) : null}
 
-            {selectedType?.requires_document ? (
-              <Card title={linkedEvidenceTypes.length > 0 ? "5. Evidence" : "4. Evidence"} description="The file is held in TTTracker staging until review, then published to SharePoint after approval. Ticked linked qualifications reuse this selected evidence automatically.">
-                {selectedType.document_upload_type === "front_back" ? (
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Front" required>
-                      <input type="file" className={fileInputClass} onChange={(event) => setFrontFile(event.target.files?.[0] ?? null)} />
-                    </Field>
-                    <Field label="Back" required>
-                      <input type="file" className={fileInputClass} onChange={(event) => setBackFile(event.target.files?.[0] ?? null)} />
-                    </Field>
-                  </div>
-                ) : selectedType.document_upload_type === "single_or_front_back" ? (
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFlexibleEvidenceMode("single");
-                          setFrontFile(null);
-                          setBackFile(null);
-                        }}
-                        className={`rounded-xl px-4 py-2.5 text-sm font-black ${
-                          flexibleEvidenceMode === "single"
-                            ? "bg-blue-700 text-white"
-                            : "border border-slate-200 bg-white text-slate-700"
-                        }`}
-                      >
-                        Single document
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFlexibleEvidenceMode("front_back");
-                          setSingleFile(null);
-                        }}
-                        className={`rounded-xl px-4 py-2.5 text-sm font-black ${
-                          flexibleEvidenceMode === "front_back"
-                            ? "bg-blue-700 text-white"
-                            : "border border-slate-200 bg-white text-slate-700"
-                        }`}
-                      >
-                        Front + back
-                      </button>
-                    </div>
-
-                    {flexibleEvidenceMode === "front_back" ? (
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <Field label="Front" required>
-                          <input type="file" className={fileInputClass} onChange={(event) => setFrontFile(event.target.files?.[0] ?? null)} />
-                        </Field>
-                        <Field label="Back" required>
-                          <input type="file" className={fileInputClass} onChange={(event) => setBackFile(event.target.files?.[0] ?? null)} />
-                        </Field>
-                      </div>
-                    ) : (
-                      <Field label="Certificate / Licence / Evidence" required>
-                        <input type="file" className={fileInputClass} onChange={(event) => setSingleFile(event.target.files?.[0] ?? null)} />
-                      </Field>
-                    )}
-                  </div>
-                ) : (
-                  <Field label="Certificate / Licence / Evidence" required>
-                    <input type="file" className={fileInputClass} onChange={(event) => setSingleFile(event.target.files?.[0] ?? null)} />
-                  </Field>
-                )}
-                <div className="mt-3 text-xs font-semibold leading-5 text-slate-500">
-                  Final filenames are generated server-side from your configured Training filename rules.
-                </div>
-              </Card>
-            ) : null}
-
-            {existingRecords.length > 0 ? (
-              <Card
-                title={`${4 + (linkedEvidenceTypes.length > 0 ? 1 : 0) + (selectedType?.requires_document ? 1 : 0)}. Existing Current Record`}
-                description="The old record stays current until the replacement is approved."
-              >
-                <div className="space-y-3">
-                  {existingRecords.map((record) => {
-                    const codes = record.option_codes?.length ? record.option_codes : record.class_codes ?? [];
-                    return (
-                      <label key={record.id} className={`block rounded-xl border p-4 ${replaceChoice === "replace" && replaceRecordId === record.id ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"}`}>
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="radio"
-                            name="replacement-record"
-                            checked={replaceChoice === "replace" && replaceRecordId === record.id}
-                            onChange={() => {
-                              setReplaceChoice("replace");
-                              setReplaceRecordId(record.id);
-                            }}
-                            className="mt-1"
-                          />
-                          <div>
-                            <div className="font-black text-slate-900">Replace this record{codes.length ? ` — ${codes.join(", ")}` : ""}</div>
-                            <div className="mt-1 text-sm font-semibold text-slate-600">Issue: {formatDate(record.issue_date)} · Expiry: {formatDate(record.expiry_date)}</div>
-                            {record.certificate_number ? <div className="mt-1 text-xs font-semibold text-slate-500">Number: {record.certificate_number}</div> : null}
+                          <div className="mt-1 text-xs font-semibold text-slate-500">
+                            {validitySummary(item)}
+                            {item.document_upload_type === "front_back"
+                              ? " · Front + back"
+                              : item.document_upload_type ===
+                                  "single_or_front_back"
+                                ? " · Single OR front + back"
+                                : item.document_upload_type === "single"
+                                  ? " · Single document"
+                                  : " · No document"}
                           </div>
                         </div>
                       </label>
                     );
                   })}
 
-                  {selectedType?.allows_multiple_current ? (
-                    <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">
-                      <input
-                        type="radio"
-                        name="replacement-record"
-                        checked={replaceChoice === "add"}
-                        onChange={() => {
-                          setReplaceChoice("add");
-                          setReplaceRecordId("");
-                        }}
-                        className="mt-1"
-                      />
-                      <div>
-                        <div className="font-black text-slate-900">Add another current record</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-600">Keep the existing approved record current as well.</div>
-                      </div>
-                    </label>
-                  ) : null}
-                </div>
-              </Card>
-            ) : null}
-          </section>
-
-          <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
-            <Card title="Submission Summary">
-              <SummaryRow label="Employee" value={selectedEmployee ? `${selectedEmployee.payroll_id || "No Payroll ID"} — ${selectedEmployee.full_name}` : "Not selected"} />
-              <SummaryRow label="Training" value={selectedType ? `${selectedType.name}${selectedType.short_code ? ` (${selectedType.short_code})` : ""}` : "Not selected"} />
-              <SummaryRow label="Classes" value={selectedOptions.length ? selectedOptions.map((item) => item.code).join(", ") : "None"} />
-              {selectedLinkedEvidenceTypes.length > 0 ? (
-                <SummaryRow label="Also creates" value={selectedLinkedEvidenceTypes.map((item) => item.name).join(", ")} />
-              ) : null}
-              <SummaryRow label="Issue" value={issueDate ? formatDate(issueDate) : "Not set"} />
-              <SummaryRow label="Expiry" value={selectedType?.validity_mode === "never" ? "Does not expire" : expiryDate ? formatDate(expiryDate) : "Not set"} />
-              <SummaryRow label="Review" value={selectedType?.requires_review === false ? "Auto-approved" : "Reviewer approval required"} />
-            </Card>
-
-            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-900">
-              <div className="flex items-start gap-2">
-                <ShieldCheck size={18} className="mt-0.5 shrink-0" />
-                <div>
-                  Evidence requiring review is not published to SharePoint until a configured reviewer approves it.
-                </div>
+                {recordTypes.filter(
+                  (item) => item.active && item.id !== typeForm.id,
+                ).length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-5 text-center text-sm font-semibold text-slate-500">
+                    Create another active Training record type before linking
+                    combined-course evidence.
+                  </div>
+                ) : null}
               </div>
+
+              {typeForm.linked_evidence_training_type_ids.length > 0 ? (
+                <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs font-semibold leading-5 text-blue-900">
+                  The Add Training page will show these as optional combined-course
+                  records. The primary record&apos;s expiry is not copied across;
+                  each selected linked Training Type applies its own validity
+                  configuration.
+                </div>
+              ) : null}
             </div>
 
-            <button
-              type="submit"
-              disabled={submitting || !selectedEmployee || !selectedType}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-700 px-5 py-4 text-sm font-black text-white shadow-lg shadow-blue-200 disabled:opacity-50"
-            >
-              {submitting ? <Loader2 size={18} className="animate-spin" /> : <UploadCloud size={18} />}
-              {submitting ? "Submitting..." : "Submit Training Record"}
-            </button>
-          </aside>
-        </form>
-      </main>
+            <Section
+              title="Generated SharePoint filename"
+              description="The filename is built automatically from enabled fields. Empty or disabled values are omitted."
+            />
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Example
+              </div>
+              {buildFilenamePreview({
+                ...typeForm,
+                filename_components: filenameComponentsFor(typeForm),
+              }).length ? (
+                <div className="mt-2 space-y-2">
+                  {buildFilenamePreview({
+                    ...typeForm,
+                    filename_components: filenameComponentsFor(typeForm),
+                  }).map((filename) => (
+                    <code
+                      key={filename}
+                      className="block break-all text-sm font-semibold text-slate-900"
+                    >
+                      {filename}
+                    </code>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 text-sm font-semibold text-slate-500">
+                  No document filename required
+                </div>
+              )}
+              <p className="mt-3 text-xs leading-5 text-slate-500">
+                This preview uses generic field codes and updates from the
+                selected configuration. Employee details are populated from
+                Supabase during upload. For automatic renewals, the expiry date
+                is calculated from the issue date and the configured interval.
+              </p>
+            </div>
+
+            <Actions
+              saving={saving}
+              onCancel={() => setTypeForm(null)}
+              label={typeForm.id ? "Save Changes" : "Create Record Type"}
+            />
+          </form>
+        </Modal>
+      ) : null}
+
+      {optionForm ? (
+        <Modal
+          title={optionForm.id ? "Edit Option" : "Add Option"}
+          onClose={() => setOptionForm(null)}
+        >
+          <form onSubmit={saveOption} className="space-y-4">
+            <LabeledSelect
+              label="Record type"
+              value={optionForm.training_type_id}
+              onChange={(value) =>
+                setOptionForm((current) =>
+                  current
+                    ? { ...current, training_type_id: value }
+                    : current,
+                )
+              }
+              options={[
+                { value: "", label: "Select record type" },
+                ...recordTypes.map((item) => ({
+                  value: item.id,
+                  label: `${item.name} (${item.code})`,
+                })),
+              ]}
+              required
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Option name"
+                value={optionForm.name}
+                onChange={(value) =>
+                  setOptionForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          name: value,
+                          code: current.code || makeCode(value),
+                        }
+                      : current,
+                  )
+                }
+                required
+              />
+              <Field
+                label="Option code"
+                value={optionForm.code}
+                onChange={(value) =>
+                  setOptionForm((current) =>
+                    current
+                      ? { ...current, code: editCode(value) }
+                      : current,
+                  )
+                }
+                required
+              />
+            </div>
+
+            <Area
+              label="Description"
+              value={optionForm.description ?? ""}
+              onChange={(value) =>
+                setOptionForm((current) =>
+                  current ? { ...current, description: value } : current,
+                )
+              }
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Toggle
+                label="Active"
+                description="Available when adding a record"
+                checked={optionForm.active}
+                onChange={(value) =>
+                  setOptionForm((current) =>
+                    current ? { ...current, active: value } : current,
+                  )
+                }
+              />
+            </div>
+
+            <Actions
+              saving={saving}
+              onCancel={() => setOptionForm(null)}
+              label={optionForm.id ? "Save Changes" : "Create Option"}
+            />
+          </form>
+        </Modal>
+      ) : null}
     </AppShell>
   );
 }
 
-const inputClass =
-  "w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100";
+function TypesTable({
+  items,
+  categoryById,
+  optionCount,
+  onEdit,
+  onToggle,
+  onAddOption,
+  onMove,
+}: {
+  items: RecordType[];
+  categoryById: Map<string, Category>;
+  optionCount: (id: string) => number;
+  onEdit: (item: RecordType) => void;
+  onToggle: (item: RecordType) => void;
+  onAddOption: (id: string) => void;
+  onMove: (item: RecordType, direction: "up" | "down") => void;
+}) {
+  if (!items.length) return <Empty text="No record types found." />;
 
-const fileInputClass =
-  "block w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-black file:text-slate-700";
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-5 py-3 font-semibold">Record Type</th>
+            <th className="px-5 py-3 font-semibold">Category</th>
+            <th className="px-5 py-3 font-semibold">Fields</th>
+            <th className="px-5 py-3 font-semibold">Options</th>
+            <th className="px-5 py-3 font-semibold">Current Records</th>
+            <th className="px-5 py-3 font-semibold">Status</th>
+            <th className="px-5 py-3 text-right font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.map((item) => {
+            const fields = [
+              item.validity_mode === "automatic"
+                ? `Auto ${item.validity_interval_value ?? "?"} ${item.validity_interval_unit ?? ""}`
+                : item.validity_mode === "manual"
+                  ? "Manual expiry"
+                  : "Never expires",
+              item.filename_date_field === "expiry_date"
+                ? "Filename: expiry"
+                : item.filename_date_field === "issue_date"
+                  ? "Filename: issue"
+                  : null,
+              item.requires_certificate_number ? "Number" : null,
+              item.requires_issuer ? "Issuer" : null,
+              item.requires_project ? "Project" : null,
+              item.linked_evidence_training_type_ids.length > 0
+                ? `Linked evidence: ${item.linked_evidence_training_type_ids.length}`
+                : null,
+              item.document_upload_type === "front_back"
+                ? "Front + back"
+                : item.document_upload_type === "single_or_front_back"
+                  ? "Single OR front + back"
+                  : item.document_upload_type === "single"
+                    ? "Single document"
+                    : "No document",
+            ].filter(Boolean);
 
-function Card({
+            return (
+              <tr key={item.id} className="hover:bg-slate-50">
+                <td className="px-5 py-4">
+                  <div className="font-bold text-slate-950">{item.name}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {item.code}
+                  </div>
+                </td>
+                <td className="px-5 py-4 text-slate-700">
+                  {item.category_id
+                    ? categoryById.get(item.category_id)?.name ?? "Unknown"
+                    : item.category ?? "Unassigned"}
+                </td>
+                <td className="px-5 py-4">
+                  <div className="flex max-w-sm flex-wrap gap-1.5">
+                    {fields.map((field) => (
+                      <span
+                        key={field}
+                        className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600"
+                      >
+                        {field}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-5 py-4">
+                  <div className="font-semibold text-slate-700">
+                    {item.subtype_mode === "none"
+                      ? "None"
+                      : item.subtype_mode === "single"
+                        ? "Single"
+                        : "Multiple"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {optionCount(item.id)} configured
+                  </div>
+                </td>
+                <td className="px-5 py-4 text-xs text-slate-600">
+                  {item.allows_multiple_current
+                    ? "Multiple current allowed"
+                    : "Prompt on upload / renewal"}
+                </td>
+                <td className="px-5 py-4">
+                  <Status active={item.active} />
+                </td>
+                <td className="px-5 py-4">
+                  <div className="flex justify-end gap-2">
+                    <IconButton
+                      title="Move earlier"
+                      onClick={() => onMove(item, "up")}
+                      icon={<ArrowUp size={15} />}
+                    />
+                    <IconButton
+                      title="Move later"
+                      onClick={() => onMove(item, "down")}
+                      icon={<ArrowDown size={15} />}
+                    />
+                    <IconButton
+                      title="Add option"
+                      onClick={() => onAddOption(item.id)}
+                      icon={<Plus size={15} />}
+                    />
+                    <IconButton
+                      title="Edit"
+                      onClick={() => onEdit(item)}
+                      icon={<Pencil size={15} />}
+                    />
+                    <IconButton
+                      title={item.active ? "Deactivate" : "Activate"}
+                      onClick={() => onToggle(item)}
+                      icon={
+                        item.active ? (
+                          <ToggleRight size={17} />
+                        ) : (
+                          <ToggleLeft size={17} />
+                        )
+                      }
+                    />
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CategoriesTable({
+  items,
+  typeCount,
+  onEdit,
+  onToggle,
+  onMove,
+}: {
+  items: Category[];
+  typeCount: (id: string) => number;
+  onEdit: (item: Category) => void;
+  onToggle: (item: Category) => void;
+  onMove: (item: Category, direction: "up" | "down") => void;
+}) {
+  if (!items.length) return <Empty text="No categories found." />;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-5 py-3 font-semibold">Category</th>
+            <th className="px-5 py-3 font-semibold">SharePoint Folder</th>
+            <th className="px-5 py-3 font-semibold">Types</th>
+            <th className="px-5 py-3 font-semibold">Status</th>
+            <th className="px-5 py-3 text-right font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.map((item) => (
+            <tr key={item.id} className="hover:bg-slate-50">
+              <td className="px-5 py-4">
+                <div className="font-bold text-slate-950">{item.name}</div>
+                <div className="mt-1 text-xs text-slate-500">{item.code}</div>
+                {item.description ? (
+                  <div className="mt-2 max-w-xl text-xs text-slate-500">
+                    {item.description}
+                  </div>
+                ) : null}
+              </td>
+              <td className="px-5 py-4">
+                <code className="rounded bg-slate-100 px-2 py-1 text-xs">
+                  {item.sharepoint_folder_name}
+                </code>
+              </td>
+              <td className="px-5 py-4 font-semibold text-slate-700">
+                {typeCount(item.id)}
+              </td>
+              <td className="px-5 py-4">
+                <Status active={item.active} />
+              </td>
+              <td className="px-5 py-4">
+                <div className="flex justify-end gap-2">
+                  <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
+                  <IconButton
+                    title="Edit"
+                    onClick={() => onEdit(item)}
+                    icon={<Pencil size={15} />}
+                  />
+                  <IconButton
+                    title={item.active ? "Deactivate" : "Activate"}
+                    onClick={() => onToggle(item)}
+                    icon={
+                      item.active ? (
+                        <ToggleRight size={17} />
+                      ) : (
+                        <ToggleLeft size={17} />
+                      )
+                    }
+                  />
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OptionsTable({
+  items,
+  typeById,
+  onEdit,
+  onToggle,
+  onDelete,
+  onMove,
+}: {
+  items: RecordOption[];
+  typeById: Map<string, RecordType>;
+  onEdit: (item: RecordOption) => void;
+  onToggle: (item: RecordOption) => void;
+  onDelete: (item: RecordOption) => void;
+  onMove: (item: RecordOption, direction: "up" | "down") => void;
+}) {
+  if (!items.length) return <Empty text="No options found." />;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-5 py-3 font-semibold">Option</th>
+            <th className="px-5 py-3 font-semibold">Record Type</th>
+            <th className="px-5 py-3 font-semibold">Description</th>
+            <th className="px-5 py-3 font-semibold">Status</th>
+            <th className="px-5 py-3 text-right font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.map((item) => (
+            <tr key={item.id} className="hover:bg-slate-50">
+              <td className="px-5 py-4">
+                <div className="font-bold text-slate-950">{item.name}</div>
+                <div className="mt-1 text-xs text-slate-500">{item.code}</div>
+              </td>
+              <td className="px-5 py-4 text-slate-700">
+                {typeById.get(item.training_type_id)?.name ?? "Unknown"}
+              </td>
+              <td className="px-5 py-4 text-xs text-slate-500">
+                {item.description || "No description"}
+              </td>
+              <td className="px-5 py-4">
+                <Status active={item.active} />
+              </td>
+              <td className="px-5 py-4">
+                <div className="flex justify-end gap-2">
+                  <IconButton
+                    title="Move earlier"
+                    onClick={() => onMove(item, "up")}
+                    icon={<ArrowUp size={15} />}
+                  />
+                  <IconButton
+                    title="Move later"
+                    onClick={() => onMove(item, "down")}
+                    icon={<ArrowDown size={15} />}
+                  />
+                  <IconButton
+                    title="Edit"
+                    onClick={() => onEdit(item)}
+                    icon={<Pencil size={15} />}
+                  />
+                  <IconButton
+                    title={item.active ? "Deactivate" : "Activate"}
+                    onClick={() => onToggle(item)}
+                    icon={
+                      item.active ? (
+                        <ToggleRight size={17} />
+                      ) : (
+                        <ToggleLeft size={17} />
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onDelete(item)}
+                    className="rounded-lg border border-rose-200 p-2 text-rose-600 hover:bg-rose-50"
+                    title="Delete"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon,
+}: {
+  label: string;
+  value: number;
+  detail: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-600">{label}</div>
+          <div className="mt-2 text-3xl font-bold text-slate-950">{value}</div>
+          <div className="mt-1 text-xs text-slate-500">{detail}</div>
+        </div>
+        <div className="rounded-xl bg-slate-100 p-2.5 text-slate-700">
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tab({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`border-b-2 px-4 pb-3 text-sm font-semibold ${
+        active
+          ? "border-slate-950 text-slate-950"
+          : "border-transparent text-slate-500"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Status({ active }: { active: boolean }) {
+  return (
+    <span
+      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${
+        active
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-slate-200 bg-slate-100 text-slate-500"
+      }`}
+    >
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
+
+function IconButton({
   title,
-  description,
+  onClick,
+  icon,
+}: {
+  title: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-white"
+      title={title}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="p-12 text-center text-sm font-medium text-slate-500">
+      {text}
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  wide = false,
+  onClose,
   children,
 }: {
   title: string;
-  description?: string;
-  children: ReactNode;
+  wide?: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-5">
-        <h2 className="text-lg font-black text-slate-950">{title}</h2>
-        {description ? <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p> : null}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+      <div
+        className={`max-h-[92vh] w-full overflow-y-auto rounded-3xl bg-white shadow-2xl ${
+          wide ? "max-w-5xl" : "max-w-2xl"
+        }`}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
+          <h2 className="text-xl font-bold text-slate-950">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-6">{children}</div>
       </div>
-      {children}
-    </section>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h3 className="font-bold text-slate-950">{title}</h3>
+      <p className="mt-1 text-sm text-slate-500">{description}</p>
+    </div>
   );
 }
 
 function Field({
   label,
+  value,
+  onChange,
   required = false,
-  children,
+  type = "text",
+  min,
+  step,
 }: {
   label: string;
+  value: string;
+  onChange: (value: string) => void;
   required?: boolean;
-  children: ReactNode;
+  type?: "text" | "number";
+  min?: string;
+  step?: string;
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-black text-slate-800">
-        {label}{required ? <span className="ml-1 text-rose-600">*</span> : null}
-      </span>
-      {children}
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <input
+        type={type}
+        min={min}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+      />
     </label>
   );
 }
 
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-3 last:border-b-0">
-      <span className="text-sm font-semibold text-slate-500">{label}</span>
-      <span className="max-w-[62%] text-right text-sm font-black text-slate-900">{value}</span>
-    </div>
-  );
-}
-
-function DynamicField({
-  field,
+function Area({
+  label,
   value,
   onChange,
 }: {
-  field: CustomField;
-  value: unknown;
-  onChange: (value: unknown) => void;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
 }) {
-  const options = fieldOptions(field.options);
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={3}
+        className="mt-2 w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none ring-slate-200 focus:ring-2"
+      />
+    </label>
+  );
+}
 
-  if (field.field_type === "checkbox") {
-    return (
-      <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
-        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} className="h-5 w-5 rounded border-slate-300" />
-        <span className="text-sm font-black text-slate-800">{field.label}{field.required ? <span className="ml-1 text-rose-600">*</span> : null}</span>
-      </label>
-    );
-  }
-
-  if (field.field_type === "select") {
-    return (
-      <Field label={field.label} required={field.required}>
-        <select className={inputClass} value={clean(value)} onChange={(event) => onChange(event.target.value)}>
-          <option value="">Select...</option>
-          {options.map((option) => <option key={option} value={option}>{option}</option>)}
+function LabeledSelect({
+  label,
+  value,
+  onChange,
+  options,
+  required = false,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  required?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <div className="relative mt-2">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          disabled={disabled}
+          className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-9 text-sm outline-none ring-slate-200 focus:ring-2 disabled:bg-slate-100"
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
-      </Field>
-    );
-  }
+        <ChevronDown
+          size={16}
+          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+        />
+      </div>
+    </label>
+  );
+}
 
-  if (field.field_type === "multiselect") {
-    const selected = Array.isArray(value) ? value.map(String) : [];
-    return (
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <label className="relative block min-w-48">
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-9 text-sm font-medium text-slate-700 outline-none ring-slate-200 focus:ring-2"
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={16}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+      />
+    </label>
+  );
+}
+
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-3 rounded-2xl border border-slate-200 p-4">
       <div>
-        <div className="mb-2 text-sm font-black text-slate-800">{field.label}{field.required ? <span className="ml-1 text-rose-600">*</span> : null}</div>
-        <div className="flex flex-wrap gap-2">
-          {options.map((option) => {
-            const checked = selected.includes(option);
-            return (
-              <label key={option} className={`cursor-pointer rounded-xl border px-3 py-2 text-sm font-bold ${checked ? "border-blue-300 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700"}`}>
-                <input type="checkbox" className="mr-2" checked={checked} onChange={() => onChange(checked ? selected.filter((item) => item !== option) : [...selected, option])} />
-                {option}
-              </label>
-            );
-          })}
+        <div className="text-sm font-bold text-slate-800">{label}</div>
+        <div className="mt-1 text-xs leading-5 text-slate-500">
+          {description}
         </div>
       </div>
-    );
-  }
-
-  if (field.field_type === "textarea") {
-    return (
-      <Field label={field.label} required={field.required}>
-        <textarea className={`${inputClass} min-h-24`} placeholder={field.placeholder ?? ""} value={clean(value)} onChange={(event) => onChange(event.target.value)} />
-      </Field>
-    );
-  }
-
-  const type = field.field_type === "number" ? "number" : field.field_type === "date" ? "date" : "text";
-
-  return (
-    <Field label={field.label} required={field.required}>
       <input
-        type={type}
-        className={inputClass}
-        placeholder={field.placeholder ?? ""}
-        value={clean(value)}
-        onChange={(event) => onChange(field.field_type === "number" ? Number(event.target.value) : event.target.value)}
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-1 h-4 w-4 rounded border-slate-300"
       />
-    </Field>
+    </label>
+  );
+}
+
+function Actions({
+  saving,
+  onCancel,
+  label,
+}: {
+  saving: boolean;
+  onCancel: () => void;
+  label: string;
+}) {
+  return (
+    <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={saving}
+        className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700"
+      >
+        <X size={16} />
+        Cancel
+      </button>
+      <button
+        type="submit"
+        disabled={saving}
+        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+      >
+        {saving ? (
+          <Loader2 size={16} className="animate-spin" />
+        ) : (
+          <Save size={16} />
+        )}
+        {label}
+      </button>
+    </div>
   );
 }
