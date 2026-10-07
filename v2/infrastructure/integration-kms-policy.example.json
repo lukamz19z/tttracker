@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IntegrationEnvelopeOnly",
+      "Effect": "Allow",
+      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:<REGION>:<ACCOUNT_ID>:key/<ENVIRONMENT_KEY_ID>",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:purpose": "tttracker.integration-credential.xero",
+          "kms:EncryptionContext:environment": "<ENVIRONMENT>",
+          "kms:EncryptionContext:provider": "xero"
+        }
+      }
+    },
+    {
+      "Sid": "InspectDedicatedKey",
+      "Effect": "Allow",
+      "Action": ["kms:DescribeKey"],
+      "Resource": "arn:aws:kms:<REGION>:<ACCOUNT_ID>:key/<ENVIRONMENT_KEY_ID>"
+    }
+  ]
+}

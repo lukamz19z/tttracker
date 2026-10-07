@@ -104,6 +104,7 @@ export async function POST(request: NextRequest, context: Context) {
         primary_tower_id:
           body.primaryTowerId ? String(body.primaryTowerId) : null,
         docket_date: docketDate,
+        crew_id:body.crewId ? String(body.crewId) : null,
         crew_label: String(body.crewLabel ?? "").trim() || null,
         leading_hand_person_id:
           body.leadingHandPersonId

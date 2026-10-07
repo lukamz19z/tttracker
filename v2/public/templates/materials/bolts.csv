@@ -1,0 +1,3 @@
+Bolt Reference,Diameter,Length,Bolt Type,Required Qty,Drawing Reference,Drawing Revision,Tower Segment,Description
+M16x60-MB,M16,60,Machine Bolt,24,DRG-001,Rev A,Bottom Body,Standard connection bolt
+M20x75-HSB,M20,75,High Strength Bolt,12,DRG-002,Rev A,Bottom Crossarm,Crossarm connection bolt

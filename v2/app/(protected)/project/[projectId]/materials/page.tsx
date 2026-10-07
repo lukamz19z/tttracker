@@ -11,7 +11,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import { createSupabaseBrowser } from "@/lib/supabase";
+import { createSupabaseBrowser } from "@/lib/supabase/browser";
 
 type TowerRow = {
   id: string;

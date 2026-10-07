@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import InvitationManager from "./invitation-manager";
-import { requirePlatformAdmin } from "@/lib/platform/server";
+import { requirePlatformPage } from "@/lib/platform/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 type Props = {
@@ -11,9 +11,7 @@ type Props = {
   }>;
 };
 
-function firstRelation<T>(
-  value: T | T[] | null | undefined,
-): T | null {
+function firstRelation<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) {
     return value[0] ?? null;
   }
@@ -21,22 +19,8 @@ function firstRelation<T>(
   return value ?? null;
 }
 
-export default async function OrganisationDetailPage({
-  params,
-}: Props) {
-  try {
-    await requirePlatformAdmin();
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "UNKNOWN_ERROR";
-
-    if (message === "UNAUTHENTICATED") {
-      redirect("/login");
-    }
-
-    throw error;
-  }
-
+export default async function OrganisationDetailPage({ params }: Props) {
+  const authority = await requirePlatformPage();
   const { organisationId } = await params;
   const supabase = createSupabaseAdmin();
 
@@ -63,7 +47,7 @@ export default async function OrganisationDetailPage({
       .from("organisation_users")
       .select("*", { count: "exact", head: true })
       .eq("organisation_id", organisationId)
-      .neq("status", "removed"),
+      .eq("status", "active"),
 
     supabase
       .from("v2_projects")
@@ -73,7 +57,8 @@ export default async function OrganisationDetailPage({
 
     supabase
       .from("v2_organisation_subscriptions")
-      .select(`
+      .select(
+        `
         id,
         status,
         billing_cycle,
@@ -86,7 +71,8 @@ export default async function OrganisationDetailPage({
             name
           )
         )
-      `)
+      `,
+      )
       .eq("organisation_id", organisationId)
       .in("status", ["trial", "active"])
       .order("starts_at", { ascending: false })
@@ -95,7 +81,8 @@ export default async function OrganisationDetailPage({
 
     supabase
       .from("v2_organisation_entitlement_overrides")
-      .select(`
+      .select(
+        `
         id,
         enabled,
         value,
@@ -107,37 +94,43 @@ export default async function OrganisationDetailPage({
           name,
           feature_type
         )
-      `)
+      `,
+      )
       .eq("organisation_id", organisationId)
       .order("created_at", { ascending: false }),
 
     supabase
       .from("v2_organisation_invitations")
-      .select(`
+      .select(
+        `
         id,
         email,
         status,
         intended_role_code,
+        intended_role_id,
+        expires_at,
         last_sent_at,
         send_count,
         last_error,
         provider,
         provider_message_id,
         created_at
-      `)
+      `,
+      )
       .eq("organisation_id", organisationId)
       .order("created_at", { ascending: false }),
 
     supabase
       .from("v2_roles")
-      .select("code, name")
+      .select("id, code, name")
       .eq("organisation_id", organisationId)
       .eq("is_active", true)
       .order("sort_order", { ascending: true }),
 
     supabase
       .from("v2_invitation_delivery_attempts")
-      .select(`
+      .select(
+        `
         id,
         invitation_id,
         provider,
@@ -145,14 +138,13 @@ export default async function OrganisationDetailPage({
         provider_message_id,
         error_message,
         attempted_at
-      `)
+      `,
+      )
       .eq("organisation_id", organisationId)
       .order("attempted_at", { ascending: false }),
   ]);
 
-  const versionRow = firstRelation(
-    subscription?.v2_subscription_plan_versions,
-  );
+  const versionRow = firstRelation(subscription?.v2_subscription_plan_versions);
 
   const planRow = versionRow
     ? firstRelation(versionRow.v2_subscription_plans)
@@ -171,8 +163,7 @@ export default async function OrganisationDetailPage({
   >();
 
   for (const attempt of deliveryAttempts ?? []) {
-    const existing =
-      attemptsByInvitation.get(attempt.invitation_id) ?? [];
+    const existing = attemptsByInvitation.get(attempt.invitation_id) ?? [];
 
     existing.push({
       id: attempt.id,
@@ -190,7 +181,10 @@ export default async function OrganisationDetailPage({
     id: invitation.id,
     email: invitation.email,
     status: invitation.status,
-    roleCode: invitation.intended_role_code,
+    roleName:
+      (roles ?? []).find((role) => role.id === invitation.intended_role_id)
+        ?.name ?? "Role requires configuration",
+    expiresAt: invitation.expires_at,
     lastSentAt: invitation.last_sent_at,
     sendCount: invitation.send_count ?? 0,
     lastError: invitation.last_error,
@@ -200,28 +194,24 @@ export default async function OrganisationDetailPage({
   }));
 
   const roleOptions = (roles ?? []).map((role) => ({
-    code: role.code,
+    id: role.id,
     name: role.name,
   }));
 
   return (
-    <main style={{ minHeight: "100vh", padding: "32px 24px" }}>
+    <main style={{ padding: "0" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <Link
-          href="/platform-admin"
+          href="/platform-admin/organisations"
           style={{ color: "#7dd3fc", fontSize: 14 }}
         >
           ← Organisations
         </Link>
 
         <div style={{ marginTop: 18, marginBottom: 24 }}>
-          <h1 style={{ marginBottom: 6 }}>
-            {organisation.name}
-          </h1>
+          <h1 style={{ marginBottom: 6 }}>{organisation.name}</h1>
 
-          <div style={{ color: "#94a3b8" }}>
-            {organisation.code}
-          </div>
+          <div style={{ color: "#94a3b8" }}>{organisation.code}</div>
         </div>
 
         <div
@@ -233,20 +223,18 @@ export default async function OrganisationDetailPage({
           }}
         >
           <Metric label="Users" value={userCount ?? 0} />
-          <Metric label="Projects" value={projectCount ?? 0} />
+          <Metric label="Organisation Projects" value={projectCount ?? 0} />
           <Metric label="Plan" value={planRow?.name ?? "None"} />
         </div>
 
         <InvitationManager
           organisationId={organisationId}
+          canProvision={authority.role !== "support"}
           roles={roleOptions}
           invitations={invitationRows}
         />
 
-        <section
-          className="tt-card"
-          style={{ padding: 20, marginBottom: 20 }}
-        >
+        <section className="tt-card" style={{ padding: 20, marginBottom: 20 }}>
           <h2 style={{ marginTop: 0 }}>Subscription</h2>
 
           <div
@@ -263,20 +251,14 @@ export default async function OrganisationDetailPage({
         </section>
 
         <section className="tt-card" style={{ padding: 20 }}>
-          <h2 style={{ marginTop: 0 }}>
-            Feature overrides
-          </h2>
+          <h2 style={{ marginTop: 0 }}>Feature overrides</h2>
 
           {!overrides?.length ? (
-            <div style={{ color: "#94a3b8" }}>
-              No overrides.
-            </div>
+            <div style={{ color: "#94a3b8" }}>No overrides.</div>
           ) : (
             <div>
               {overrides.map((override) => {
-                const feature = firstRelation(
-                  override.v2_features,
-                );
+                const feature = firstRelation(override.v2_features);
 
                 return (
                   <div
@@ -290,9 +272,7 @@ export default async function OrganisationDetailPage({
                     }}
                   >
                     <div>
-                      {feature?.name ??
-                        feature?.feature_key ??
-                        "Feature"}
+                      {feature?.name ?? feature?.feature_key ?? "Feature"}
                     </div>
 
                     <div>
@@ -317,13 +297,7 @@ export default async function OrganisationDetailPage({
   );
 }
 
-function Metric({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="tt-card" style={{ padding: 16 }}>
       <div

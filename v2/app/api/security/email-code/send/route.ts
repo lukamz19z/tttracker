@@ -1,3 +1,4 @@
+import { securityError } from "@/lib/security/errors";
 import { NextResponse } from "next/server";
 
 import { sendEmailSecurityCode } from "@/lib/security/email-code";
@@ -11,14 +12,10 @@ export async function POST() {
       ...result,
     });
   } catch (error) {
+    const result = securityError(error);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not send verification code.",
-      },
-      { status: 400 },
+      { error: result.error, code: result.code },
+      { status: result.status, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

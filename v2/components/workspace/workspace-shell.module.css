@@ -190,3 +190,32 @@
     padding: 18px 12px 32px;
   }
 }
+
+.identity { display:flex; align-items:center; gap:12px; min-width:0; }
+.contextLabel { color:#94a3b8; font-size:10px; white-space:nowrap; }
+.switcher, .accountMenu { position:relative; font-size:13px; }
+.switcher summary, .accountMenu summary { display:flex; align-items:center; gap:6px; cursor:pointer; list-style:none; padding:8px; border-radius:8px; }
+.switcherPanel { position:absolute; top:100%; right:0; z-index:60; width:260px; max-height:320px; overflow:auto; display:grid; gap:4px; padding:12px; background:#0f172a; border:1px solid #334155; border-radius:10px; box-shadow:0 12px 28px #0008; }
+.switcherPanel a, .switcherPanel button { padding:8px; color:#e2e8f0; text-align:left; text-decoration:none; background:transparent; border:0; cursor:pointer; }
+.switcherPanel small { overflow-wrap:anywhere; color:#94a3b8; }
+.switcherPanel label { display:flex; gap:6px; align-items:center; padding:6px; background:#f8fafc; color:#0f172a; border-radius:6px; }
+.switcherPanel input { width:100%; border:0; background:transparent; color:#0f172a; }
+.mobileToggle { display:none; background:none; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px; }
+@media(min-width:901px) { .topbar { gap:12px; padding:0 18px; } .navLink { padding:8px; } }
+@media(max-width:900px) {
+ .topbar { grid-template-columns:minmax(0,1fr) auto auto; padding:8px 12px; }
+ .globalNav { display:none; overflow:visible; flex-wrap:wrap; grid-column:1/-1; grid-row:auto; }
+ .mobileOpen { display:flex; }
+ .mobileToggle { display:flex; }
+ .identity { flex-wrap:wrap; gap:4px 10px; }
+ .contextLabel { display:none; }
+ .organisationName { display:block; max-width:170px; }
+ .switcher summary { max-width:180px; }
+ .switcherPanel { left:0; right:auto; }
+ .accountMenu .switcherPanel { left:auto; right:0; }
+}
+
+.identity .organisationName { max-width:190px; }
+.switcher summary::-webkit-details-marker, .accountMenu summary::-webkit-details-marker { display:none; }
+
+@media(max-width:900px) { .accountMenu { grid-column:3; grid-row:1; } .globalNav { grid-row:2; } }

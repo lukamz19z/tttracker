@@ -1,4 +1,5 @@
 import "server-only";
+import { notFound, redirect } from "next/navigation";
 
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
@@ -77,4 +78,20 @@ export function platformErrorResponse(error: unknown) {
     status: 500,
     body: { error: message },
   };
+}
+// Navigation discovery only: tenant authorization never uses platform authority.
+export async function isPlatformAdmin(userId: string) {
+  const { data, error } = await createSupabaseAdmin().from("v2_platform_admins")
+    .select("role").eq("user_id", userId).eq("status", "active").maybeSingle();
+  if (error) throw new Error(`PLATFORM_ADMIN_LOOKUP_FAILED: ${error.message}`);
+  return Boolean(data && ["owner", "admin", "support"].includes(data.role));
+}
+
+export async function requirePlatformPage() {
+  try { return await requirePlatformAdmin(); }
+  catch (error) {
+    if (error instanceof Error && error.message === "UNAUTHENTICATED") redirect("/login");
+    if (error instanceof Error && error.message === "FORBIDDEN") notFound();
+    throw error;
+  }
 }

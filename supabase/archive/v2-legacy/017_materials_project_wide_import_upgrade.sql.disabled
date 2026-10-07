@@ -1,0 +1,61 @@
+-- TTTracker V2
+-- Materials Control - project-wide import + traceability upgrade
+-- Run after the Materials Traceability Control migration.
+
+begin;
+
+alter table public.v2_material_import_batches
+  add column if not exists target_tower_id uuid references public.v2_towers(id) on delete set null,
+  add column if not exists import_category_key text,
+  add column if not exists source_role_key text;
+
+create index if not exists v2_material_import_batches_target_tower_idx
+  on public.v2_material_import_batches(project_id, target_tower_id, import_category_key, created_at desc);
+
+alter table public.v2_material_source_records
+  add column if not exists import_category_key text,
+  add column if not exists source_role_key text,
+  add column if not exists profile text,
+  add column if not exists diameter text,
+  add column if not exists length text,
+  add column if not exists bolt_type text,
+  add column if not exists packer_mark text;
+
+alter table public.v2_material_bundles
+  add column if not exists source_import_batch_id uuid references public.v2_material_import_batches(id) on delete set null;
+
+create index if not exists v2_material_bundles_import_batch_idx
+  on public.v2_material_bundles(source_import_batch_id);
+
+alter table public.v2_material_register
+  add column if not exists source_role_key text;
+
+-- Configurable labels / behaviours for import provenance and issue close-out.
+insert into public.v2_project_option_definitions (
+  organisation_id, project_id, option_group, option_key, label, sort_order, settings
+)
+select p.organisation_id, p.id, x.option_group, x.option_key, x.label, x.sort_order, x.settings
+from public.v2_projects p
+cross join (
+  values
+    ('material_import_source_role','packing_list','Packing List',10,'{"applies_to":["members","bundles"]}'::jsonb),
+    ('material_import_source_role','drawing_schedule','Drawing / Material Schedule',20,'{"applies_to":["members","bolts","packers"]}'::jsonb),
+    ('material_import_source_role','member_schedule','Member Schedule',30,'{"applies_to":["members"]}'::jsonb),
+    ('material_import_source_role','supplier_list','Supplier List',40,'{"applies_to":["bundles","members","bolts","packers"]}'::jsonb),
+    ('material_import_source_role','manual','Manual Entry',90,'{"applies_to":["bundles","members","bolts","packers"]}'::jsonb),
+    ('material_import_source_role','custom','Custom Source',100,'{"applies_to":["bundles","members","bolts","packers"]}'::jsonb),
+    ('material_issue_event_type','note','Note / Update',10,'{}'::jsonb),
+    ('material_issue_event_type','client_notified','Client Notified',20,'{}'::jsonb),
+    ('material_issue_event_type','client_acknowledged','Client Acknowledged',30,'{}'::jsonb),
+    ('material_issue_event_type','source_identified','Replacement Source Identified',40,'{}'::jsonb),
+    ('material_issue_event_type','dispatched','Dispatched / In Transit',50,'{}'::jsonb),
+    ('material_issue_event_type','received','Received',60,'{"resolves_quantity":true}'::jsonb),
+    ('material_issue_event_type','found_received','Found / Received',70,'{"resolves_quantity":true}'::jsonb),
+    ('material_issue_event_type','replacement_received','Replacement Received',80,'{"resolves_quantity":true}'::jsonb),
+    ('material_issue_event_type','transfer_received','Transfer Received',90,'{"resolves_quantity":true}'::jsonb),
+    ('material_issue_event_type','receipt_reversed','Receipt Reversed',100,'{"reverses_quantity":true}'::jsonb)
+) as x(option_group, option_key, label, sort_order, settings)
+on conflict (project_id, option_group, option_key) do nothing;
+
+notify pgrst, 'reload schema';
+commit;

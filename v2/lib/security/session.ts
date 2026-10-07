@@ -1,4 +1,5 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createSupabaseServer } from "@/lib/supabase/server";
 
@@ -8,12 +9,13 @@ export type AuthSessionIdentity = {
   sessionId: string;
 };
 
-export async function requireAuthSessionIdentity(): Promise<AuthSessionIdentity> {
-  const supabase = await createSupabaseServer();
+export async function requireAuthSessionIdentity(
+  client?: SupabaseClient,
+): Promise<AuthSessionIdentity> {
+  const supabase = client ?? (await createSupabaseServer());
   const { data, error } = await supabase.auth.getClaims();
 
-  const userId =
-    typeof data?.claims?.sub === "string" ? data.claims.sub : null;
+  const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
   const email =
     typeof data?.claims?.email === "string"
       ? data.claims.email.trim().toLowerCase()

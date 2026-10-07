@@ -1,0 +1,6 @@
+.header { position:sticky;top:0;z-index:40;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 24px;background:#0f172a;border-bottom:1px solid #334155; }
+.header a { color:#7dd3fc;font-size:13px; }
+.body { max-width:1280px;margin:auto;padding:20px; }
+.label { color:#94a3b8;font-size:12px;margin:0 0 12px; }
+.nav { display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px; }
+.nav a { padding:8px 12px;border:1px solid #334155;border-radius:8px;color:#e2e8f0;text-decoration:none;font-size:13px; }

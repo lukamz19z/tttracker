@@ -4,7 +4,7 @@ import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type RoleOption = {
-  code: string;
+  id: string;
   name: string;
 };
 
@@ -21,7 +21,8 @@ type Invitation = {
   id: string;
   email: string;
   status: string;
-  roleCode: string;
+  roleName: string;
+  expiresAt: string | null;
   lastSentAt: string | null;
   sendCount: number;
   lastError: string | null;
@@ -32,6 +33,7 @@ type Invitation = {
 
 type Props = {
   organisationId: string;
+  canProvision: boolean;
   roles: RoleOption[];
   invitations: Invitation[];
 };
@@ -47,6 +49,7 @@ function formatDate(value: string | null) {
 
 export default function InvitationManager({
   organisationId,
+  canProvision,
   roles,
   invitations,
 }: Props) {
@@ -54,9 +57,7 @@ export default function InvitationManager({
 
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState("");
-  const [roleCode, setRoleCode] = useState(
-    roles[0]?.code ?? "",
-  );
+  const [roleId, setRoleId] = useState(roles[0]?.id ?? "");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -66,15 +67,13 @@ export default function InvitationManager({
 
   const activeInvitations = useMemo(
     () =>
-      invitations.filter(
-        (invitation) => invitation.status !== "cancelled",
+      invitations.filter((invitation) =>
+        ["pending", "expired"].includes(invitation.status),
       ),
     [invitations],
   );
 
-  async function createInvitation(
-    event: FormEvent<HTMLFormElement>,
-  ) {
+  async function createInvitation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setCreating(true);
@@ -92,7 +91,7 @@ export default function InvitationManager({
           },
           body: JSON.stringify({
             email,
-            roleCode,
+            roleId,
           }),
         },
       );
@@ -100,9 +99,8 @@ export default function InvitationManager({
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          payload.error ?? "Could not create invitation.",
-        );
+        if (payload.invitationId) router.refresh();
+        throw new Error(payload.error ?? "Could not create invitation.");
       }
 
       setEmail("");
@@ -111,9 +109,7 @@ export default function InvitationManager({
       router.refresh();
     } catch (error) {
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not create invitation.",
+        error instanceof Error ? error.message : "Could not create invitation.",
       );
     } finally {
       setCreating(false);
@@ -126,9 +122,7 @@ export default function InvitationManager({
 
     try {
       const response = await fetch(
-        `/api/platform/invitations/${encodeURIComponent(
-          invitationId,
-        )}/resend`,
+        `/api/platform/invitations/${encodeURIComponent(invitationId)}/resend`,
         {
           method: "POST",
         },
@@ -137,18 +131,14 @@ export default function InvitationManager({
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          payload.error ?? "Could not resend invitation.",
-        );
+        throw new Error(payload.error ?? "Could not resend invitation.");
       }
 
       setMessage("Invitation sent.");
       router.refresh();
     } catch (error) {
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not resend invitation.",
+        error instanceof Error ? error.message : "Could not resend invitation.",
       );
     } finally {
       setBusyId(null);
@@ -167,9 +157,7 @@ export default function InvitationManager({
 
     try {
       const response = await fetch(
-        `/api/platform/invitations/${encodeURIComponent(
-          invitationId,
-        )}`,
+        `/api/platform/invitations/${encodeURIComponent(invitationId)}`,
         {
           method: "PATCH",
           headers: {
@@ -184,9 +172,7 @@ export default function InvitationManager({
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          payload.error ?? "Could not change invitation email.",
-        );
+        throw new Error(payload.error ?? "Could not change invitation email.");
       }
 
       setEditingId(null);
@@ -215,9 +201,7 @@ export default function InvitationManager({
 
     try {
       const response = await fetch(
-        `/api/platform/invitations/${encodeURIComponent(
-          invitationId,
-        )}`,
+        `/api/platform/invitations/${encodeURIComponent(invitationId)}`,
         {
           method: "DELETE",
         },
@@ -226,18 +210,14 @@ export default function InvitationManager({
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          payload.error ?? "Could not cancel invitation.",
-        );
+        throw new Error(payload.error ?? "Could not cancel invitation.");
       }
 
       setMessage("Invitation cancelled.");
       router.refresh();
     } catch (error) {
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not cancel invitation.",
+        error instanceof Error ? error.message : "Could not cancel invitation.",
       );
     } finally {
       setBusyId(null);
@@ -261,13 +241,12 @@ export default function InvitationManager({
           marginBottom: 16,
         }}
       >
-        <h2 style={{ margin: 0 }}>
-          Invitations
-        </h2>
+        <h2 style={{ margin: 0 }}>Pending invitations</h2>
 
         <button
           type="button"
           className="tt-button tt-button-primary"
+          disabled={!canProvision || roles.length === 0}
           onClick={() => {
             setShowInvite((current) => !current);
             setMessage(null);
@@ -316,14 +295,13 @@ export default function InvitationManager({
           <select
             className="tt-select"
             required
-            value={roleCode}
-            onChange={(event) => setRoleCode(event.target.value)}
+            aria-label="Intended organisation role"
+            disabled={roles.length === 1}
+            value={roleId}
+            onChange={(event) => setRoleId(event.target.value)}
           >
             {roles.map((role) => (
-              <option
-                key={role.code}
-                value={role.code}
-              >
+              <option key={role.id} value={role.id}>
                 {role.name}
               </option>
             ))}
@@ -332,7 +310,7 @@ export default function InvitationManager({
           <button
             type="submit"
             className="tt-button tt-button-primary"
-            disabled={creating || !roleCode}
+            disabled={creating || !roleId}
           >
             {creating ? "Sending..." : "Send invite"}
           </button>
@@ -340,13 +318,13 @@ export default function InvitationManager({
       ) : null}
 
       {activeInvitations.length === 0 ? (
-        <div style={{ color: "#94a3b8" }}>
-          No invitations.
-        </div>
+        <div style={{ color: "#94a3b8" }}>No pending invitations.</div>
       ) : (
         <div>
           {activeInvitations.map((invitation) => {
-            const pending = invitation.status === "pending";
+            const pending =
+              canProvision &&
+              ["pending", "expired"].includes(invitation.status);
             const busy = busyId === invitation.id;
             const editing = editingId === invitation.id;
             const expanded = expandedId === invitation.id;
@@ -389,9 +367,7 @@ export default function InvitationManager({
                           type="button"
                           className="tt-button"
                           disabled={busy}
-                          onClick={() =>
-                            void saveEmail(invitation.id)
-                          }
+                          onClick={() => void saveEmail(invitation.id)}
                         >
                           Save
                         </button>
@@ -410,21 +386,20 @@ export default function InvitationManager({
                         <div style={{ fontWeight: 700 }}>
                           {invitation.email}
                         </div>
+                        <div style={{ color: "#cbd5e1", fontSize: 12 }}>
+                          {invitation.roleName}
+                        </div>
 
                         <div
                           style={{
-                            color: invitation.lastError
-                              ? "#fecaca"
-                              : "#64748b",
+                            color: invitation.lastError ? "#fecaca" : "#64748b",
                             fontSize: 12,
                             marginTop: 4,
                           }}
                         >
                           {invitation.lastError
                             ? invitation.lastError
-                            : `Last sent: ${formatDate(
-                                invitation.lastSentAt,
-                              )}`}
+                            : `Last sent: ${formatDate(invitation.lastSentAt)}`}
                         </div>
                       </>
                     )}
@@ -433,7 +408,10 @@ export default function InvitationManager({
                   <div>
                     <SmallLabel>Status</SmallLabel>
                     <div style={{ textTransform: "capitalize" }}>
-                      {invitation.status}
+                      {invitation.expiresAt &&
+                      new Date(invitation.expiresAt).getTime() <= Date.now()
+                        ? "Expired"
+                        : invitation.status}
                     </div>
                   </div>
 
@@ -454,9 +432,7 @@ export default function InvitationManager({
                       type="button"
                       className="tt-button"
                       onClick={() =>
-                        setExpandedId(
-                          expanded ? null : invitation.id,
-                        )
+                        setExpandedId(expanded ? null : invitation.id)
                       }
                     >
                       {expanded ? "Hide history" : "History"}
@@ -477,9 +453,7 @@ export default function InvitationManager({
                           type="button"
                           className="tt-button"
                           disabled={busy || editing}
-                          onClick={() =>
-                            void resend(invitation.id)
-                          }
+                          onClick={() => void resend(invitation.id)}
                         >
                           {busy ? "Working..." : "Resend"}
                         </button>
@@ -488,11 +462,9 @@ export default function InvitationManager({
                           type="button"
                           className="tt-button"
                           disabled={busy || editing}
-                          onClick={() =>
-                            void cancelInvitation(invitation.id)
-                          }
+                          onClick={() => void cancelInvitation(invitation.id)}
                         >
-                          Cancel invite
+                          Revoke
                         </button>
                       </>
                     ) : null}
@@ -541,9 +513,7 @@ export default function InvitationManager({
                             fontSize: 12,
                           }}
                         >
-                          <div>
-                            {formatDate(attempt.attemptedAt)}
-                          </div>
+                          <div>{formatDate(attempt.attemptedAt)}</div>
 
                           <div
                             style={{
@@ -579,15 +549,30 @@ export default function InvitationManager({
           })}
         </div>
       )}
+      {invitations.some((invitation) =>
+        ["accepted", "cancelled"].includes(invitation.status),
+      ) && (
+        <details style={{ marginTop: 14 }}>
+          <summary>Accepted and revoked invitations</summary>
+          {invitations
+            .filter((invitation) =>
+              ["accepted", "cancelled"].includes(invitation.status),
+            )
+            .map((invitation) => (
+              <div
+                key={invitation.id}
+                style={{ padding: "8px 0", fontSize: 13 }}
+              >
+                {invitation.email} | {invitation.roleName} | {invitation.status}
+              </div>
+            ))}
+        </details>
+      )}
     </section>
   );
 }
 
-function SmallLabel({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+function SmallLabel({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{

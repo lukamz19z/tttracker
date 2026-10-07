@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 
+import WorkspaceFrame from "@/components/workspace/workspace-frame";
 import AccountClient from "./account-client";
 import MfaPanel from "./mfa-panel";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
-export default async function AccountPage() {
+export default async function AccountPage({ searchParams }: { searchParams: Promise<{ organisation?: string }> }) {
+  const organisationId = (await searchParams).organisation;
   const supabase = await createSupabaseServer();
 
   const { data: claimsData, error } =
@@ -20,10 +22,10 @@ export default async function AccountPage() {
   }
 
   return (
-    <main
+    <WorkspaceFrame organisationId={organisationId} personal>
+    <div
       style={{
-        minHeight: "100vh",
-        padding: "32px 24px",
+        padding: "0",
       }}
     >
       <div
@@ -36,11 +38,13 @@ export default async function AccountPage() {
           Account
         </h1>
 
+        <p style={{ color: "#94a3b8" }}>Personal account</p>
         <div style={{ display: "grid", gap: 20 }}>
           <AccountClient email={email} />
           <MfaPanel />
         </div>
       </div>
-    </main>
+    </div>
+    </WorkspaceFrame>
   );
 }

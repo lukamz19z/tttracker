@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ClipboardCopy, FilePlus2, HardHat } from "lucide-react";
 
-import { createSupabaseBrowser } from "@/lib/supabase";
+import { createSupabaseBrowser } from "@/lib/supabase/browser";
 
 type TowerRow = {
   id: string;

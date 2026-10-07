@@ -3,7 +3,6 @@ import "server-only";
 import { buildOrganisationInviteEmail } from "@/lib/email/templates/organisation-invite";
 import { sendEmail } from "@/lib/email/send";
 import { getEmailConfig } from "@/lib/email/config";
-import { ensureInvitationAccess } from "@/lib/invitations/provision";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 type SendOrganisationInvitationInput = {
@@ -23,9 +22,20 @@ export async function sendOrganisationInvitation(
 ): Promise<SendOrganisationInvitationResult> {
   const supabase = createSupabaseAdmin();
 
+  const { error: prepareError } = await supabase.rpc(
+    "tttracker_v2_platform_invitation",
+    {
+      p_actor: input.attemptedBy,
+      p_action: "resend",
+      p_invitation_id: input.invitationId,
+    },
+  );
+  if (prepareError) throw new Error(prepareError.message);
+
   const { data: invitation, error: invitationError } = await supabase
     .from("v2_organisation_invitations")
-    .select(`
+    .select(
+      `
       id,
       organisation_id,
       email,
@@ -37,7 +47,8 @@ export async function sendOrganisationInvitation(
       organisations (
         name
       )
-    `)
+    `,
+    )
     .eq("id", input.invitationId)
     .maybeSingle();
 
@@ -67,8 +78,7 @@ export async function sendOrganisationInvitation(
 
   const config = getEmailConfig();
 
-  const redirectTo =
-    `${config.appUrl}/onboarding?invitation=${encodeURIComponent(invitation.id)}`;
+  const redirectTo = `${config.appUrl}/onboarding?invitation=${encodeURIComponent(invitation.id)}`;
 
   let authUserId = invitation.auth_user_id as string | null;
 
@@ -108,20 +118,13 @@ export async function sendOrganisationInvitation(
         auth_user_id: authUserId,
         last_error: null,
       })
-      .eq("id", invitation.id);
+      .eq("id", invitation.id)
+      .eq("status", "pending")
+      .eq("email", invitation.email);
 
     if (authLinkUpdateError) {
       throw authLinkUpdateError;
     }
-
-    // Resend also repairs missing membership / role setup.
-    await ensureInvitationAccess({
-      organisationId: invitation.organisation_id,
-      userId: authUserId,
-      roleCode: invitation.intended_role_code || "admin",
-      invitationId: invitation.id,
-      invitedBy: invitation.invited_by ?? input.attemptedBy,
-    });
 
     const template = buildOrganisationInviteEmail({
       organisationName: organisation.name,
@@ -146,7 +149,9 @@ export async function sendOrganisationInvitation(
         provider: sent.provider,
         provider_message_id: sent.messageId,
       })
-      .eq("id", invitation.id);
+      .eq("id", invitation.id)
+      .eq("status", "pending")
+      .eq("email", invitation.email);
 
     if (updateError) {
       throw updateError;
@@ -154,17 +159,15 @@ export async function sendOrganisationInvitation(
 
     // Audit logging should never turn a successful customer email into a
     // delivery failure. Log it best-effort after the primary state is saved.
-    await supabase
-      .from("v2_invitation_delivery_attempts")
-      .insert({
-        invitation_id: invitation.id,
-        organisation_id: invitation.organisation_id,
-        attempted_by: input.attemptedBy,
-        delivery_type: "email",
-        provider: sent.provider,
-        status: "sent",
-        provider_message_id: sent.messageId,
-      });
+    await supabase.from("v2_invitation_delivery_attempts").insert({
+      invitation_id: invitation.id,
+      organisation_id: invitation.organisation_id,
+      attempted_by: input.attemptedBy,
+      delivery_type: "email",
+      provider: sent.provider,
+      status: "sent",
+      provider_message_id: sent.messageId,
+    });
 
     return {
       invitationId: invitation.id,
@@ -182,19 +185,19 @@ export async function sendOrganisationInvitation(
         auth_user_id: authUserId,
         last_error: message,
       })
-      .eq("id", invitation.id);
+      .eq("id", invitation.id)
+      .eq("status", "pending")
+      .eq("email", invitation.email);
 
-    await supabase
-      .from("v2_invitation_delivery_attempts")
-      .insert({
-        invitation_id: invitation.id,
-        organisation_id: invitation.organisation_id,
-        attempted_by: input.attemptedBy,
-        delivery_type: "email",
-        provider: "resend",
-        status: "failed",
-        error_message: message,
-      });
+    await supabase.from("v2_invitation_delivery_attempts").insert({
+      invitation_id: invitation.id,
+      organisation_id: invitation.organisation_id,
+      attempted_by: input.attemptedBy,
+      delivery_type: "email",
+      provider: "resend",
+      status: "failed",
+      error_message: message,
+    });
 
     throw new Error(message);
   }

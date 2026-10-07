@@ -14,6 +14,10 @@ export type WorkspaceSection = {
 };
 
 export type WorkspaceContext = {
+  contextKind?: "organisation" | "client";
+  platformAdmin?: boolean;
+  permissions?: Record<string, boolean>;
+  projectOnly?: boolean;
   userId: string;
   email: string;
   organisation: WorkspaceMembership;

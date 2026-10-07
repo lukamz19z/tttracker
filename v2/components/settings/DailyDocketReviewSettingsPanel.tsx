@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ShieldCheck, UserRoundCheck } from "lucide-react";
 
-import { createSupabaseBrowser } from "@/lib/supabase";
+import { createSupabaseBrowser } from "@/lib/supabase/browser";
 import {
   DEFAULT_REVIEW_SETTINGS,
   loadDailyDocketReviewSettings,

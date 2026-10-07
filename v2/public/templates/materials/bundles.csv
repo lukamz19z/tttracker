@@ -1,0 +1,5 @@
+Tower Number,Bundle Reference,Tower Segment,Required Qty,Total Weight (t),Source Revision,Description
+T001,1/1,EWP,1,2.25,C,Example bundle
+T001,1/2,MCA,1,1.89,C,Example bundle
+T002,1/1,EWP,1,2.31,C,Example bundle
+T002,1/2,MCA,1,1.75,C,Example bundle

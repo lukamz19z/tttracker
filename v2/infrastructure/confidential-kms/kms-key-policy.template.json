@@ -1,0 +1,73 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ExplicitKeyMaintenanceNoDataAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "${KEY_MAINTENANCE_ROLE_ARN}"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:PutKeyPolicy",
+        "kms:EnableKey",
+        "kms:DisableKey",
+        "kms:EnableKeyRotation",
+        "kms:GetKeyRotationStatus",
+        "kms:RotateKeyOnDemand",
+        "kms:CancelKeyDeletion",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:ListResourceTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "FederatedWorkloadEnvelopeOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "${CRYPTO_ROLE_ARN}"
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:purpose": "tttracker.people.confidential",
+          "kms:EncryptionContext:environment": "${ENVIRONMENT}"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:organisation_id": "????????-????-????-????-????????????"
+        },
+        "ForAllValues:StringEquals": {
+          "kms:EncryptionContextKeys": [
+            "purpose",
+            "environment",
+            "organisation_id",
+            "person_id",
+            "instance_id",
+            "field_id",
+            "record_id",
+            "revision",
+            "key_version",
+            "semantic_type",
+            "kind",
+            "crypto_format_version"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "FederatedWorkloadHealthOnly",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "${CRYPTO_ROLE_ARN}"
+      },
+      "Action": "kms:DescribeKey",
+      "Resource": "*"
+    }
+  ]
+}

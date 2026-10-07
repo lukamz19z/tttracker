@@ -10,6 +10,12 @@ export type ResolvedSecurityPolicy = {
 
 export type SecurityStatus = {
   authenticated: boolean;
+  activeChallenge: {
+    challengeId: string;
+    expiresAt: string;
+    resendAfter: string;
+    codeLength: number;
+  } | null;
   email: string | null;
   emailCodeRequired: boolean;
   emailCodeVerified: boolean;

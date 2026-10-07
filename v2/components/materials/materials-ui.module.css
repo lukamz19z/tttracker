@@ -1,0 +1,28 @@
+.search { display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid #cbd5e1; color:#334155; border-radius:8px; padding:0 10px; min-width:0; }
+.search:focus-within { outline:2px solid #38bdf8; outline-offset:2px; }
+.search input { width:100%; min-width:0; border:0; background:transparent; color:#0f172a; padding:10px 0; outline:0; font-size:14px; }
+.search input::placeholder { color:#64748b; opacity:1; }
+.clear { border:0; background:transparent; color:#475569; display:flex; padding:4px; cursor:pointer; }
+.bundleRow { display:grid; grid-template-columns:minmax(160px,1fr) 120px max-content; gap:12px; align-items:center; }
+.bundleInfo { display:flex; gap:10px; align-items:center; min-width:0; }
+.bundleContext { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.bundleActions { display:flex; gap:5px; align-items:center; flex-wrap:nowrap; }
+.issueRow { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.summary { display:flex; gap:8px; align-items:center; padding:8px 0; cursor:pointer; list-style:none; }
+.summary::-webkit-details-marker { display:none; }
+.choices { border:1px solid #475569; border-radius:8px; max-height:220px; overflow:auto; margin-top:4px; background:var(--tt-panel,#0f172a); }
+.choice { display:block; width:100%; padding:9px 10px; text-align:left; background:transparent; color:inherit; border:0; cursor:pointer; }
+.choice:hover,.choice:focus { background:rgba(56,189,248,.15); }
+@media(max-width:900px) { .bundleRow { grid-template-columns:1fr; gap:6px; } .bundleInfo { flex-wrap:wrap; } .bundleContext { white-space:normal; } .bundleActions { flex-wrap:wrap; } }
+
+.dateField { position:relative; min-width:0; }
+.dateInput { display:flex; gap:4px; align-items:center; }
+.dateInput input { width:100%; min-width:0; }
+.dateInput button, .calendar button { border:1px solid #475569; border-radius:6px; padding:6px; background:#1e293b; color:#f8fafc; cursor:pointer; }
+.calendar { position:absolute; z-index:30; top:100%; left:0; width:280px; max-width:calc(100vw - 32px); padding:10px; border:1px solid #64748b; border-radius:8px; background:#0f172a; box-shadow:0 8px 20px #0006; }
+.calendarHeading { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+.calendarDays { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center; margin-bottom:8px; }
+.calendarDays button[aria-pressed="true"] { background:#2563eb; }
+.calendar button:focus-visible { outline:2px solid #60a5fa; outline-offset:2px; }
+.vehicleHeading { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.vehicleHeading button { font-size:12px; padding:2px 6px; border:0; background:transparent; color:#93c5fd; cursor:pointer; }

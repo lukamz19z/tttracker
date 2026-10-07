@@ -1,0 +1,3 @@
+Tower,Tower Type,Material Type,Item / Member Reference,Diameter,Length,Bolt Type,Packer Mark,Tower Segment,Drawing Reference,Drawing Revision,Required Qty,Unit
+T001,Type A,bolt,M16 x 75,M16,75,Standard,,Common Body,DRG-002,A,24,ea
+T001,Type A,packer,P-M16,M16,,,P1,Common Body,DRG-002,A,8,ea

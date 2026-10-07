@@ -1,3 +1,5 @@
+import { getSecurityStatus } from "@/lib/security/status";
+import { securityError } from "@/lib/security/errors";
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -35,7 +37,51 @@ export async function updateSession(request: NextRequest) {
   });
 
   // Verifies/refreshes the auth token and writes refreshed cookies.
-  await supabase.auth.getClaims();
+  const { data, error } = await supabase.auth.getClaims();
+  const path = request.nextUrl.pathname;
+  const protectedRoute =
+    /^\/(workspace|project|platform-admin|setup)(?:\/|$)/.test(path) ||
+    /^\/api\/(projects|people|platform|settings)(?:\/|$)/.test(path);
+  if (!error && data?.claims?.sub && protectedRoute) {
+    try {
+      const security = await getSecurityStatus(supabase);
+      if (!security.complete) {
+        const denied = path.startsWith("/api/")
+          ? NextResponse.json(
+              {
+                code: "SECURITY_CHECK_REQUIRED",
+                error: "Complete the security check before continuing.",
+              },
+              { status: 403 },
+            )
+          : NextResponse.redirect(
+              new URL(
+                `/security-check?next=${encodeURIComponent(path + request.nextUrl.search)}`,
+                request.url,
+              ),
+            );
+        for (const cookie of response.cookies.getAll())
+          denied.cookies.set(cookie);
+        return denied;
+      }
+    } catch (securityFailure) {
+      const result = securityError(securityFailure);
+      const denied = path.startsWith("/api/")
+        ? NextResponse.json(
+            { code: result.code, error: result.error },
+            { status: result.status },
+          )
+        : NextResponse.redirect(
+            new URL(
+              `/security-check?next=${encodeURIComponent(path + request.nextUrl.search)}`,
+              request.url,
+            ),
+          );
+      for (const cookie of response.cookies.getAll())
+        denied.cookies.set(cookie);
+      return denied;
+    }
+  }
 
   return response;
 }

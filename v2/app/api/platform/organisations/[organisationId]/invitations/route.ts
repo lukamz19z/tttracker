@@ -13,10 +13,7 @@ type RouteContext = {
   }>;
 };
 
-export async function POST(
-  request: NextRequest,
-  context: RouteContext,
-) {
+export async function POST(request: NextRequest, context: RouteContext) {
   try {
     const admin = await requirePlatformAdmin(["owner", "admin"]);
     const { organisationId } = await context.params;
@@ -26,123 +23,28 @@ export async function POST(
       .trim()
       .toLowerCase();
 
-    const roleCode = String(body.roleCode ?? "")
-      .trim()
-      .toLowerCase();
-
-    if (!email || !roleCode) {
+    const roleId = String(body.roleId ?? "").trim();
+    if (!email || !roleId)
       return NextResponse.json(
         { error: "Email and role are required." },
         { status: 400 },
       );
-    }
-
-    const supabase = createSupabaseAdmin();
-
-    const { data: organisation, error: organisationError } =
-      await supabase
-        .from("organisations")
-        .select("id, name, status")
-        .eq("id", organisationId)
-        .maybeSingle();
-
-    if (organisationError || !organisation) {
+    const { data, error } = await createSupabaseAdmin().rpc(
+      "tttracker_v2_platform_invitation",
+      {
+        p_actor: admin.userId,
+        p_action: "create",
+        p_organisation_id: organisationId,
+        p_role_id: roleId,
+        p_email: email,
+      },
+    );
+    if (error || typeof data?.invitationId !== "string")
       return NextResponse.json(
-        {
-          error:
-            organisationError?.message ??
-            "Organisation not found.",
-        },
-        { status: 404 },
+        { error: error?.message ?? "Could not create invitation." },
+        { status: error?.message.includes("ALREADY") ? 409 : 400 },
       );
-    }
-
-    if (organisation.status !== "active") {
-      return NextResponse.json(
-        { error: "Organisation is not active." },
-        { status: 400 },
-      );
-    }
-
-    const { data: role, error: roleError } = await supabase
-      .from("v2_roles")
-      .select("id, code, name, is_active")
-      .eq("organisation_id", organisationId)
-      .eq("code", roleCode)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (roleError) {
-      return NextResponse.json(
-        { error: roleError.message },
-        { status: 500 },
-      );
-    }
-
-    if (!role) {
-      return NextResponse.json(
-        { error: "Selected role is not available for this organisation." },
-        { status: 400 },
-      );
-    }
-
-    const { data: existingInvitation, error: existingError } =
-      await supabase
-        .from("v2_organisation_invitations")
-        .select("id, status")
-        .eq("organisation_id", organisationId)
-        .eq("email", email)
-        .in("status", ["pending", "accepted"])
-        .maybeSingle();
-
-    if (existingError) {
-      return NextResponse.json(
-        { error: existingError.message },
-        { status: 500 },
-      );
-    }
-
-    if (existingInvitation) {
-      return NextResponse.json(
-        {
-          error:
-            existingInvitation.status === "accepted"
-              ? "This email already belongs to an accepted organisation user."
-              : "A pending invitation already exists for this email.",
-          invitationId: existingInvitation.id,
-        },
-        { status: 409 },
-      );
-    }
-
-    const { data: invitation, error: invitationError } =
-      await supabase
-        .from("v2_organisation_invitations")
-        .insert({
-          organisation_id: organisationId,
-          email,
-          intended_role_code: roleCode,
-          invitation_type: "organisation_user",
-          status: "pending",
-          invited_by: admin.userId,
-          metadata: {
-            source: "platform_admin",
-            created_from: "organisation_detail",
-          },
-        })
-        .select("id")
-        .single();
-
-    if (invitationError || !invitation) {
-      return NextResponse.json(
-        {
-          error:
-            invitationError?.message ??
-            "Could not create invitation.",
-        },
-        { status: 400 },
-      );
-    }
+    const invitation = { id: data.invitationId as string };
 
     try {
       const sent = await sendOrganisationInvitation({

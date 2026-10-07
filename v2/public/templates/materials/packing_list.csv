@@ -1,0 +1,3 @@
+Tower,Tower Type,Bundle Reference,Item / Member Reference,Profile,Tower Segment,Drawing Reference,Required Qty
+T001,Type A,1/5,101,L90x90x8,Leg Extensions,DRG-001,4
+T001,Type A,1/5,102,L75x75x6,Leg Extensions,DRG-001,8

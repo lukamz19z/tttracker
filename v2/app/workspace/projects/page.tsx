@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -14,7 +15,8 @@ import {
   StatusBadge,
   tt,
 } from "@/components/ui/tt-ui";
-import { requireWorkspaceContext } from "@/lib/workspace/context";
+import { requireProjectListContext } from "@/lib/projects/list-context";
+import { listAccessibleProjects } from "@/lib/projects/list";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 type Props = {
@@ -29,38 +31,17 @@ export default async function ProjectsPage({
   const query = await searchParams;
 
   const context =
-    await requireWorkspaceContext(
+    await requireProjectListContext(
       query.organisation ?? null,
     );
 
+  if (!context.projectOnly && !context.sections.some((s) => s.key === "workspace_projects")) notFound();
   const admin = createSupabaseAdmin();
 
-  const { data: projects, error } =
-    await admin
-      .from("v2_projects")
-      .select(`
-        id,
-        name,
-        project_number,
-        code,
-        client_name,
-        location,
-        status,
-        expected_tower_count
-      `)
-      .eq(
-        "organisation_id",
-        context.organisation.organisationId,
-      )
-      .neq("status", "archived")
-      .order("name");
-
-  if (error) {
-    throw new Error(error.message);
-  }
+  const projects = await listAccessibleProjects(context.organisation.organisationId);
 
   const projectIds =
-    (projects ?? []).map(
+    projects.filter((project) => !project.party).map(
       (project) => project.id,
     );
 
@@ -101,7 +82,7 @@ export default async function ProjectsPage({
         title="Projects"
         subtitle="Manage projects, tower registers and project performance."
         actions={
-          <ButtonLink
+          !context.projectOnly && context.enabledModules.has("projects") && context.permissions?.["projects.create"] && <ButtonLink
             href={`/workspace/projects/new?organisation=${encodeURIComponent(
               orgId,
             )}`}
@@ -145,20 +126,13 @@ export default async function ProjectsPage({
                   project.id,
                 ) ?? 0;
 
-              const expected =
-                project.expected_tower_count;
-
-              const details = [
-                project.client_name,
-                project.location,
-              ].filter(Boolean);
+              const expected = project.expected_tower_count;
+              const details = project.party ? ["Shared project"] : [project.client_name, project.location].filter(Boolean);
 
               return (
                 <Link
                   key={project.id}
-                  href={`/workspace/projects/${project.id}?organisation=${encodeURIComponent(
-                    orgId,
-                  )}`}
+                  href={project.href}
                   className={tt.projectCard}
                 >
                   <div className={tt.projectCardTop}>
@@ -195,13 +169,12 @@ export default async function ProjectsPage({
                       }}
                     >
                       <RadioTower size={15} />
-                      {towerCount}{" "}
-                      {towerCount === 1
+                      {project.party ? "Shared access" : towerCount}{" "}
+                      {!project.party && (towerCount === 1
                         ? "Tower"
-                        : "Towers"}
-                      {expected
-                        ? ` · ${expected} expected`
-                        : ""}
+                        : "Towers")}
+                      {expected ? ` ? ${expected} expected` : ""}
+
                     </span>
 
                     <ArrowRight size={15} />

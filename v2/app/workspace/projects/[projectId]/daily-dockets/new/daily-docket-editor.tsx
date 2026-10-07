@@ -1,28 +1,17 @@
 "use client";
 
-import {
-  FormEvent,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Clock3,
-  Plus,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, Clock3, Plus, Save, Trash2 } from "lucide-react";
 
+import {
+  PeoplePicker,
+  responseData,
+} from "@/components/people/people-controls";
 import EmployeeSearch, {
   type EmployeeSearchValue,
 } from "@/components/people/employee-search";
-import {
-  Card,
-  MetricCard,
-  tt,
-} from "@/components/ui/tt-ui";
+import { Card, MetricCard, tt } from "@/components/ui/tt-ui";
 import {
   aggregateMhPerTonne,
   calculateLabourTotals,
@@ -130,6 +119,7 @@ type Props = {
   progressProfile: Profile;
   initialTowerId: string;
   initialDate: string;
+  canUseCrews?: boolean;
 };
 
 function uid() {
@@ -211,13 +201,17 @@ export default function DailyDocketEditor({
   progressProfile,
   initialTowerId,
   initialDate,
+  canUseCrews = false,
 }: Props) {
   const router = useRouter();
 
   const [docketDate, setDocketDate] = useState(initialDate);
   const [crewLabel, setCrewLabel] = useState("");
-  const [leadingHand, setLeadingHand] =
-    useState<EmployeeSearchValue | null>(null);
+  const [crewId, setCrewId] = useState("");
+  const [crewLoading, setCrewLoading] = useState(false);
+  const [leadingHand, setLeadingHand] = useState<EmployeeSearchValue | null>(
+    null,
+  );
   const [weatherKey, setWeatherKey] = useState("");
   const [rateType, setRateType] = useState("");
 
@@ -226,9 +220,7 @@ export default function DailyDocketEditor({
   const [travelInMinutes, setTravelInMinutes] = useState("");
   const [travelOutMinutes, setTravelOutMinutes] = useState("");
 
-  const [labour, setLabour] = useState<LabourRow[]>([
-    blankLabour(),
-  ]);
+  const [labour, setLabour] = useState<LabourRow[]>([blankLabour()]);
   const [delays, setDelays] = useState<DelayRow[]>([]);
   const [materials, setMaterials] = useState<MaterialEventRow[]>([]);
   const [plant, setPlant] = useState<PlantRow[]>([]);
@@ -269,9 +261,7 @@ export default function DailyDocketEditor({
             prestartMinutes: Number(
               row.prestartMinutes || prestartMinutes || 0,
             ),
-            lunchMinutes: Number(
-              row.lunchMinutes || lunchMinutes || 0,
-            ),
+            lunchMinutes: Number(row.lunchMinutes || lunchMinutes || 0),
             travelInMinutes: Number(
               row.travelInMinutes || travelInMinutes || 0,
             ),
@@ -282,13 +272,7 @@ export default function DailyDocketEditor({
             delayHours: Number(row.delayHours || 0),
           })),
       ),
-    [
-      labour,
-      lunchMinutes,
-      prestartMinutes,
-      travelInMinutes,
-      travelOutMinutes,
-    ],
+    [labour, lunchMinutes, prestartMinutes, travelInMinutes, travelOutMinutes],
   );
 
   const allocationMetrics = useMemo(() => {
@@ -306,16 +290,14 @@ export default function DailyDocketEditor({
       }
 
       const progress = calculateTowerProgress({
-        stages: allocation.stages.map(
-          (stage): ProgressStageInput => ({
-            id: stage.id,
-            phase: stage.phase,
-            weight: stage.weight,
-            applicable: stage.applicable,
-            percentBefore: stage.percentBefore,
-            percentAfter: Number(stage.percentAfter),
-          }),
-        ),
+        stages: allocation.stages.map((stage): ProgressStageInput => ({
+          id: stage.id,
+          phase: stage.phase,
+          weight: stage.weight,
+          applicable: stage.applicable,
+          percentBefore: stage.percentBefore,
+          percentAfter: Number(stage.percentAfter),
+        })),
         profile: {
           assemblyShare: Number(progressProfile.assembly_share ?? 50),
           erectionShare: Number(progressProfile.erection_share ?? 50),
@@ -328,9 +310,7 @@ export default function DailyDocketEditor({
               : "progress_earned_tonnes",
         },
         towerWeightTonnes: allocation.towerWeight,
-        manualProductionTonnes: Number(
-          allocation.manualProductionTonnes || 0,
-        ),
+        manualProductionTonnes: Number(allocation.manualProductionTonnes || 0),
       });
 
       const aggregate = aggregateMhPerTonne([
@@ -429,10 +409,7 @@ export default function DailyDocketEditor({
     );
   }
 
-  function updateAllocation(
-    key: string,
-    patch: Partial<TowerAllocation>,
-  ) {
+  function updateAllocation(key: string, patch: Partial<TowerAllocation>) {
     setAllocations((current) =>
       current.map((row) => (row.key === key ? { ...row, ...patch } : row)),
     );
@@ -461,14 +438,10 @@ export default function DailyDocketEditor({
     setLabour((current) =>
       current.map((row) => ({
         ...row,
-        prestartMinutes:
-          row.prestartMinutes || prestartMinutes,
-        lunchMinutes:
-          row.lunchMinutes || lunchMinutes,
-        travelInMinutes:
-          row.travelInMinutes || travelInMinutes,
-        travelOutMinutes:
-          row.travelOutMinutes || travelOutMinutes,
+        prestartMinutes: row.prestartMinutes || prestartMinutes,
+        lunchMinutes: row.lunchMinutes || lunchMinutes,
+        travelInMinutes: row.travelInMinutes || travelInMinutes,
+        travelOutMinutes: row.travelOutMinutes || travelOutMinutes,
       })),
     );
   }
@@ -522,9 +495,8 @@ export default function DailyDocketEditor({
     if (
       submit &&
       (Math.abs(allocatedRaw - calculatedLabour.rawManhours) > 0.05 ||
-        Math.abs(
-          allocatedProduction - calculatedLabour.productionManhours,
-        ) > 0.05)
+        Math.abs(allocatedProduction - calculatedLabour.productionManhours) >
+          0.05)
     ) {
       setMessage(
         "Before submitting, allocate all Raw MH and Production MH across the towers worked. Drafts can remain partially allocated.",
@@ -545,6 +517,7 @@ export default function DailyDocketEditor({
           docketDate,
           primaryTowerId: allocations[0]?.towerId || null,
           crewLabel,
+          crewId,
           leadingHandPersonId: leadingHand.id,
           leadingHandName: leadingHand.displayName,
           weatherKey,
@@ -566,9 +539,7 @@ export default function DailyDocketEditor({
               prestartMinutes: Number(
                 row.prestartMinutes || prestartMinutes || 0,
               ),
-              lunchMinutes: Number(
-                row.lunchMinutes || lunchMinutes || 0,
-              ),
+              lunchMinutes: Number(row.lunchMinutes || lunchMinutes || 0),
               travelInMinutes: Number(
                 row.travelInMinutes || travelInMinutes || 0,
               ),
@@ -699,10 +670,80 @@ export default function DailyDocketEditor({
               className="tt-input"
               type="date"
               value={docketDate}
-              onChange={(event) => setDocketDate(event.target.value)}
+              onChange={(event) => {
+                setDocketDate(event.target.value);
+                setCrewId("");
+              }}
             />
           </label>
 
+          {canUseCrews && (
+            <div className={tt.field}>
+              <PeoplePicker
+                organisation={organisationId}
+                area="crew_choices"
+                label="Organisation crew"
+                selected={crewId}
+                onChange={setCrewId}
+                filters={{ project_id: projectId, date: docketDate }}
+              />
+              <button
+                type="button"
+                className={tt.button}
+                disabled={!crewId || crewLoading}
+                onClick={async () => {
+                  setCrewLoading(true);
+                  try {
+                    let page = 1;
+                    let total = 0;
+                    const people: EmployeeSearchValue[] = [];
+                    let caption = "";
+                    do {
+                      const r = await responseData(
+                        await fetch(
+                          `/api/people?organisation=${organisationId}&area=crew_allocation&id=${crewId}&project_id=${projectId}&date=${docketDate}&page=${page}`,
+                        ),
+                      );
+                      caption = String(
+                        (r.crew as Record<string, unknown>)?.name ?? "",
+                      );
+                      total = Number(r.total ?? 0);
+                      people.push(
+                        ...(r.rows ?? []).map((p) => ({
+                          id: String(p.id),
+                          displayName: String(p.display_name),
+                        })),
+                      );
+                      page++;
+                    } while (people.length < total && page <= 100);
+                    if (people.length < total)
+                      throw new Error("CREW_TOO_LARGE");
+                    setCrewLabel(caption);
+                    setLabour((current) => [
+                      ...current.filter((r) => r.person || r.workerName),
+                      ...people
+                        .filter(
+                          (p) => !current.some((r) => r.person?.id === p.id),
+                        )
+                        .map((p) => ({
+                          ...blankLabour(),
+                          person: p,
+                          workerName: p.displayName,
+                        })),
+                    ]);
+                  } catch {
+                    setMessage(
+                      "Unable to load the crew for this docket date. Check its project allocation.",
+                    );
+                  } finally {
+                    setCrewLoading(false);
+                  }
+                }}
+              >
+                {crewLoading ? "Loading crew..." : "Add crew people"}
+              </button>
+            </div>
+          )}
           <label className={tt.field}>
             <span className={tt.label}>Crew</span>
             <input
@@ -934,7 +975,8 @@ export default function DailyDocketEditor({
             <h2 className={tt.cardTitle}>Tower work & progress</h2>
             <p className={tt.cardDescription}>
               Allocate Raw MH and Production MH across one or more towers. Stage
-              weights and assembly/erection shares come from Project Configuration.
+              weights and assembly/erection shares come from Project
+              Configuration.
             </p>
           </div>
 
@@ -942,10 +984,7 @@ export default function DailyDocketEditor({
             type="button"
             className={tt.button}
             onClick={() =>
-              setAllocations((current) => [
-                ...current,
-                blankAllocation(),
-              ])
+              setAllocations((current) => [...current, blankAllocation()])
             }
           >
             <Plus size={14} />
@@ -986,9 +1025,7 @@ export default function DailyDocketEditor({
                       className={tt.button}
                       onClick={() =>
                         setAllocations((current) =>
-                          current.filter(
-                            (item) => item.key !== allocation.key,
-                          ),
+                          current.filter((item) => item.key !== allocation.key),
                         )
                       }
                     >
@@ -1004,10 +1041,7 @@ export default function DailyDocketEditor({
                       className="tt-select"
                       value={allocation.towerId}
                       onChange={(event) =>
-                        void loadTowerState(
-                          allocation.key,
-                          event.target.value,
-                        )
+                        void loadTowerState(allocation.key, event.target.value)
                       }
                     >
                       <option value="">Select tower...</option>
@@ -1082,10 +1116,7 @@ export default function DailyDocketEditor({
                           {phase === "assembly" ? "Assembly" : "Erection"}
                         </h3>
 
-                        <div
-                          className={tt.tableWrap}
-                          style={{ marginTop: 8 }}
-                        >
+                        <div className={tt.tableWrap} style={{ marginTop: 8 }}>
                           <table className={tt.table}>
                             <thead>
                               <tr>
@@ -1112,8 +1143,7 @@ export default function DailyDocketEditor({
                                             allocation.key,
                                             stage.id,
                                             {
-                                              applicable:
-                                                event.target.checked,
+                                              applicable: event.target.checked,
                                             },
                                           )
                                         }
@@ -1153,8 +1183,7 @@ export default function DailyDocketEditor({
                     <div
                       className={tt.metricGrid}
                       style={{
-                        gridTemplateColumns:
-                          "repeat(3,minmax(0,1fr))",
+                        gridTemplateColumns: "repeat(3,minmax(0,1fr))",
                         marginTop: 14,
                       }}
                     >
@@ -1187,13 +1216,13 @@ export default function DailyDocketEditor({
         </div>
       </Card>
 
-
       <Card>
         <div className={tt.toolbar}>
           <div>
             <h2 className={tt.cardTitle}>Plant</h2>
             <p className={tt.cardDescription}>
-              Record plant used on the docket. Plant hours remain separate from labour MH/t.
+              Record plant used on the docket. Plant hours remain separate from
+              labour MH/t.
             </p>
           </div>
 
@@ -1411,7 +1440,8 @@ export default function DailyDocketEditor({
           <div>
             <h2 className={tt.cardTitle}>Materials</h2>
             <p className={tt.cardDescription}>
-              Missing, excess, transfers and other material events feed Materials Control.
+              Missing, excess, transfers and other material events feed
+              Materials Control.
             </p>
           </div>
 
@@ -1482,7 +1512,9 @@ export default function DailyDocketEditor({
                 </label>
 
                 <label className={tt.field}>
-                  <span className={tt.label}>Item / bundle / bolt reference</span>
+                  <span className={tt.label}>
+                    Item / bundle / bolt reference
+                  </span>
                   <input
                     className="tt-input"
                     value={row.itemReference}
@@ -1526,7 +1558,6 @@ export default function DailyDocketEditor({
           ) : null}
         </div>
       </Card>
-
 
       <Card>
         <h2 className={tt.cardTitle}>Incident check</h2>

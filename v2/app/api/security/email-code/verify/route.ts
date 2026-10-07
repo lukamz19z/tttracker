@@ -1,3 +1,4 @@
+import { securityError } from "@/lib/security/errors";
 import { NextRequest, NextResponse } from "next/server";
 
 import { verifyEmailSecurityCode } from "@/lib/security/email-code";
@@ -6,9 +7,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const challengeId = String(
-      body.challengeId ?? "",
-    ).trim();
+    const challengeId = String(body.challengeId ?? "").trim();
 
     const code = String(body.code ?? "").trim();
 
@@ -19,24 +18,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await verifyEmailSecurityCode(
-      challengeId,
-      code,
-    );
+    const result = await verifyEmailSecurityCode(challengeId, code);
 
     return NextResponse.json({
       ok: true,
       ...result,
     });
   } catch (error) {
+    const result = securityError(error);
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Verification failed.",
-      },
-      { status: 400 },
+      { error: result.error, code: result.code },
+      { status: result.status, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

@@ -1,150 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
-
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { requireProjectContext } from "@/lib/projects/project-context";
+import { requireMaterialsContext, materialsErrorResponse } from "@/lib/materials/security";
+import { isRecord, prepareImportRows, importValidationCounts, uuidPattern, type ImportCategory, type ImportMode } from "@/lib/materials/import-validation";
 
-type Context = {
-  params: Promise<{ projectId: string }>;
-};
-
-function clean(value: unknown) {
-  const output = String(value ?? "").trim();
-  return output || null;
-}
-
-function numberOrNull(value: unknown) {
-  const cleaned = String(value ?? "")
-    .trim()
-    .replaceAll(",", "");
-
-  if (!cleaned) return null;
-
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+type Context = { params: Promise<{ projectId: string }> };
+const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
 
 export async function POST(request: NextRequest, context: Context) {
   try {
     const { projectId } = await context.params;
-    const body = await request.json();
-
-    const project = await requireProjectContext(
-      projectId,
-      String(body.organisationId ?? "") || null,
-    );
-
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    const mapping =
-      body.mapping && typeof body.mapping === "object"
-        ? (body.mapping as Record<string, string>)
-        : {};
-
-    const admin = createSupabaseAdmin();
-
-    const { data: towers } = await admin
-      .from("v2_towers")
-      .select("id, tower_identifier")
-      .eq("project_id", projectId);
-
-    const towerMap = new Map(
-      (towers ?? []).map((tower) => [
-        String(tower.tower_identifier).trim().toLowerCase(),
-        tower.id,
-      ]),
-    );
-
-    let imported = 0;
-    const errors: Array<{ row: number; message: string }> = [];
-
-    for (let index = 0; index < rows.length; index += 1) {
-      const source =
-        rows[index] && typeof rows[index] === "object"
-          ? (rows[index] as Record<string, unknown>)
-          : {};
-
-      try {
-        const itemReference = clean(source[mapping.item_reference]);
-        if (!itemReference) {
-          throw new Error("Item reference is required.");
-        }
-
-        const towerIdentifier = mapping.tower_identifier
-          ? clean(source[mapping.tower_identifier])
-          : null;
-
-        const towerId = towerIdentifier
-          ? towerMap.get(towerIdentifier.toLowerCase()) ?? null
-          : null;
-
-        if (towerIdentifier && !towerId) {
-          throw new Error(`Tower ${towerIdentifier} was not found.`);
-        }
-
-        const payload = {
-          organisation_id:
-            project.workspace.organisation.organisationId,
-          project_id: projectId,
-          tower_id: towerId,
-          material_kind:
-            clean(source[mapping.material_kind]) ?? "member",
-          item_reference: itemReference,
-          description: mapping.description
-            ? clean(source[mapping.description])
-            : null,
-          bundle_reference: mapping.bundle_reference
-            ? clean(source[mapping.bundle_reference])
-            : null,
-          segment: mapping.segment
-            ? clean(source[mapping.segment])
-            : null,
-          drawing_reference: mapping.drawing_reference
-            ? clean(source[mapping.drawing_reference])
-            : null,
-          required_quantity: mapping.required_quantity
-            ? numberOrNull(source[mapping.required_quantity])
-            : null,
-          received_quantity: mapping.received_quantity
-            ? numberOrNull(source[mapping.received_quantity]) ?? 0
-            : 0,
-          unit: mapping.unit
-            ? clean(source[mapping.unit]) ?? "ea"
-            : "ea",
-          metadata: {},
-        };
-
-        const { error } = await admin
-          .from("v2_material_register")
-          .insert(payload);
-
-        if (error) throw new Error(error.message);
-
-        imported += 1;
-      } catch (error) {
-        errors.push({
-          row: index + 2,
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unknown import error.",
-        });
-      }
+    const body: unknown = await request.json();
+    if (!isRecord(body)) throw new Error("Expected an import request object.");
+    const project = await requireMaterialsContext(projectId, text(body.organisationId) || null, "import");
+    const towerId = text(body.towerId);
+    const scope = text(body.importScope) || "single";
+    if (!["single", "selected", "all", "csv"].includes(scope)) throw new Error("Invalid import scope.");
+    if (scope === "single" && !uuidPattern.test(towerId)) throw new Error("Select a valid tower before importing.");
+    const targetIds = scope === "single" ? [towerId] : ["selected", "all"].includes(scope) ? body.targetTowerIds : [];
+    if (!Array.isArray(targetIds) || !targetIds.every(id => typeof id === "string" && uuidPattern.test(id))
+      || (["selected", "all"].includes(scope) && !targetIds.length)) throw new Error("Select valid target towers.");
+    const category = text(body.importCategory) as ImportCategory;
+    const mode = (text(body.mode) || "merge") as ImportMode;
+    if (!["bundles", "members", "bolts", "packers"].includes(category)) throw new Error("Invalid import category.");
+    if (!["add", "merge", "replace"].includes(mode)) throw new Error("Invalid import mode.");
+    if (!Array.isArray(body.rows) || !body.rows.length) throw new Error("The import contains no rows.");
+    if (body.rows.length > 10000) throw new Error("Import at most 10,000 rows per batch.");
+    if (!isRecord(body.mapping)) throw new Error("Column mapping is required.");
+    const sourceRole = text(body.sourceRole);
+    if (!sourceRole) throw new Error("Select an import source role.");
+    const sourceFileName = text(body.sourceFileName);
+    const sourceScope = text(body.sourceScope) || sourceFileName;
+    if (!sourceScope) throw new Error("A source document scope is required.");
+    const sourceRowNumbers = body.sourceRowNumbers;
+    if (sourceRowNumbers !== undefined && (!Array.isArray(sourceRowNumbers)
+      || sourceRowNumbers.length !== body.rows.length
+      || !sourceRowNumbers.every((row, index) => Number.isSafeInteger(row) && row >= 1
+        && (index === 0 || row > sourceRowNumbers[index - 1])))) throw new Error("Invalid source row numbers.");
+    const prepared = prepareImportRows(body.rows, body.mapping, category, sourceRowNumbers as number[] | undefined);
+    if (!prepared.rows.length && !prepared.rowErrors.length) throw new Error("The import contains no material rows.");
+    if (scope === "csv") for (const row of prepared.rows) {
+      if (!row.values.tower_reference) prepared.rowErrors.push({ row: row.row_number, message: "tower_reference is required." });
     }
-
-    return NextResponse.json({
-      ok: errors.length === 0,
-      imported,
-      errorRows: errors.length,
-      errors: errors.slice(0, 200),
+    if (prepared.rowErrors.length) {
+      return NextResponse.json({ ok: false, error: "Validation failed. No rows were applied.",
+        ...importValidationCounts(prepared.rows.length, prepared.rowErrors),
+        ignoredEmptyRows: prepared.ignoredEmptyRows, rowErrors: prepared.rowErrors }, { status: 422 });
+    }
+    // Live relationship validation and all writes belong to a single database transaction.
+    const suppliedOptions = isRecord(body.importOptions) ? body.importOptions : {};
+    const options = { applicability: isRecord(suppliedOptions.applicability) ? {...suppliedOptions.applicability, unmatched:"retain"} : undefined,
+      bundleIdentity:suppliedOptions.bundleIdentity };
+    const { data, error } = await createSupabaseAdmin().rpc("tttracker_v2_apply_material_schedule", {
+      p_project_id: projectId, p_organisation_id: project.dataOrganisationId,
+      p_scope: scope, p_tower_ids: targetIds, p_confirm_types: body.confirmTowerTypes === true,
+      p_options: { ...options, memberIdentity: category === "members" ? "source_variant" : undefined },
+      p_actor_id: project.workspace.userId, p_category: category, p_mode: mode,
+      p_source_role: sourceRole, p_source_scope: sourceScope, p_source_file: sourceFileName || null,
+      p_profile_name: text(body.profileName) || null, p_mapping: body.mapping, p_rows: prepared.rows,
     });
+    if (error) {
+      console.error("Materials import RPC failed", { projectId, code: error.code, message: error.message, details: error.details, hint: error.hint });
+      return NextResponse.json({ ok:false, code:"MATERIALS_IMPORT_FAILED",
+        error:"Materials import could not be applied. No rows were changed. Please retry or contact support.",
+        ...importValidationCounts(prepared.rows.length, [], 0), rowErrors:[],
+      }, { status:500 });
+    }
+    if (!isRecord(data)) throw new Error("Materials import RPC returned no result.");
+    const errors = Array.isArray(data.rowErrors) ? data.rowErrors.filter((row): row is { row: number; message: string } =>
+      isRecord(row) && typeof row.row === "number" && typeof row.message === "string") : [];
+    const counts = importValidationCounts(prepared.rows.length, errors, data.ok === true ? prepared.rows.length : 0);
+    return NextResponse.json({ ...data,
+      ...counts, acceptedRows: counts.validRows, rejectedRows: counts.invalidRows,
+      ignoredEmptyRows: prepared.ignoredEmptyRows,
+    }, { status: data.ok === true ? 200 : 422 });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Materials import failed.",
-      },
-      { status: 400 },
-    );
+    return materialsErrorResponse(error);
   }
 }

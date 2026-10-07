@@ -1,12 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+
+import { securityReturnPath } from "@/lib/security/navigation";
 
 import { createSupabaseBrowser } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
@@ -14,24 +24,20 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] =
-    useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const next = searchParams.get("next") || "/";
+  const next = securityReturnPath(searchParams.get("next") || "/");
 
-  async function signIn(
-    event: FormEvent<HTMLFormElement>,
-  ) {
+  async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setSubmitting(true);
     setError(null);
 
-    const { error: signInError } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     if (signInError) {
       setError("Email or password is incorrect.");
@@ -39,9 +45,20 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace(
-      `/security-check?next=${encodeURIComponent(next)}`,
-    );
+    // The server decides whether this authenticated session needs a challenge.
+    try {
+      const response = await fetch("/api/security/status", {
+        cache: "no-store",
+      });
+      const status: { complete?: boolean } = await response.json();
+      router.replace(
+        response.ok && status.complete
+          ? next
+          : `/security-check?next=${encodeURIComponent(next)}`,
+      );
+    } catch {
+      router.replace(`/security-check?next=${encodeURIComponent(next)}`);
+    }
 
     router.refresh();
   }
@@ -74,9 +91,7 @@ export default function LoginPage() {
           TTTracker
         </div>
 
-        <h1 style={{ marginBottom: 20 }}>
-          Sign in
-        </h1>
+        <h1 style={{ marginBottom: 20 }}>Sign in</h1>
 
         {error ? (
           <div
@@ -90,9 +105,7 @@ export default function LoginPage() {
         ) : null}
 
         <label style={{ display: "block", marginBottom: 16 }}>
-          <div style={{ marginBottom: 6, fontSize: 14 }}>
-            Email
-          </div>
+          <div style={{ marginBottom: 6, fontSize: 14 }}>Email</div>
 
           <input
             className="tt-input"
@@ -100,16 +113,12 @@ export default function LoginPage() {
             required
             autoComplete="email"
             value={email}
-            onChange={(event) =>
-              setEmail(event.target.value)
-            }
+            onChange={(event) => setEmail(event.target.value)}
           />
         </label>
 
         <label style={{ display: "block", marginBottom: 10 }}>
-          <div style={{ marginBottom: 6, fontSize: 14 }}>
-            Password
-          </div>
+          <div style={{ marginBottom: 6, fontSize: 14 }}>Password</div>
 
           <input
             className="tt-input"
@@ -117,9 +126,7 @@ export default function LoginPage() {
             required
             autoComplete="current-password"
             value={password}
-            onChange={(event) =>
-              setPassword(event.target.value)
-            }
+            onChange={(event) => setPassword(event.target.value)}
           />
         </label>
 
@@ -147,9 +154,7 @@ export default function LoginPage() {
           disabled={submitting}
           style={{ width: "100%" }}
         >
-          {submitting
-            ? "Signing in..."
-            : "Sign in"}
+          {submitting ? "Signing in..." : "Sign in"}
         </button>
       </form>
     </main>

@@ -1,373 +1,318 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-
 import { createSupabaseBrowser } from "@/lib/supabase/browser";
+import {
+  maskedSecurityEmail,
+  securityReturnPath,
+} from "@/lib/security/navigation";
+import type { SecurityStatus } from "@/lib/security/types";
 
-type SecurityStatus = {
-  email: string | null;
-  emailCodeRequired: boolean;
-  emailCodeVerified: boolean;
-  totpRequired: boolean;
-  totpEnrolled: boolean;
-  totpVerified: boolean;
-  currentLevel: "aal1" | "aal2" | null;
-  nextLevel: "aal1" | "aal2" | null;
-  complete: boolean;
-};
-
+type Challenge = NonNullable<SecurityStatus["activeChallenge"]>;
 export default function SecurityCheckClient() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const params = useSearchParams();
+  const next = securityReturnPath(params.get("next") || "/");
   const supabase = useMemo(() => createSupabaseBrowser(), []);
-
-  const next = searchParams.get("next") || "/";
-
-  const [status, setStatus] =
-    useState<SecurityStatus | null>(null);
-  const [challengeId, setChallengeId] =
-    useState<string | null>(null);
-  const [emailCode, setEmailCode] = useState("");
-  const [totpCode, setTotpCode] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<SecurityStatus | null>(null);
+  const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const [code, setCode] = useState("");
+  const [totp, setTotp] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] =
-    useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [now, setNow] = useState(0);
+  const sending = useRef(false);
 
-  async function loadStatus() {
-    const response = await fetch(
-      "/api/security/status",
-      { cache: "no-store" },
-    );
-
-    if (!response.ok) {
-      router.replace("/login");
-      return null;
+  const send = useCallback(async () => {
+    if (sending.current) return;
+    sending.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/security/email-code/send", {
+        method: "POST",
+      });
+      const payload: Challenge & { error?: string; code?: string } =
+        await response.json();
+      if (!response.ok) {
+        if (payload.code === "RATE_LIMITED") setNow(Date.now());
+        setMessage(
+          payload.error ||
+            "We could not send the verification email. Please try again.",
+        );
+        return;
+      }
+      setChallenge(payload);
+      setNow(Date.now());
+      setCode("");
+      setMessage("Verification code sent. Check your inbox and spam folder.");
+    } catch {
+      setMessage("Could not connect. Please try again.");
+    } finally {
+      sending.current = false;
+      setBusy(false);
     }
-
-    const payload =
-      (await response.json()) as SecurityStatus;
-
-    setStatus(payload);
-    setLoading(false);
-
-    if (payload.complete) {
-      router.replace(next);
-      router.refresh();
-    }
-
-    return payload;
-  }
-
-  useEffect(() => {
-    void loadStatus();
   }, []);
 
-  async function sendEmailCode() {
-    setBusy(true);
-    setMessage(null);
-
-    const response = await fetch(
-      "/api/security/email-code/send",
-      { method: "POST" },
-    );
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      setMessage(
-        payload.error ??
-          "Could not send verification code.",
-      );
-      setBusy(false);
-      return;
-    }
-
-    setChallengeId(payload.challengeId);
-    setMessage("Verification code sent.");
-    setBusy(false);
-  }
-
-  async function verifyEmail(
-    event: FormEvent<HTMLFormElement>,
-  ) {
-    event.preventDefault();
-
-    if (!challengeId) {
-      setMessage("Request a verification code first.");
-      return;
-    }
-
-    setBusy(true);
-    setMessage(null);
-
-    const response = await fetch(
-      "/api/security/email-code/verify",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          challengeId,
-          code: emailCode,
-        }),
-      },
-    );
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      setMessage(
-        payload.error ?? "Verification failed.",
-      );
-      setBusy(false);
-      return;
-    }
-
-    setEmailCode("");
-    setMessage("Email verified.");
-    setBusy(false);
-
-    await loadStatus();
-  }
-
-  async function verifyTotp(
-    event: FormEvent<HTMLFormElement>,
-  ) {
-    event.preventDefault();
-
-    setBusy(true);
-    setMessage(null);
-
-    const { data: factors, error: factorsError } =
-      await supabase.auth.mfa.listFactors();
-
-    if (factorsError) {
-      setMessage(factorsError.message);
-      setBusy(false);
-      return;
-    }
-
-    const factor = factors.totp.find(
-      (item) => item.status === "verified",
-    );
-
-    if (!factor) {
-      setMessage(
-        "Set up an authenticator in Account security first.",
-      );
-      setBusy(false);
-      return;
-    }
-
-    const { error } =
-      await supabase.auth.mfa.challengeAndVerify({
-        factorId: factor.id,
-        code: totpCode,
+  const load = useCallback(async () => {
+    try {
+      const response = await fetch("/api/security/status", {
+        cache: "no-store",
       });
-
-    if (error) {
-      setMessage("Authenticator code is incorrect.");
-      setBusy(false);
-      return;
+      const payload: SecurityStatus & { error?: string } =
+        await response.json();
+      if (!response.ok) {
+        if (response.status === 401)
+          router.replace(`/login?next=${encodeURIComponent(next)}`);
+        else
+          setMessage(
+            payload.error ||
+              "Security verification is unavailable. Please retry.",
+          );
+        return;
+      }
+      setStatus(payload);
+      setChallenge(payload.activeChallenge);
+      setNow(Date.now());
+      if (payload.complete) {
+        router.replace(next);
+        router.refresh();
+      } else if (
+        payload.emailCodeRequired &&
+        !payload.emailCodeVerified &&
+        !payload.activeChallenge
+      )
+        await send();
+    } catch {
+      setMessage("Could not connect. Please retry.");
     }
+  }, [next, router, send]);
 
-    setTotpCode("");
-    setMessage("Authenticator verified.");
-    setBusy(false);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const cooldown = challenge
+    ? Math.max(0, Math.ceil((Date.parse(challenge.resendAfter) - now) / 1000))
+    : 0;
+  const expired = challenge && Date.parse(challenge.expiresAt) <= now;
 
-    await loadStatus();
+  async function verify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!challenge || busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/security/email-code/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: challenge.challengeId, code }),
+      });
+      const payload: { error?: string } = await response.json();
+      if (!response.ok) {
+        setMessage(payload.error || "Verification failed. Please retry.");
+        return;
+      }
+      setCode("");
+      // Email assurance is server-recorded for the existing authenticated session.
+      // It does not fabricate a Supabase AAL2 session.
+      await load();
+    } catch {
+      setMessage("Could not connect. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
-
-  if (loading || !status) {
-    return (
-      <div className="tt-card" style={{ padding: 28 }}>
-        Checking security...
-      </div>
-    );
+  async function verifyTotp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { data, error } = await supabase.auth.mfa.listFactors();
+      if (error) {
+        setMessage("Authenticator verification is unavailable. Please retry.");
+        return;
+      }
+      const factor = data.totp.find((f) => f.status === "verified");
+      if (!factor) {
+        setMessage("Set up an authenticator in Account security first.");
+        return;
+      }
+      const result = await supabase.auth.mfa.challengeAndVerify({
+        factorId: factor.id,
+        code: totp,
+      });
+      if (result.error) {
+        setMessage("Authenticator code is incorrect or expired.");
+        return;
+      }
+      setTotp("");
+      await load();
+    } catch {
+      setMessage("Could not connect. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
-
   return (
     <div
       className="tt-card"
-      style={{
-        width: "100%",
-        maxWidth: 470,
-        padding: 28,
-      }}
+      style={{ width: "100%", maxWidth: 470, padding: 28 }}
     >
-      <div
-        style={{
-          color: "#7dd3fc",
-          fontWeight: 800,
-          fontSize: 14,
-        }}
-      >
-        TTTracker
-      </div>
-
-      <h1 style={{ marginBottom: 8 }}>
-        Security check
-      </h1>
-
-      <div
-        style={{
-          color: "#94a3b8",
-          fontSize: 13,
-          marginBottom: 24,
-        }}
-      >
-        {status.email}
-      </div>
-
-      {message ? (
-        <div
-          style={{
-            marginBottom: 18,
-            color: "#cbd5e1",
-            fontSize: 13,
-          }}
-        >
+      <strong style={{ color: "#7dd3fc" }}>TTTracker</strong>
+      <h1>Security Check</h1>
+      {message && (
+        <p role="status" aria-live="polite">
           {message}
-        </div>
-      ) : null}
-
-      {status.emailCodeRequired &&
-      !status.emailCodeVerified ? (
-        <section style={{ marginBottom: 26 }}>
-          <h2 style={{ fontSize: 17 }}>
-            Email verification
-          </h2>
-
-          {!challengeId ? (
-            <button
-              type="button"
-              className="tt-button tt-button-primary"
-              disabled={busy}
-              onClick={() => void sendEmailCode()}
-            >
-              {busy
-                ? "Sending..."
-                : "Send email code"}
-            </button>
-          ) : (
-            <form onSubmit={verifyEmail}>
-              <input
-                className="tt-input"
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                pattern="[0-9]{6}"
-                placeholder="6-digit code"
-                value={emailCode}
-                onChange={(event) =>
-                  setEmailCode(
-                    event.target.value
-                      .replace(/\D/g, "")
-                      .slice(0, 6),
-                  )
-                }
-              />
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  marginTop: 10,
-                }}
-              >
+        </p>
+      )}
+      {!status ? (
+        <>
+          <p>Checking your sign-in security...</p>
+          <button
+            className="tt-button"
+            onClick={() => void load()}
+            disabled={busy}
+          >
+            Retry
+          </button>
+        </>
+      ) : status.complete ? (
+        <>
+          <p>Your sign-in meets the configured security requirements.</p>
+          <button
+            className="tt-button tt-button-primary"
+            onClick={() => {
+              router.replace(next);
+              router.refresh();
+            }}
+          >
+            Continue to workspace
+          </button>
+        </>
+      ) : (
+        <>
+          {status.emailCodeRequired && !status.emailCodeVerified && (
+            <section>
+              <p>
+                {challenge
+                  ? "We sent a verification code to"
+                  : "Verify your sign-in email"}
+                <br />
+                <strong>{maskedSecurityEmail(status.email)}</strong>
+              </p>
+              {challenge ? (
+                <form onSubmit={verify}>
+                  <label htmlFor="security-code">Verification code</label>
+                  <input
+                    id="security-code"
+                    className="tt-input"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    required
+                    maxLength={challenge.codeLength}
+                    pattern={`[0-9]{${challenge.codeLength}}`}
+                    value={code}
+                    onChange={(event) =>
+                      setCode(
+                        event.target.value
+                          .replace(/\D/g, "")
+                          .slice(0, challenge.codeLength),
+                      )
+                    }
+                  />
+                  {expired && (
+                    <p>This verification code has expired. Send a new code.</p>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button
+                      className="tt-button tt-button-primary"
+                      disabled={
+                        busy ||
+                        Boolean(expired) ||
+                        code.length !== challenge.codeLength
+                      }
+                    >
+                      {busy ? "Verifying..." : "Verify"}
+                    </button>
+                    <button
+                      type="button"
+                      className="tt-button"
+                      disabled={busy || cooldown > 0}
+                      onClick={() => void send()}
+                    >
+                      {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
                 <button
-                  type="submit"
                   className="tt-button tt-button-primary"
                   disabled={busy}
+                  onClick={() => void send()}
                 >
-                  Verify
+                  {busy ? "Sending..." : "Send code"}
                 </button>
-
-                <button
-                  type="button"
-                  className="tt-button"
-                  disabled={busy}
-                  onClick={() =>
-                    void sendEmailCode()
-                  }
-                >
-                  Resend
-                </button>
-              </div>
-            </form>
+              )}
+            </section>
           )}
-        </section>
-      ) : null}
-
-      {status.totpRequired &&
-      !status.totpVerified ? (
-        <section>
-          <h2 style={{ fontSize: 17 }}>
-            Authenticator
-          </h2>
-
-          {status.totpEnrolled ? (
-            <form onSubmit={verifyTotp}>
-              <input
-                className="tt-input"
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                pattern="[0-9]{6}"
-                placeholder="Authenticator code"
-                value={totpCode}
-                onChange={(event) =>
-                  setTotpCode(
-                    event.target.value
-                      .replace(/\D/g, "")
-                      .slice(0, 6),
-                  )
-                }
-              />
-
-              <button
-                type="submit"
-                className="tt-button tt-button-primary"
-                disabled={busy}
-                style={{ marginTop: 10 }}
-              >
-                Verify authenticator
-              </button>
-            </form>
-          ) : (
-            <div>
-              <p
-                style={{
-                  color: "#94a3b8",
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                }}
-              >
-                An authenticator is required for this account.
-              </p>
-
-              <button
-                type="button"
-                className="tt-button tt-button-primary"
-                onClick={() =>
-                  router.push(
-                    `/account?next=${encodeURIComponent(
-                      `/security-check?next=${next}`,
-                    )}`,
-                  )
-                }
-              >
-                Set up authenticator
-              </button>
-            </div>
+          {status.totpRequired && !status.totpVerified && (
+            <section style={{ marginTop: 16 }}>
+              {status.totpEnrolled ? (
+                <form onSubmit={verifyTotp}>
+                  <label htmlFor="authenticator-code">Authenticator code</label>
+                  <input
+                    id="authenticator-code"
+                    className="tt-input"
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
+                    required
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    value={totp}
+                    onChange={(event) =>
+                      setTotp(event.target.value.replace(/\D/g, "").slice(0, 6))
+                    }
+                  />
+                  <button
+                    className="tt-button tt-button-primary"
+                    disabled={busy || totp.length !== 6}
+                  >
+                    Verify authenticator
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <p>Additional security setup is required.</p>
+                  <button
+                    className="tt-button tt-button-primary"
+                    onClick={() =>
+                      router.push(
+                        `/account?next=${encodeURIComponent(`/security-check?next=${encodeURIComponent(next)}`)}`,
+                      )
+                    }
+                  >
+                    Set up authenticator
+                  </button>
+                </>
+              )}
+            </section>
           )}
-        </section>
-      ) : null}
+        </>
+      )}
     </div>
   );
 }

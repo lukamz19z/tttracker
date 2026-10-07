@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { MaterialsSecurityError } from "@/lib/materials/access-policy";
+import { materialsErrorResponse } from "@/lib/materials/security";
 import { requireProjectContext } from "@/lib/projects/project-context";
 
 type Context = {
@@ -15,8 +17,10 @@ export async function POST(request: NextRequest, context: Context) {
     const project = await requireProjectContext(
       projectId,
       String(body.organisationId ?? "") || null,
+      "configuration",
     );
 
+    if (!project.access.settingsConfigure) throw new MaterialsSecurityError("CONFIGURATION_PERMISSION_DENIED");
     const admin = createSupabaseAdmin();
 
     const assemblyShare = Number(body.assemblyShare ?? 50);
@@ -38,7 +42,7 @@ export async function POST(request: NextRequest, context: Context) {
       .upsert(
         {
           organisation_id:
-            project.workspace.organisation.organisationId,
+            project.dataOrganisationId,
           project_id: projectId,
           assembly_share: assemblyShare,
           erection_share: erectionShare,
@@ -72,7 +76,7 @@ export async function POST(request: NextRequest, context: Context) {
 
       const payload = {
         organisation_id:
-          project.workspace.organisation.organisationId,
+          project.dataOrganisationId,
         project_id: projectId,
         progress_profile_id: profile.id,
         stage_key: stageKey,
@@ -95,14 +99,6 @@ export async function POST(request: NextRequest, context: Context) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not save project progress configuration.",
-      },
-      { status: 400 },
-    );
+    return materialsErrorResponse(error);
   }
 }

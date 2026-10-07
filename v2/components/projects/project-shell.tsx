@@ -66,6 +66,7 @@ export default function ProjectShell({
       >
         <div className={styles.projectHeader}>
           <div className={styles.projectCode}>
+            Project /
             {projectNumber}
           </div>
           <div className={styles.projectName}>

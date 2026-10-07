@@ -1,0 +1,4 @@
+Member / Mark,Bundle Reference,Profile / Section Size,Qty / Tower,Drawing Reference,Drawing Revision,Tower Segment,Description,Applicable Towers
+101,1/4,L90x90x8,4,DRG-001,Rev A,Bottom Body,Main leg member,
+234,2/4,L75x75x6,2,DRG-002,Rev A,Bottom Crossarm,Crossarm member,
+M-CONDITIONAL,7/1,L90,1,DWG-02,C,MAIN,Conditional member,"T001,T002"

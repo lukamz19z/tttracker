@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import SecurityCheckClient from "./security-check-client";
 
 export default function SecurityCheckPage() {
@@ -10,7 +11,7 @@ export default function SecurityCheckPage() {
         padding: 24,
       }}
     >
-      <SecurityCheckClient />
+      <Suspense fallback={null}><SecurityCheckClient /></Suspense>
     </main>
   );
 }

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { MaterialsSecurityError } from "@/lib/materials/access-policy";
+import { materialsErrorResponse } from "@/lib/materials/security";
 import { requireProjectContext } from "@/lib/projects/project-context";
 
 type Context = {
@@ -15,8 +17,10 @@ export async function POST(request: NextRequest, context: Context) {
     const project = await requireProjectContext(
       projectId,
       String(body.organisationId ?? "") || null,
+      "configuration",
     );
 
+    if (!project.access.settingsConfigure) throw new MaterialsSecurityError("CONFIGURATION_PERMISSION_DENIED");
     const admin = createSupabaseAdmin();
 
     const { error } = await admin
@@ -25,7 +29,7 @@ export async function POST(request: NextRequest, context: Context) {
         {
           project_id: projectId,
           organisation_id:
-            project.workspace.organisation.organisationId,
+            project.dataOrganisationId,
           internal_review_required:
             body.internalReviewRequired !== false,
           client_approval_enabled:
@@ -46,14 +50,6 @@ export async function POST(request: NextRequest, context: Context) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not save review settings.",
-      },
-      { status: 400 },
-    );
+    return materialsErrorResponse(error);
   }
 }

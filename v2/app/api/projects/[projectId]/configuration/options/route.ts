@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { MaterialsSecurityError, requireMaterialsPermission } from "@/lib/materials/access-policy";
+import { materialsErrorResponse } from "@/lib/materials/security";
 import { requireProjectContext } from "@/lib/projects/project-context";
 
 type Context = {
@@ -15,9 +17,12 @@ export async function POST(request: NextRequest, context: Context) {
     const project = await requireProjectContext(
       projectId,
       String(body.organisationId ?? "") || null,
+      "configuration",
     );
 
     const optionGroup = String(body.optionGroup ?? "").trim();
+    if (optionGroup.startsWith("material_")) requireMaterialsPermission(project.access, "configure");
+    else if (!project.access.settingsConfigure) throw new MaterialsSecurityError("CONFIGURATION_PERMISSION_DENIED");
     const options = Array.isArray(body.options) ? body.options : [];
 
     if (!optionGroup) {
@@ -40,7 +45,7 @@ export async function POST(request: NextRequest, context: Context) {
         .upsert(
           {
             organisation_id:
-              project.workspace.organisation.organisationId,
+              project.dataOrganisationId,
             project_id: projectId,
             option_group: optionGroup,
             option_key: key,
@@ -63,14 +68,6 @@ export async function POST(request: NextRequest, context: Context) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not save project options.",
-      },
-      { status: 400 },
-    );
+    return materialsErrorResponse(error);
   }
 }

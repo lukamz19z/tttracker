@@ -4538,11 +4538,10 @@ export default function DailyDocketForm({
   }
 
   async function syncTowerRevisionAllocations(docketIdValue: string) {
-    const deleteRes = await supabase
-      .from("tower_docket_hour_allocations")
-      .delete()
-      .eq("docket_id", docketIdValue)
-      .is("transfer_id", null);
+const deleteRes = await supabase
+  .from("tower_docket_hour_allocations")
+  .delete()
+  .eq("docket_id", docketIdValue);
 
     if (deleteRes.error) {
       console.error("Daily Docket allocation delete error", deleteRes.error);

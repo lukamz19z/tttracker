@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import { FolderPlus } from "lucide-react";
 
 import ProjectForm from "./project-form";
@@ -5,7 +6,7 @@ import {
   Page,
   PageHeader,
 } from "@/components/ui/tt-ui";
-import { requireWorkspaceContext } from "@/lib/workspace/context";
+import { requireWorkspacePermission } from "@/lib/workspace/context";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { getProjectNumberConfig } from "@/lib/projects/numbering";
 
@@ -20,10 +21,13 @@ export default async function NewProjectPage({
 }: Props) {
   const query = await searchParams;
 
-  const context =
-    await requireWorkspaceContext(
-      query.organisation ?? null,
-    );
+  let context;
+  try { context = await requireWorkspacePermission(query.organisation,"projects.create"); }
+  catch (error) {
+    if (error instanceof Error && ["WORKSPACE_PERMISSION_DENIED","NO_ACTIVE_ORGANISATION_MEMBERSHIP","WORKSPACE_ORGANISATION_ACCESS_DENIED"].includes(error.message)) notFound();
+    throw error;
+  }
+  if (!context.enabledModules.has("projects")) notFound();
 
   const numberConfig =
     await getProjectNumberConfig(

@@ -4,6 +4,7 @@ import {
   platformErrorResponse,
   requirePlatformAdmin,
 } from "@/lib/platform/server";
+import { initialOrganisationRole } from "@/lib/invitations/provision";
 import { sendOrganisationInvitation } from "@/lib/invitations/organisation-invite";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
@@ -17,16 +18,21 @@ function firstRelation<T>(
   return value ?? null;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     await requirePlatformAdmin();
 
     const supabase = createSupabaseAdmin();
 
-    const { data: organisations, error } = await supabase
+    const pageValue = Number(request.nextUrl.searchParams.get("page") ?? 1);
+    const page = Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : 1;
+    const search = (request.nextUrl.searchParams.get("search") ?? "").replace(/[(),%\\]/g, "").trim();
+    let query = supabase
       .from("organisations")
-      .select("id, code, name, legal_name, abn, status, created_at")
-      .order("created_at", { ascending: false });
+      .select("id, code, name, legal_name, abn, status, created_at", { count:"exact" })
+      .order("created_at", { ascending: false }).order("id");
+    if (search) query = query.or(`name.ilike.%${search}%,code.ilike.%${search}%`);
+    const { data: organisations, error, count } = await query.range((page-1)*25,page*25-1);
 
     if (error) {
       return NextResponse.json(
@@ -38,9 +44,11 @@ export async function GET() {
     const result = await Promise.all(
       (organisations ?? []).map(async (organisation) => {
         const [
-          { count: userCount },
-          { count: projectCount },
-          { data: subscription },
+          { count: userCount,error:userError },
+          { count: projectCount,error:projectError },
+          { data: subscription,error:subscriptionError },
+          { data: setup,error: setupError },
+          { data: modules,error: modulesError },
         ] = await Promise.all([
           supabase
             .from("organisation_users")
@@ -72,7 +80,10 @@ export async function GET() {
             .order("starts_at", { ascending: false })
             .limit(1)
             .maybeSingle(),
+          supabase.from("v2_organisation_setup_state").select("status").eq("organisation_id",organisation.id).maybeSingle(),
+          supabase.from("organisation_modules").select("module_key").eq("organisation_id",organisation.id).eq("enabled",true),
         ]);
+        if (setupError || modulesError || userError || projectError || subscriptionError) throw new Error("PLATFORM_ORGANISATION_CONTEXT_LOOKUP_FAILED");
 
         const versionRow = firstRelation(
           subscription?.v2_subscription_plan_versions,
@@ -96,11 +107,13 @@ export async function GET() {
           planName: planRow?.name ?? null,
           planVersion: versionRow?.version ?? null,
           subscriptionStatus: subscription?.status ?? null,
+          setupStatus: setup?.status ?? null,
+          enabledModules: (modules ?? []).map((m) => String(m.module_key)),
         };
       }),
     );
 
-    return NextResponse.json({ organisations: result });
+    return NextResponse.json({ organisations: result, total:count ?? 0 });
   } catch (error) {
     const mapped = platformErrorResponse(error);
 
@@ -291,13 +304,14 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      const intendedRoleId = await initialOrganisationRole(organisation.id, platformAdmin.userId);
       const { data: invitation, error: invitationError } =
         await supabase
           .from("v2_organisation_invitations")
           .insert({
             organisation_id: organisation.id,
             email: initialAdminEmail,
-            intended_role_code: "admin",
+            intended_role_id: intendedRoleId,
             invitation_type: "initial_admin",
             status: "pending",
             invited_by: platformAdmin.userId,

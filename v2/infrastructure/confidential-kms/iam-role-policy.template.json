@@ -1,0 +1,45 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnvelopeCryptoOnly",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt"
+      ],
+      "Resource": "${KMS_KEY_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "kms:EncryptionContext:purpose": "tttracker.people.confidential",
+          "kms:EncryptionContext:environment": "${ENVIRONMENT}"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:organisation_id": "????????-????-????-????-????????????"
+        },
+        "ForAllValues:StringEquals": {
+          "kms:EncryptionContextKeys": [
+            "purpose",
+            "environment",
+            "organisation_id",
+            "person_id",
+            "instance_id",
+            "field_id",
+            "record_id",
+            "revision",
+            "key_version",
+            "semantic_type",
+            "kind",
+            "crypto_format_version"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "HealthDescribeOnly",
+      "Effect": "Allow",
+      "Action": "kms:DescribeKey",
+      "Resource": "${KMS_KEY_ARN}"
+    }
+  ]
+}

@@ -99,7 +99,8 @@
   .nav {
     display: flex;
     gap: 6px;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow: visible;
     padding: 9px;
     scrollbar-width: none;
   }

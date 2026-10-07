@@ -32,11 +32,7 @@ export default async function NewDailyDocketPage({
 
   const admin = createSupabaseAdmin();
 
-  const [
-    { data: towers, error },
-    options,
-    progress,
-  ] = await Promise.all([
+  const [{ data: towers, error }, options, progress] = await Promise.all([
     admin
       .from("v2_towers")
       .select("id, tower_identifier, tower_weight_t")
@@ -61,18 +57,17 @@ export default async function NewDailyDocketPage({
       />
 
       <DailyDocketEditor
-        organisationId={
-          context.workspace.organisation.organisationId
+        organisationId={context.workspace.organisation.organisationId}
+        canUseCrews={
+          context.workspace.enabledModules.has("people") &&
+          Boolean(context.workspace.permissions?.["people.crews.view"])
         }
         projectId={projectId}
         towers={towers ?? []}
         options={options}
         progressProfile={progress.profile}
         initialTowerId={query.tower ?? ""}
-        initialDate={
-          query.date ??
-          new Date().toISOString().slice(0, 10)
-        }
+        initialDate={query.date ?? new Date().toISOString().slice(0, 10)}
       />
     </Page>
   );

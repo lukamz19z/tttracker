@@ -3,12 +3,10 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
-  Building2,
   ChevronRight,
   Plus,
   RefreshCw,
   ShieldCheck,
-  Users,
 } from "lucide-react";
 
 import type {
@@ -27,6 +25,11 @@ type Props = {
 export default function PlatformAdminClient({ admin }: Props) {
   const [organisations, setOrganisations] = useState<OrganisationSummary[]>([]);
   const [plans, setPlans] = useState<SubscriptionPlanSummary[]>([]);
+  const [search,setSearch] = useState("");
+  const [querySearch,setQuerySearch] = useState("");
+  const [page,setPage] = useState(1);
+  const [total,setTotal] = useState(0);
+  useEffect(() => { const timer = setTimeout(() => { setQuerySearch(search); setPage(1); },300); return () => clearTimeout(timer); },[search]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -45,7 +48,7 @@ export default function PlatformAdminClient({ admin }: Props) {
 
     try {
       const [organisationResponse, planResponse] = await Promise.all([
-        fetch("/api/platform/organisations", { cache: "no-store" }),
+        fetch(`/api/platform/organisations?page=${page}&search=${encodeURIComponent(querySearch)}`, { cache: "no-store" }),
         fetch("/api/platform/plans", { cache: "no-store" }),
       ]);
 
@@ -70,6 +73,7 @@ export default function PlatformAdminClient({ admin }: Props) {
         planPayload.plans ?? [];
 
       setOrganisations(organisationPayload.organisations ?? []);
+      setTotal(organisationPayload.total ?? 0);
       setPlans(nextPlans);
 
       setPlanVersionId((current) => {
@@ -85,7 +89,7 @@ export default function PlatformAdminClient({ admin }: Props) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page,querySearch]);
 
   useEffect(() => {
     void loadData();
@@ -138,12 +142,8 @@ export default function PlatformAdminClient({ admin }: Props) {
     }
   }
 
-  const activeCount = organisations.filter(
-    (item) => item.status === "active",
-  ).length;
-
   return (
-    <main style={{ minHeight: "100vh", padding: "32px 24px" }}>
+    <main style={{ padding: "0" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <header
           style={{
@@ -170,7 +170,7 @@ export default function PlatformAdminClient({ admin }: Props) {
             </div>
 
             <h1 style={{ fontSize: 32, marginBottom: 6 }}>
-              Platform Admin
+              Organisations
             </h1>
 
             <div style={{ color: "#94a3b8", fontSize: 13 }}>
@@ -191,7 +191,7 @@ export default function PlatformAdminClient({ admin }: Props) {
               Refresh
             </button>
 
-            <button
+            {admin.role !== "support" && <button
               className="tt-button tt-button-primary"
               type="button"
               onClick={() => setShowCreate((current) => !current)}
@@ -201,36 +201,9 @@ export default function PlatformAdminClient({ admin }: Props) {
                 style={{ verticalAlign: "middle", marginRight: 7 }}
               />
               New organisation
-            </button>
+            </button>}
           </div>
         </header>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-            gap: 14,
-            marginBottom: 24,
-          }}
-        >
-          <Stat
-            label="Organisations"
-            value={organisations.length}
-            icon={<Building2 size={18} />}
-          />
-
-          <Stat
-            label="Active"
-            value={activeCount}
-            icon={<ShieldCheck size={18} />}
-          />
-
-          <Stat
-            label="Plans"
-            value={plans.length}
-            icon={<Users size={18} />}
-          />
-        </div>
 
         {error ? (
           <div
@@ -369,13 +342,14 @@ export default function PlatformAdminClient({ admin }: Props) {
         <section className="tt-card" style={{ overflow: "hidden" }}>
           <div
             style={{
-              padding: "16px 18px",
+              padding: "10px 14px",
               borderBottom: "1px solid #1e293b",
               fontWeight: 700,
             }}
           >
             Organisations
           </div>
+          <input className="tt-input" aria-label="Search organisations" placeholder="Search organisation name or code..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ margin:12,width:"calc(100% - 24px)" }} />
 
           {loading ? (
             <div style={{ padding: 36, color: "#94a3b8" }}>
@@ -396,7 +370,7 @@ export default function PlatformAdminClient({ admin }: Props) {
                     "minmax(0, 2fr) 1fr 1fr 1fr 34px",
                   gap: 14,
                   alignItems: "center",
-                  padding: "16px 18px",
+                  padding: "10px 14px",
                   borderBottom: "1px solid #1e293b",
                 }}
               >
@@ -420,7 +394,7 @@ export default function PlatformAdminClient({ admin }: Props) {
                       marginTop: 3,
                     }}
                   >
-                    {organisation.legalName ?? "No legal name"}
+                    Setup: {organisation.setupStatus ?? "Not started"} / Modules: {organisation.enabledModules?.join(", ") || "None"} / Created: {new Date(organisation.createdAt).toLocaleDateString("en-AU")}
                   </div>
                 </div>
 
@@ -447,46 +421,14 @@ export default function PlatformAdminClient({ admin }: Props) {
               </Link>
             ))
           )}
+          <div style={{ padding:12,display:"flex",gap:12,alignItems:"center" }}>
+            <span>{total} organisations / Page {page}</span>
+            <button className="tt-button" disabled={page === 1 || loading} onClick={() => setPage(page-1)}>Previous</button>
+            <button className="tt-button" disabled={page*25 >= total || loading} onClick={() => setPage(page+1)}>Next</button>
+          </div>
         </section>
       </div>
     </main>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: React.ReactNode;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="tt-card" style={{ padding: 18 }}>
-      <div
-        style={{
-          color: "#94a3b8",
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          fontSize: 13,
-        }}
-      >
-        {icon}
-        {label}
-      </div>
-
-      <div
-        style={{
-          fontSize: 26,
-          fontWeight: 800,
-          marginTop: 10,
-        }}
-      >
-        {value}
-      </div>
-    </div>
   );
 }
 

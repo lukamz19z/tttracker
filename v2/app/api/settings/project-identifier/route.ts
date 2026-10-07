@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireWorkspaceContext } from "@/lib/workspace/context";
+import { requireWorkspacePermission } from "@/lib/workspace/context";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 export async function POST(request: NextRequest) {
@@ -13,8 +13,9 @@ export async function POST(request: NextRequest) {
     ).trim();
 
     const context =
-      await requireWorkspaceContext(
+      await requireWorkspacePermission(
         organisationId,
+        "organisation.settings.configure",
       );
 
     const mode = String(
@@ -86,6 +87,7 @@ export async function POST(request: NextRequest) {
       ok: true,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "WORKSPACE_PERMISSION_DENIED") return NextResponse.json({ error: error.message }, { status:403 });
     return NextResponse.json(
       {
         error:

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { requireWorkspaceContext } from "@/lib/workspace/context";
+import { requireWorkspacePermission } from "@/lib/workspace/context";
 import {
   getProjectNumberConfig,
   renderProjectNumberTemplate,
@@ -28,9 +28,12 @@ export async function POST(request: NextRequest) {
     }
 
     const context =
-      await requireWorkspaceContext(
+      await requireWorkspacePermission(
         organisationId,
+        "projects.create",
       );
+
+    if (!context.enabledModules.has("projects")) return NextResponse.json({ error:"PROJECTS_MODULE_DISABLED" }, { status:403 });
 
     const name = text(body.name);
 
@@ -270,6 +273,7 @@ export async function POST(request: NextRequest) {
       { status: 201 },
     );
   } catch (error) {
+    if (error instanceof Error && error.message === "WORKSPACE_PERMISSION_DENIED") return NextResponse.json({ error:error.message }, { status:403 });
     return NextResponse.json(
       {
         error:

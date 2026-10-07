@@ -24,6 +24,8 @@ export type OrganisationSummary = {
   planName: string | null;
   planVersion: number | null;
   subscriptionStatus: string | null;
+  setupStatus?: string | null;
+  enabledModules?: string[];
 };
 
 export type CreateOrganisationInput = {

@@ -1,80 +1,33 @@
 import "server-only";
 
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { createSupabaseServer } from "@/lib/supabase/server";
-import { requireWorkspaceContext } from "@/lib/workspace/context";
-
-async function resolveProjectOrganisationId(
-  projectId: string,
-  requestedOrganisationId?: string | null,
-) {
-  if (requestedOrganisationId) {
-    return requestedOrganisationId;
-  }
-
-  const session =
-    await createSupabaseServer();
-
-  const { data: claimsData, error } =
-    await session.auth.getClaims();
-
-  const userId =
-    typeof claimsData?.claims?.sub ===
-    "string"
-      ? claimsData.claims.sub
-      : null;
-
-  if (error || !userId) {
-    redirect("/login");
-  }
-
-  const admin = createSupabaseAdmin();
-
-  const { data: project } = await admin
-    .from("v2_projects")
-    .select("organisation_id")
-    .eq("id", projectId)
-    .maybeSingle();
-
-  if (!project?.organisation_id) {
-    notFound();
-  }
-
-  const { data: membership } =
-    await admin
-      .from("organisation_users")
-      .select("organisation_id")
-      .eq(
-        "organisation_id",
-        project.organisation_id,
-      )
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .maybeSingle();
-
-  if (!membership) {
-    notFound();
-  }
-
-  return project.organisation_id;
-}
+import { requireWorkspaceContext, requirePartyWorkspaceContext } from "@/lib/workspace/context";
+import { selectProjectParticipant } from "@/lib/projects/access-selection";
+import { resolveProjectAccess, ProjectAccessError } from "@/lib/projects/access";
 
 export async function requireProjectContext(
   projectId: string,
   organisationId?: string | null,
+  scope: "internal" | "shell" | "materials" | "configuration" = "internal",
 ) {
-  const resolvedOrganisationId =
-    await resolveProjectOrganisationId(
-      projectId,
-      organisationId,
-    );
-
-  const workspace =
-    await requireWorkspaceContext(
-      resolvedOrganisationId,
-    );
+  const access = selectProjectParticipant(await resolveProjectAccess(projectId), organisationId);
+  if (!access) throw new ProjectAccessError();
+  if (access.kind === "party" && scope === "internal") throw new ProjectAccessError();
+  if (scope === "materials" && !access.permissions["materials.view"]) throw new ProjectAccessError("MATERIALS_PERMISSION_DENIED");
+  if (scope === "configuration" && !access.settingsView && !access.permissions["materials.configure"]) throw new ProjectAccessError("CONFIGURATION_PERMISSION_DENIED");
+  // Workspace identity is the participant; data ownership remains the canonical project organisation.
+  const participant = access.kind === "party" ? access.parties.find((party) =>
+    !organisationId || party.organisationId === organisationId || party.id === organisationId) : null;
+  if (access.kind === "party" && !participant) throw new ProjectAccessError();
+  if (access.kind === "host" && organisationId && organisationId !== access.dataOrganisationId) throw new ProjectAccessError();
+  let workspace: Awaited<ReturnType<typeof requireWorkspaceContext>>;
+  if (access.kind === "host") workspace = await requireWorkspaceContext(access.dataOrganisationId);
+  else {
+    if (!participant) throw new ProjectAccessError();
+    workspace = await requirePartyWorkspaceContext(access, participant);
+  }
 
   const admin = createSupabaseAdmin();
 
@@ -102,8 +55,7 @@ export async function requireProjectContext(
       .eq("id", projectId)
       .eq(
         "organisation_id",
-        workspace.organisation
-          .organisationId,
+        access.dataOrganisationId,
       )
       .maybeSingle();
 
@@ -161,6 +113,9 @@ export async function requireProjectContext(
   const sections =
     (definitions ?? [])
       .filter((definition) => {
+        if (access.kind === "party" && definition.section_key !== "project_materials" && definition.section_key !== "project_configuration") return false;
+        if (definition.section_key === "project_materials" && !access.permissions["materials.view"]) return false;
+        if (definition.section_key === "project_configuration" && !access.settingsView && !access.permissions["materials.configure"]) return false;
         const override =
           overrideMap.get(
             definition.section_key,
@@ -210,6 +165,8 @@ export async function requireProjectContext(
 
   return {
     workspace,
+    access,
+    dataOrganisationId: access.dataOrganisationId,
     project,
     sections,
   };

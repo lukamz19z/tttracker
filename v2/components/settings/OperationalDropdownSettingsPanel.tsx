@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Save, Settings2, Trash2 } from "lucide-react";
 
-import { createSupabaseBrowser } from "@/lib/supabase";
+import { createSupabaseBrowser } from "@/lib/supabase/browser";
 import {
   type ConfiguredOption,
   loadConfiguredOptions,

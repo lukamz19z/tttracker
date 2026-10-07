@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import ProjectShell from "@/components/projects/project-shell";
 import { requireProjectContext } from "@/lib/projects/project-context";
 
@@ -12,23 +13,18 @@ export default async function ProjectLayout({
 }) {
   const { projectId } = await params;
 
-  const context =
-    await requireProjectContext(
-      projectId,
-    );
+  const context = await requireProjectContext(
+    projectId,
+    (await headers()).get("x-tttracker-organisation-id"),
+    "shell",
+  );
 
   return (
     <ProjectShell
-      organisationId={
-        context.workspace.organisation
-          .organisationId
-      }
+      organisationId={context.workspace.organisation.organisationId}
       projectId={projectId}
       projectName={context.project.name}
-      projectNumber={
-        context.project.project_number ??
-        context.project.code
-      }
+      projectNumber={context.project.project_number ?? context.project.code}
       sections={context.sections}
     >
       {children}

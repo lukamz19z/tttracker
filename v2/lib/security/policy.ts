@@ -15,9 +15,7 @@ const MODE_WEIGHT: Record<SecurityMode, number> = {
 function strongestMode(values: SecurityMode[]): SecurityMode {
   return values.reduce<SecurityMode>(
     (strongest, current) =>
-      MODE_WEIGHT[current] > MODE_WEIGHT[strongest]
-        ? current
-        : strongest,
+      MODE_WEIGHT[current] > MODE_WEIGHT[strongest] ? current : strongest,
     "off",
   );
 }
@@ -28,9 +26,9 @@ export async function resolveSecurityPolicy(
   const admin = createSupabaseAdmin();
 
   const [
-    { data: platformAdmin },
-    { data: memberships },
-    { data: platformPolicy },
+    { data: platformAdmin, error: platformError },
+    { data: memberships, error: membershipError },
+    { data: platformPolicy, error: policyError },
   ] = await Promise.all([
     admin
       .from("v2_platform_admins")
@@ -45,37 +43,44 @@ export async function resolveSecurityPolicy(
       .eq("status", "active"),
     admin
       .from("v2_security_policies")
-      .select(`
+      .select(
+        `
         email_code_mode,
         totp_mode,
         email_code_expiry_minutes,
         max_email_code_attempts,
         trusted_email_verification_hours
-      `)
+      `,
+      )
       .eq("scope_type", "platform")
       .eq("is_active", true)
       .maybeSingle(),
   ]);
 
-  const organisationIds =
-    (memberships ?? []).map((row) => row.organisation_id);
+  if (platformError || membershipError || policyError)
+    throw new Error("AUTH_ERROR");
+
+  const organisationIds = (memberships ?? []).map((row) => row.organisation_id);
 
   const organisationResult =
     organisationIds.length > 0
       ? await admin
           .from("v2_security_policies")
-          .select(`
+          .select(
+            `
             organisation_id,
             email_code_mode,
             totp_mode,
             email_code_expiry_minutes,
             max_email_code_attempts,
             trusted_email_verification_hours
-          `)
+          `,
+          )
           .eq("scope_type", "organisation")
           .eq("is_active", true)
           .in("organisation_id", organisationIds)
-      : { data: [] };
+      : { data: [], error: null };
+  if (organisationResult.error) throw new Error("AUTH_ERROR");
 
   const policies: Array<{
     email_code_mode: SecurityMode;
@@ -86,11 +91,11 @@ export async function resolveSecurityPolicy(
   }> = [];
 
   if (platformAdmin && platformPolicy) {
-    policies.push(platformPolicy as typeof policies[number]);
+    policies.push(platformPolicy as (typeof policies)[number]);
   }
 
   for (const policy of organisationResult.data ?? []) {
-    policies.push(policy as typeof policies[number]);
+    policies.push(policy as (typeof policies)[number]);
   }
 
   if (policies.length === 0) {
@@ -107,9 +112,7 @@ export async function resolveSecurityPolicy(
     emailCodeMode: strongestMode(
       policies.map((policy) => policy.email_code_mode),
     ),
-    totpMode: strongestMode(
-      policies.map((policy) => policy.totp_mode),
-    ),
+    totpMode: strongestMode(policies.map((policy) => policy.totp_mode)),
     emailCodeExpiryMinutes: Math.min(
       ...policies.map((policy) => policy.email_code_expiry_minutes),
     ),
@@ -117,9 +120,7 @@ export async function resolveSecurityPolicy(
       ...policies.map((policy) => policy.max_email_code_attempts),
     ),
     trustedEmailVerificationHours: Math.min(
-      ...policies.map(
-        (policy) => policy.trusted_email_verification_hours,
-      ),
+      ...policies.map((policy) => policy.trusted_email_verification_hours),
     ),
   };
 }

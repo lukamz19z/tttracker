@@ -25,17 +25,6 @@ function hashCode(challengeId: string, code: string) {
     .digest("hex");
 }
 
-function safeEqual(a: string, b: string) {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(left, right);
-}
-
 function generateCode() {
   return crypto.randomInt(100000, 1000000).toString();
 }
@@ -102,87 +91,53 @@ function buildEmailCodeEmail(code: string) {
 export async function sendEmailSecurityCode() {
   const identity = await requireAuthSessionIdentity();
   const policy = await resolveSecurityPolicy(identity.userId);
+  if (policy.emailCodeMode === "off") throw new Error("MFA_NOT_CONFIGURED");
   const admin = createSupabaseAdmin();
-
-  await admin
-    .from("v2_email_mfa_challenges")
-    .update({ status: "cancelled" })
-    .eq("user_id", identity.userId)
-    .eq("session_id", identity.sessionId)
-    .eq("status", "pending");
-
-  const expiresAt = new Date(
-    Date.now() + policy.emailCodeExpiryMinutes * 60_000,
-  ).toISOString();
-
-  const { data: challenge, error: insertError } =
-    await admin
-      .from("v2_email_mfa_challenges")
-      .insert({
-        user_id: identity.userId,
-        session_id: identity.sessionId,
-        email: identity.email,
-        code_hash: "pending",
-        expires_at: expiresAt,
-        max_attempts: policy.maxEmailCodeAttempts,
-        status: "pending",
-      })
-      .select("id")
-      .single();
-
-  if (insertError || !challenge) {
-    throw new Error(
-      insertError?.message ??
-        "Could not create verification challenge.",
-    );
-  }
-
+  const id = crypto.randomUUID();
   const code = generateCode();
-  const codeHash = hashCode(challenge.id, code);
-
-  await admin
-    .from("v2_email_mfa_challenges")
-    .update({ code_hash: codeHash })
-    .eq("id", challenge.id);
-
+  const { data, error } = await admin.rpc(
+    "tttracker_v2_reserve_email_challenge",
+    {
+      p_user_id: identity.userId,
+      p_session_id: identity.sessionId,
+      p_id: id,
+      p_email: identity.email,
+      p_hash: hashCode(id, code),
+      p_expiry_minutes: policy.emailCodeExpiryMinutes,
+      p_max_attempts: policy.maxEmailCodeAttempts,
+    },
+  );
+  if (error)
+    throw new Error(
+      error.message === "RATE_LIMITED" || error.message === "SESSION_MISSING"
+        ? error.message
+        : "AUTH_ERROR",
+    );
   const template = buildEmailCodeEmail(code);
-
   try {
-    const sent = await sendEmail({
-      to: identity.email,
-      subject: template.subject,
-      html: template.html,
-    });
-
-    await admin
+    const sent = await sendEmail({ to: identity.email, ...template });
+    const { error: saveError } = await admin
       .from("v2_email_mfa_challenges")
       .update({
         provider: sent.provider,
         provider_message_id: sent.messageId,
         last_error: null,
       })
-      .eq("id", challenge.id);
-
-    return {
-      challengeId: challenge.id,
-      expiresAt,
-    };
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Verification email failed.";
-
+      .eq("id", id)
+      .eq("user_id", identity.userId)
+      .eq("session_id", identity.sessionId)
+      .eq("status", "pending");
+    if (saveError) throw new Error("SEND_FAILED");
+    return data;
+  } catch {
     await admin
       .from("v2_email_mfa_challenges")
-      .update({
-        status: "cancelled",
-        provider: "resend",
-        last_error: message,
-      })
-      .eq("id", challenge.id);
-
-    throw error;
+      .update({ status: "cancelled", last_error: "SEND_FAILED" })
+      .eq("id", id)
+      .eq("user_id", identity.userId)
+      .eq("session_id", identity.sessionId)
+      .eq("status", "pending");
+    throw new Error("SEND_FAILED");
   }
 }
 
@@ -191,110 +146,24 @@ export async function verifyEmailSecurityCode(
   code: string,
 ) {
   const identity = await requireAuthSessionIdentity();
+  if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code))
+    throw new Error("CODE_INVALID");
   const policy = await resolveSecurityPolicy(identity.userId);
-  const admin = createSupabaseAdmin();
-
-  const { data: challenge, error } = await admin
-    .from("v2_email_mfa_challenges")
-    .select(`
-      id,
-      user_id,
-      session_id,
-      code_hash,
-      expires_at,
-      attempts,
-      max_attempts,
-      status
-    `)
-    .eq("id", challengeId)
-    .maybeSingle();
-
-  if (error || !challenge) {
-    throw new Error("Verification code is invalid.");
-  }
-
-  if (
-    challenge.user_id !== identity.userId ||
-    challenge.session_id !== identity.sessionId ||
-    challenge.status !== "pending"
-  ) {
-    throw new Error("Verification code is no longer valid.");
-  }
-
-  if (new Date(challenge.expires_at).getTime() < Date.now()) {
-    await admin
-      .from("v2_email_mfa_challenges")
-      .update({ status: "expired" })
-      .eq("id", challenge.id);
-
-    throw new Error("Verification code has expired.");
-  }
-
-  if (challenge.attempts >= challenge.max_attempts) {
-    await admin
-      .from("v2_email_mfa_challenges")
-      .update({ status: "cancelled" })
-      .eq("id", challenge.id);
-
+  const { data, error } = await createSupabaseAdmin().rpc(
+    "tttracker_v2_verify_email_challenge",
+    {
+      p_user_id: identity.userId,
+      p_session_id: identity.sessionId,
+      p_id: challengeId,
+      p_hash: hashCode(challengeId, code),
+      p_trusted_hours: policy.trustedEmailVerificationHours,
+    },
+  );
+  if (error)
     throw new Error(
-      "Too many attempts. Request a new code.",
+      error.message === "SESSION_MISSING" ? "SESSION_MISSING" : "AUTH_ERROR",
     );
-  }
-
-  const suppliedHash = hashCode(
-    challenge.id,
-    code.trim(),
-  );
-
-  if (!safeEqual(challenge.code_hash, suppliedHash)) {
-    const nextAttempts = challenge.attempts + 1;
-
-    await admin
-      .from("v2_email_mfa_challenges")
-      .update({
-        attempts: nextAttempts,
-        status:
-          nextAttempts >= challenge.max_attempts
-            ? "cancelled"
-            : "pending",
-      })
-      .eq("id", challenge.id);
-
-    throw new Error("Verification code is incorrect.");
-  }
-
-  const verifiedAt = new Date();
-  const verificationExpiresAt = new Date(
-    verifiedAt.getTime() +
-      policy.trustedEmailVerificationHours * 60 * 60 * 1000,
-  );
-
-  await admin
-    .from("v2_email_mfa_challenges")
-    .update({
-      status: "verified",
-      verified_at: verifiedAt.toISOString(),
-    })
-    .eq("id", challenge.id);
-
-  await admin
-    .from("v2_security_session_verifications")
-    .upsert(
-      {
-        user_id: identity.userId,
-        session_id: identity.sessionId,
-        verification_type: "email_code",
-        verified_at: verifiedAt.toISOString(),
-        expires_at: verificationExpiresAt.toISOString(),
-      },
-      {
-        onConflict:
-          "user_id,session_id,verification_type",
-      },
-    );
-
-  return {
-    verified: true,
-    expiresAt: verificationExpiresAt.toISOString(),
-  };
+  if (data?.error) throw new Error(String(data.error));
+  if (!data?.verified) throw new Error("AUTH_ERROR");
+  return data;
 }
