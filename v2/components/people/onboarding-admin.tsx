@@ -5,6 +5,7 @@ import { BackLink } from "./people-ui";
 import { formatPeopleDate } from "@/lib/people/dates";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { MaterialsSearch } from "@/components/materials/workflow-controls";
 import {
   Editor,
@@ -105,17 +106,20 @@ export function OnboardingPanel({
     <section className={styles.panel}>
       <div className={styles.toolbar}>
         <h2>{templates ? "Onboarding Templates" : "Onboarding"}</h2>
+        {!templates && permissions["people.configure"] && <Link className="tt-button-secondary" href={`/workspace/settings/people/onboarding/templates?organisation=${encodeURIComponent(organisation)}`}>Manage Templates</Link>}
         {(templates
           ? permissions["people.configure"]
           : permissions["people.onboarding.manage"]) && (
           <button
             className="tt-button-primary"
+            type="button"
             onClick={() => (templates ? setEdit({}) : setStart(true))}
           >
             {templates ? "New template" : "Start Onboarding"}
           </button>
         )}
       </div>
+      {templates && <p className={styles.muted}>Create and manage the forms sent to new starters and external workers.</p>}
       <div className={styles.toolbar}>
         <MaterialsSearch
           value={query}
@@ -462,7 +466,7 @@ export function OnboardingPanel({
                           fields: s.fields.filter((f) =>
                             reviewTab === "training"
                               ? f.type === "training_request"
-                              : f.type === "document_upload",
+                              : ["document_upload","profile_photo"].includes(f.type),
                           ),
                         }))
                         .filter((s) => s.fields.length > 0),
@@ -935,7 +939,7 @@ function TemplateBuilder({
                 <div className={styles.fieldList}>
                   {current?.fields.map((f, n) =>
                     builderTab === "documents" &&
-                    !["document_upload", "training_request"].includes(
+                    !["document_upload", "profile_photo", "training_request"].includes(
                       f.type,
                     ) ? null : (
                       <div className={styles.toolbar} key={f.key}>
@@ -1143,6 +1147,7 @@ function OnboardingFieldEditor({
               const type = e.target.value as OnboardingField["type"];
               updateField({
                 type,
+                ...(type === "profile_photo" ? { label: "Profile Photo", mapping: undefined, condition: undefined, help: "Upload a recent head-and-shoulders photo for employee identification and project onboarding within TTTracker." } : {}),
                 classification: minimumClassification(type),
                 domain:
                   minimumClassification(type) === "private"
@@ -1153,7 +1158,7 @@ function OnboardingFieldEditor({
           >
             {onboardingTypes.map((t) => (
               <option key={t} value={t}>
-                {peopleLabel(t)}
+                {t === "profile_photo" ? "Profile Photo / Headshot" : peopleLabel(t)}
               </option>
             ))}
           </select>

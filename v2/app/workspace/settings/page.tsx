@@ -6,6 +6,7 @@ import { requireWorkspacePermission } from "@/lib/workspace/context";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { getProjectNumberConfig } from "@/lib/projects/numbering";
 import { workspaceHref } from "@/lib/workspace/navigation";
+import { PageHeading } from "@/components/workspace/workspace-navigation";
 
 export default async function SettingsPage({
   searchParams,
@@ -45,15 +46,9 @@ export default async function SettingsPage({
   const sections = [
     { key: "organisation", label: "Organisation" },
     { key: "modules", label: "Modules & Subscription" },
-    ...(context.permissions?.["organisation.users.view"]
-      ? [{ key: "users", label: "Users & Access" }]
-      : []),
+    ...(context.permissions?.["organisation.users.view"] ? [{ key: "users", label: "Users & Access" }] : []),
     { key: "projects", label: "Project Defaults" },
-    ...((context.permissions?.["people.configure"] ||
-      context.permissions?.["training.configure"]) &&
-    context.enabledModules.has("people")
-      ? [{ key: "people", label: "People & Onboarding" }]
-      : []),
+    ...((context.permissions?.["people.configure"] || context.permissions?.["training.configure"]) && context.enabledModules.has("people") ? [{ key: "people", label: "People" }] : []),
     { key: "integrations", label: "Integrations" },
   ];
   const selected = query.section ?? "projects";
@@ -117,10 +112,7 @@ export default async function SettingsPage({
     throw new Error("SETTINGS_ACCESS_REGISTER_LOOKUP_FAILED");
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>Organisation Settings</h1>
-      <p style={{ color: "#94a3b8" }}>
-        {context.organisation.organisationName}
-      </p>
+      <PageHeading title={sections.find((s) => s.key === selected)?.label ?? "Settings"} />
       <div
         style={{
           display: "flex",
@@ -129,45 +121,13 @@ export default async function SettingsPage({
           alignItems: "flex-start",
         }}
       >
-        <nav
-          aria-label="Settings navigation"
-          style={{ display: "grid", gap: 4, minWidth: 190 }}
-        >
-          {sections.map((s) => (
-            <Link
-              key={s.key}
-              aria-current={selected === s.key ? "page" : undefined}
-              className="tt-button"
-              style={{
-                textAlign: "left",
-                background: selected === s.key ? "#164e63" : undefined,
-              }}
-              href={`${workspaceHref(orgId, "settings")}&section=${s.key}`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </nav>
         <section style={{ flex: "1 1 440px", minWidth: 0 }}>
-          <h2 style={{ marginTop: 0, fontSize: 20 }}>
-            {sections.find((s) => s.key === selected)?.label}
-          </h2>
           {selected === "people" && (
             <div className="tt-card" style={{ padding: 16 }}>
-              <p>
-                Configure relationship types and training requirements for your
-                organisation.
-              </p>
-              <Link
-                className="tt-button"
-                href={`${workspaceHref(orgId, "people/settings")}`}
-              >
-                Open People &amp; Onboarding Settings
+              <p>Configure workforce, onboarding, Training and document defaults.</p>
+              <Link className="tt-button" href={`/workspace/settings/people?organisation=${encodeURIComponent(orgId)}`}>
+                Open People Settings
               </Link>
-              <p style={{ color: "#94a3b8" }}>
-                Configurable onboarding templates will be available in the next
-                phase.
-              </p>
             </div>
           )}
           {selected === "organisation" && (

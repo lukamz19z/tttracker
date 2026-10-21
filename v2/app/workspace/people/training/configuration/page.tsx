@@ -10,13 +10,15 @@ export default async function TrainingConfiguration({
   if (!context.permissions?.["training.configure"])
     return <p>You do not have permission to configure Training.</p>;
   const section = [
+    "overview",
     "training_categories",
     "training_options",
     "training_types",
     "document_rules",
+    "file_naming",
   ].includes(query.section ?? "")
     ? query.section
-    : "training_types";
+    : "overview";
   return (
     <PeopleClient
       key={section}

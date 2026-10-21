@@ -10,6 +10,38 @@ Configure server-only `TTTRACKER_XERO_CLIENT_ID`, `TTTRACKER_XERO_CLIENT_SECRET`
 `NEXT_PUBLIC_APP_URL`. Runtime environment must match. Use a separate development
 app and Xero Demo Company. Preview must not inherit production secrets or KMS trust.
 
+## Operator connection checklist
+
+1. Create the Xero development **Web OAuth 2.0** application and use a Demo Company.
+2. Register the exact callback `https://<host>/api/integrations/xero/callback`.
+   Local development callback: `http://localhost:3001/api/integrations/xero/callback`.
+   Set `NEXT_PUBLIC_APP_URL` to that origin; HTTP is permitted only on loopback in
+   a non-production, non-Vercel runtime. Local OAuth still requires a supported,
+   verified Vercel OIDC/KMS development identity; this change adds no static-key fallback.
+3. Supply `TTTRACKER_XERO_CLIENT_ID`, `TTTRACKER_XERO_CLIENT_SECRET` and
+   `TTTRACKER_XERO_ENVIRONMENT=development` (or the exact hosted runtime environment).
+4. Enable only implemented mapping features: Employee Mapping requests
+   `payroll.employees.read`; Project Mapping requests `projects.read`.
+   `openid offline_access` are the base connection scopes. No payroll writes are enabled.
+5. Configure the integration-purpose KMS/OIDC variables listed below and the dedicated
+   IAM/KMS policy. Verify encrypted credential readiness; a flag alone is insufficient.
+6. Assign `integrations.xero.view/manage` and relevant `xero.people.map` or
+   `xero.projects.manage` capabilities. An integration manager does not receive payroll access.
+7. Open Settings → Integrations → Xero, select supported features and **Connect Xero**.
+8. Authorise in Xero with the required Xero administrator privileges.
+9. Explicitly choose the intended Xero organisation, even if only one is offered,
+   then **Connect Selected Organisation**. No first-tenant automatic selection occurs.
+10. Choose **Test Connection**. This refreshes credentials when necessary and reads
+    connections; it does not write payroll or business objects. Configure mappings separately.
+
+Readiness: `/api/integrations/readiness?organisation={id}&provider=xero` requires
+provider view permission. Only an authorised integration manager triggers the KMS
+readiness probe. A missing Microsoft/Xero application and unavailable encrypted
+credential storage have distinct user-facing states. No secret values are returned.
+Reconnect retains same-tenant mappings; a different tenant is blocked pending
+explicit reset/remapping. Disconnect removes encrypted credentials and disables
+local access while retaining Xero objects and TTTracker history.
+
 OAuth uses random 256-bit state, hashed at rest, actor/organisation binding, expiry,
 one-time atomic consumption and a scoped HttpOnly Secure SameSite cookie. It uses
 the documented confidential web-server authorization code flow. Xero's separate
@@ -119,3 +151,44 @@ explicit tenant selection, concurrent refresh, mapping, safe projection, disconn
 reconnect against a Demo Company. Unit mocks alone cannot approve production operation.
 No Xero payroll webhook is invented: supported Accounting events are irrelevant to the
 currently implemented mapping-only workflows; use controlled reads for mapping refresh.
+
+## Platform setup vs organisation connection
+
+**Platform operator:** open Platform Administration > Integrations > Manage Platform
+Setup. Configure one Microsoft multi-tenant Entra application and one Xero Web OAuth
+application per environment through secure deployment variables. The platform UI
+shows booleans, expected callback URLs and aggregate connection counts. It cannot
+read or replace secrets. Restart/redeploy after changing environment configuration.
+
+**Customer organisation:** open Settings > Integrations. Entitlement determines
+provider availability; tenant RBAC determines who can connect/manage; platform
+readiness determines whether a flow can start; the organisation connection stores
+that customer's identity/configuration. These are four independent states.
+
+Microsoft customers complete Connect Microsoft 365 > SharePoint Site > Library ?
+Destinations > Access > Test & Finish. Microsoft's verified callback supplies their
+tenant identity. Sites.Selected authorises only separately granted customer sites.
+Xero customers complete Connect Xero > authorise > explicitly choose their Xero
+organisation. KMS-backed integration credential storage must pass readiness.
+
+Generic example: TTTracker platform Client ID is configured once. Customer A
+connects Microsoft Tenant A / Site A; Customer B connects Tenant B / Site B. The same
+platform Xero application also serves isolated customer Xero tenants A and B.
+
+Platform pages: `/platform-admin/integrations`, `/platform-admin/integrations/microsoft`,
+`/platform-admin/integrations/xero`. Safe platform status/health API:
+`/api/platform/integrations`, restricted to active Platform Admins; health requests
+require owner/admin and same-origin POST. No tenant provider content or credentials
+are available through this API. Entitlements remain in the organisation subscription
+panel; enabling entitlement does not grant tenant RBAC or customer consent.
+
+Microsoft platform health checks configuration without a customer site. Optional
+`TTTRACKER_MICROSOFT_PLATFORM_DIRECTORY_ID` is the **operator's app-registration
+directory**, supplied only through deployment configuration, never a customer ID
+entered in Platform Admin. With its Sites.Selected consent the check verifies an
+application token; without it the result honestly reports configuration-only checks.
+Xero platform health checks OAuth configuration and KMS readiness; credentials are
+validated by Xero during customer OAuth, not through a random customer tenant.
+Health timestamps describe the requested check, not a persisted monitoring service.
+Safe organisation metadata may be viewed in Platform Admin organisation setup status;
+this does not grant document, payroll, accounting or credential-decryption access.

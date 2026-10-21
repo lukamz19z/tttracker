@@ -173,7 +173,7 @@ export default async function ProjectsPage({
                       {!project.party && (towerCount === 1
                         ? "Tower"
                         : "Towers")}
-                      {expected ? ` ? ${expected} expected` : ""}
+                      {expected ? <><span aria-hidden="true"> / </span><span>{expected} expected</span></> : null}
 
                     </span>
 

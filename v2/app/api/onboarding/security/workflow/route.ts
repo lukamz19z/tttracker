@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { tokenHash } from "@/lib/people/confidential";
+import { uploadDocument, documentError } from "@/lib/documents/service";
+import { publishPendingProfilePhotos } from "@/lib/people/profile-photo";
+import { previewOnboardingDocument } from "@/lib/documents/onboarding";
 export const runtime = "nodejs";
 const headers = {
   "Cache-Control": "no-store",
@@ -13,7 +16,7 @@ export async function POST(request: NextRequest) {
   return run(request, true);
 }
 async function run(request: NextRequest, write: boolean) {
-  let uploaded: string | undefined;
+  let fileBytes: Uint8Array | undefined;
   try {
     const configured = process.env.NEXT_PUBLIC_APP_URL;
     if (
@@ -59,11 +62,20 @@ async function run(request: NextRequest, write: boolean) {
               bytes[3] === 71)
       )
         throw new Error("ONBOARDING_FILE_INVALID");
-      uploaded = `${scope.organisation_id}/onboarding/${scope.instance_id}/${crypto.randomUUID()}`;
-      const { error: uploadError } = await admin.storage
-        .from("v2-people-evidence")
-        .upload(uploaded, file, { upsert: false, contentType: file.type });
-      if (uploadError) throw new Error("ONBOARDING_UPLOAD_FAILED");
+      if (!scope || !["operational", "private"].includes(scope.field?.classification)) throw new Error("ONBOARDING_FIELD_INVALID");
+      if(scope.field.type === "profile_photo" && !["image/jpeg","image/png"].includes(file.type)) throw new Error("ONBOARDING_FILE_INVALID");
+      fileBytes = new Uint8Array(await file.arrayBuffer());
+      const person = scope.person_id ? await admin.from("v2_people").select("id,display_name,employee_number").eq("organisation_id",scope.organisation_id).eq("id",scope.person_id).single() : null;
+      if (person?.error) throw new Error("ONBOARDING_FIELD_INVALID");
+      const side = String(form.get("side") ?? "single");
+      if (scope.field.type === "profile_photo" && side !== "single") throw new Error("ONBOARDING_FILE_INVALID");
+      if (!["single","front","back"].includes(side)) throw new Error("ONBOARDING_FILE_INVALID");
+      const document = await uploadDocument({organisationId:scope.organisation_id,actorId:null,permissions:{},externalClassification:scope.field.classification}, {
+        context:"onboarding",entityType:"onboarding",entityId:scope.instance_id,
+        relationshipTypeId:scope.relationship_type_id,classification:scope.field.classification,side:side as "single"|"front"|"back",
+        values:{onboarding_instance_id:scope.instance_id,recipient_name:scope.recipient_name??"",person_id:person?.data?.id??"",person_display_name:person?.data?.display_name??"",employee_number:person?.data?.employee_number??"",
+          document_type:scope.field.label,document_category:"Onboarding",year:String(new Date().getUTCFullYear()),month:String(new Date().getUTCMonth()+1).padStart(2,"0")}
+      },{name:file.name,mime:file.type,bytes:fileBytes});
       const { data, error } = await admin.rpc(
         "tttracker_v2_onboarding_external",
         {
@@ -71,7 +83,7 @@ async function run(request: NextRequest, write: boolean) {
           p_action: "document",
           p_field: field,
           p_value: {
-            storage_key: uploaded,
+            storage_key: document.storage_key,
             name: file.name.slice(0, 200),
             side: String(form.get("side") ?? "single"),
             content_type: file.type,
@@ -80,7 +92,7 @@ async function run(request: NextRequest, write: boolean) {
         },
       );
       if (error) throw new Error("ONBOARDING_UPLOAD_FAILED");
-      uploaded = undefined;
+
       return NextResponse.json(data, { headers });
     }
     const body = write
@@ -89,11 +101,12 @@ async function run(request: NextRequest, write: boolean) {
           field?: string;
           value?: unknown;
         })
-      : { action: "read" };
+      : { action: request.nextUrl.searchParams.get("document") ? "document_access" : "read", field: request.nextUrl.searchParams.get("field") ?? undefined };
     if (
       !["read", "save", "submit", "document_access"].includes(body.action ?? "")
     )
       throw new Error("ONBOARDING_INVALID_REQUEST");
+    const beforeSubmit = body.action === "submit" ? await admin.rpc("tttracker_v2_onboarding_external", { p_session_hash: hash, p_action: "read" }) : null;
     const { data, error } = await admin.rpc(
       "tttracker_v2_onboarding_external",
       {
@@ -104,43 +117,35 @@ async function run(request: NextRequest, write: boolean) {
       },
     );
     if (error) throw new Error(error.message);
+    let photoPublicationPending = false;
+    if (body.action === "submit" && data?.status === "completed" && beforeSubmit?.data?.instance_id) {
+      try { photoPublicationPending = (await publishPendingProfilePhotos({ instance: beforeSubmit.data.instance_id })).deferred > 0; }
+      catch { photoPublicationPending = true; console.error("Onboarding completed with pending profile photo publication"); }
+    }
     if (body.action === "document_access") {
-      const urls = await Promise.all(
-        (data.rows ?? []).map(
-          async (d: {
-            id: string;
-            name: string;
-            side: string;
-            storage_key: string;
-          }) => {
-            const { data: signed, error: failed } = await admin.storage
-              .from("v2-people-evidence")
-              .createSignedUrl(d.storage_key, 60);
-            if (failed) throw new Error("ONBOARDING_DOCUMENT_UNAVAILABLE");
-            return {
-              id: d.id,
-              name: d.name,
-              side: d.side,
-              url: signed.signedUrl,
-            };
-          },
-        ),
-      );
+      const selected = request.nextUrl.searchParams.get("document");
+      if (selected) {
+        const row = (data.rows ?? []).find((d: {id:string}) => d.id === selected);
+        if (!row) throw new Error("ONBOARDING_DOCUMENT_UNAVAILABLE");
+        const scope = await admin.rpc("tttracker_v2_onboarding_external",{p_session_hash:hash,p_action:"upload_scope",p_field:body.field??null});
+        if(scope.error||!scope.data)throw new Error("ONBOARDING_SESSION_INVALID");
+        const preview = await previewOnboardingDocument({organisationId:scope.data.organisation_id,actorId:null,permissions:{},externalClassification:scope.data.field.classification},row);
+        return new NextResponse(new Uint8Array(preview.bytes),{headers:preview.headers});
+      }
+      const urls = (data.rows ?? []).map((d:{id:string;name:string;side:string})=>({id:d.id,name:d.name,side:d.side,
+        url:`/api/onboarding/security/workflow?field=${encodeURIComponent(body.field??"")}&document=${encodeURIComponent(d.id)}`}));
       return NextResponse.json({ rows: urls }, { headers });
     }
-    return NextResponse.json(data, { headers });
+    return NextResponse.json({ ...data, photo_publication_pending: photoPublicationPending }, { headers });
   } catch (e) {
-    if (uploaded)
-      await createSupabaseAdmin()
-        .storage.from("v2-people-evidence")
-        .remove([uploaded]);
     const code =
       e instanceof Error && /^ONBOARDING_[A-Z_]+$/.test(e.message)
         ? e.message
         : "ONBOARDING_UNAVAILABLE";
+    const safe = e instanceof Error && /^(DOCUMENT_|INTEGRATION_)/.test(e.message) ? documentError(e).error : code;
     return NextResponse.json(
-      { error: code },
+      { error: safe },
       { status: code === "ONBOARDING_SESSION_INVALID" ? 401 : 422, headers },
     );
-  }
+  } finally { fileBytes?.fill(0); }
 }

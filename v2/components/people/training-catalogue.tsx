@@ -10,6 +10,8 @@ import {
   type Field,
 } from "./people-controls";
 import styles from "./people.module.css";
+import { DocumentTemplateBuilder } from "@/components/integrations/document-template-builder";
+import { contextTokens } from "@/lib/integrations/resolver";
 export function TrainingCatalogue({
   organisation,
   area,
@@ -21,7 +23,7 @@ export function TrainingCatalogue({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("");
+  const [trainingType, setTrainingType] = useState("");
   const [editor, setEditor] = useState<Row | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -33,7 +35,8 @@ export function TrainingCatalogue({
         area,
         q: query,
         page: String(page),
-        category_id: category,
+        training_type_id: trainingType,
+        include_inactive: area === "training_options" ? "true" : "false",
       });
       const result = await responseData(await fetch(`/api/people?${params}`));
       setRows(result.rows ?? []);
@@ -45,7 +48,7 @@ export function TrainingCatalogue({
     } finally {
       setLoading(false);
     }
-  }, [organisation, area, query, page, category]);
+  }, [organisation, area, query, page, trainingType]);
   useEffect(() => {
     const timer = setTimeout(() => void load(), 200);
     return () => clearTimeout(timer);
@@ -54,10 +57,11 @@ export function TrainingCatalogue({
     ...(area === "training_options"
       ? [
           {
-            key: "category_id",
-            label: "Category",
-            area: "training_categories",
+            key: "training_type_id",
+            label: "Training Type",
+            area: "training_types",
             required: true,
+            group: "Basic Details",
           },
         ]
       : []),
@@ -66,11 +70,13 @@ export function TrainingCatalogue({
       label:
         area === "training_categories" ? "Category name" : "Option / Class",
       required: true,
+      group: "Basic Details",
     },
-    { key: "code", label: "Code" },
-    { key: "description", label: "Description", type: "textarea" },
-    { key: "sort_order", label: "Display order", type: "number" },
-    { key: "is_active", label: "Active", type: "checkbox" },
+    { key: "code", label: "Code", group: "Basic Details" },
+    { key: "description", label: "Description", type: "textarea", group: "Basic Details" },
+    { key: "sort_order", label: "Display order", type: "number", group: "Basic Details" },
+    { key: "is_active", label: "Active", type: "checkbox", group: "Basic Details" },
+    ...(area === "training_categories" ? [{ key: "filename_template", label: "Category file name override", type: "custom", group: "File Naming" }] : []),
   ];
   const [notice, setNotice] = useState("");
   return (
@@ -83,18 +89,17 @@ export function TrainingCatalogue({
               : "Options / Classes"}
           </h2>
           <p className={styles.muted}>
-            Organisation-configured groupings and classes used by your Training
-            records.
+            {area === "training_categories" ? "Categories group related Training Types." : "Each Option / Class belongs to a Training Type."}
           </p>
         </div>
         <button
-          className="tt-button-primary"
-          onClick={() =>
-            setEditor({ is_active: true, sort_order: 0, category_id: category })
+          className={`tt-button-primary ${styles.configurationAddButton}`}
+            onClick={() =>
+            setEditor({ is_active: true, sort_order: 0, training_type_id: trainingType })
           }
         >
           <Plus size={16} />
-          {area === "training_categories" ? "Add Category" : "Add Option"}
+          {area === "training_categories" ? "Add Category" : "Add Option / Class"}
         </button>
       </div>
       <div className={styles.fields}>
@@ -110,23 +115,23 @@ export function TrainingCatalogue({
             setPage(1);
           }}
         />
-        {area === "training_options" && (
+          {area === "training_options" && (
           <PeoplePicker
             organisation={organisation}
-            area="training_categories"
-            label="Category"
-            emptyLabel="All categories"
-            selected={category}
+              area="training_types"
+              label="Training Type"
+              emptyLabel="All Training Types"
+              selected={trainingType}
             onChange={(id) => {
-              setCategory(id);
+              setTrainingType(id);
               setPage(1);
             }}
           />
         )}
       </div>
-      {area === "training_options" && !category && (
+      {area === "training_options" && !trainingType && (
         <p className={styles.muted}>
-          Showing All categories. Select a category to manage its options.
+          Options / Classes are owned by a Training Type. Select a Training Type to filter.
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
@@ -134,6 +139,7 @@ export function TrainingCatalogue({
       {editor && (
         <>
           <Editor
+            key={String(editor.id ?? "new-training-catalogue-item")}
             surface="small"
             saveLabel={
               area === "training_categories" ? "Save Category" : "Save Option"
@@ -142,6 +148,8 @@ export function TrainingCatalogue({
             organisation={organisation}
             fields={fields}
             initial={editor}
+            groupContent={area === "training_categories" ? { "File Naming": <p className={styles.muted}>Optional Category name used after a Ticket-specific name and before the organisation Training default.</p> } : undefined}
+            sectionContent={area === "training_categories" ? (group, data, update) => group === "File Naming" ? <CategoryFilenameEditor value={String(data.filename_template ?? "")} onChange={(filename_template) => update({ filename_template })} /> : null : undefined}
             onCancel={() => setEditor(null)}
             onSave={async (data) => {
               await responseData(
@@ -171,16 +179,15 @@ export function TrainingCatalogue({
         </>
       )}
       <div className={styles.tableWrap}>
-        <table className={styles.table}>
+        <table className={`${styles.table} ${styles.configurationTable}`}>
           <thead>
             <tr>
               <th>Name</th>
-              {area === "training_options" && <th>Category</th>}
+              {area === "training_options" && <><th>Training Type</th><th>Category</th></>}
               <th>Description</th>
               {area === "training_categories" && (
                 <>
                   <th>Training Types</th>
-                  <th>Options</th>
                 </>
               )}
               <th>Code</th>
@@ -196,20 +203,19 @@ export function TrainingCatalogue({
                   <strong>{String(row.name)}</strong>
                 </td>
                 {area === "training_options" && (
-                  <td>{String(row.category ?? "Not assigned")}</td>
+                  <><td>{String(row.training_type ?? "Needs Assignment")}</td><td>{String(row.category ?? "—")}</td></>
                 )}
                 <td>{String(row.description ?? "Not provided")}</td>
                 {area === "training_categories" && (
                   <>
                     <td>{String(row.training_type_count ?? 0)}</td>
-                    <td>{String(row.option_count ?? 0)}</td>
                   </>
                 )}
                 <td>{String(row.code ?? "Not assigned")}</td>
                 <td>{String(row.sort_order)}</td>
                 <td>{row.is_active ? "Active" : "Inactive"}</td>
                 <td>
-                  <button onClick={() => setEditor(row)}>Edit</button>
+                  <button className={styles.configurationRowAction} onClick={() => setEditor(row)}>Edit</button>
                 </td>
               </tr>
             ))}
@@ -238,4 +244,15 @@ export function TrainingCatalogue({
       </div>
     </section>
   );
+}
+
+function CategoryFilenameEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [mode, setMode] = useState(value ? "custom" : "default");
+  const tokens = contextTokens.training.filter((token) => ["employee_number", "person_display_name", "training_type", "training_category", "training_option", "document_side", "issue_date", "expiry_date"].includes(token));
+  return <div className={styles.panel}>
+    <label className={styles.field}>Category file name<select className="tt-input" value={mode} onChange={(event) => { setMode(event.target.value); if (event.target.value === "default") onChange(""); }}>
+      <option value="default">Use organisation Training default</option><option value="custom">Custom for this Category</option>
+    </select></label>
+    {mode === "custom" ? <><DocumentTemplateBuilder value={value} onChange={onChange} tokens={tokens} filename /><button className="tt-button-subtle" type="button" onClick={() => { onChange(""); setMode("default"); }}>Reset to Default</button></> : <p className={styles.muted}>This Category inherits the organisation Training file name unless a Ticket has its own override.</p>}
+  </div>;
 }

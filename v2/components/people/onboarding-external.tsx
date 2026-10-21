@@ -75,7 +75,7 @@ export default function ExternalOnboarding() {
       for (const field of data.definition.sections.flatMap((s) => s.fields)) {
         if (
           field.classification === "confidential" ||
-          field.type === "document_upload" ||
+          ["document_upload","profile_photo"].includes(field.type) ||
           answers[field.key] == null
         )
           continue;
@@ -88,7 +88,7 @@ export default function ExternalOnboarding() {
           setData({ ...data, status: r.status ?? "submitted" });
           setNotice(
             r.status === "completed"
-              ? "Onboarding completed."
+              ? r.photo_publication_pending ? "Onboarding completed. Your uploaded photo is retained and will publish to the employee profile when document storage is ready." : "Onboarding completed."
               : "Onboarding submitted. The organisation will review it according to its policy.",
           );
         }
@@ -135,9 +135,10 @@ export default function ExternalOnboarding() {
             definition={data.definition}
             answers={answers}
             training={data.training}
-            onChange={(key, value) =>
-              setAnswers((prior) => ({ ...prior, [key]: value }))
-            }
+            onChange={(key, value) => {
+              setAnswers((prior) => ({ ...prior, [key]: value }));
+              if(value===null && data.definition.sections.flatMap(s=>s.fields).some(f=>f.key===key&&f.type==="profile_photo")) void request("save",key,null).catch(e=>setError(e instanceof Error?e.message:"Photo could not be removed."));
+            }}
             readOnly={["submitted", "completed", "under_review"].includes(
               data.status,
             )}

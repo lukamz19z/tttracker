@@ -1,4 +1,6 @@
+import { requireIntegrationEntitlement } from "@/lib/integrations/entitlements";
 import "server-only";
+import {integrationOrigin} from "@/lib/integrations/presentation";
 import {randomUUID} from "node:crypto";
 import {createSupabaseAdmin} from "@/lib/supabase/admin";
 import {encryptCredential,decryptCredential,integrationCredentialReady,type CredentialEnvelope} from "./credential-crypto";
@@ -8,8 +10,8 @@ export function xeroConfig(){
   const clientId=process.env.TTTRACKER_XERO_CLIENT_ID,clientSecret=process.env.TTTRACKER_XERO_CLIENT_SECRET,origin=process.env.NEXT_PUBLIC_APP_URL;
   const environment=process.env.TTTRACKER_XERO_ENVIRONMENT;
   const runtime=process.env.VERCEL_TARGET_ENV||process.env.VERCEL_ENV||(process.env.NODE_ENV!=="production"?"development":"");
-  if(!clientId||!clientSecret||!origin||!origin.startsWith("https://")||!environment||environment!==runtime)throw new Error("INTEGRATION_SETUP_REQUIRED");
-  return {clientId,clientSecret,redirectUri:new URL("/api/integrations/xero/callback",origin).toString()};
+  if(!clientId||!clientSecret||!environment||environment!==runtime)throw new Error("INTEGRATION_SETUP_REQUIRED");
+  return {clientId,clientSecret,redirectUri:new URL("/api/integrations/xero/callback",integrationOrigin(origin,process.env.NODE_ENV)).toString()};
 }
 export function xeroFailure(status:number,headers?:Headers):never{
   if(status===401&&headers?.get("www-authenticate")?.includes("insufficient_scope"))throw new Error("INTEGRATION_ADDITIONAL_PERMISSION_REQUIRED");
@@ -34,6 +36,7 @@ async function decode(row:{organisation_id:string;integration_id:string;generati
 }
 export async function persistXeroTokens(org:string,id:string,tokens:XeroTokens,expectedGeneration:number){
   if(!await integrationCredentialReady())throw new Error("INTEGRATION_CREDENTIAL_STORAGE_UNAVAILABLE");
+  await requireIntegrationEntitlement(org,"xero");
   const bytes=Buffer.from(JSON.stringify(tokens));
   try{
     const envelope=await encryptCredential(bytes,{organisation_id:org,integration_id:id,provider:"xero",generation:expectedGeneration+1});
@@ -43,6 +46,7 @@ export async function persistXeroTokens(org:string,id:string,tokens:XeroTokens,e
 }
 // Callers must authorize the feature and target before obtaining provider authority.
 export async function xeroAccessToken(org:string,id:string,actor:string,allowPending=false){
+  await requireIntegrationEntitlement(org,"xero",!allowPending);
   if(!await integrationCredentialReady())throw new Error("INTEGRATION_CREDENTIAL_STORAGE_UNAVAILABLE");
   const connection=await loadIntegration(org,"xero");if(connection?.id!==id||(!allowPending&&connection.status!=="connected"&&!(connection.status==="attention_required"&&connection.error_category==="refresh_failed")))throw new Error("INTEGRATION_SCOPE_INVALID");
   const admin=createSupabaseAdmin();const {data:row,error}=await admin.from("v2_xero_credentials").select("*").eq("organisation_id",org).eq("integration_id",id).single();if(error||!row)throw new Error("INTEGRATION_RECONNECT_REQUIRED");

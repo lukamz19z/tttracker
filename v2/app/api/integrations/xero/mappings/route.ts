@@ -1,3 +1,4 @@
+import { requireIntegrationEntitlement } from "@/lib/integrations/entitlements";
 import {NextRequest,NextResponse} from "next/server";
 import {integrationContext,integrationAudit,integrationError,loadIntegration} from "@/lib/integrations/server";
 import {xeroRead} from "@/lib/integrations/xero";
@@ -8,6 +9,7 @@ export async function GET(request:NextRequest){
     const kind=request.nextUrl.searchParams.get("kind")==="project"?"project":"person";
     const {org,admin}=await integrationContext(request.nextUrl.searchParams.get("organisation"),"xero","view");
     await requireWorkspacePermission(org,kind==="person"?"xero.people.map":"xero.projects.manage");
+    await requireIntegrationEntitlement(org,"xero",true);
     const connection=await loadIntegration(org,"xero");if(!connection) return NextResponse.json({rows:[],total:0});
     const person=request.nextUrl.searchParams.get("person");
     if(person)await peopleRead(org,"profile",{personId:person});
@@ -24,6 +26,7 @@ export async function POST(request:NextRequest){
     const body=await request.json();const kind=body.kind==="project"?"project":"person";
     const {org,admin,context}=await integrationContext(body.organisation,"xero","view");
     await requireWorkspacePermission(org,kind==="person"?"xero.people.map":"xero.projects.manage");
+    await requireIntegrationEntitlement(org,"xero",true);
     const connection=await loadIntegration(org,"xero");if(connection?.status!=="connected"||!connection.tenant_id)throw new Error("INTEGRATION_SCOPE_INVALID");
     const table=kind==="person"?"v2_xero_person_mappings":"v2_xero_project_mappings";
     if(body.action==="unmap"){

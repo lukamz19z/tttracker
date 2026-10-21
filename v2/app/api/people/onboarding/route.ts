@@ -6,6 +6,7 @@ import { secureToken, tokenHash } from "@/lib/people/confidential";
 import { sendEmail } from "@/lib/email/send";
 import { getEmailConfig } from "@/lib/email/config";
 
+import { publishPendingProfilePhotos } from "@/lib/people/profile-photo";
 import { onboardingEmail } from "@/lib/people/onboarding-email";
 
 const headers = { "Cache-Control": "no-store" };
@@ -86,6 +87,11 @@ export async function POST(request: NextRequest) {
       },
     });
     if (error) throw new Error(error.message);
+    let photoPublicationPending = false;
+    if (body.action === "complete" && body.id) {
+      try { photoPublicationPending = (await publishPendingProfilePhotos({ organisation: context.organisation.organisationId, instance: body.id })).deferred > 0; }
+      catch { photoPublicationPending = true; console.error("Onboarding completed with pending profile photo publication"); }
+    }
     if (send && token) {
       try {
         const url = `${getEmailConfig().appUrl}/secure-onboarding#token=${encodeURIComponent(token)}`;
@@ -120,7 +126,7 @@ export async function POST(request: NextRequest) {
         );
       }
     }
-    return NextResponse.json({ id: data.id }, { headers });
+    return NextResponse.json({ id: data.id, photo_publication_pending: photoPublicationPending }, { headers });
   } catch (e) {
     unstable_rethrow(e);
     const r = peopleError(e);

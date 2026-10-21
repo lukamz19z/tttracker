@@ -257,6 +257,8 @@ type AdditionalTowerWork = {
   notes: string;
   has_body_extension: boolean;
   progress_rows: SectionV2ProgressRow[];
+  progress_loading?: boolean;
+  progress_load_error?: string;
 };
 
 type MobilisationStatus =
@@ -376,6 +378,51 @@ function blankSectionV2Rows(): SectionV2ProgressRow[] {
     assembly_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
     erection_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
   }));
+}
+
+type SavedTowerProgressRow = {
+  tower_id?: string | null;
+  docket_id: string;
+  section_code?: string | null;
+  section?: string | null;
+  section_label?: string | null;
+  assembly_overall?: number | string | null;
+  assembly_today?: number | string | null;
+  assembled_qty?: number | string | null;
+  erection_overall?: number | string | null;
+  erection_today?: number | string | null;
+  erected_qty?: number | string | null;
+};
+
+// Rows must be newest first. Resolve each section/phase independently so a
+// section last worked on a different (including split-tower) docket is retained.
+function sectionV2RowsFromSavedProgress(
+  savedRows: SavedTowerProgressRow[],
+  hasBodyExtension: boolean
+): SectionV2ProgressRow[] {
+  return blankSectionV2Rows().map((cfg) => {
+    if (cfg.section_code === "BE" && !hasBodyExtension) return cfg;
+    const sectionRows = savedRows.filter(
+      (row) =>
+        toStringValue(row.section_code || row.section).trim().toUpperCase() ===
+        cfg.section_code
+    );
+    const latestValue = (phase: "assembly" | "erection") => {
+      for (const row of sectionRows) {
+        const value = phase === "assembly"
+          ? row.assembly_overall ?? row.assembly_today ?? row.assembled_qty
+          : row.erection_overall ?? row.erection_today ?? row.erected_qty;
+        if (value == null || value === "" || !Number.isFinite(Number(value))) continue;
+        return clampPercentString(toStringValue(value));
+      }
+      return "";
+    };
+    return {
+      ...cfg,
+      assembly_today: latestValue("assembly"),
+      erection_today: latestValue("erection"),
+    };
+  });
 }
 
 type DocketRecord = {
@@ -1295,6 +1342,7 @@ export default function DailyDocketForm({
   const [primaryWorkActivity, setPrimaryWorkActivity] = useState<ProductionActivity>("mixed");
   const [primaryWorkNotes, setPrimaryWorkNotes] = useState("");
   const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
+  const additionalTowerProgressRequests = useRef(new Map<string, symbol>());
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
   const [missingMaterialIssues, setMissingMaterialIssues] = useState<MissingMaterialIssue[]>([]);
   const [bundleTransfers, setBundleTransfers] = useState<BundleTransferRecord[]>([]);
@@ -3991,6 +4039,75 @@ export default function DailyDocketForm({
     setOpenSections((prev) => new Set([...prev, "progress"]));
   }
 
+  async function handleAdditionalTowerSelection(workIndex: number, targetTowerId: string) {
+    if (isView || locked || saving || submittingApproval) return;
+    const work = additionalTowerWork[workIndex];
+    if (!work) return;
+    const request = Symbol();
+    additionalTowerProgressRequests.current.set(work.ui_id, request);
+    const towerOption = projectTowers.find((tower) => tower.id === targetTowerId);
+    const selectedHasBodyExtension = towerOption?.has_body_extension ?? false;
+    const updateSelectedWork = (patch: Partial<AdditionalTowerWork>) => {
+      if (additionalTowerProgressRequests.current.get(work.ui_id) !== request) return;
+      setAdditionalTowerWork((prev) => prev.map((row) =>
+        row.ui_id === work.ui_id ? { ...row, ...patch } : row
+      ));
+    };
+    updateSelectedWork({
+      target_tower_id: targetTowerId,
+      has_body_extension: selectedHasBodyExtension,
+      progress_rows: blankSectionV2Rows(),
+      progress_loading: Boolean(targetTowerId),
+      progress_load_error: "",
+    });
+    try {
+      if (!targetTowerId) return;
+      const result = await supabase.from("tower_docket_progress")
+        .select("*")
+        .eq("tower_id", targetTowerId)
+        .order("created_at", { ascending: false, nullsFirst: false })
+        .limit(1000);
+      let savedRows = (result.data || []) as SavedTowerProgressRow[];
+      if (result.error) {
+        // Older V1 schemas may lack a progress-row timestamp. Resolve chronology
+        // from the actual referenced dockets, never from their primary tower ID.
+        if (!/created_at/i.test(result.error.message) ||
+            !/does not exist|schema cache/i.test(result.error.message)) {
+          throw result.error;
+        }
+        const fallback = await supabase.from("tower_docket_progress")
+          .select("*").eq("tower_id", targetTowerId).limit(1000);
+        if (fallback.error) throw fallback.error;
+        if ((fallback.data || []).length >= 1000) {
+          throw new Error("Progress history exceeds the timestamp-free lookup limit.");
+        }
+        savedRows = (fallback.data || []) as SavedTowerProgressRow[];
+        const docketIds = [...new Set(savedRows.map((row) => row.docket_id))];
+        if (docketIds.length) {
+          const dockets = await supabase.from("tower_daily_dockets")
+            .select("id, docket_date").in("id", docketIds);
+          if (dockets.error) throw dockets.error;
+          const dates = new Map((dockets.data || []).map((row) => [row.id, row.docket_date || ""]));
+          savedRows.sort((a, b) => toStringValue(dates.get(b.docket_id))
+            .localeCompare(toStringValue(dates.get(a.docket_id))));
+        }
+      }
+      updateSelectedWork({
+        progress_rows: sectionV2RowsFromSavedProgress(savedRows, selectedHasBodyExtension),
+      });
+    } catch (error) {
+      console.error("Additional tower progress load failed", error);
+      updateSelectedWork({
+        progress_load_error: "Could not load this tower's cumulative progress. Retry before entering progress or saving.",
+      });
+    } finally {
+      updateSelectedWork({ progress_loading: false });
+      if (additionalTowerProgressRequests.current.get(work.ui_id) === request) {
+        additionalTowerProgressRequests.current.delete(work.ui_id);
+      }
+    }
+  }
+
   function updateAdditionalTowerWork(
     index: number,
     patch: Partial<AdditionalTowerWork>
@@ -4021,6 +4138,8 @@ export default function DailyDocketForm({
 
   function removeAdditionalTowerWork(index: number) {
     if (isView || locked) return;
+    const work = additionalTowerWork[index];
+    if (work) additionalTowerProgressRequests.current.delete(work.ui_id);
     setAdditionalTowerWork((prev) => prev.filter((_, i) => i !== index));
   }
 
@@ -4066,19 +4185,33 @@ export default function DailyDocketForm({
     return "Not Started";
   }
 
-  async function recalcTowerProgressAndStatus() {
-    const targetProgress = new Map<string, number>();
-    targetProgress.set(towerId, displayProgress);
-
+  async function recalcTowerProgressAndStatus(docketIdValue: string) {
+    const saved = await supabase.from("tower_docket_progress")
+      .select("*").eq("docket_id", docketIdValue);
+    if (saved.error || !saved.data) {
+      throw new Error("Daily docket saved, but tower progress could not be recalculated.");
+    }
+    const savedRows = saved.data as SavedTowerProgressRow[];
+    const workedTowers = new Map<string, boolean>([[towerId, hasBodyExtension]]);
     additionalTowerWork.forEach((work) => {
-      if (!work.target_tower_id) return;
-      const totals = additionalTowerProgressTotals(work);
-      const current = targetProgress.get(work.target_tower_id) || 0;
-      targetProgress.set(
-        work.target_tower_id,
-        Math.max(current, totals.totalProgressPercent)
-      );
+      if (work.target_tower_id) workedTowers.set(work.target_tower_id, work.has_body_extension);
     });
+    const targetProgress = new Map<string, number>();
+    for (const [targetTowerId, towerHasBodyExtension] of workedTowers) {
+      const towerRows = savedRows.filter((row) => row.tower_id === targetTowerId);
+      const totals = calculateProgressTotals({
+        // Additional towers use Section V2; preserve existing legacy primary dockets.
+        progressModel: targetTowerId === towerId ? progressModel : "section_v2",
+        sectionV2Rows: sectionV2RowsFromSavedProgress(towerRows, towerHasBodyExtension),
+        legacyRows: towerRows.map((row) => ({
+          section_label: toStringValue(row.section_label || row.section),
+          assembled_qty: row.assembled_qty,
+          erected_qty: row.erected_qty,
+        })),
+        hasBodyExtension: towerHasBodyExtension,
+      });
+      targetProgress.set(targetTowerId, totals.totalProgressPercent);
+    }
 
     for (const [targetTowerId, calculatedProgress] of targetProgress.entries()) {
       const { data: towerRow, error: towerLoadError } = await supabase
@@ -4087,7 +4220,7 @@ export default function DailyDocketForm({
         .eq("id", targetTowerId)
         .single();
 
-      if (towerLoadError) {
+      if (towerLoadError || !towerRow) {
         throw new Error("Docket saved, but a worked tower could not be reloaded.");
       }
 
@@ -5985,7 +6118,7 @@ const deleteRes = await supabase
     await syncMaterialEvents(docket.id);
     await syncBundleTransfers(docket.id);
     await syncDelayDayworks(docket.id);
-    await recalcTowerProgressAndStatus();
+    await recalcTowerProgressAndStatus(String(docket.id));
     await syncDocketDefects(String(docket.id));
 
     if (options?.navigate !== false) {
@@ -6082,7 +6215,7 @@ const deleteRes = await supabase
     await syncMaterialEvents(docketId);
     await syncBundleTransfers(docketId);
     await syncDelayDayworks(docketId);
-    await recalcTowerProgressAndStatus();
+    await recalcTowerProgressAndStatus(docketId);
     await syncDocketDefects(docketId);
 
     if (options?.navigate !== false) {
@@ -6122,6 +6255,8 @@ const deleteRes = await supabase
     const usedTowerIds = new Set<string>();
 
     for (const work of additionalTowerWork) {
+      if (work.progress_loading) return "Wait for the additional tower's cumulative progress to finish loading.";
+      if (work.progress_load_error) return work.progress_load_error;
       const share = additionalTowerAllocationPercent(work);
       const hasAnyEntry =
         Boolean(work.target_tower_id) ||
@@ -7077,11 +7212,9 @@ const deleteRes = await supabase
                   </label>
                   <select
                     value={work.target_tower_id}
-                    disabled={locked || isView}
+                    disabled={locked || isView || saving || submittingApproval}
                     onChange={(e) =>
-                      updateAdditionalTowerWork(workIndex, {
-                        target_tower_id: e.target.value,
-                      })
+                      void handleAdditionalTowerSelection(workIndex, e.target.value)
                     }
                     className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm disabled:bg-slate-100"
                   >
@@ -7177,7 +7310,7 @@ const deleteRes = await supabase
                   <input
                     type="checkbox"
                     checked={work.has_body_extension}
-                    disabled={locked || isView}
+                    disabled={locked || isView || work.progress_loading || Boolean(work.progress_load_error)}
                     onChange={(e) =>
                       updateAdditionalTowerWork(workIndex, {
                         has_body_extension: e.target.checked,
@@ -7189,10 +7322,16 @@ const deleteRes = await supabase
                 </label>
               </div>
 
+              {work.progress_loading && <p role="status" className="text-sm text-slate-600">Loading existing cumulative progress...</p>}
+              {work.progress_load_error && <div role="alert" className="text-sm text-red-700">
+                {work.progress_load_error}{" "}
+                <button type="button" className="font-bold underline" disabled={locked || isView || saving || submittingApproval}
+                  onClick={() => void handleAdditionalTowerSelection(workIndex, work.target_tower_id)}>Retry</button>
+              </div>}
               <SectionProgressTable
                 rows={work.progress_rows}
                 hasBodyExtension={work.has_body_extension}
-                disabled={locked || isView}
+                disabled={locked || isView || !work.target_tower_id || work.progress_loading || Boolean(work.progress_load_error)}
                 totals={{
                   assemblyPercent: workTotals.assemblyPercent,
                   erectionPercent: workTotals.erectionPercent,

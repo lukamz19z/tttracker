@@ -19,11 +19,12 @@ function load(file, mocks = {}) {
   if (name.endsWith(".module.css")) return { default:new Proxy({}, { get:(_,key) => String(key) }) };
   if (name === "react") return React;
   if (name === "react/jsx-runtime") return dependency(path.join(root,"v2/node_modules/react/jsx-runtime"));
+  if (name === "next/image") return dependency(path.join(root,"v2/node_modules/next/image"));
   if (name === "next/link") return { default:({ children,...props }) => React.createElement("a",props,children) };
   if (name === "next/navigation") return { usePathname:() => pathname,useRouter:() => ({}),notFound:() => { throw Error("NOT_FOUND"); },redirect:(href) => { throw Error(`REDIRECT:${href}`); } };
   if (name === "@/lib/supabase/browser") return { createSupabaseBrowser:() => ({}) };
   if (name === "lucide-react") return new Proxy({}, { get:(_,key) => () => React.createElement("svg",{"data-icon":key}) });
-  if (name.startsWith("@/")) return load(`v2/${name.slice(2)}.ts`,mocks);
+  if (name.startsWith("@/")) return load(`v2/${name.slice(2)}${name.includes("components/")?".tsx":".ts"}`,mocks);
   throw Error(`Unexpected import ${name}`);
  },exp);
  return exp;

@@ -1,0 +1,29 @@
+.workspace { max-width: 1040px; display: grid; gap: 14px; }
+.stepper { display: flex; flex-wrap: wrap; gap: 7px; }
+.stepper button { display: flex; align-items: center; gap: 7px; width: auto; }
+.stepper small { font-size: 10px; }
+.panel { padding: 18px; display: grid; gap: 12px; align-content: start; }
+.panel h2 { margin: 0; font-size: 19px; }
+.panel label { display: grid; gap: 6px; max-width: 640px; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
+.actions button { width: auto; justify-self: start; }
+.workspace h3 { margin: 8px 0; font-size: 16px; }
+.workspace details { padding: 8px 0; }
+.workspace summary { cursor: pointer; font-weight: 600; }
+.workspace table button { margin-left: 8px; }
+.workspace label { display: grid; gap: 6px; max-width: 640px; }
+.workspace pre { font-size: 13px; line-height: 1.6; }
+.summaryGrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 10px; }
+.summaryGrid > div { padding: 10px; border: 1px solid #475569; border-radius: 6px; }
+.summaryGrid p { margin: 6px 0 0; }
+.prerequisite { border-left: 3px solid #64748b; padding: 10px 14px; background: #152033; border-radius: 5px; }
+.diagnostics { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; font-size: 13px; }
+@media(max-width:600px){ .diagnostics { grid-template-columns: 1fr; } .stepper button { flex: 1 1 145px; justify-content: flex-start; } }
+
+.templateBuilder { display: grid; gap: 8px; }
+.templateLevel { padding: 8px 10px; border: 1px solid #475569; border-radius: 6px; display: grid; gap: 6px; }
+.levelHeader { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.templatePieces { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tokenChip { padding: 6px 9px; border-radius: 5px; border: 1px solid #3b82f6; background: #172e50; color: #dbeafe; cursor: pointer; font-size: 13px; }
+.literalChip { border-style: dashed; background: #1e293b; font-family: monospace; min-height: 32px; padding: 5px 8px; }
+.templateBuilder select { min-height: 32px; padding: 5px 8px; }

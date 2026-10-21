@@ -45,9 +45,11 @@ const tokenGroups = {
 export function TokenInput({
   value,
   onChange,
+  tokens: allowedTokens,
 }: {
   value: string;
   onChange: (next: string) => void;
+  tokens?: readonly string[];
 }) {
   const input = useRef<HTMLInputElement>(null);
   return (
@@ -80,7 +82,7 @@ export function TokenInput({
         }}
       >
         <option value="">+ Insert token</option>
-        {Object.entries(tokenGroups).map(([group, tokens]) => (
+        {Object.entries(allowedTokens ? { "Available tokens": allowedTokens } : tokenGroups).map(([group, tokens]) => (
           <optgroup key={group} label={group}>
             {tokens.map((token) => (
               <option key={token} value={token}>

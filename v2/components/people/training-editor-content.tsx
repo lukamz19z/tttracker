@@ -1,123 +1,74 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import {
-  Editor,
   PeoplePicker,
-  responseData,
   type Row,
 } from "./people-controls";
 import { FilenamePreview } from "./people-operations";
 import styles from "./people.module.css";
+import { MaterialsSearch } from "@/components/materials/workflow-controls";
 export function TrainingClassSelection({
-  organisation,
-  category,
-  selected,
+  definitions,
   onChange,
 }: {
-  organisation: string;
-  category: string;
-  selected: string[];
-  onChange: (next: string[]) => void;
+  definitions: Row[];
+  onChange: (next: Row[]) => void;
 }) {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState("");
-  const [adding, setAdding] = useState(false);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(
-      `/api/people?${new URLSearchParams({ organisation, area: "training_options", category_id: category })}`,
-      { signal: controller.signal },
-    )
-      .then(responseData)
-      .then((data) => {
-        setRows(data.rows ?? []);
-        setLoaded(true);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setError("Unable to load options. Try reopening the editor.");
-      });
-    return () => controller.abort();
-  }, [organisation, category]);
+  const [search, setSearch] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkError, setBulkError] = useState("");
+  const visible = definitions.filter((row) => `${row.code ?? ""} ${row.name ?? ""}`.toLowerCase().includes(search.toLowerCase()));
+  const addBulk = () => {
+    const parsed = bulkText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line, index) => {
+      const parts = line.split(/\s*[|,]\s*/, 2);
+      return { code: parts[0]?.trim() ?? "", name: parts[1]?.trim() ?? "", is_active: true, sort_order: definitions.length + index };
+    });
+    const existing = new Set(definitions.map((row) => String(row.code ?? "").trim().toLowerCase()).filter(Boolean));
+    const seen = new Set<string>();
+    let invalid = -1;
+    for (const [index, row] of parsed.entries()) {
+      const normalized = row.code.toLowerCase();
+      if (!row.code || !row.name || existing.has(normalized) || seen.has(normalized)) { invalid = index; break; }
+      seen.add(normalized);
+    }
+    if (!parsed.length || invalid >= 0) {
+      setBulkError(invalid >= 0 ? `Line ${invalid + 1}: add a code and name, and avoid duplicate codes.` : "Enter one Option / Class per line.");
+      return;
+    }
+    onChange([...definitions, ...parsed]);
+    setBulkText(""); setBulkError(""); setBulkOpen(false);
+  };
   return (
     <div className={styles.panel}>
-      {error && <p role="alert">{error}</p>}
-      {loaded && !rows.length ? (
-        <div>
-          <p>No options configured for this category.</p>
-          <button
-            type="button"
-            className="tt-button"
-            onClick={() => setAdding(true)}
-          >
-            Add Option
-          </button>
+      <p className={styles.muted}>Options / Classes belong to this Training Type. Existing records keep their Option IDs; removing a used option deactivates it.</p>
+      <div className={styles.toolbar}>
+        <MaterialsSearch value={search} placeholder="Search options / classes..." onChange={(event) => setSearch(event.target.value)} />
+        <div className={styles.actions}>
+          <button type="button" className="tt-button" onClick={() => onChange([...definitions, { name: "", code: "", is_active: true, sort_order: definitions.length }])}>+ Add Option</button>
+          <button type="button" className="tt-button" onClick={() => setBulkOpen(true)}>Add Multiple</button>
         </div>
-      ) : (
-        <PeoplePicker
-          organisation={organisation}
-          area="training_options"
-          filters={{ category_id: category }}
-          label="Add Option / Class"
-          selected=""
-          onChange={(id) => {
-            if (id && !selected.includes(id)) onChange([...selected, id]);
-          }}
-        />
-      )}
-      {selected.map((id) => (
-        <div key={id} className={styles.toolbar}>
-          <span>
-            {String(
-              rows.find((row) => row.id === id)?.name ?? "Configured class",
-            )}
-          </span>
-          <button
-            type="button"
-            className="tt-button"
-            onClick={() => onChange(selected.filter((item) => item !== id))}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
-      <small>Leave the selection empty when no class is required.</small>
-      {adding && (
-        <Editor
-          surface="small"
-          heading="Add Option / Class"
-          description="Add an option to the selected training category."
-          saveLabel="Add Option"
-          organisation={organisation}
-          initial={{ is_active: true, sort_order: 0 }}
-          fields={[
-            { key: "name", label: "Option / Class", required: true },
-            { key: "code", label: "Code" },
-            { key: "description", label: "Description", type: "textarea" },
-            { key: "is_active", label: "Active", type: "checkbox" },
-          ]}
-          onCancel={() => setAdding(false)}
-          onSave={async (data) => {
-            const result = await responseData(
-              await fetch("/api/people", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  organisation,
-                  action: "training_option",
-                  data: { ...data, category_id: category },
-                }),
-              }),
-            );
-            const row = { ...data, id: result.id };
-            setRows([...rows, row]);
-            onChange([...selected, String(result.id)]);
-            setAdding(false);
-          }}
-        />
-      )}
+      </div>
+      <div className={styles.tableWrap}><table className={`${styles.table} ${styles.configurationTable}`}>
+        <thead><tr><th>Code</th><th>Name</th><th>Active</th><th aria-label="Actions" /></tr></thead>
+        <tbody>{visible.map((option) => {
+          const index = definitions.indexOf(option);
+          return <tr key={String(option.id ?? `new-${index}`)}>
+            <td><input className="tt-input" aria-label={`Option ${index + 1} code`} value={String(option.code ?? "")} onChange={(event) => onChange(definitions.map((row, i) => i === index ? { ...row, code: event.target.value } : row))} /></td>
+            <td><input className="tt-input" aria-label={`Option ${index + 1} name`} value={String(option.name ?? "")} onChange={(event) => onChange(definitions.map((row, i) => i === index ? { ...row, name: event.target.value } : row))} /></td>
+            <td><label><input type="checkbox" checked={option.is_active !== false} onChange={(event) => onChange(definitions.map((row, i) => i === index ? { ...row, is_active: event.target.checked } : row))} /> Active</label></td>
+            <td><button type="button" className={styles.configurationRowAction} onClick={() => onChange(definitions.filter((_, i) => i !== index))}>Remove</button></td>
+          </tr>;
+        })}</tbody>
+      </table></div>
+      {!definitions.length && <p>No Options / Classes configured for this Training Type.</p>}
+      {bulkOpen && <div className={styles.panel} role="group" aria-label="Add multiple options">
+        <label className={styles.field}>Paste one code and name per line<textarea className="tt-input" rows={8} placeholder={'DG | Dogging\nLF | Forklift Truck'} value={bulkText} onChange={(event) => setBulkText(event.target.value)} /></label>
+        <p className={styles.muted}>Use CODE | Name or CODE, Name. All lines are validated before they are added.</p>
+        {bulkError && <p role="alert">{bulkError}</p>}
+        <div className={styles.actions}><button type="button" className="tt-button-primary" onClick={addBulk}>Add Options</button><button type="button" className="tt-button" onClick={() => { setBulkOpen(false); setBulkError(""); }}>Cancel</button></div>
+      </div>}
     </div>
   );
 }

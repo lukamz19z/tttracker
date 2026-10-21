@@ -40,3 +40,8 @@ Seven root migrations (20261005090000 through 20261005150000) applied to V2 Dev.
 - Root verification: `people_operations.test.mjs`, `people_onboarding.test.mjs`, `people_workflow_ui.test.mjs`, `people_ui.test.mjs`.
 
 All paths above are under `v2/` except the explicitly identified root migrations/verification. Earlier working-tree changes to auth, Materials, navigation, KMS and access management were preserved.
+
+
+## Profile photos and onboarding
+
+The canonical Person can have a current headshot without a login. Overview, Employee Register and linked-user Account avatars reuse the same permission-protected image. Templates may explicitly add the generic Profile Photo field as required or optional; existing templates remain unchanged. External uploads use canonical SharePoint onboarding documents, with durable publication into the final Person destination. See [Person profile photos](person-profile-photos.md) for capabilities, retention, staging, retries and deployment status.

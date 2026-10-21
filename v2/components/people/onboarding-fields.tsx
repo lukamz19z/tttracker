@@ -1,6 +1,7 @@
 "use client";
+import Image from "next/image";
 import { PeopleDateInput } from "./people-ui";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, LockKeyhole, Upload } from "lucide-react";
 import {
   fieldApplies,
@@ -64,8 +65,8 @@ export function OnboardingFields({
             setError("");
             try {
               for (const file of files) await onUpload(field.key, side, file);
-            } catch {
-              setError("Upload failed. Check the file and retry.");
+            } catch (error) {
+              setError(error instanceof Error ? error.message : "SharePoint is unavailable. The document was not uploaded; try again.");
             } finally {
               setBusy("");
             }
@@ -74,6 +75,7 @@ export function OnboardingFields({
         <small>Choose a file or take a photo using your device.</small>
       </label>
     );
+    if (field.type === "profile_photo") return <OnboardingPhotoField field={field} readOnly={readOnly} onUpload={onUpload ? file=>onUpload(field.key,"single",file) : undefined} onRemove={onChange ? ()=>onChange(field.key,null) : undefined} onDocuments={()=>onDocuments?.(field.key)} />;
     if (field.type === "document_upload")
       return (
         <>
@@ -308,7 +310,7 @@ export function OnboardingFields({
                 {f.label}
                 {f.required ? " *" : ""}
               </strong>
-              {f.help && <small>{f.help}</small>}
+              {f.help && f.type !== "profile_photo" && <small>{f.help}</small>}
               {f.classification === "private" && (
                 <small>
                   Private information · only authorised organisation personnel
@@ -341,4 +343,19 @@ export function OnboardingFields({
       </div>
     </div>
   );
+}
+
+function OnboardingPhotoField({field,readOnly,onUpload,onRemove,onDocuments}:{field:OnboardingField;readOnly:boolean;onUpload?:(file:File)=>Promise<void>;onRemove?:()=>void;onDocuments:()=>void}) {
+ const [file,setFile]=useState<File|null>(null),[preview,setPreview]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+ useEffect(()=>{if(!file){setPreview("");return;}const url=URL.createObjectURL(file);setPreview(url);return()=>URL.revokeObjectURL(url);},[file]);
+ const input=(camera:boolean)=><PhotoPicker camera={camera} label={camera?"Take Photo":file?"Change Photo":"Choose Photo"} disabled={readOnly||busy} onFile={next=>{setError("");if(!["image/jpeg","image/png"].includes(next.type)||next.size>10485760)setError("Choose a JPG, JPEG or PNG photo up to 10 MB.");else setFile(next);}}/>;
+ return <div><p>{field.help || "Upload a recent head-and-shoulders photo for employee identification and project onboarding within TTTracker."}</p><small>Face clearly visible. Good lighting. No screenshots of IDs. JPG/PNG up to 10 MB.</small>
+ {preview&&<div style={{marginBlock:12}}><Image unoptimized src={preview} width={112} height={112} style={{objectFit:"cover",borderRadius:10}} alt="Selected profile photo preview" /></div>}
+ {!readOnly&&<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>{input(true)}{input(false)}{file&&<button type="button" className="tt-button-primary" disabled={busy} onClick={async()=>{setBusy(true);setError("");try{await onUpload?.(file);setFile(null);}catch(e){setError(e instanceof Error?e.message:"Photo upload failed. Try again.");}finally{setBusy(false);}}}>{busy?"Uploading...":"Use Photo"}</button>}<button type="button" className="tt-button-subtle" disabled={busy} onClick={()=>{setFile(null);onRemove?.();}}>Remove</button></div>}
+ <button type="button" className="tt-button-subtle" onClick={onDocuments}>View uploaded photo</button>{error&&<p role="alert">{error}</p>}</div>;
+}
+
+function PhotoPicker({camera,label,disabled,onFile}:{camera:boolean;label:string;disabled:boolean;onFile:(file:File)=>void}) {
+ const input=useRef<HTMLInputElement>(null);
+ return <><button type="button" className="tt-button-secondary" disabled={disabled} onClick={()=>input.current?.click()}>{label}</button><input ref={input} aria-label={camera?"Take Profile Photo":"Choose Profile Photo"} type="file" accept="image/jpeg,image/png" capture={camera?"user":undefined} disabled={disabled} hidden onChange={e=>{const file=e.target.files?.[0];if(file)onFile(file);e.target.value="";}}/></>;
 }

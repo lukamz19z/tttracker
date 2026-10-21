@@ -115,6 +115,7 @@ function harness(file, exportName, initialProps) {
       if (name === "react") return react;
       if (name === "react-dom") return { createPortal: (content) => content };
       if (name === "react/jsx-runtime") return jsx;
+      if (name === "next/image") return { default: "img" };
       if (name === "next/link") return { default: "a" };
       if (name === "lucide-react")
         return new Proxy({}, { get: (_, key) => key });
@@ -124,7 +125,10 @@ function harness(file, exportName, initialProps) {
         return { PeopleDateInput: "date-input", BackLink: "back-link" };
       if (name === "@/components/materials/workflow-controls")
         return { MaterialsSearch: "search" };
-      if (name.startsWith("@/")) return load("v2/" + name.slice(2) + ".ts");
+      if (name.startsWith("@/")) {
+        const base = "v2/" + name.slice(2);
+        return load(fs.existsSync(path.join(root, base + ".tsx")) ? base + ".tsx" : base + ".ts");
+      }
       if (name.startsWith("./")) {
         const base = path.posix.join(path.posix.dirname(file), name);
         return load(
@@ -575,33 +579,37 @@ test("Category and Option editors use small modal; save closes and refreshes reg
     }
   }
 });
-test("Training classes query only selected category, and remove never creates user access", async () => {
+test("Training Type option editor edits owned definitions without writing outside Save", async () => {
   const h = harness(
     "v2/components/people/training-editor-content.tsx",
     "TrainingClassSelection",
     {
       organisation: "org",
-      category: "selected-category",
-      selected: ["option"],
+      definitions: [{ id: "option", code: "DG", name: "Dogging", is_active: true }],
       onChange: () => {},
     },
   );
   try {
     await h.flush();
     h.render();
-    assert.ok(
-      h.requests.every(
-        (r) =>
-          r.url.includes("category_id=selected-category") &&
-          r.url.includes("organisation=org"),
-      ),
-    );
-    const picker = walk(h.render(), (n) => n.type.name === "PeoplePicker")[0];
-    assert.equal(picker.props.filters.category_id, "selected-category");
+    const tree = h.render();
+    assert.ok(walk(tree, (n) => n.type === "input").some((input) => input.props.value === "Dogging" || input.props.value === "DG"));
+    assert.match(text(tree), /Add Multiple/);
+    assert.match(text(tree), /belong to this Training Type/);
     assert.ok(!h.requests.some((r) => r.method === "POST"));
   } finally {
     h.cleanup();
   }
+});
+test("Training Type option editor remains dense with twenty configurable classes", () => {
+  const definitions = Array.from({ length: 20 }, (_, index) => ({ id: `option-${index}`, code: `C${index}`, name: `Class ${index}`, is_active: true }));
+  const h = harness("v2/components/people/training-editor-content.tsx", "TrainingClassSelection", { definitions, onChange: () => {} });
+  try {
+    const tree = h.render();
+    assert.equal(walk(tree, (node) => node.type === "tr").length, 21);
+    assert.match(text(tree), /Add Multiple/);
+    assert.ok(walk(tree, (node) => node.type === "input").some((input) => input.props.value === "C19"));
+  } finally { h.cleanup(); }
 });
 test("filename and folder preview are synthetic, filesystem-safe and separate from token help", () => {
   const h = harness(

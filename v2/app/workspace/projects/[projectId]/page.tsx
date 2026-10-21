@@ -7,6 +7,7 @@ import {
 
 import {
   Card,
+  ButtonLink,
   MetricCard,
   Page,
   PageHeader,
@@ -14,6 +15,7 @@ import {
   tt,
 } from "@/components/ui/tt-ui";
 import { requireProjectContext } from "@/lib/projects/project-context";
+import { ProjectDocuments } from "@/components/documents/document-list";
 import { getProjectDashboardData } from "@/lib/projects/dashboard";
 
 type Props = {
@@ -75,6 +77,12 @@ export default async function ProjectPage({
             : "Project overview"
         }
       />
+
+      {context.access.kind === "host" && context.workspace.permissions?.["integrations.xero.view"] && context.workspace.permissions?.["xero.projects.manage"] && (
+        <div><ButtonLink href={`/workspace/settings/integrations/xero?organisation=${context.workspace.organisation.organisationId}&project=${projectId}`}>Manage Xero Project Mapping</ButtonLink></div>
+      )}
+
+      {context.access.kind === "host" && context.access.permissions["projects.view"] && <ProjectDocuments organisation={context.dataOrganisationId} project={projectId} canUpload={!!context.access.permissions["projects.edit"]}/>}
 
       <div className={tt.metricGrid}>
         <MetricCard

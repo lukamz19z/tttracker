@@ -11,6 +11,7 @@ export const onboardingTypes = [
   "multi_select",
   "address",
   "document_upload",
+  "profile_photo",
   "training_request",
   "acknowledgement",
   "bank_account",

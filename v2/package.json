@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "worker:sharepoint": "node scripts/sharepoint-worker.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1146.0",
@@ -14,6 +15,7 @@
     "@supabase/supabase-js": "^2.57.4",
     "@vercel/oidc": "^4.0.0",
     "@vercel/oidc-aws-credentials-provider": "^3.3.11",
+    "jose": "^6.2.12",
     "lucide-react": "^0.468.0",
     "next": "16.1.6",
     "react": "19.2.3",

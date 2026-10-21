@@ -55,7 +55,11 @@ export const labels: Record<string, string> = {
   PEOPLE_DOCUMENT_RULE_AMBIGUOUS:
     "More than one document rule matches. Configure one rule for this category and relationship.",
   TRAINING_STORAGE_NOT_CONNECTED:
-    "The configured SharePoint storage is not connected. Change the rule to Internal or connect the integration.",
+    "TTTracker could not access the configured SharePoint destination. The existing Training record has not been changed.",
+  TRAINING_DOCUMENT_LINK_FAILED: "The evidence reached SharePoint, but its Training link could not be saved. Retry this submission to restore the link.",
+  TRAINING_SCHEMA_NOT_READY: "Training document storage needs a platform update before uploads can be saved. The existing record has not been changed.",
+  TRAINING_FILE_INVALID: "Choose a PDF, PNG or JPG file no larger than 10 MB.",
+  TRAINING_SUBMISSION_CONFLICT: "This submission was already saved with different details. Start a new Training submission.",
   PEOPLE_ONBOARDING_SEND_FAILED:
     "Onboarding was saved, but the email could not be sent. Use Resend to retry.",
   PEOPLE_RATE_LIMITED: "Wait 30 seconds before resending this onboarding link.",
@@ -78,12 +82,38 @@ export const labels: Record<string, string> = {
     "This submission has already been reviewed. Refresh to see its current state.",
   PEOPLE_RELATIONSHIP_INVALID:
     "The selected record is not available in this organisation.",
+  TRAINING_FILENAME_DEFAULT_UNAVAILABLE:
+    "Training default file naming could not be loaded.",
+  TRAINING_FILENAME_DEFAULT_NOT_CONFIGURED:
+    "Configure Training Document Storage before saving its default file name.",
+  TRAINING_FILENAME_DEFAULT_SAVE_FAILED:
+    "Training default file naming could not be saved.",
+  TRAINING_FILENAME_TEMPLATE_INVALID:
+    "Use supported Training fields and remove unsupported filename characters.",
+  TRAINING_TYPE_CONFIGURATION_LOAD_FAILED:
+    "Training Type settings could not be loaded.",
+  TRAINING_RECORD_STATUS_LOAD_FAILED:
+    "Training records could not be loaded. Refresh and try again.",
+  TRAINING_MATRIX_DISPLAY_SAVE_FAILED:
+    "Training Type matrix display could not be saved.",
+  TRAINING_OPTION_TYPE_MISMATCH:
+    "The selected Option / Class does not belong to this Training Type.",
+  TRAINING_OPTION_SEPARATE_EVIDENCE_REQUIRED:
+    "This Training Type requires separate evidence. Submit one Option / Class at a time.",
+  TRAINING_OPTIONS_LOAD_FAILED:
+    "Options / Classes could not be loaded.",
+  TRAINING_APPROVED_MATERIAL_EDIT_REQUIRES_REPLACEMENT:
+    "Use Add Replacement to change issue date, expiry, or Option / Class on an approved record.",
+  TRAINING_VOID_REASON_REQUIRED:
+    "Enter a reason before removing this Training record.",
+  TRAINING_EXPIRY_INVALID:
+    "Expiry date cannot be earlier than the issue date.",
 };
 export async function responseData(response: Response): Promise<Result> {
   const result: Result & { error?: string } = await response.json();
   if (!response.ok)
     throw new Error(
-      labels[result.error ?? ""] ??
+      labels[result.error ?? ""] ?? (typeof result.message === "string" ? result.message : undefined) ??
         "Unable to complete this action. Check the details and try again.",
     );
   return result;
@@ -285,12 +315,14 @@ export function Editor({
     ),
   ].sort((a, b) => {
     const order = [
-      "Basic",
-      "Category",
+      "Basic Details",
       "Validity",
+      "Options / Classes",
       "Evidence",
       "Review",
-      "File Rules",
+      "Superseding",
+      "File Naming",
+      "Advanced",
     ];
     return order.includes(a) && order.includes(b)
       ? order.indexOf(a) - order.indexOf(b)
@@ -394,7 +426,7 @@ export function Editor({
             (field) =>
               (!field.group || field.group === selectedGroup) && visible(field),
           )
-          .map((field) => (
+          .map((field) => field.type === "custom" ? null : (
             <div key={field.key} className={styles.field}>
               {field.area ? (
                 <PeoplePicker

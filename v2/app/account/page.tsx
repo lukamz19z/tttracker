@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import WorkspaceFrame from "@/components/workspace/workspace-frame";
+import { PersonPhotoPanel } from "@/components/people/person-photo-panel";
 import AccountClient from "./account-client";
 import MfaPanel from "./mfa-panel";
 import { createSupabaseServer } from "@/lib/supabase/server";
@@ -40,6 +41,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
 
         <p style={{ color: "#94a3b8" }}>Personal account</p>
         <div style={{ display: "grid", gap: 20 }}>
+          {organisationId && <PersonPhotoPanel organisation={organisationId} name={email.split("@")[0]} />}
           <AccountClient email={email} />
           <MfaPanel />
         </div>

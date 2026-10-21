@@ -28,6 +28,7 @@ export default async function PlatformLayout({
             ["", "Overview"],
             ["organisations", "Organisations"],
             ["plans", "Plans & Modules"],
+            ["integrations", "Integrations"],
             ["invitations", "Invitations"],
             ["users", "Platform Users"],
           ].map(([route, label]) => (

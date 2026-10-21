@@ -23,5 +23,5 @@ export async function GET(request:NextRequest){
     await integrationAudit(org,id,context.userId,"oauth_authorised");result="select_tenant";
   }catch{}
   const url=new URL("/workspace/settings/integrations/xero",request.nextUrl.origin);if(/^[a-f0-9-]{36}$/.test(org))url.searchParams.set("organisation",org);url.searchParams.set("result",result);
-  const response=NextResponse.redirect(url);response.cookies.set("tt-xero-state","",{httpOnly:true,secure:true,sameSite:"lax",maxAge:0,path:"/api/integrations/xero/callback"});return response;
+  const response=NextResponse.redirect(url);response.cookies.set("tt-xero-state","",{httpOnly:true,secure:request.nextUrl.protocol==="https:",sameSite:"lax",maxAge:0,path:"/api/integrations/xero/callback"});return response;
 }

@@ -1,0 +1,6 @@
+"use client";
+const labels:Record<string,string>={setupClientId:"Setup Client ID",expectedTenantId:"Expected Tenant ID",returnedTenantId:"Returned Tenant ID (signature-verified only when marked Valid)",tenantMatch:"Tenant Match",signature:"ID Token Signature",issuer:"Issuer",audience:"Audience / Setup Client",nonce:"Nonce",pkce:"PKCE",adminConsent:"Delegated Admin Consent",delegatedScope:"Sites.FullControl.All Delegated",servicePrincipal:"Setup Enterprise Application",administrator:"Microsoft Administrator Grant Capability",siteMembership:"Target Site Membership / Access",objectId:"Microsoft User Object ID Claim",accessTokenTenant:"Access Token Tenant Reference",accessTokenClient:"Access Token Client Reference"};
+export function MicrosoftSetupDiagnostics({diagnostics}:{diagnostics?:Record<string,string>}){
+ if(!diagnostics||!Object.keys(diagnostics).length)return null;
+ return <details><summary>Advanced Details</summary><dl>{Object.entries(labels).map(([key,label])=>diagnostics[key]&&<div key={key}><dt>{label}</dt><dd>{diagnostics[key]}</dd></div>)}</dl><p>Not checked means processing stopped before this check. Grant API success proves sufficient rights for this operation. A site access denial alone cannot distinguish missing membership from tenant policy restrictions. Opaque Graph tokens are validated by Microsoft Graph.</p></details>;
+}

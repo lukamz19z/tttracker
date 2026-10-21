@@ -1,5 +1,7 @@
 "use client";
 
+import { PersonAvatar } from "@/components/people/person-avatar";
+import type { PersonPhoto } from "@/lib/people/profile-photo";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -31,6 +33,13 @@ export default function AppShell({
   contextKind = "organisation",
   platformAdmin = false,
 }: Props) {
+  const [photo, setPhoto] = useState<PersonPhoto | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = () => { void fetch(`/api/people/profile-photo?organisation=${encodeURIComponent(organisation.organisationId)}`, {cache:"no-store"}).then(r=>r.ok?r.json():null).then(p=>{if(active)setPhoto(p);}).catch(()=>{if(active)setPhoto(null);}); };
+    load(); window.addEventListener("person-photo-changed",load);
+    return () => { active=false;window.removeEventListener("person-photo-changed",load); };
+  },[organisation.organisationId]);
   const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
@@ -127,7 +136,7 @@ export default function AppShell({
         </nav>
         <details className={styles.accountMenu}>
           <summary>
-            Account <ChevronDown size={14} />
+            <PersonAvatar organisation={organisation.organisationId} personId={photo?.person_id} name={photo?.name??email.split("@")[0]} documentId={photo?.document_id} size={28} decorative /> Account <ChevronDown size={14} />
           </summary>
           <div className={styles.switcherPanel}>
             <small>{email}</small>
@@ -136,6 +145,7 @@ export default function AppShell({
             >
               Personal account
             </Link>
+            {photo?.can_manage && <Link href={`/account?organisation=${encodeURIComponent(organisation.organisationId)}&section=profile_photo`}>Change Profile Photo</Link>}
             {platformAdmin && (
               <Link href="/platform-admin">Platform Admin</Link>
             )}

@@ -1,3 +1,4 @@
+import { requireIntegrationEntitlement } from "@/lib/integrations/entitlements";
 import {NextRequest,NextResponse} from "next/server";
 import {requireWorkspacePermission} from "@/lib/workspace/context";
 import {requireProjectContext} from "@/lib/projects/project-context";
@@ -15,6 +16,7 @@ export async function GET(request:NextRequest){
     const ids=(dockets.data??[]).map(d=>d.id);if(!ids.length)return NextResponse.json({rows:[],page,total:dockets.count??0});
     const labour=await admin.from("v2_docket_labour").select("id,docket_id,person_id,worker_name,raw_hours,production_hours").in("docket_id",ids).limit(500);
     if(labour.error || labour.data?.length===500)throw new Error("INTEGRATION_PREFLIGHT_LIMIT");
+    await requireIntegrationEntitlement(org,"xero",true);
     const connection=await loadIntegration(org,"xero");
     const mappings=connection?.tenant_id?await admin.from("v2_xero_person_mappings").select("person_id,xero_employee_id").eq("organisation_id",org).eq("integration_id",connection.id).eq("xero_tenant_id",connection.tenant_id).in("person_id",(labour.data??[]).map(l=>l.person_id).filter(Boolean)):{data:[]};
     const rows=(labour.data??[]).map(l=>{const docket=dockets.data!.find(d=>d.id===l.docket_id)!;return {...timesheetPreflight([{personId:l.person_id??"",date:docket.docket_date,rawHours:Number(l.raw_hours),approved:docket.approval_status==="approved",employeeId:mappings.data?.find(m=>m.person_id===l.person_id)?.xero_employee_id}])[0],sourceId:l.id,docketId:l.docket_id,name:l.worker_name,productionHours:Number(l.production_hours)};});

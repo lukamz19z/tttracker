@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import InvitationManager from "./invitation-manager";
 import { requirePlatformPage } from "@/lib/platform/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { subscriptionWorkspace } from "@/lib/platform/subscription";
+import { PlatformSubscription } from "@/components/integrations/platform-subscription";
 
 type Props = {
   params: Promise<{
@@ -23,6 +25,7 @@ export default async function OrganisationDetailPage({ params }: Props) {
   const authority = await requirePlatformPage();
   const { organisationId } = await params;
   const supabase = createSupabaseAdmin();
+  const subscriptionData = await subscriptionWorkspace(organisationId);
 
   const { data: organisation } = await supabase
     .from("organisations")
@@ -233,25 +236,10 @@ export default async function OrganisationDetailPage({ params }: Props) {
           roles={roleOptions}
           invitations={invitationRows}
         />
-
-        <section className="tt-card" style={{ padding: 20, marginBottom: 20 }}>
-          <h2 style={{ marginTop: 0 }}>Subscription</h2>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-              gap: 14,
-            }}
-          >
-            <Metric label="Plan" value={planRow?.name ?? "None"} />
-            <Metric label="Version" value={versionRow?.version ?? "-"} />
-            <Metric label="Status" value={subscription?.status ?? "-"} />
-          </div>
-        </section>
+        <PlatformSubscription data={subscriptionData} canManage={authority.role !== "support"} />
 
         <section className="tt-card" style={{ padding: 20 }}>
-          <h2 style={{ marginTop: 0 }}>Feature overrides</h2>
+          <h2 style={{ marginTop: 0 }}>Other feature overrides</h2>
 
           {!overrides?.length ? (
             <div style={{ color: "#94a3b8" }}>No overrides.</div>
@@ -259,6 +247,7 @@ export default async function OrganisationDetailPage({ params }: Props) {
             <div>
               {overrides.map((override) => {
                 const feature = firstRelation(override.v2_features);
+                if (["sharepoint","xero"].includes(feature?.feature_key ?? "")) return null;
 
                 return (
                   <div

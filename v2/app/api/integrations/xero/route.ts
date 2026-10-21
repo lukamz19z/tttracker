@@ -11,14 +11,14 @@ export async function GET(request:NextRequest){
     const settings=await admin.from("v2_xero_settings").select("features,granted_scopes,payroll_region,last_refreshed_at,export_policy").eq("organisation_id",org).eq("integration_id",connection?.id??"00000000-0000-0000-0000-000000000000").maybeSingle();
     const pending=await admin.from("v2_xero_pending_tenants").select("candidates").eq("organisation_id",org).eq("actor_id",context.userId).gt("expires_at",new Date().toISOString()).maybeSingle();
     let configured=false;try{xeroConfig();configured=true;}catch{}
-    const ready=context.permissions?.["integrations.xero.manage"]?await integrationCredentialReady():false;
+    const ready=configured?await integrationCredentialReady():false; // Platform readiness is independent of tenant management permission.
     return NextResponse.json({connection,settings:settings.data,candidates:pending.data?.candidates??[],configured,credentialReady:ready},{headers:{"Cache-Control":"no-store"}});
   }catch(error){return NextResponse.json(integrationError(error),{status:403});}
 }
 export async function POST(request:NextRequest){
   try{
     if(request.headers.get("origin")!==request.nextUrl.origin)throw new Error("INTEGRATION_ACCESS_DENIED");
-    const body=await request.json();const {org,admin,context}=await integrationContext(body.organisation,"xero","manage");
+    const body=await request.json();const search=body.action==="search_employees"||body.action==="search_projects";const {org,admin,context}=await integrationContext(body.organisation,"xero",search?"view":"manage");
     const action=String(body.action);let connection=await loadIntegration(org,"xero");
     if(action==="connect"){
       const config=xeroConfig();if(!await integrationCredentialReady())throw new Error("INTEGRATION_CREDENTIAL_STORAGE_UNAVAILABLE");
@@ -32,7 +32,8 @@ export async function POST(request:NextRequest){
       // Only implemented read/mapping features are selectable. Financial writes stay disabled.
       const setting=await admin.from("v2_xero_settings").upsert({organisation_id:org,integration_id:connection.id,features,payroll_region:body.payroll_region??null});if(setting.error)throw new Error("INTEGRATION_ACTION_FAILED");
       const params=new URLSearchParams({response_type:"code",client_id:config.clientId,redirect_uri:config.redirectUri,scope:scopes.join(" "),state});
-      const response=NextResponse.json({url:`https://login.xero.com/identity/connect/authorize?${params}`});response.cookies.set("tt-xero-state",`${org}.${state}`,{httpOnly:true,secure:true,sameSite:"lax",maxAge:600,path:"/api/integrations/xero/callback"});return response;
+      await integrationAudit(org,connection.id,context.userId,connection.tenant_id?"reconnect_started":"connection_started");
+      const response=NextResponse.json({url:`https://login.xero.com/identity/connect/authorize?${params}`});response.cookies.set("tt-xero-state",`${org}.${state}`,{httpOnly:true,secure:config.redirectUri.startsWith("https:"),sameSite:"lax",maxAge:600,path:"/api/integrations/xero/callback"});return response;
     }
     if(!connection)throw new Error("INTEGRATION_SETUP_REQUIRED");
     if(action==="select_tenant"){
@@ -46,8 +47,8 @@ export async function POST(request:NextRequest){
       await integrationAudit(org,connection.id,context.userId,"tenant_selected");return NextResponse.json({ok:true});
     }
     if(action==="health"){
-      const access=await xeroAccessToken(org,connection.id,context.userId);const connections=await xeroConnections(access);if(!connections.some(t=>t.tenantId===connection.tenant_id))throw new Error("INTEGRATION_RECONNECT_REQUIRED");
-      const now=new Date().toISOString();await admin.from("v2_integrations").update({status:"connected",last_checked_at:now,last_success_at:now,error_category:null}).eq("organisation_id",org).eq("id",connection.id);await integrationAudit(org,connection.id,context.userId,"health_check");return NextResponse.json({ok:true});
+      const access=await xeroAccessToken(org,connection.id,context.userId,true);const connections=await xeroConnections(access);if(!connections.some(t=>t.tenantId===connection.tenant_id))throw new Error("INTEGRATION_RECONNECT_REQUIRED");
+      const now=new Date().toISOString();await admin.from("v2_integrations").update({entitlement_check_required:false,status:"connected",last_checked_at:now,last_success_at:now,error_category:null}).eq("organisation_id",org).eq("id",connection.id);await integrationAudit(org,connection.id,context.userId,"health_check");return NextResponse.json({ok:true});
     }
     if(action==="disconnect"){await disconnectXero(org,connection.id,context.userId);return NextResponse.json({ok:true});}
     if(action==="search_employees" || action==="search_projects"){
