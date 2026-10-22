@@ -170,7 +170,7 @@ function statusClass(status: string) {
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-export default function TowerHeader({ projectId, tower, latestDate, resolvedProgress }: Props) {
+export default function TowerHeader({ projectId, tower, resolvedProgress }: Props) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const towerId = tower.id;
 
@@ -182,7 +182,7 @@ export default function TowerHeader({ projectId, tower, latestDate, resolvedProg
   const [openDefects, setOpenDefects] = useState(0);
   const [deliveryProgress, setDeliveryProgress] = useState(0);
   const [progressError, setProgressError] = useState("");
-  const [lastDocketDate, setLastDocketDate] = useState<string | null>(latestDate || null);
+  const [lastDocketDate, setLastDocketDate] = useState<string | null>(resolvedProgress?.latestDocketDate ?? null);
 
   const towerLabel =
     tower.tower_number ||
@@ -339,7 +339,7 @@ export default function TowerHeader({ projectId, tower, latestDate, resolvedProg
       if (cancelled) return;
 
       setProgressError("");
-      setLastDocketDate(progress.latestDocketDate || latestDate || null);
+      setLastDocketDate(progress.latestDocketDate);
       setAssemblyProgress(progress.assemblyPercent);
       setErectionProgress(progress.erectionPercent);
       setOverallProgress(progress.totalProgressPercent);
@@ -357,7 +357,7 @@ export default function TowerHeader({ projectId, tower, latestDate, resolvedProg
     return () => {
       cancelled = true;
     };
-  }, [supabase, towerId, latestDate, tower.extra_data, resolvedProgress]);
+  }, [supabase, towerId, tower.extra_data, resolvedProgress]);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">

@@ -4,6 +4,7 @@
 
 import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
+import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import {
@@ -6317,6 +6318,11 @@ const deleteRes = await supabase
       return;
     }
 
+    if (isFutureDocketDate(docketDate)) {
+      alert("Daily Docket date cannot be in the future.");
+      return;
+    }
+
     if (!leadingHand.trim()) {
       alert("Please enter leading hand name");
       return;
@@ -6367,6 +6373,11 @@ const deleteRes = await supabase
 
     if (!docketDate) {
       alert("Please enter docket date");
+      return;
+    }
+
+    if (isFutureDocketDate(docketDate)) {
+      alert("Daily Docket date cannot be in the future.");
       return;
     }
 

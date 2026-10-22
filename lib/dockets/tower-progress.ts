@@ -1,3 +1,4 @@
+import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   calculateProgressTotals,
@@ -14,6 +15,7 @@ export type TowerProgressDocket = {
   assembly_percent?: number | null;
   erection_percent?: number | null;
   docket_date?: string | null;
+  approval_status?: string | null;
   progress_model?: string | null;
 };
 export type TowerProgressHistoryRow = {
@@ -132,8 +134,16 @@ export function inferTowerHasBodyExtension(tower: TowerRecord | null) {
   return true;
 }
 
-// Parent docket date defines activity chronology; a row timestamp breaks ties
-// within a day. An old docket edited later must not override a newer work date.
+// Changes-requested records retain their submitted operational progress.
+function isOperationalDocket(docket: TowerProgressDocket | undefined) {
+  if (!docket) return false;
+  return !docket.approval_status || [
+    "legacy", "submitted_bc", "client_pending", "final", "legacy_final",
+    "bc_changes_requested", "client_changes_requested",
+  ].includes(docket.approval_status);
+}
+
+// Current construction progress is monotonic per section/phase, not date-led.
 export function calculateTowerSectionProgress(
   towerId: string,
   history: TowerProgressHistoryRow[],
@@ -142,34 +152,31 @@ export function calculateTowerSectionProgress(
 ) {
   const docketById = new Map(dockets.map((docket) => [docket.id, docket]));
   const rows = history.filter((row) =>
-    row.tower_id === towerId &&
+    row.tower_id === towerId && isOperationalDocket(docketById.get(row.docket_id)) &&
     (row.progress_model || docketById.get(row.docket_id)?.progress_model) !== "legacy"
-  ).sort((a, b) => {
-    const dateOrder = (docketById.get(b.docket_id)?.docket_date || "")
-      .localeCompare(docketById.get(a.docket_id)?.docket_date || "");
-    return dateOrder || (b.created_at || "").localeCompare(a.created_at || "");
-  });
+  );
   let hasUsableProgress = false;
   const sectionV2Rows = SECTION_V2_DEFS.map(([section_code, section_label]) => {
     const sectionRows = rows.filter((row) =>
       String(row.section_code || row.section_label || "").trim().toUpperCase().replace(/\s+/g, "_") === section_code
     );
-    const latestValue = (phase: "assembly" | "erection") => {
+    const maximumValue = (phase: "assembly" | "erection") => {
       if (section_code === "BE" && !hasBodyExtension) return "";
+      let maximum: number | null = null;
       for (const row of sectionRows) {
         const value = phase === "assembly"
           ? row.assembly_overall ?? row.assembly_today ?? row.assembled_qty
           : row.erection_overall ?? row.erection_today ?? row.erected_qty;
         if (value == null || String(value).trim() === "" || !Number.isFinite(Number(value))) continue;
         hasUsableProgress = true;
-        return value;
+        maximum = Math.max(maximum ?? 0, Math.max(0, Math.min(100, Number(value))));
       }
-      return "";
+      return maximum ?? "";
     };
     return {
       section_code, section_label,
-      assembly_today: latestValue("assembly"),
-      erection_today: latestValue("erection"),
+      assembly_today: maximumValue("assembly"),
+      erection_today: maximumValue("erection"),
       assembly_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
       erection_weight: SECTION_PROGRESS_WEIGHTS[section_code] ?? 0,
     };
@@ -196,12 +203,13 @@ export function resolveTowerProgress(
   dockets: TowerProgressDocket[],
 ): ResolvedTowerProgress {
   const towerRows = history.filter((row) => row.tower_id === tower.id);
-  const primaryDockets = dockets.filter((docket) => docket.tower_id === tower.id);
+  const primaryDockets = dockets.filter((docket) => docket.tower_id === tower.id && isOperationalDocket(docket));
   const workedDocketIds = new Set(towerRows.map((row) => row.docket_id));
   const latestDocketDate = dockets
-    .filter((docket) => docket.tower_id === tower.id || workedDocketIds.has(docket.id))
+    .filter((docket) => isOperationalDocket(docket) &&
+      (docket.tower_id === tower.id || workedDocketIds.has(docket.id)))
     .map((docket) => docket.docket_date)
-    .filter((date): date is string => Boolean(date))
+    .filter((date): date is string => typeof date === "string" && date.length > 0 && !isFutureDocketDate(date))
     .sort().at(-1) || null;
   const sectionTotals = calculateTowerSectionProgress(
     tower.id, towerRows, dockets, inferTowerHasBodyExtension(tower),
@@ -286,10 +294,10 @@ export async function loadTowerProgressForTowers(
     }
   }
   const docketsById = new Map(primaryDockets.map((docket) => [docket.id, docket]));
-  const parentIds = [...new Set(history.map((row) => row.docket_id))];
+  const parentIds = [...new Set([...primaryDockets.map((docket) => docket.id), ...history.map((row) => row.docket_id)])];
   for (let start = 0; start < parentIds.length; start += 200) {
     const result = await supabase.from("tower_daily_dockets")
-      .select("id,tower_id,docket_date,progress_model,assembly_percent,erection_percent")
+      .select("id,tower_id,docket_date,approval_status,progress_model,assembly_percent,erection_percent")
       .in("id", parentIds.slice(start, start + 200));
     if (result.error) throw new Error(`Tower progress docket dates could not be loaded: ${result.error.message}`);
     for (const docket of (result.data || []) as TowerProgressDocket[]) docketsById.set(docket.id, docket);
