@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { getUserRole } from "@/lib/roles";
+import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Project = {
   id: string;
@@ -345,21 +346,6 @@ function naturalSortText(a: string, b: string) {
 
 function naturalTowerSort(a: Tower, b: Tower) {
   return naturalSortText(getTowerDisplayName(a), getTowerDisplayName(b));
-}
-
-function getTowerComputedProgress(tower: Tower, dockets: DocketRow[]) {
-  const related = dockets.filter((d) => d.tower_id === tower.id);
-
-  if (related.length > 0) {
-    return related.reduce((max, docket) => {
-      const assembly = Number(docket.assembly_percent || 0);
-      const erection = Number(docket.erection_percent || 0);
-      const weighted = Math.round(assembly * 0.5 + erection * 0.5);
-      return Math.max(max, weighted);
-    }, 0);
-  }
-
-  return safeNumber(tower.progress, 0);
 }
 
 function getDocketProgress(docket: DocketRow) {
@@ -824,6 +810,8 @@ export default function ProjectDashboard() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [towers, setTowers] = useState<Tower[]>([]);
+  const [resolvedProgress, setResolvedProgress] = useState(new Map<string, ResolvedTowerProgress>());
+  const [progressError, setProgressError] = useState("");
   const [dockets, setDockets] = useState<DocketRow[]>([]);
   const [labourRows, setLabourRows] = useState<LabourRow[]>([]);
   const [defects, setDefects] = useState<DefectRow[]>([]);
@@ -868,7 +856,7 @@ export default function ProjectDashboard() {
   const isAdmin = role === "admin";
 
   useEffect(() => {
-    void load();
+    void load().catch((error: unknown) => { console.error(error); setProgressError("Tower progress could not be loaded. Refresh to try again."); setLoading(false); });
     void loadRole();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -880,6 +868,7 @@ export default function ProjectDashboard() {
 
   async function load() {
     setLoading(true);
+    setProgressError("");
 
     const { data: projectData, error: projectError } = await supabase
       .from("projects")
@@ -902,7 +891,7 @@ export default function ProjectDashboard() {
 
     const { data: docketsData, error: docketsError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, tower_id, project_id, docket_date, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
+      .select("id, tower_id, project_id, docket_date, progress_model, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
       .eq("project_id", projectId);
 
     if (docketsError) console.error("dockets load error", docketsError);
@@ -1004,6 +993,7 @@ export default function ProjectDashboard() {
           : "",
       status: loadedProject?.status || "ongoing",
     });
+    setResolvedProgress(await loadTowerProgressForTowers(supabase, loadedTowers, loadedDockets));
     setTowers(loadedTowers);
     setDockets(loadedDockets);
     setLabourRows(loadedLabourRows);
@@ -1072,7 +1062,7 @@ export default function ProjectDashboard() {
 
   const towerProductionSummaries = useMemo<TowerProductionSummary[]>(() => {
     return [...towers].sort(naturalTowerSort).map((tower) => {
-      const computedProgress = getTowerComputedProgress(tower, dockets);
+      const computedProgress = resolvedProgress.get(tower.id)?.totalProgressPercent ?? 0;
       const computedWeight = getTowerWeightFromExtraData(tower.extra_data);
       const completedTonnes = computedWeight ? computedWeight * (computedProgress / 100) : null;
 
@@ -1085,6 +1075,7 @@ export default function ProjectDashboard() {
       return {
         ...tower,
         computedProgress,
+        status: resolvedProgress.get(tower.id)?.status ?? "Not Started",
         computedWeight,
         completedTonnes,
         manhours,
@@ -1093,7 +1084,7 @@ export default function ProjectDashboard() {
         productionMhPerTonne,
       };
     });
-  }, [towers, dockets, docketHoursById, docketProductionHoursById]);
+  }, [towers, dockets, docketHoursById, docketProductionHoursById, resolvedProgress]);
 
   const stats = useMemo<ProjectStats>(() => {
     const totalTowers = towers.length;
@@ -1824,10 +1815,10 @@ export default function ProjectDashboard() {
     if (!q) return sorted;
 
     return sorted.filter((tower) => {
-      const text = [getTowerDisplayName(tower), safeString(tower.line), safeString(tower.status)].join(" ").toLowerCase();
+      const text = [getTowerDisplayName(tower), safeString(tower.line), resolvedProgress.get(tower.id)?.status || "Not Started"].join(" ").toLowerCase();
       return text.includes(q);
     });
-  }, [towers, towerSearch]);
+  }, [towers, towerSearch, resolvedProgress]);
 
   function openAction(type: QuickActionType) {
     setActionType(type);
@@ -2068,6 +2059,7 @@ export default function ProjectDashboard() {
     return "";
   }
 
+  if (progressError) return <div className="p-8 text-red-700" role="alert">{progressError}</div>;
   if (loading) return <div className="p-8">Loading project dashboard...</div>;
 
   return (
@@ -2964,14 +2956,14 @@ export default function ProjectDashboard() {
               ) : (
                 <div className="space-y-3">
                   {filteredTowers.map((tower) => {
-                    const computedProgress = getTowerComputedProgress(tower, dockets);
+                    const computedProgress = resolvedProgress.get(tower.id)?.totalProgressPercent ?? 0;
                     return (
                       <button key={tower.id} onClick={() => goToTowerAction(tower.id)} className="w-full text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition">
                         <div className="flex items-center justify-between gap-4">
                           <div>
                             <div className="font-semibold text-slate-900">{getTowerDisplayName(tower)}</div>
                             <div className="text-sm text-slate-500 mt-1">
-                              {tower.line || "Line not set"} • {tower.status || "Status not set"}
+                              {tower.line || "Line not set"} • {resolvedProgress.get(tower.id)?.status || "Not Started"}
                             </div>
                           </div>
 

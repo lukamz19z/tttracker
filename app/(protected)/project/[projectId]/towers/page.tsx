@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { getUserRole } from "@/lib/roles";
+import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Tower = {
   id: string;
@@ -83,23 +84,6 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value));
 }
 
-function getTotalProgressFromDockets(
-  dockets: Array<{ assembly_percent?: number | null; erection_percent?: number | null }>
-) {
-  return dockets.reduce((max, docket) => {
-    const assembly = Number(docket.assembly_percent || 0);
-    const erection = Number(docket.erection_percent || 0);
-    const weighted = Math.round(assembly * 0.5 + erection * 0.5);
-    return Math.max(max, weighted);
-  }, 0);
-}
-
-function normalizeStatusFromProgress(progress: number): Exclude<StatusFilter, "All"> {
-  if (progress >= 100) return "Complete";
-  if (progress > 0) return "In Progress";
-  return "Not Started";
-}
-
 export default function TowersPage() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -107,7 +91,8 @@ export default function TowersPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [towers, setTowers] = useState<Tower[]>([]);
-  const [dockets, setDockets] = useState<DocketRow[]>([]);
+  const [resolvedProgress, setResolvedProgress] = useState(new Map<string, ResolvedTowerProgress>());
+  const [progressError, setProgressError] = useState("");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
@@ -140,12 +125,13 @@ export default function TowersPage() {
 
     async function run() {
       setLoading(true);
+      setProgressError("");
 
       const [towersRes, docketsRes] = await Promise.all([
         supabase.from("towers").select("*").eq("project_id", projectId),
         supabase
           .from("tower_daily_dockets")
-          .select("id, tower_id, assembly_percent, erection_percent")
+          .select("id, tower_id, docket_date, progress_model, assembly_percent, erection_percent")
           .eq("project_id", projectId),
       ]);
 
@@ -154,46 +140,33 @@ export default function TowersPage() {
       if (towersRes.error) {
         console.error(towersRes.error);
         setTowers([]);
-        setDockets([]);
+        setResolvedProgress(new Map());
         setLoading(false);
         return;
       }
 
-      if (docketsRes.error) {
-        console.error(docketsRes.error);
-      }
-
-      setTowers(sortTowersNaturally((towersRes.data as Tower[]) || []));
-      setDockets((docketsRes.data as DocketRow[]) || []);
+      if (docketsRes.error) throw new Error(`Tower dockets could not be loaded: ${docketsRes.error.message}`);
+      const loadedTowers = sortTowersNaturally((towersRes.data as Tower[]) || []);
+      const progress = await loadTowerProgressForTowers(supabase, loadedTowers, (docketsRes.data || []) as DocketRow[]);
+      if (cancelled) return;
+      setTowers(loadedTowers);
+      setResolvedProgress(progress);
       setLoading(false);
     }
 
-    run();
+    void run().catch((error: unknown) => {
+      console.error(error);
+      if (!cancelled) { setProgressError("Tower progress could not be loaded. Refresh to try again."); setLoading(false); }
+    });
 
     return () => {
       cancelled = true;
     };
   }, [projectId, supabase]);
 
-  const progressByTower = useMemo(() => {
-    const grouped: Record<string, DocketRow[]> = {};
-
-    dockets.forEach((docket) => {
-      const towerId = docket.tower_id;
-      if (!towerId) return;
-      if (!grouped[towerId]) grouped[towerId] = [];
-      grouped[towerId].push(docket);
-    });
-
-    const progressMap: Record<string, number> = {};
-
-    towers.forEach((tower) => {
-      const relatedDockets = grouped[tower.id] || [];
-      progressMap[tower.id] = getTotalProgressFromDockets(relatedDockets);
-    });
-
-    return progressMap;
-  }, [towers, dockets]);
+  const progressByTower = useMemo(() => Object.fromEntries(
+    [...resolvedProgress].map(([id, progress]) => [id, progress.totalProgressPercent]),
+  ), [resolvedProgress]);
 
   const summary = useMemo(() => {
     const total = towers.length;
@@ -223,7 +196,7 @@ export default function TowersPage() {
 
     return sortTowersNaturally(towers).filter((tower) => {
       const progress = progressByTower[tower.id] || 0;
-      const status = normalizeStatusFromProgress(progress);
+      const status = resolvedProgress.get(tower.id)?.status || "Not Started";
 
       if (statusFilter !== "All" && status !== statusFilter) {
         return false;
@@ -244,7 +217,7 @@ export default function TowersPage() {
         value.toLowerCase().includes(q)
       );
     });
-  }, [towers, search, statusFilter, progressByTower]);
+  }, [towers, search, statusFilter, progressByTower, resolvedProgress]);
 
   async function handleDeleteTower(tower: Tower) {
     const label = getTowerLabel(tower);
@@ -265,7 +238,7 @@ export default function TowersPage() {
       }
 
       setTowers((prev) => prev.filter((t) => t.id !== tower.id));
-      setDockets((prev) => prev.filter((d) => d.tower_id !== tower.id));
+      setResolvedProgress((prev) => { const next = new Map(prev); next.delete(tower.id); return next; });
     } catch (error) {
       console.error(error);
       alert(error instanceof Error ? error.message : "Failed to delete tower.");
@@ -273,6 +246,8 @@ export default function TowersPage() {
       setDeletingId(null);
     }
   }
+
+  if (progressError) return <div className="p-8 text-red-700" role="alert">{progressError}</div>;
 
   if (loading) {
     return <div className="p-8">Loading towers...</div>;
@@ -413,7 +388,7 @@ export default function TowersPage() {
               <tbody>
                 {filtered.map((tower) => {
                   const progress = progressByTower[tower.id] || 0;
-                  const status = normalizeStatusFromProgress(progress);
+                  const status = resolvedProgress.get(tower.id)?.status || "Not Started";
                   const label = getTowerLabel(tower);
 
                   return (

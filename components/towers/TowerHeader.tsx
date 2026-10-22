@@ -3,12 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import {
-  calculateTowerSectionProgress,
-  inferTowerHasBodyExtension,
-  type TowerProgressHistoryRow,
-  type TowerProgressDocket,
-} from "@/lib/dockets/tower-progress";
+import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Tower = {
   id: string;
@@ -27,10 +22,12 @@ type Props = {
   projectId: string;
   tower: Tower;
   latestDate?: string | null;
+  resolvedProgress?: ResolvedTowerProgress;
 };
 
 type DocketRow = {
   id: string;
+  tower_id?: string | null;
   docket_date?: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
@@ -173,11 +170,7 @@ function statusClass(status: string) {
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-function calcOverall(assembly: number, erection: number) {
-  return Math.round(assembly * 0.5 + erection * 0.5);
-}
-
-export default function TowerHeader({ projectId, tower, latestDate }: Props) {
+export default function TowerHeader({ projectId, tower, latestDate, resolvedProgress }: Props) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const towerId = tower.id;
 
@@ -229,34 +222,16 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
     ? supabase.storage.from("tower-photos").getPublicUrl(tower.cover_photo_path).data.publicUrl
     : null;
 
-  const hasBodyExtension = inferTowerHasBodyExtension(tower);
-
   useEffect(() => {
     if (!towerId) return;
 
     let cancelled = false;
 
-    async function loadProgressHistory() {
-      const rows: TowerProgressHistoryRow[] = [];
-      // Select all includes created_at when available without requiring a schema
-      // change on older V1 tables. Parent docket dates provide the primary order.
-      for (let offset = 0; ; offset += 1000) {
-        const result = await supabase.from("tower_docket_progress")
-          .select("*").eq("tower_id", towerId)
-          .order("docket_id").order("section_code")
-          .range(offset, offset + 999);
-        if (result.error) throw new Error(`Tower progress history could not be loaded: ${result.error.message}`);
-        const page = (result.data || []) as TowerProgressHistoryRow[];
-        rows.push(...page);
-        if (page.length < 1000 || cancelled) return rows;
-      }
-    }
-
     async function loadHeaderData() {
-      const [docketsRes, defectsRes, requiredBundlesRes, deliveriesRes, progressRows] = await Promise.all([
+      const [docketsRes, defectsRes, requiredBundlesRes, deliveriesRes] = await Promise.all([
         supabase
           .from("tower_daily_dockets")
-          .select("id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours")
+          .select("id,tower_id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours")
           .eq("tower_id", towerId)
           .order("docket_date", { ascending: false }),
 
@@ -268,57 +243,16 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
           .eq("tower_id", towerId),
 
         supabase.from("tower_bundle_deliveries").select("id").eq("tower_id", towerId),
-        loadProgressHistory(),
       ]);
 
       if (cancelled) return;
 
       const dockets = (docketsRes.data || []) as DocketRow[];
-      const parentDockets: TowerProgressDocket[] = [];
-      const progressDocketIds = [...new Set(progressRows.map((row) => row.docket_id))];
-      for (let offset = 0; offset < progressDocketIds.length; offset += 200) {
-        const result = await supabase.from("tower_daily_dockets")
-          .select("id,docket_date,progress_model")
-          .in("id", progressDocketIds.slice(offset, offset + 200));
-        if (result.error) throw new Error(`Tower progress docket dates could not be loaded: ${result.error.message}`);
-        parentDockets.push(...((result.data || []) as TowerProgressDocket[]));
-      }
+      const progress = resolvedProgress ?? (await loadTowerProgressForTowers(
+        supabase, [{ id: towerId, extra_data: tower.extra_data }], dockets,
+      )).get(towerId);
+      if (!progress) throw new Error("Tower progress could not be resolved.");
       if (cancelled) return;
-      const resolvedDocketIds = new Set(parentDockets.map((docket) => docket.id));
-      if (progressDocketIds.some((id) => !resolvedDocketIds.has(id))) {
-        throw new Error("A parent docket for this tower's progress is unavailable.");
-      }
-      const nextLastDocketDate = [...dockets, ...parentDockets]
-        .map((docket) => docket.docket_date)
-        .filter((date): date is string => Boolean(date))
-        .sort().at(-1) || latestDate || null;
-
-      let bestOverall = 0;
-      let bestAssembly = 0;
-      let bestErection = 0;
-
-      dockets.forEach((docket) => {
-        const assembly = safeNumber(docket.assembly_percent, 0);
-        const erection = safeNumber(docket.erection_percent, 0);
-        const overall = calcOverall(assembly, erection);
-
-        if (overall >= bestOverall) {
-          bestOverall = overall;
-          bestAssembly = Math.round(assembly);
-          bestErection = Math.round(erection);
-        }
-      });
-
-      // Section rows belong to their own tower, even when another tower owns
-      // the parent docket. Only use legacy docket percentages without usable V2 history.
-      const sectionTotals = calculateTowerSectionProgress(
-        towerId, progressRows, parentDockets, hasBodyExtension,
-      );
-      if (sectionTotals) {
-        bestAssembly = sectionTotals.assemblyPercent;
-        bestErection = sectionTotals.erectionPercent;
-        bestOverall = sectionTotals.totalProgressPercent;
-      }
 
       const docketRawTotal = dockets.reduce(
         (sum, docket) => sum + safeNumber(docket.raw_manhours, 0),
@@ -405,10 +339,10 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
       if (cancelled) return;
 
       setProgressError("");
-      setLastDocketDate(nextLastDocketDate);
-      setAssemblyProgress(bestAssembly);
-      setErectionProgress(bestErection);
-      setOverallProgress(bestOverall);
+      setLastDocketDate(progress.latestDocketDate || latestDate || null);
+      setAssemblyProgress(progress.assemblyPercent);
+      setErectionProgress(progress.erectionPercent);
+      setOverallProgress(progress.totalProgressPercent);
       setTotalHours(Math.round(nextTotalHours * 100) / 100);
       setProductionHours(Math.round(nextProductionHours * 100) / 100);
       setOpenDefects(nextOpenDefects);
@@ -423,7 +357,7 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [supabase, towerId, latestDate, hasBodyExtension]);
+  }, [supabase, towerId, latestDate, tower.extra_data, resolvedProgress]);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">

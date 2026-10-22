@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
+import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Tower = {
   id: string;
@@ -265,17 +266,6 @@ function getDocketProgress(docket: DocketRow) {
   return clampPercent(Math.round(assembly * 0.5 + erection * 0.5));
 }
 
-function getProgressFromLiveDockets(dockets: DocketRow[]) {
-  if (dockets.length === 0) return 0;
-  return dockets.reduce((max, docket) => Math.max(max, getDocketProgress(docket)), 0);
-}
-
-function getStatusFromProgress(progress: number) {
-  if (progress >= 100) return "Complete";
-  if (progress > 0) return "In Progress";
-  return "Not Started";
-}
-
 function isOpenDefect(defect: DefectRow) {
   const status = safeString(defect.status).trim().toLowerCase();
   return status !== "closed" && status !== "complete" && status !== "completed";
@@ -464,6 +454,8 @@ export default function TowerOverviewPage() {
   const towerId = params.towerId as string;
   const supabase = createSupabaseBrowser();
 
+  const [resolvedProgress, setResolvedProgress] = useState<ResolvedTowerProgress | null>(null);
+  const [progressError, setProgressError] = useState("");
   const [tower, setTower] = useState<Tower | null>(null);
   const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
   const [dockets, setDockets] = useState<DocketRow[]>([]);
@@ -495,12 +487,13 @@ export default function TowerOverviewPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    void load();
+    void load().catch((error: unknown) => { console.error(error); setProgressError("Tower progress could not be loaded. Refresh to try again."); setLoading(false); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [towerId]);
 
   async function load() {
     setLoading(true);
+    setProgressError("");
 
     const towerRes = await supabase.from("towers").select("*").eq("id", towerId).single();
     const towerData = (towerRes.data as Tower | null) ?? null;
@@ -516,7 +509,7 @@ export default function TowerOverviewPage() {
     const docketData = await safeSelect<DocketRow>(
       supabase,
       "tower_daily_dockets",
-      "id, docket_date, crew, leading_hand, assembly_percent, erection_percent, raw_manhours, production_manhours, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours, client_rep_name, signed_date",
+      "id, tower_id, docket_date, progress_model, crew, leading_hand, assembly_percent, erection_percent, raw_manhours, production_manhours, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours, client_rep_name, signed_date",
       [{ column: "tower_id", value: towerId }],
     );
     docketData.sort((a, b) => {
@@ -525,6 +518,10 @@ export default function TowerOverviewPage() {
       return bDate - aDate;
     });
     setDockets(docketData);
+    if (towerData) {
+      const progress = await loadTowerProgressForTowers(supabase, [towerData], docketData);
+      setResolvedProgress(progress.get(towerId) || null);
+    }
 
     const docketIds = docketData.map((docket) => docket.id).filter(Boolean);
 
@@ -729,9 +726,9 @@ export default function TowerOverviewPage() {
   }, [bundles, materialBundles, deliveries, deliveryItems]);
 
   const stats = useMemo(() => {
-    const computedProgress = getProgressFromLiveDockets(dockets);
-    const computedStatus = getStatusFromProgress(computedProgress);
-    const latestDate = dockets[0]?.docket_date ?? null;
+    const computedProgress = resolvedProgress?.totalProgressPercent ?? 0;
+    const computedStatus = resolvedProgress?.status ?? "Not Started";
+    const latestDate = resolvedProgress?.latestDocketDate ?? null;
 
     const docketRawTotal = dockets.reduce((sum, docket) => sum + safeNumber(docket.raw_manhours, 0), 0);
     const docketProductionTotal = dockets.reduce((sum, docket) => sum + safeNumber(docket.production_manhours, 0), 0);
@@ -803,7 +800,7 @@ export default function TowerOverviewPage() {
       plantHours: plantRows.reduce((sum, row) => sum + safeNumber(row.total_hours, 0), 0),
       plantItemCount: plantRows.filter((row) => row.plant_name || row.asset_number || row.plant_type).length,
     };
-  }, [dockets, labourRows, delayRows, plantRows, defects, modifications, documents, tower?.extra_data, materialMembers.length, materialBundles.length]);
+  }, [dockets, labourRows, delayRows, plantRows, defects, modifications, documents, tower?.extra_data, materialMembers.length, materialBundles.length, resolvedProgress]);
 
   const itcCompletionPercent = useMemo(() => {
     if (!itcMetrics.hasItc) return 0;
@@ -922,6 +919,7 @@ export default function TowerOverviewPage() {
     return Object.entries(extra).sort(([a], [b]) => a.localeCompare(b));
   }, [tower?.extra_data]);
 
+  if (progressError) return <div className="p-8 text-red-700" role="alert">{progressError}</div>;
   if (loading || !tower) return <div className="p-8">Loading tower overview...</div>;
 
   const towerForHeader = {
@@ -930,11 +928,10 @@ export default function TowerOverviewPage() {
     status: stats.computedStatus,
   };
 
-  const latestDocket = dockets[0] ?? null;
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 lg:p-8 space-y-6">
-      <TowerHeader projectId={projectId} tower={towerForHeader} latestDate={stats.latestDate} />
+      <TowerHeader projectId={projectId} tower={towerForHeader} latestDate={stats.latestDate} resolvedProgress={resolvedProgress ?? undefined} />
 
       <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-5 text-white md:px-6">

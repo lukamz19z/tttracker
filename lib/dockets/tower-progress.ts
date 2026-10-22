@@ -1,12 +1,18 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   calculateProgressTotals,
+  buildTowerProgressStatus,
   SECTION_V2_DEFS,
   SECTION_PROGRESS_WEIGHTS,
 } from "@/lib/dockets/calculations";
 
-type TowerRecord = { extra_data?: Record<string, unknown> | null };
+export type TowerProgressTower = { id: string; extra_data?: Record<string, unknown> | null };
+type TowerRecord = Pick<TowerProgressTower, "extra_data">;
 export type TowerProgressDocket = {
   id: string;
+  tower_id?: string | null;
+  assembly_percent?: number | null;
+  erection_percent?: number | null;
   docket_date?: string | null;
   progress_model?: string | null;
 };
@@ -172,4 +178,122 @@ export function calculateTowerSectionProgress(
   return calculateProgressTotals({
     progressModel: "section_v2", sectionV2Rows, legacyRows: [], hasBodyExtension,
   });
+}
+
+export type ResolvedTowerProgress = {
+  assemblyPercent: number;
+  erectionPercent: number;
+  totalProgressPercent: number;
+  status: ReturnType<typeof buildTowerProgressStatus>;
+  latestDocketDate: string | null;
+  source: "section_v2" | "legacy";
+};
+
+/** Resolve current construction progress, not daily production or manhour allocation. */
+export function resolveTowerProgress(
+  tower: TowerProgressTower,
+  history: TowerProgressHistoryRow[],
+  dockets: TowerProgressDocket[],
+): ResolvedTowerProgress {
+  const towerRows = history.filter((row) => row.tower_id === tower.id);
+  const primaryDockets = dockets.filter((docket) => docket.tower_id === tower.id);
+  const workedDocketIds = new Set(towerRows.map((row) => row.docket_id));
+  const latestDocketDate = dockets
+    .filter((docket) => docket.tower_id === tower.id || workedDocketIds.has(docket.id))
+    .map((docket) => docket.docket_date)
+    .filter((date): date is string => Boolean(date))
+    .sort().at(-1) || null;
+  const sectionTotals = calculateTowerSectionProgress(
+    tower.id, towerRows, dockets, inferTowerHasBodyExtension(tower),
+  );
+  if (sectionTotals) return {
+    assemblyPercent: sectionTotals.assemblyPercent,
+    erectionPercent: sectionTotals.erectionPercent,
+    totalProgressPercent: sectionTotals.totalProgressPercent,
+    status: buildTowerProgressStatus(sectionTotals.totalProgressPercent),
+    latestDocketDate, source: "section_v2",
+  };
+
+  // Preserve the existing primary-docket legacy fallback and 50/50 formula.
+  let assemblyPercent = 0, erectionPercent = 0, totalProgressPercent = 0;
+  for (const docket of primaryDockets) {
+    const assembly = Number(docket.assembly_percent || 0);
+    const erection = Number(docket.erection_percent || 0);
+    const overall = Math.round(assembly * 0.5 + erection * 0.5);
+    if (Number.isFinite(overall) && overall >= totalProgressPercent) {
+      assemblyPercent = Math.round(assembly);
+      erectionPercent = Math.round(erection);
+      totalProgressPercent = overall;
+    }
+  }
+  return {
+    assemblyPercent, erectionPercent, totalProgressPercent,
+    status: buildTowerProgressStatus(totalProgressPercent),
+    latestDocketDate, source: "legacy",
+  };
+}
+
+/** Group once rather than scan the project's entire history for every tower. */
+export function resolveTowerProgressBatch(
+  towers: TowerProgressTower[],
+  history: TowerProgressHistoryRow[],
+  dockets: TowerProgressDocket[],
+): Map<string, ResolvedTowerProgress> {
+  const rowsByTower = new Map<string, TowerProgressHistoryRow[]>();
+  const primaryByTower = new Map<string, TowerProgressDocket[]>();
+  const docketById = new Map(dockets.map((docket) => [docket.id, docket]));
+  for (const row of history) {
+    if (!row.tower_id) continue;
+    const rows = rowsByTower.get(row.tower_id) || [];
+    rows.push(row); rowsByTower.set(row.tower_id, rows);
+  }
+  for (const docket of dockets) {
+    if (!docket.tower_id) continue;
+    const rows = primaryByTower.get(docket.tower_id) || [];
+    rows.push(docket); primaryByTower.set(docket.tower_id, rows);
+  }
+  return new Map(towers.map((tower) => {
+    const rows = rowsByTower.get(tower.id) || [];
+    const related = new Map((primaryByTower.get(tower.id) || []).map((docket) => [docket.id, docket]));
+    for (const row of rows) {
+      const parent = docketById.get(row.docket_id);
+      if (parent) related.set(parent.id, parent);
+    }
+    return [tower.id, resolveTowerProgress(tower, rows, [...related.values()])];
+  }));
+}
+
+/** Fetch by receiving tower IDs, regardless of the parent docket's primary
+ * tower. Batched IN queries and paged rows avoid per-tower calls and truncation.
+ * Existing primary-docket arrays remain separate for callers' hours/history. */
+export async function loadTowerProgressForTowers(
+  supabase: SupabaseClient,
+  towers: TowerProgressTower[],
+  primaryDockets: TowerProgressDocket[],
+): Promise<Map<string, ResolvedTowerProgress>> {
+  const towerIds = [...new Set(towers.map((tower) => tower.id))];
+  const history: TowerProgressHistoryRow[] = [];
+  for (let start = 0; start < towerIds.length; start += 200) {
+    for (let offset = 0; ; offset += 1000) {
+      const result = await supabase.from("tower_docket_progress").select("*")
+        .in("tower_id", towerIds.slice(start, start + 200))
+        .order("tower_id").order("docket_id").order("section_code")
+        .range(offset, offset + 999);
+      if (result.error) throw new Error(`Tower progress history could not be loaded: ${result.error.message}`);
+      const page = (result.data || []) as TowerProgressHistoryRow[];
+      history.push(...page);
+      if (page.length < 1000) break;
+    }
+  }
+  const docketsById = new Map(primaryDockets.map((docket) => [docket.id, docket]));
+  const parentIds = [...new Set(history.map((row) => row.docket_id))];
+  for (let start = 0; start < parentIds.length; start += 200) {
+    const result = await supabase.from("tower_daily_dockets")
+      .select("id,tower_id,docket_date,progress_model,assembly_percent,erection_percent")
+      .in("id", parentIds.slice(start, start + 200));
+    if (result.error) throw new Error(`Tower progress docket dates could not be loaded: ${result.error.message}`);
+    for (const docket of (result.data || []) as TowerProgressDocket[]) docketsById.set(docket.id, docket);
+  }
+  if (parentIds.some((id) => !docketsById.has(id))) throw new Error("A parent docket for tower progress is unavailable.");
+  return resolveTowerProgressBatch(towers, history, [...docketsById.values()]);
 }
