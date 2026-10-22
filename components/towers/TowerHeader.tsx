@@ -3,6 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import {
+  calculateTowerSectionProgress,
+  inferTowerHasBodyExtension,
+  type TowerProgressHistoryRow,
+  type TowerProgressDocket,
+} from "@/lib/dockets/tower-progress";
 
 type Tower = {
   id: string;
@@ -182,6 +188,7 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
   const [productionHours, setProductionHours] = useState(0);
   const [openDefects, setOpenDefects] = useState(0);
   const [deliveryProgress, setDeliveryProgress] = useState(0);
+  const [progressError, setProgressError] = useState("");
   const [lastDocketDate, setLastDocketDate] = useState<string | null>(latestDate || null);
 
   const towerLabel =
@@ -200,8 +207,8 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
   const status = useMemo(() => {
     if (overallProgress >= 100) return "Complete";
     if (overallProgress > 0) return "In Progress";
-    return tower.status || "Not Started";
-  }, [overallProgress, tower.status]);
+    return "Not Started";
+  }, [overallProgress]);
 
   const completedTonnes = useMemo(() => {
     if (towerWeightTonnes === null) return null;
@@ -222,13 +229,31 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
     ? supabase.storage.from("tower-photos").getPublicUrl(tower.cover_photo_path).data.publicUrl
     : null;
 
+  const hasBodyExtension = inferTowerHasBodyExtension(tower);
+
   useEffect(() => {
     if (!towerId) return;
 
     let cancelled = false;
 
+    async function loadProgressHistory() {
+      const rows: TowerProgressHistoryRow[] = [];
+      // Select all includes created_at when available without requiring a schema
+      // change on older V1 tables. Parent docket dates provide the primary order.
+      for (let offset = 0; ; offset += 1000) {
+        const result = await supabase.from("tower_docket_progress")
+          .select("*").eq("tower_id", towerId)
+          .order("docket_id").order("section_code")
+          .range(offset, offset + 999);
+        if (result.error) throw new Error(`Tower progress history could not be loaded: ${result.error.message}`);
+        const page = (result.data || []) as TowerProgressHistoryRow[];
+        rows.push(...page);
+        if (page.length < 1000 || cancelled) return rows;
+      }
+    }
+
     async function loadHeaderData() {
-      const [docketsRes, defectsRes, requiredBundlesRes, deliveriesRes] = await Promise.all([
+      const [docketsRes, defectsRes, requiredBundlesRes, deliveriesRes, progressRows] = await Promise.all([
         supabase
           .from("tower_daily_dockets")
           .select("id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours")
@@ -243,11 +268,30 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
           .eq("tower_id", towerId),
 
         supabase.from("tower_bundle_deliveries").select("id").eq("tower_id", towerId),
+        loadProgressHistory(),
       ]);
 
       if (cancelled) return;
 
       const dockets = (docketsRes.data || []) as DocketRow[];
+      const parentDockets: TowerProgressDocket[] = [];
+      const progressDocketIds = [...new Set(progressRows.map((row) => row.docket_id))];
+      for (let offset = 0; offset < progressDocketIds.length; offset += 200) {
+        const result = await supabase.from("tower_daily_dockets")
+          .select("id,docket_date,progress_model")
+          .in("id", progressDocketIds.slice(offset, offset + 200));
+        if (result.error) throw new Error(`Tower progress docket dates could not be loaded: ${result.error.message}`);
+        parentDockets.push(...((result.data || []) as TowerProgressDocket[]));
+      }
+      if (cancelled) return;
+      const resolvedDocketIds = new Set(parentDockets.map((docket) => docket.id));
+      if (progressDocketIds.some((id) => !resolvedDocketIds.has(id))) {
+        throw new Error("A parent docket for this tower's progress is unavailable.");
+      }
+      const nextLastDocketDate = [...dockets, ...parentDockets]
+        .map((docket) => docket.docket_date)
+        .filter((date): date is string => Boolean(date))
+        .sort().at(-1) || latestDate || null;
 
       let bestOverall = 0;
       let bestAssembly = 0;
@@ -265,6 +309,17 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
         }
       });
 
+      // Section rows belong to their own tower, even when another tower owns
+      // the parent docket. Only use legacy docket percentages without usable V2 history.
+      const sectionTotals = calculateTowerSectionProgress(
+        towerId, progressRows, parentDockets, hasBodyExtension,
+      );
+      if (sectionTotals) {
+        bestAssembly = sectionTotals.assemblyPercent;
+        bestErection = sectionTotals.erectionPercent;
+        bestOverall = sectionTotals.totalProgressPercent;
+      }
+
       const docketRawTotal = dockets.reduce(
         (sum, docket) => sum + safeNumber(docket.raw_manhours, 0),
         0,
@@ -279,8 +334,6 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
       let nextProductionHours = docketProductionTotal;
 
       if (dockets.length > 0) {
-        setLastDocketDate(dockets[0]?.docket_date || latestDate || null);
-
         const docketIds = dockets.map((docket) => docket.id);
 
         const labourRes = await supabase
@@ -351,6 +404,8 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
 
       if (cancelled) return;
 
+      setProgressError("");
+      setLastDocketDate(nextLastDocketDate);
       setAssemblyProgress(bestAssembly);
       setErectionProgress(bestErection);
       setOverallProgress(bestOverall);
@@ -360,17 +415,21 @@ export default function TowerHeader({ projectId, tower, latestDate }: Props) {
       setDeliveryProgress(nextDeliveryProgress);
     }
 
-    void loadHeaderData();
+    void loadHeaderData().catch((error: unknown) => {
+      console.error("Tower header progress load failed", error);
+      if (!cancelled) setProgressError("Tower progress could not be loaded. Refresh to try again.");
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [supabase, towerId, latestDate]);
+  }, [supabase, towerId, latestDate, hasBodyExtension]);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px]">
         <div className="p-4 md:p-6 space-y-5">
+          {progressError && <p role="alert" className="text-sm text-red-700">{progressError}</p>}
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
