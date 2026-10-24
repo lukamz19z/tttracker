@@ -23,6 +23,7 @@ import type {
 } from "@/types/daily-dockets";
 
 type Props = {
+  onSigningChange?: (signing: boolean) => void;
   payload: DailyDocketEditorPayload;
   draft: DailyDocketDraft;
   onChange: (next: DailyDocketDraft) => void;
@@ -87,6 +88,7 @@ function SummaryRow({
 
 export function DailyDocketReviewSubmit({
   payload,
+  onSigningChange,
   draft,
   onChange,
   onSaveDraft,
@@ -353,7 +355,7 @@ export function DailyDocketReviewSubmit({
           </View>
         ) : null}
 
-        <PngSignaturePad
+        <PngSignaturePad onSigningChange={onSigningChange}
           disabled={locked}
           onChange={(dataUrl) =>
             setDraft({

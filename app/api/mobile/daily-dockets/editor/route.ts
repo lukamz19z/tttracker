@@ -2,6 +2,9 @@
 
 // app/api/mobile/daily-dockets/editor/route.ts
 
+import { localCalendarDate } from "@/lib/dockets/calendar-date";
+import { mobileProgressContext } from "@/lib/dockets/mobile-progress-context";
+import { MOBILE_DOCKET_DEFAULTS, recommendedDocketDate } from "@/lib/dockets/mobile-defaults";
 import { NextResponse } from "next/server";
 
 import {
@@ -28,15 +31,6 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function todaySydneyLike() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Sydney",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 function labourRow(row: any) {
   return {
@@ -604,8 +598,7 @@ function blankDraft(args: {
     dailySiteSummary: "",
     rfiReferences: [],
 
-    prestartMinutes: "",
-    lunchBreakMinutes: "30",
+    ...MOBILE_DOCKET_DEFAULTS,
     travelInMinutes: "",
     travelOutMinutes: "",
 
@@ -662,6 +655,7 @@ function blankDraft(args: {
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
+    const today = localCalendarDate(new Date(), request.headers.get("X-TTTracker-Timezone"));
 
     const projectId = clean(
       url.searchParams.get("projectId"),
@@ -672,9 +666,9 @@ export async function GET(request: Request) {
     const docketId = clean(
       url.searchParams.get("docketId"),
     );
-    const docketDate =
+    let docketDate =
       clean(url.searchParams.get("docketDate")) ||
-      todaySydneyLike();
+      today;
     const copyPrevious =
       url.searchParams.get("copyPrevious") === "1";
 
@@ -778,6 +772,11 @@ export async function GET(request: Request) {
       );
     }
 
+    const currentContext = await mobileProgressContext(service, projectId, towers);
+    const previousDate = currentContext.resolved.get(towerId)?.latestDocketDate || null;
+    const recommendedDate = recommendedDocketDate(previousDate, today);
+    if (!docketId && !clean(url.searchParams.get("docketDate"))) docketDate = recommendedDate;
+
     const [
       outstandingMaterials,
       bundleTransferContext,
@@ -825,7 +824,8 @@ export async function GET(request: Request) {
         .select("*")
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
-        .lt("docket_date", docketDate)
+        .lte("docket_date", today)
+        .or("approval_status.is.null,approval_status.in.(legacy,submitted_bc,client_pending,final,legacy_final)")
         .order("docket_date", {
           ascending: false,
         })
@@ -914,8 +914,18 @@ export async function GET(request: Request) {
       bundleReplacementDrafts: {},
     };
 
+    const baseline = await mobileProgressContext(service, projectId, towers, { excludeDocketId: docketId || undefined, throughDate: docketDate });
+    if (!sourceDocket) {
+      const progress = baseline.resolved.get(towerId);
+      if (progress?.sectionV2Rows) draft.sectionV2Rows = progress.sectionV2Rows;
+    }
+
     return NextResponse.json({
       project: projectResult.data,
+      resolvedDefaults: MOBILE_DOCKET_DEFAULTS,
+      recommendedDocketDate: recommendedDate,
+      productivityTowers: baseline.productivityTowers,
+      towerProgress: Object.fromEntries(baseline.resolved),
       towers: towers.map((row: any) => ({
         ...row,
         has_body_extension:

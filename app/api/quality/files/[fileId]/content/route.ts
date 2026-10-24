@@ -26,7 +26,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { data: file, error } = await service
       .from("tower_quality_files")
       .select(
-        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id",
+        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id",
       )
       .eq("id", fileId)
       .single();
@@ -42,9 +42,11 @@ export async function GET(request: Request, context: RouteContext) {
       projectId: file.project_id,
     });
 
+    const annotated = new URL(request.url).searchParams.get("variant") === "annotated";
+    const itemId = annotated && file.annotated_sharepoint_item_id ? file.annotated_sharepoint_item_id : file.sharepoint_item_id;
     const token = await getGraphAccessToken();
     const response = await fetch(
-      `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(file.sharepoint_item_id)}/content`,
+      `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(itemId)}/content`,
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",

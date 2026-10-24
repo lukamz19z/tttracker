@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { router, type Href } from "expo-router";
 import {
@@ -16,7 +17,6 @@ import {
   ActivityIndicator,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -111,7 +111,7 @@ export default function ApprovalsScreen() {
 
   if (!capabilities.hasApprovals && !loading) {
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safe}>
         <View style={styles.empty}>
           <ClipboardCheck size={36} color="#94a3b8" />
           <Text style={styles.title}>No approval workflows assigned</Text>

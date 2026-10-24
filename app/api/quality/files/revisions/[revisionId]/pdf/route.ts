@@ -38,6 +38,7 @@ type QualityFileRow = {
   mime_type: string | null;
   sharepoint_drive_id: string;
   sharepoint_item_id: string;
+  annotated_sharepoint_item_id?: string | null;
   captured_at: string | null;
   uploaded_by_label: string | null;
 };
@@ -45,7 +46,7 @@ type QualityFileRow = {
 async function graphFileDataUrl(file: QualityFileRow) {
   const token = await getGraphAccessToken();
   const response = await fetch(
-    `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(file.sharepoint_item_id)}/content`,
+    `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(file.annotated_sharepoint_item_id || file.sharepoint_item_id)}/content`,
     {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
@@ -71,7 +72,7 @@ async function toPdfPhoto(file: QualityFileRow): Promise<RevisionPdfPhoto> {
   return {
     id: file.id,
     fileName: file.file_name,
-    mimeType: file.mime_type || "image/jpeg",
+    mimeType: file.annotated_sharepoint_item_id ? "image/jpeg" : file.mime_type || "image/jpeg",
     dataUrl: await graphFileDataUrl(file),
     capturedAt: file.captured_at,
     uploadedByLabel: file.uploaded_by_label,
@@ -116,7 +117,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,item_number,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
@@ -128,7 +129,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_quality_files")
           .select(
-            "id,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,captured_at,uploaded_by_label",
+            "id,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,captured_at,uploaded_by_label",
           )
           .eq("revision_id", revision.id)
           .in("file_role", ["before_photo", "after_photo"])
@@ -207,6 +208,7 @@ export async function POST(request: Request, context: RouteContext) {
 
       pdfItems.push({
         itemNumber: Number(item.item_number),
+        assignedFlag: item.assigned_flag, leg: item.leg, itemReference: item.fli_number,
         issueType:
           issueTypeMap.get(item.issue_type_id) ||
           String(item.other_issue_text ?? "").trim() ||

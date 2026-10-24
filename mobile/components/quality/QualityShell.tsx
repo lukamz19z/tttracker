@@ -1,10 +1,10 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import type { PropsWithChildren } from "react";
 import {
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -72,11 +72,11 @@ export const qualityStyles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 12, backgroundColor: "#fff", paddingHorizontal: 12, minHeight: 46, color: "#0f172a" },
   select: { borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 12, backgroundColor: "#fff", padding: 12 },
   selectText: { color: "#0f172a", fontWeight: "800" },
-  primary: { backgroundColor: "#2563eb", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
+  primary: { minHeight: 44, backgroundColor: "#2563eb", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
   primaryText: { color: "#fff", fontWeight: "900" },
-  secondary: { backgroundColor: "#f1f5f9", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
+  secondary: { minHeight: 44, backgroundColor: "#f1f5f9", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
   secondaryText: { color: "#334155", fontWeight: "900" },
-  danger: { backgroundColor: "#fff1f2", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
+  danger: { minHeight: 44, backgroundColor: "#fff1f2", borderRadius: 13, paddingHorizontal: 15, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
   dangerText: { color: "#be123c", fontWeight: "900" },
   row: { flexDirection: "row", alignItems: "center", gap: 10 },
   grow: { flex: 1 },
@@ -86,7 +86,7 @@ export const qualityStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#f8fafc" },
-  content: { padding: 18, gap: 12, paddingBottom: 42 },
+  content: { padding: 14, gap: 10, paddingBottom: 12 },
   back: { flexDirection: "row", alignItems: "center", gap: 7, alignSelf: "flex-start", paddingVertical: 5 },
   backText: { color: "#334155", fontWeight: "800" },
   eyebrow: { fontSize: 11, fontWeight: "900", letterSpacing: 1.1, color: "#2563eb" },

@@ -1,3 +1,4 @@
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   DrawerContentScrollView,
   DrawerItem,
@@ -42,7 +43,7 @@ import {
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { AppFooter } from "@/components/common/AppFooter";
-import { SyncStatus } from "@/components/sync/SyncStatus";
+import { SyncStatus, OfflineModeButton } from "@/components/sync/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess, type DynamicNavigationItem } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
@@ -219,6 +220,7 @@ function DynamicTitle({ code, fallback }: { code: string; fallback: string }) {
 }
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { profile, signOut } = useAuth();
   const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
@@ -301,7 +303,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 
   return (
     <View style={styles.drawer}>
-      <View style={styles.profileHeader}>
+      <View style={[styles.profileHeader, { paddingTop: insets.top + 12 }]}>
         <View style={styles.profileTopRow}>
           <View style={styles.logo}><Text style={styles.logoText}>TT</Text></View>
 
@@ -373,8 +375,9 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         ))}
       </DrawerContentScrollView>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         <SyncStatus />
+        <OfflineModeButton />
         <Pressable onPress={() => void handleSignOut()} style={styles.signOutButton}>
           <LogOut size={18} color="#b91c1c" />
           <Text style={styles.signOutText}>Sign out</Text>
@@ -386,12 +389,13 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 }
 
 export default function DrawerLayout() {
+  const insets = useSafeAreaInsets();
   return (
     <NotificationBadgeProvider>
       <Drawer
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
-        headerStyle: { backgroundColor: "#fff" },
+        headerStyle: { backgroundColor: "#fff", height: insets.top + 48 },
         headerTintColor: "#0f172a",
         headerTitleStyle: { fontWeight: "800" },
         headerRight: () => <HeaderNotifications />,
@@ -429,7 +433,7 @@ export default function DrawerLayout() {
 
 const styles = StyleSheet.create({
   drawer: { flex: 1, backgroundColor: "#fff" },
-  profileHeader: { paddingHorizontal: 20, paddingTop: 52, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
+  profileHeader: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
   profileTopRow: { flexDirection: "row", alignItems: "flex-start" },
   logo: { width: 50, height: 50, borderRadius: 16, backgroundColor: "#0f172a", alignItems: "center", justifyContent: "center" },
   logoText: { color: "#fff", fontWeight: "900", fontSize: 19 },
@@ -448,8 +452,8 @@ const styles = StyleSheet.create({
   drawerLabel: { fontSize: 13, fontWeight: "800" },
   drawerBadge: { minWidth: 22, height: 20, paddingHorizontal: 6, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#dc2626" },
   drawerBadgeText: { color: "#fff", fontSize: 9, fontWeight: "900" },
-  footer: { borderTopWidth: 1, borderTopColor: "#e2e8f0", paddingHorizontal: 18, paddingTop: 12, paddingBottom: 10, gap: 10 },
-  signOutButton: { flexDirection: "row", alignItems: "center", gap: 9, borderRadius: 12, backgroundColor: "#fff1f2", paddingVertical: 10, paddingHorizontal: 12 },
+  footer: { borderTopWidth: 1, borderTopColor: "#e2e8f0", paddingHorizontal: 18, paddingTop: 8, paddingBottom: 8, gap: 10 },
+  signOutButton: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 9, borderRadius: 12, backgroundColor: "#fff1f2", paddingVertical: 10, paddingHorizontal: 12 },
   signOutText: { color: "#b91c1c", fontWeight: "800", fontSize: 12 },
   headerBell: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center", justifyContent: "center" },
   headerBadge: { position: "absolute", top: -5, right: -5, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },

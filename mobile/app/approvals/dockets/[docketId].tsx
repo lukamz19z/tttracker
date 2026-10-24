@@ -1,10 +1,10 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router";
 import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Pencil,
-  RotateCcw,
   Save,
   X,
 } from "lucide-react-native";
@@ -18,7 +18,6 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -49,7 +48,7 @@ type Detail = {
   transfers: Row[];
   reviewActionable?: boolean;
   selectedClientContentKeys?: string[];
-  clientContentOptions: Array<{ key: string; label: string }>;
+  clientContentOptions: { key: string; label: string }[];
 };
 
 const clean = (value: unknown) => String(value ?? "").trim();

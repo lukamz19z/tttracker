@@ -69,6 +69,8 @@ type RevisionRow = {
 };
 
 type RevisionItem = {
+  leg?: string | null;
+  assigned_flag?: string | null;
   id: string;
   revision_id: string;
   project_id: string;
@@ -638,6 +640,8 @@ export default function TowerRevisionsPage() {
     setBusyId(`submit-${revision.id}`);
     setMessage(null);
     try {
+      const finalised = await apiFetch(`/api/quality/revisions/${encodeURIComponent(revision.id)}/finalise`, { method: "POST" });
+      if (!finalised.ok) { const detail = await finalised.json(); throw new Error(detail.error || "Revision could not be finalised."); }
       const response = await apiFetch(
         `/api/quality/revisions/${encodeURIComponent(revision.id)}/submit-review`,
         { method: "POST" },
@@ -982,7 +986,7 @@ export default function TowerRevisionsPage() {
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-sm font-black text-slate-800">Inspection Findings</div>
                       <div className="flex flex-wrap gap-2">
-                        {revision.status !== "Ready for Review" && revision.status !== "Closed" ? <button type="button" onClick={() => void submitRevisionForReview(revision)} disabled={busyId === `submit-${revision.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">{busyId === `submit-${revision.id}` ? "Submitting…" : "Submit for Review"}</button> : null}
+                        {revision.status !== "Ready for Review" && revision.status !== "Closed" ? <button type="button" onClick={() => void submitRevisionForReview(revision)} disabled={busyId === `submit-${revision.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">{busyId === `submit-${revision.id}` ? "Submitting…" : "Finalise & Submit for Review"}</button> : null}
                         {revision.status === "Closed" ? <button type="button" onClick={() => void updateRevisionStatus(revision, "In Progress")} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Reopen</button> : null}
                       </div>
                     </div>
@@ -999,7 +1003,7 @@ export default function TowerRevisionsPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span><span className="font-bold text-slate-900">{issueName(item.issue_type_id, item.other_issue_text)}</span><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{complete.complete ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">Evidence Complete</span> : <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-700">Evidence Incomplete</span>}</div>
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3"><span>Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
-                                <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.finding || "No additional client comment."}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
+                                <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{[item.assigned_flag && `Flag: ${item.assigned_flag}`, item.leg && `Leg ${item.leg}`, item.finding || "No additional client comment."].filter(Boolean).join(" / ")}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
                                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]"><span className={`rounded-lg px-2 py-1 ${beforeCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Before {beforeCount ? `✓ (${beforeCount})` : "missing"}</span><span className={`rounded-lg px-2 py-1 ${item.rectification_comment?.trim() ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>Comment {item.rectification_comment?.trim() ? "✓" : "missing"}</span><span className={`rounded-lg px-2 py-1 ${afterCount ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>After {afterCount ? `✓ (${afterCount})` : "missing"}</span></div>
                               </div>
                               <div className="flex shrink-0 gap-2"><button type="button" onClick={() => void openEvidence(item)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-bold text-slate-700"><Camera size={14} /> Evidence</button><button type="button" onClick={() => editFinding(item)} className="rounded-lg border border-slate-200 p-2 text-slate-600"><Pencil size={14} /></button></div>

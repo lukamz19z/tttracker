@@ -89,20 +89,20 @@ const BLANK_DEFECT: NewDefectForm = {
   photos: [],
 };
 
-const OUTCOMES: Array<{
+const OUTCOMES: {
   value: MaterialWorkOutcome;
   label: string;
-}> = [
+}[] = [
   { value: "stopped_work", label: "Stopped" },
   { value: "slowed_down", label: "Slowed" },
   { value: "changed_sequence", label: "Resequenced" },
   { value: "minor_impact", label: "Minor" },
 ];
 
-const MOB_STATUSES: Array<{
+const MOB_STATUSES: {
   value: MobilisationStatus;
   label: string;
-}> = [
+}[] = [
   { value: "planning", label: "Planning" },
   { value: "packing", label: "Packing" },
   { value: "demobilising", label: "Demob" },
@@ -641,27 +641,21 @@ export function DailyDocketSiteEvents({
     }
   };
 
-  const chooseMaterial = (
-    eventIndex: number,
-    itemIndex: number,
-    result: MaterialCatalogItem,
-  ) => {
-    updateItem(eventIndex, itemIndex, {
-      source_table: result.source_table,
-      source_record_id: result.source_record_id,
-      bundle_id: result.bundle_id,
-      bundle_no: result.bundle_no,
-      bundle_section: result.bundle_section,
-      material_kind: "registered",
-      manual_category: "",
-      bolt_size: "",
-      item_reference: result.item_reference,
-      item_description: result.item_description,
-      quantity: "1",
-      unit: result.unit,
-      search_query: "",
-      search_results: [],
-    });
+  const chooseMaterial = (eventIndex: number, itemIndex: number, result: MaterialCatalogItem) => {
+    if (locked) return;
+    const event = draft.materialEvents[eventIndex];
+    const item = event?.items[itemIndex];
+    if (!event || !item) return;
+    const match = (row: MaterialEventItemDraft) => row.source_table === result.source_table && row.source_record_id === result.source_record_id;
+    const selected = event.items.findIndex(match);
+    let items: MaterialEventItemDraft[];
+    if (selected >= 0) {
+      items = selected === 0 ? event.items.map((row, index) => index === selected ? { ...createBlankMaterialItem(), search_mode: row.search_mode, search_query: item.search_query, search_results: item.search_results } : row) : event.items.filter((_, index) => index !== selected);
+    } else {
+      const next = { ...createBlankMaterialItem(), ...result, material_kind: "registered" as const, quantity: "1", search_mode: item.search_mode, search_results: item.search_results, search_query: item.search_query };
+      items = !item.source_record_id && !item.item_reference ? event.items.map((row, index) => index === itemIndex ? { ...next, ui_id: row.ui_id } : row) : [...event.items, { ...next, search_query: "", search_results: [] }];
+    }
+    setDraft({ materialEvents: draft.materialEvents.map((row, index) => index === eventIndex ? { ...row, items } : row) });
   };
 
   const toggleEventWorker = (eventIndex: number, name: string) => {
@@ -808,13 +802,13 @@ export function DailyDocketSiteEvents({
 
       if (error) throw error;
 
-      const bundleRows = (data ?? []) as Array<{
+      const bundleRows = (data ?? []) as {
         id: unknown;
         tower_id: unknown;
         bundle_no: unknown;
         section: unknown;
         qty_required: unknown;
-      }>;
+      }[];
 
       setTransferResults((current) => ({
         ...current,
@@ -863,12 +857,12 @@ export function DailyDocketSiteEvents({
 
       if (error) throw error;
 
-      const destinationRows = (data ?? []) as Array<{
+      const destinationRows = (data ?? []) as {
         id: unknown;
         tower_id: unknown;
         bundle_no: unknown;
         section: unknown;
-      }>;
+      }[];
 
       const destination = destinationRows.find(
         (row) =>
@@ -1408,7 +1402,7 @@ export function DailyDocketSiteEvents({
                       ) : null}
                     </View>
 
-                    <View style={styles.chips}>
+                    {(!item.source_record_id || itemIndex === 0) ? <View style={styles.chips}>
                       <Chip
                         label="Member"
                         disabled={locked}
@@ -1483,9 +1477,9 @@ export function DailyDocketSiteEvents({
                           })
                         }
                       />
-                    </View>
+                    </View> : null}
 
-                    {item.material_kind === "registered" ? (
+                    {item.material_kind === "registered" && (!item.source_record_id || itemIndex === 0) ? (
                       <>
                         <View style={styles.searchRow}>
                           <View style={{ flex: 1 }}>
@@ -1535,8 +1529,12 @@ export function DailyDocketSiteEvents({
                                     result,
                                   )
                                 }
-                                style={styles.result}
+                                disabled={locked}
+                                accessibilityRole="checkbox"
+                                accessibilityState={{ checked: event.items.some((row) => row.source_table === result.source_table && row.source_record_id === result.source_record_id) }}
+                                style={[styles.result, { minHeight: 48 }, event.items.some((row) => row.source_table === result.source_table && row.source_record_id === result.source_record_id) && { backgroundColor: "#dcfce7", borderColor: "#16a34a" }]}
                               >
+                                <Ionicons name={event.items.some((row) => row.source_table === result.source_table && row.source_record_id === result.source_record_id) ? "checkbox" : "square-outline"} size={26} color="#15803d" />
                                 <Text style={styles.resultTitle}>
                                   {result.item_reference}
                                 </Text>
@@ -1579,7 +1577,8 @@ export function DailyDocketSiteEvents({
                     ) : null}
 
                     {item.item_reference || item.bolt_size ? (
-                      <View style={styles.selectedMaterial}>
+                      <Pressable disabled={locked} accessibilityRole="checkbox" accessibilityState={{ checked: true }} onPress={() => itemIndex > 0 ? updateEvent(eventIndex, { items: event.items.filter((_, index) => index !== itemIndex) }) : updateItem(eventIndex, itemIndex, { ...createBlankMaterialItem(), ui_id: item.ui_id, search_results: item.search_results, search_query: item.search_query })} style={[styles.selectedMaterial, { minHeight: 48 }]}>
+                        <Ionicons name="checkbox" size={24} color="#15803d" />
                         <Text style={styles.selectedMaterialTitle}>
                           {item.item_reference ||
                             `Bolt ${item.bolt_size}`}
@@ -1589,7 +1588,7 @@ export function DailyDocketSiteEvents({
                             {item.item_description}
                           </Text>
                         ) : null}
-                      </View>
+                      </Pressable>
                     ) : null}
 
                     <View style={styles.twoCol}>

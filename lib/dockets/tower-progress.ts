@@ -1,11 +1,11 @@
-import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
+import { isFutureDocketDate } from "./calendar-date";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   calculateProgressTotals,
   buildTowerProgressStatus,
   SECTION_V2_DEFS,
   SECTION_PROGRESS_WEIGHTS,
-} from "@/lib/dockets/calculations";
+} from "./calculations";
 
 export type TowerProgressTower = { id: string; extra_data?: Record<string, unknown> | null };
 type TowerRecord = Pick<TowerProgressTower, "extra_data">;
@@ -171,7 +171,7 @@ export function calculateTowerSectionProgress(
         hasUsableProgress = true;
         maximum = Math.max(maximum ?? 0, Math.max(0, Math.min(100, Number(value))));
       }
-      return maximum ?? "";
+      return maximum === null ? "" : String(maximum);
     };
     return {
       section_code, section_label,
@@ -182,9 +182,9 @@ export function calculateTowerSectionProgress(
     };
   });
   if (!hasUsableProgress) return null;
-  return calculateProgressTotals({
+  return { sectionV2Rows, ...calculateProgressTotals({
     progressModel: "section_v2", sectionV2Rows, legacyRows: [], hasBodyExtension,
-  });
+  }) };
 }
 
 export type ResolvedTowerProgress = {
@@ -194,6 +194,7 @@ export type ResolvedTowerProgress = {
   status: ReturnType<typeof buildTowerProgressStatus>;
   latestDocketDate: string | null;
   source: "section_v2" | "legacy";
+  sectionV2Rows?: NonNullable<ReturnType<typeof calculateTowerSectionProgress>>["sectionV2Rows"];
 };
 
 /** Resolve current construction progress, not daily production or manhour allocation. */
@@ -219,7 +220,7 @@ export function resolveTowerProgress(
     erectionPercent: sectionTotals.erectionPercent,
     totalProgressPercent: sectionTotals.totalProgressPercent,
     status: buildTowerProgressStatus(sectionTotals.totalProgressPercent),
-    latestDocketDate, source: "section_v2",
+    latestDocketDate, source: "section_v2", sectionV2Rows: sectionTotals.sectionV2Rows,
   };
 
   // Preserve the existing primary-docket legacy fallback and 50/50 formula.
@@ -278,6 +279,7 @@ export async function loadTowerProgressForTowers(
   supabase: SupabaseClient,
   towers: TowerProgressTower[],
   primaryDockets: TowerProgressDocket[],
+  options: { excludeDocketId?: string; throughDate?: string } = {},
 ): Promise<Map<string, ResolvedTowerProgress>> {
   const towerIds = [...new Set(towers.map((tower) => tower.id))];
   const history: TowerProgressHistoryRow[] = [];
@@ -303,5 +305,8 @@ export async function loadTowerProgressForTowers(
     for (const docket of (result.data || []) as TowerProgressDocket[]) docketsById.set(docket.id, docket);
   }
   if (parentIds.some((id) => !docketsById.has(id))) throw new Error("A parent docket for tower progress is unavailable.");
-  return resolveTowerProgressBatch(towers, history, [...docketsById.values()]);
+  const eligibleDockets = [...docketsById.values()].filter((docket) =>
+    docket.id !== options.excludeDocketId && (!options.throughDate || !docket.docket_date || docket.docket_date <= options.throughDate));
+  const eligibleIds = new Set(eligibleDockets.map((docket) => docket.id));
+  return resolveTowerProgressBatch(towers, history.filter((row) => eligibleIds.has(row.docket_id)), eligibleDockets);
 }

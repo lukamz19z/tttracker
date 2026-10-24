@@ -1,3 +1,4 @@
+import { compareBundles } from "@/lib/materials-sort";
 import { AppState } from "react-native";
 import {
   createContext,
@@ -124,7 +125,7 @@ function localBundleStatus(
 
 export function MaterialsProvider({ children }: PropsWithChildren) {
   const { profile } = useAuth();
-  const { online } = useSync();
+  const { online, setMaterialPendingCount, registerMaterialSync } = useSync();
   const projectId = profile?.projectId ?? null;
 
   const [data, setData] = useState<MaterialPayload | null>(null);
@@ -179,10 +180,10 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     [pendingMutations, projectId, replaceQueue],
   );
 
-  const flushQueue = useCallback(
+  const performFlush = useCallback(
     async (queueOverride?: PendingMaterialMutation[]) => {
       if (!projectId || !online) {
-        return queueOverride ?? pendingMutations;
+        return queueOverride ?? (projectId ? await loadMaterialQueue(projectId) : []);
       }
 
       const queue =
@@ -228,6 +229,15 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     },
     [online, projectId, replaceQueue],
   );
+
+  const flushPromise = useRef<Promise<PendingMaterialMutation[]> | null>(null);
+  const flushQueue = useCallback((queueOverride?: PendingMaterialMutation[]) => {
+    if (flushPromise.current) return flushPromise.current;
+    const task = performFlush(queueOverride);
+    const tracked = task.finally(() => { if (flushPromise.current === tracked) flushPromise.current = null; });
+    flushPromise.current = tracked;
+    return tracked;
+  }, [performFlush]);
 
   const runLoad = useCallback(
     async (forceRefresh = false) => {
@@ -305,7 +315,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
         const shouldRefreshServer =
           online &&
           remaining.length === 0 &&
-          (forceRefresh || !cached || (!cacheFresh && !recentlyRefreshed));
+          (forceRefresh || (cached && "requiresCatalogueRefresh" in cached) || !cached || (!cacheFresh && !recentlyRefreshed));
 
         if (shouldRefreshServer) {
           if (dataRef.current) {
@@ -1174,9 +1184,13 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     [pendingMutations],
   );
 
+  useEffect(() => registerMaterialSync(async () => { const remaining = await flushQueue(); if (remaining.length) throw new Error("Material changes remain pending. Tap Sync now to retry."); }), [flushQueue, registerMaterialSync]);
+  useEffect(() => { setMaterialPendingCount(pendingMutations.length); }, [pendingMutations.length, setMaterialPendingCount]);
+
+  const sortedData = useMemo(() => data ? { ...data, bundles: [...data.bundles].sort(compareBundles), deliveries: data.deliveries.map((delivery) => ({ ...delivery, tower_bundle_delivery_items: [...(delivery.tower_bundle_delivery_items || [])].sort(compareBundles) })) } : data, [data]);
   const value = useMemo<Value>(
     () => ({
-      data,
+      data: sortedData,
       loading,
       refreshing,
       cachedAt,
@@ -1211,7 +1225,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       recordMissingReceipt,
     }),
     [
-      data,
+      sortedData,
       loading,
       refreshing,
       cachedAt,

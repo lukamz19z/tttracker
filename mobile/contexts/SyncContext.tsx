@@ -1,3 +1,6 @@
+import { prepareRevisionQueue, qualityQueuePriority } from "@/lib/offline/revision-sync-plan";
+import { getCache, setCache } from "@/lib/offline/db";
+import { manuallyOffline, setManualOffline } from "@/lib/offline/connectivity";
 import {
   createContext,
   useCallback,
@@ -18,10 +21,16 @@ import {
   type QueueRecord,
 } from "@/lib/offline/db";
 import { syncRevisionQueueRecord } from "@/lib/offline/revision-sync";
-import { syncQualityQueueRecord } from "@/lib/offline/quality-sync";
+import { syncQualityQueueRecord, cleanupQualityRecord } from "@/lib/offline/quality-sync";
 
 type SyncState = {
   online: boolean;
+  effectiveOnline: boolean;
+  networkOnline: boolean;
+  forcedOffline: boolean;
+  setForcedOffline: (value: boolean) => Promise<void>;
+  setMaterialPendingCount: (value: number) => void;
+  registerMaterialSync: (callback: () => Promise<void>) => () => void;
   syncing: boolean;
   pendingCount: number;
   failedCount: number;
@@ -53,7 +62,19 @@ async function processRecord(record: QueueRecord) {
 }
 
 export function SyncProvider({ children }: PropsWithChildren) {
-  const [online, setOnline] = useState(true);
+  const [online, setOnline] = useState(false);
+  const [forcedOffline, setForcedOfflineState] = useState(false);
+  const [materialPendingCount, setMaterialPendingCount] = useState(0);
+  const materialSyncRef = useRef<null | (() => Promise<void>)>(null);
+  const registerMaterialSync = useCallback((callback: () => Promise<void>) => {
+    materialSyncRef.current = callback;
+    return () => { if (materialSyncRef.current === callback) materialSyncRef.current = null; };
+  }, []);
+  const setForcedOffline = useCallback(async (value: boolean) => {
+    setManualOffline(value);
+    setForcedOfflineState(value);
+    await setCache("sync:forced-offline", value);
+  }, []);
   const [syncing, setSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
@@ -61,6 +82,8 @@ export function SyncProvider({ children }: PropsWithChildren) {
 
   const mountedRef = useRef(true);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
+  const syncAgainRef = useRef(false);
+  const syncInvokerRef = useRef<null | (() => Promise<void>)>(null);
 
   const applyQueueState = useCallback((rows: QueueRecord[]) => {
     if (!mountedRef.current) return;
@@ -76,6 +99,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
      * Queue inspection is local and cheap. Network inspection is only used to
      * keep the status accurate; refresh itself never starts another sync loop.
      */
+    await prepareRevisionQueue();
     const [network, rows] = await Promise.all([
       Network.getNetworkStateAsync(),
       queueRows(),
@@ -92,10 +116,11 @@ export function SyncProvider({ children }: PropsWithChildren) {
      * Check the local queue first. If nothing is waiting there is no reason to
      * perform a network call or show a syncing state.
      */
+    await prepareRevisionQueue();
     const rows = await queueRows();
     applyQueueState(rows);
 
-    if (!rows.length) {
+    if (!rows.length && !materialSyncRef.current) {
       if (mountedRef.current) {
         setLastError(null);
       }
@@ -109,7 +134,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       setOnline(connected);
     }
 
-    if (!connected) return;
+    if (!connected || manuallyOffline()) return;
 
     if (mountedRef.current) {
       setSyncing(true);
@@ -117,11 +142,16 @@ export function SyncProvider({ children }: PropsWithChildren) {
     }
 
     try {
-      for (const record of rows) {
+      const ordered = [...rows].sort((a, b) => {
+        return qualityQueuePriority(a.kind) - qualityQueuePriority(b.kind) || a.createdAt.localeCompare(b.createdAt);
+      });
+      for (const record of ordered) {
+        if (manuallyOffline()) break;
         try {
           await updateQueueStatus(record.id, "syncing", null);
           await processRecord(record);
           await removeQueueRecord(record.id);
+          if (record.kind.startsWith("quality_")) await cleanupQualityRecord(record);
         } catch (error) {
           const message =
             error instanceof Error
@@ -135,6 +165,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
           }
         }
       }
+      if (!manuallyOffline()) await materialSyncRef.current?.();
     } finally {
       const remaining = await queueRows();
       applyQueueState(remaining);
@@ -148,13 +179,18 @@ export function SyncProvider({ children }: PropsWithChildren) {
   const syncNow = useCallback((): Promise<void> => {
     /* One queue processor at a time, regardless of how many screens request it. */
     if (syncPromiseRef.current) {
+      syncAgainRef.current = true;
       return syncPromiseRef.current;
     }
 
-    const task = runSync();
+    const task = runSync().catch(error => { if (mountedRef.current) setLastError(error instanceof Error ? error.message : "Sync failed. Tap to retry."); });
     const tracked = task.finally(() => {
       if (syncPromiseRef.current === tracked) {
         syncPromiseRef.current = null;
+        if (syncAgainRef.current && !manuallyOffline()) {
+          syncAgainRef.current = false;
+          queueMicrotask(() => { void syncInvokerRef.current?.(); });
+        }
       }
     });
 
@@ -162,6 +198,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     return tracked;
   }, [runSync]);
 
+  syncInvokerRef.current = syncNow;
   useEffect(() => {
     mountedRef.current = true;
 
@@ -169,7 +206,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
      * Initial status check. syncNow() exits locally when the queue is empty,
      * so normal app startup does not create a pointless upload cycle.
      */
-    void refresh().then(() => void syncNow());
+    void getCache<boolean>("sync:forced-offline").then(async (cached) => { setManualOffline(Boolean(cached?.value)); setForcedOfflineState(Boolean(cached?.value)); await refresh(); await syncNow(); });
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -200,11 +237,16 @@ export function SyncProvider({ children }: PropsWithChildren) {
     };
   }, [refresh, syncNow]);
 
+  useEffect(() => { if (!forcedOffline && online) void syncNow(); }, [forcedOffline, online, syncNow]);
+
   const value = useMemo(
     () => ({
-      online,
+      online: online && !forcedOffline,
+      effectiveOnline: online && !forcedOffline,
+      networkOnline: online,
+      forcedOffline, setForcedOffline, setMaterialPendingCount, registerMaterialSync,
       syncing,
-      pendingCount,
+      pendingCount: pendingCount + materialPendingCount,
       failedCount,
       lastError,
       refresh,
@@ -217,7 +259,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       failedCount,
       lastError,
       refresh,
-      syncNow,
+      syncNow, forcedOffline, setForcedOffline, materialPendingCount, registerMaterialSync,
     ],
   );
 

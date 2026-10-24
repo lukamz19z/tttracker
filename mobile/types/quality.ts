@@ -81,6 +81,7 @@ export type QualityDefect = {
 };
 
 export type QualityRevision = {
+  finalised_at?: string | null;
   id: string;
   project_id: string;
   tower_id: string;
@@ -107,6 +108,8 @@ export type QualityRevision = {
 };
 
 export type QualityRevisionItem = {
+  leg?: string | null;
+  assigned_flag?: string | null;
   id: string;
   revision_id: string;
   project_id: string;
@@ -210,6 +213,8 @@ export type QualityRevisionDetailPayload = {
 };
 
 export type LocalQualityPhoto = {
+  width?: number; height?: number;
+  watermarkPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   id: string;
   uri: string;
   name: string;

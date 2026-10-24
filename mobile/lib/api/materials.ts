@@ -1,4 +1,4 @@
-import { apiFetch, apiJson } from "@/lib/api/client";
+import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
   BundleCheckRecord,
@@ -11,7 +11,7 @@ import type {
   TransferRecord,
 } from "@/types/materials";
 
-const MATERIAL_CACHE_VERSION = 2;
+const MATERIAL_CACHE_VERSION = 3;
 
 export const materialCacheKey = (projectId: string) =>
   `materials:v${MATERIAL_CACHE_VERSION}:${projectId}`;
@@ -19,94 +19,31 @@ export const materialCacheKey = (projectId: string) =>
 const legacyMaterialCacheKey = (projectId: string) =>
   `materials:${projectId}`;
 
-type MaterialSnapshot = MaterialPayload & {
-  cacheVersion?: number;
-  snapshotMode?: "summary" | string;
-  catalogCounts?: {
-    members?: number;
-    bolts?: number;
-  };
-};
+async function readJson<T>(response: Response, fallback: string) { return jsonBody<T>(response, fallback); }
 
-function slimSnapshot(value: MaterialPayload): MaterialSnapshot {
-  const snapshot = value as MaterialSnapshot;
-
-  return {
-    ...snapshot,
-    cacheVersion: MATERIAL_CACHE_VERSION,
-    snapshotMode: snapshot.snapshotMode ?? "summary",
-    catalogCounts: snapshot.catalogCounts ?? {
-      members: Array.isArray(value.members) ? value.members.length : 0,
-      bolts: Array.isArray(value.bolts) ? value.bolts.length : 0,
-    },
-
-    // Large static catalogues are loaded through the dedicated search API.
-    members: [],
-    bolts: [],
-  };
-}
-
-async function readJson<T>(response: Response, fallback: string) {
-  const payload = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-  };
-
-  if (!response.ok) {
-    throw new Error(payload.error || fallback);
+async function catalogue(projectId: string, kind: "member" | "bolt") {
+  const rows: Record<string, unknown>[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const page = await apiJson<{ rows: Record<string, unknown>[] }>(`/api/mobile/materials/catalogue?projectId=${encodeURIComponent(projectId)}&kind=${kind}&offset=${offset}`);
+    rows.push(...page.rows);
+    if (page.rows.length < 500) return rows;
   }
-
-  return payload;
 }
-
 export async function refreshMaterials(projectId: string) {
-  const raw = await apiJson<MaterialSnapshot>(
-    `/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`,
-    {
-      // The slim bootstrap should no longer need the old two-minute allowance.
-      timeoutMs: 45_000,
-    },
-  );
-
-  const data = slimSnapshot(raw);
+  const [raw, members, bolts] = await Promise.all([
+    apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 45_000 }),
+    catalogue(projectId, "member"), catalogue(projectId, "bolt"),
+  ]);
+  const data = { ...raw, members, bolts } as MaterialPayload;
   await setCache(materialCacheKey(projectId), data);
   return data;
 }
-
 export async function cachedMaterials(projectId: string) {
   const current = await getCache<MaterialPayload>(materialCacheKey(projectId));
-
-  if (current) {
-    const slim = slimSnapshot(current.value);
-
-    // Self-heal any unexpectedly large v2 cache without blocking rendering.
-    if (
-      (current.value.members?.length ?? 0) > 0 ||
-      (current.value.bolts?.length ?? 0) > 0
-    ) {
-      void setCache(materialCacheKey(projectId), slim);
-    }
-
-    return {
-      ...current,
-      value: slim,
-    };
-  }
-
-  /*
-   * One-time migration path for users upgrading from the old full-project
-   * cache. This preserves bundles/checks/deliveries/offline state but drops
-   * the huge member + bolt arrays before storing the new cache format.
-   */
-  const legacy = await getCache<MaterialPayload>(legacyMaterialCacheKey(projectId));
-  if (!legacy) return null;
-
-  const slim = slimSnapshot(legacy.value);
-  await setCache(materialCacheKey(projectId), slim);
-
-  return {
-    ...legacy,
-    value: slim,
-  };
+  if (current) return current;
+  const legacy = await getCache<MaterialPayload>(`materials:v2:${projectId}`) || await getCache<MaterialPayload>(legacyMaterialCacheKey(projectId));
+  // Render legacy bundle/check data now, but download the missing catalogues in background.
+  return legacy ? { ...legacy, requiresCatalogueRefresh: true } : null;
 }
 
 export async function saveBundleCheck(

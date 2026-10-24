@@ -1,3 +1,6 @@
+import { SafeAreaView } from "react-native-safe-area-context";
+import { QualityLegField } from "@/components/quality/QualityLegField";
+import { enqueue } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
 import { Image } from "expo-image";
@@ -22,7 +25,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -51,7 +53,6 @@ import {
 } from "@/lib/api/quality";
 import {
   enqueueRevisionItemCreate,
-  enqueueRevisionItemUpdate,
 } from "@/lib/offline/quality-sync";
 import {
   clientMutationIdFromRouteKey,
@@ -82,6 +83,7 @@ function prettyDate(value: unknown) {
 }
 
 type FindingForm = {
+  leg: string | null; assignedFlag: string;
   issueTypeId: string | null;
   otherIssueText: string;
   memberNumber: string;
@@ -94,6 +96,7 @@ type FindingForm = {
 };
 
 const BLANK_FINDING: FindingForm = {
+  leg: null, assignedFlag: "",
   issueTypeId: null,
   otherIssueText: "",
   memberNumber: "",
@@ -117,7 +120,7 @@ export default function RevisionDetailScreen() {
 
   const { data, loading: metadataLoading } = useQuality();
   const { profile } = useAuth();
-  const { online, syncing } = useSync();
+  const { online, syncing, syncNow, refresh: refreshSync } = useSync();
 
   const projectId =
     clean(data?.projectId) || clean(profile?.projectId);
@@ -479,32 +482,9 @@ export default function RevisionDetailScreen() {
   useEffect(() => {
     if (!workspace || !activeRevisionId) return;
 
-    const existingMutationIds = new Set(
-      revisionItems
-        .map((item) =>
-          clean(item.mobile_client_mutation_id),
-        )
-        .filter(Boolean),
-    );
-
-    const remainingFindings =
-      workspace.findings.filter(
-        (finding) =>
-          !existingMutationIds.has(
-            finding.clientMutationId,
-          ),
-      );
-
-    const syncedSomething =
-      remainingFindings.length !==
-      workspace.findings.length;
-
-    let nextWorkspace = syncedSomething
-      ? touchWorkspace({
-          ...workspace,
-          findings: remainingFindings,
-        })
-      : workspace;
+    // Queue success, not the existence of an item row, confirms its photos synced.
+    const syncedSomething = false;
+    let nextWorkspace = workspace;
 
     const unqueued =
       nextWorkspace.findings.filter(
@@ -536,6 +516,7 @@ export default function RevisionDetailScreen() {
             finding.issueTypeId === "__other__"
               ? finding.otherIssueText
               : null,
+          leg: finding.leg, assignedFlag: finding.assignedFlag,
           towerSegment: finding.towerSegment,
           memberNumber: finding.memberNumber,
           drawingNumber: finding.drawingNumber,
@@ -581,39 +562,15 @@ export default function RevisionDetailScreen() {
 
   // Clear pending rectification overlays after the server record catches up.
   useEffect(() => {
-    if (!workspace?.pendingUpdates.length) return;
-
-    const remaining =
-      workspace.pendingUpdates.filter((update) => {
-        const item = revisionItems.find(
-          (row) => row.id === update.itemId,
-        );
-
-        if (!item) return true;
-
-        return !(
-          clean(item.status) === update.status &&
-          clean(item.rectification_comment) ===
-            clean(update.rectificationComment)
-        );
-      });
-
-    if (
-      remaining.length ===
-      workspace.pendingUpdates.length
-    ) {
-      return;
-    }
-
-    const next = touchWorkspace({
-      ...workspace,
-      pendingUpdates: remaining,
+    if (syncing || !projectId) return;
+    let active = true;
+    void listRevisionWorkspaces(projectId).then(rows => {
+      if (!active) return;
+      const saved = rows.find(row => row.routeKey === routeRevisionId || row.serverRevisionId === routeRevisionId);
+      if (saved) setWorkspace(saved);
     });
-
-    void saveRevisionWorkspace(next).then(() =>
-      setWorkspace(next),
-    );
-  }, [revisionItems, workspace]);
+    return () => { active = false; };
+  }, [syncing, projectId, routeRevisionId]);
 
   // Once an offline parent is resolved and nothing local remains,
   // move the user onto the canonical server route.
@@ -706,6 +663,7 @@ export default function RevisionDetailScreen() {
 
     try {
       const pending = createPendingFinding({
+        leg: findingForm.leg, assignedFlag: clean(findingForm.assignedFlag) || null,
         issueTypeId: findingForm.issueTypeId,
         otherIssueText:
           clean(findingForm.otherIssueText) || null,
@@ -732,12 +690,14 @@ export default function RevisionDetailScreen() {
 
       const next = touchWorkspace({
         ...workspace,
+        finalisedAt: null, finaliseRequested: false,
         findings: [...workspace.findings, pending],
       });
 
       await saveRevisionWorkspace(next);
       setWorkspace(next);
 
+      await refreshSync(); if (online) void syncNow();
       setFindingModalOpen(false);
       setFindingForm(BLANK_FINDING);
   
@@ -769,22 +729,8 @@ export default function RevisionDetailScreen() {
     setRectificationSaving(true);
 
     try {
-      await enqueueRevisionItemUpdate({
-        revisionId:
-          rectification.item.revision_id,
-        itemId: rectification.item.id,
-        projectId: workspace.projectId,
-        towerId: workspace.towerId,
-        rectificationComment:
-          clean(
-            rectification.rectificationComment,
-          ),
-        status: "Rectified",
-        afterPhotos:
-          rectification.afterPhotos,
-      });
-
       const update: PendingRevisionUpdate = {
+        leg: rectification.item.leg, assignedFlag: rectification.item.assigned_flag,
         itemId: rectification.item.id,
         rectificationComment:
           clean(
@@ -793,7 +739,7 @@ export default function RevisionDetailScreen() {
         status: "Rectified",
         afterPhotos:
           rectification.afterPhotos,
-        queuedAt: new Date().toISOString(),
+        queuedAt: null,
         createdAt: new Date().toISOString(),
       };
 
@@ -811,6 +757,7 @@ export default function RevisionDetailScreen() {
 
       await saveRevisionWorkspace(next);
       setWorkspace(next);
+      await refreshSync(); if (online) void syncNow();
       setRectification(null);
     } catch (error) {
       Alert.alert(
@@ -861,7 +808,23 @@ export default function RevisionDetailScreen() {
     });
   }
 
+  async function finalise() {
+    if (!workspace) return;
+    try {
+      const next = touchWorkspace({ ...workspace, finaliseRequested: true });
+      await saveRevisionWorkspace(next); setWorkspace(next);
+      await enqueue("quality_revision_finalise", { revisionId: workspace.serverRevisionId || workspace.routeKey, projectId: workspace.projectId }, `quality-finalise:${workspace.routeKey}`);
+      await refreshSync(); if (online) await syncNow();
+      const saved = (await listRevisionWorkspaces(workspace.projectId)).find(row => row.routeKey === workspace.routeKey);
+      if (saved) setWorkspace(saved);
+      Alert.alert(saved?.finalisedAt ? "Finalised" : "Pending sync", saved?.finalisedAt ? "Ready to submit for review." : "Finalisation will run after all findings and evidence sync.");
+      if (online) await reloadDetail(true);
+    } catch (error) { Alert.alert("Finalisation pending", error instanceof Error ? error.message : "Tap Sync now to retry."); }
+  }
+
   async function submit() {
+    if (!online) { Alert.alert("Connection required", "This action requires a connection."); return; }
+    if (!serverRevision?.finalised_at && !workspace?.finalisedAt) { Alert.alert("Finalise first", "Finalise this Revision and wait for confirmation before submitting."); return; }
     if (!serverRevision) {
       Alert.alert(
         "Revision still syncing",
@@ -987,6 +950,8 @@ export default function RevisionDetailScreen() {
         ) : null}
       </View>
 
+      <Pressable style={[styles.addFinding, { backgroundColor: "#047857" }]} onPress={() => void finalise()}><Text style={styles.addFindingText}>{workspace?.finalisedAt || serverRevision?.finalised_at ? "Finalised - ready to submit" : workspace?.finaliseRequested ? "Pending sync - Finalise when synced" : online ? "Finalise Rectification" : "Finalise when synced"}</Text></Pressable>
+      <Pressable style={styles.addFinding} onPress={() => void syncNow()}><Text style={styles.addFindingText}>Sync now</Text></Pressable>
       <Pressable
         style={styles.addFinding}
         onPress={openAddFinding}
@@ -1039,6 +1004,7 @@ export default function RevisionDetailScreen() {
                 finding.memberNumber
                   ? `Member ${finding.memberNumber}`
                   : "",
+                finding.leg && `Leg ${finding.leg}`, finding.assignedFlag && `Flag ${finding.assignedFlag}`,
                 finding.towerSegment,
                 finding.drawingNumber
                   ? `Drawing ${finding.drawingNumber}`
@@ -1147,6 +1113,7 @@ export default function RevisionDetailScreen() {
                 item.member_number
                   ? `Member ${item.member_number}`
                   : "",
+                item.leg && `Leg ${item.leg}`, item.assigned_flag && `Flag ${item.assigned_flag}`,
                 item.tower_segment,
                 item.drawing_number
                   ? `Drawing ${item.drawing_number}`
@@ -1362,6 +1329,9 @@ export default function RevisionDetailScreen() {
             contentContainerStyle={styles.formContent}
             keyboardShouldPersistTaps="handled"
           >
+            <QualityLegField value={findingForm.leg} onChange={leg => setFindingForm(current => ({ ...current, leg }))} />
+            <Text style={styles.label}>Assigned Flag (optional)</Text>
+            <TextInput style={styles.input} value={findingForm.assignedFlag} onChangeText={assignedFlag => setFindingForm(current => ({ ...current, assignedFlag }))} />
             <Text style={styles.label}>
               Flagged issue *
             </Text>
@@ -1455,6 +1425,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="Before photos"
+              context={{ Tower: tower?.name || towerId, Revision: title, Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.beforePhotos}
               onChange={(beforePhotos) =>
                 setFindingForm((current) => ({
@@ -1468,6 +1439,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="After photos"
+              context={{ Tower: tower?.name || towerId, Revision: title, Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.afterPhotos}
               onChange={(afterPhotos) =>
                 setFindingForm((current) => ({
@@ -1592,6 +1564,8 @@ export default function RevisionDetailScreen() {
                 styles.formContent
               }
             >
+              <QualityLegField value={rectification.item.leg} onChange={leg => setRectification(current => current ? { ...current, item: { ...current.item, leg } } : current)} />
+              <Text style={styles.label}>Assigned Flag</Text><TextInput style={styles.input} value={rectification.item.assigned_flag || ""} onChangeText={assigned_flag => setRectification(current => current ? { ...current, item: { ...current.item, assigned_flag } } : current)} />
               <Text style={styles.label}>
                 Rectification comment
               </Text>
@@ -1620,6 +1594,7 @@ export default function RevisionDetailScreen() {
 
               <QualityPhotoPicker
                 label="After photos"
+                context={{ Tower: tower?.name || towerId, Revision: title, Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
                 photos={
                   rectification.afterPhotos
                 }

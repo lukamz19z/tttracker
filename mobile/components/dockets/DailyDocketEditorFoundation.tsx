@@ -1,8 +1,10 @@
+import { getDailyDocketEditor } from "@/lib/api/daily-dockets";
+import { calculateDailyProductivity } from "@/lib/dockets/productivity";
 import { Ionicons } from "@expo/vector-icons";
 
 import { DailyDocketReviewSubmit } from "@/components/dockets/DailyDocketReviewSubmit";
 import { DailyDocketSiteEvents } from "@/components/dockets/DailyDocketSiteEvents";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -694,6 +696,7 @@ export function DailyDocketEditorFoundation({
     onChange({ ...draft, ...patch });
   };
 
+  const [signing, setSigning] = useState(false);
   const labourTotals = useMemo(
     () =>
       calculateLabourTotals(
@@ -718,6 +721,31 @@ export function DailyDocketEditorFoundation({
       draft.mobilisationHours,
     ],
   );
+
+  const baselineKey = `${draft.projectId}:${draft.towerId}:${draft.docketId || ""}:${draft.docketDate}`;
+  const [baseline, setBaseline] = useState({ key: baselineKey, towers: payload.productivityTowers, progress: payload.towerProgress });
+  const payloadBaselineKey = `${payload.draft.projectId}:${payload.draft.towerId}:${payload.draft.docketId || ""}:${payload.draft.docketDate}`;
+  useEffect(() => {
+    if (baselineKey === payloadBaselineKey) {
+      setBaseline({ key: baselineKey, towers: payload.productivityTowers, progress: payload.towerProgress });
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.docketDate)) return;
+      void getDailyDocketEditor({ projectId: draft.projectId, towerId: draft.towerId, docketId: draft.docketId, docketDate: draft.docketDate })
+        .then((result) => { if (!cancelled) setBaseline({ key: baselineKey, towers: result.productivityTowers, progress: result.towerProgress }); })
+        .catch(() => { if (!cancelled) setBaseline({ key: baselineKey, towers: [], progress: {} }); });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [baselineKey, payloadBaselineKey, payload.productivityTowers, payload.towerProgress, draft.projectId, draft.towerId, draft.docketId, draft.docketDate]);
+  const productivity = calculateDailyProductivity({
+    rawManhours: labourTotals.rawManhours, productionManhours: labourTotals.productionManhours,
+    towers: baseline.key === baselineKey ? baseline.towers || [] : [],
+    work: [{ towerId: draft.towerId, progress: { progressModel: draft.progressModel, sectionV2Rows: draft.sectionV2Rows, legacyRows: draft.legacyProgressRows, hasBodyExtension: draft.hasBodyExtension } },
+      ...draft.additionalTowerWork.filter((work) => work.target_tower_id).map((work) => ({ towerId: work.target_tower_id, progress: { progressModel: "section_v2" as const, sectionV2Rows: work.progress_rows, legacyRows: [], hasBodyExtension: work.has_body_extension } }))],
+  });
+  const mhRate = (value: number | null) => value == null ? "\u2014" : value.toFixed(2);
 
   const crewShift = useMemo(
     () => commonLabourShift(draft.labourRows),
@@ -1288,6 +1316,7 @@ export function DailyDocketEditorFoundation({
             return {
               ...row,
               ...patch,
+              progress_rows: (baseline.progress?.[patch.target_tower_id]?.sectionV2Rows || createBlankSectionV2Rows()).map((section) => ({ ...section, assembly_today: String(section.assembly_today ?? ""), erection_today: String(section.erection_today ?? "") })),
               has_body_extension:
                 tower?.has_body_extension ??
                 row.has_body_extension,
@@ -2355,6 +2384,7 @@ export function DailyDocketEditorFoundation({
           <View style={styles.stack}>
             {draft.additionalTowerWork.map(
               (work, index) => {
+                const totals = calculateProgressTotals({ progressModel: "section_v2", sectionV2Rows: work.progress_rows, legacyRows: [], hasBodyExtension: work.has_body_extension });
                 const expanded =
                   expandedAdditional.has(work.ui_id);
                 const share = Math.max(
@@ -2404,6 +2434,11 @@ export function DailyDocketEditorFoundation({
                       </Pressable>
                     </View>
 
+                    <View style={styles.metricRow}>
+                      <Metric label="Assembly" value={`${totals.assemblyPercent}%`} />
+                      <Metric label="Erection" value={`${totals.erectionPercent}%`} />
+                      <Metric label="Overall" value={`${totals.totalProgressPercent}%`} />
+                    </View>
                     <SelectField
                       label="Target tower"
                       value={work.target_tower_id}
@@ -2412,7 +2447,7 @@ export function DailyDocketEditorFoundation({
                         (tower) =>
                           tower.value !== draft.towerId,
                       )}
-                      disabled={locked}
+                      disabled={locked || baseline.key !== baselineKey}
                       onSelect={(target_tower_id) =>
                         updateAdditionalTower(index, {
                           target_tower_id,
@@ -2848,6 +2883,10 @@ export function DailyDocketEditorFoundation({
         </View>
       </View>
 
+      <View style={styles.metricRow}>
+        <Metric label="Daily Prod MH/t" value={mhRate(productivity.productionMhPerTonne)} />
+        <Metric label="Daily Raw MH/t" value={mhRate(productivity.rawMhPerTonne)} />
+      </View>
       <StepStrip
         current={step}
         onChange={onStepChange}
@@ -2855,6 +2894,7 @@ export function DailyDocketEditorFoundation({
 
       <ScrollView
         style={styles.scroll}
+        scrollEnabled={!signing}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
@@ -2874,12 +2914,12 @@ export function DailyDocketEditorFoundation({
                     />
                   )
                 : (
-                    <DailyDocketReviewSubmit
+                    <DailyDocketReviewSubmit onSigningChange={setSigning}
                       payload={payload}
                       draft={draft}
                       onChange={onChange}
-                      onSaveDraft={onSaveDraft}
-                      onSubmit={onSubmit}
+                      onSaveDraft={signing ? () => undefined : onSaveDraft}
+                      onSubmit={signing ? () => undefined : onSubmit}
                       saving={saving}
                       submitting={submitting}
                       disabled={locked}
@@ -2992,6 +3032,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
+    width: "100%",
+    maxWidth: 1000,
+    alignSelf: "center",
     padding: 16,
     paddingBottom: 60,
   },

@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import {
   useLocalSearchParams,
@@ -24,7 +25,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -164,7 +164,7 @@ function DefectDetailContent() {
   }, [reloadDetail]);
 
   const defect = detail?.defect ?? null;
-  const files = detail?.files ?? [];
+  const files = useMemo(() => detail?.files ?? [], [detail?.files]);
 
   const [members, setMembers] = useState<
     QualityMemberCatalogRow[]

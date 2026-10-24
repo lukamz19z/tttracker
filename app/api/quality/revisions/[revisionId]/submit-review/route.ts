@@ -1,3 +1,4 @@
+import { validateRevisionEvidence } from "@/lib/quality/finalise-revision";
 import { NextResponse } from "next/server";
 
 import { notifyRevisionEvent } from "@/lib/quality/revision-notifications";
@@ -54,6 +55,10 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    if (!revision.finalised_at) return NextResponse.json({ error: "Finalise this Revision before submitting for review." }, { status: 409 });
+    const validation = await validateRevisionEvidence(service, revisionId);
+    if (validation) return NextResponse.json({ error: validation }, { status: 409 });
+    if (revision.submitted_for_review_at) return NextResponse.json({ revision, notification: { recipients: 0 } });
     const submittedAt = new Date().toISOString();
     const { data: updated, error: updateError } = await service
       .from("tower_revisions")

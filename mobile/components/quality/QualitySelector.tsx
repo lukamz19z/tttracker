@@ -1,10 +1,10 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Search, X } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   Modal,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -92,7 +92,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#fff" },
   header: { flexDirection: "row", alignItems: "center", padding: 18, borderBottomWidth: 1, borderColor: "#e2e8f0" },
   title: { flex: 1, fontSize: 19, fontWeight: "900", color: "#0f172a" },
-  close: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#f1f5f9" },
+  close: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#f1f5f9" },
   search: { flexDirection: "row", alignItems: "center", gap: 8, margin: 16, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 13, paddingHorizontal: 12 },
   searchInput: { flex: 1, height: 46, color: "#0f172a" },
   list: { paddingHorizontal: 16, paddingBottom: 30 },

@@ -71,8 +71,8 @@ export async function enqueue<T>(kind: string, payload: T, id: string = crypto.r
   const db = await database();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT OR REPLACE INTO sync_queue(id,kind,payload,status,attempts,last_error,created_at,updated_at)
-     VALUES(?,?,?,'pending',0,NULL,?,?)`,
+    `INSERT INTO sync_queue(id,kind,payload,status,attempts,last_error,created_at,updated_at)
+     VALUES(?,?,?,'pending',0,NULL,?,?) ON CONFLICT(id) DO NOTHING`,
     id,
     kind,
     JSON.stringify(payload),
@@ -137,4 +137,10 @@ export async function updateQueueStatus(
 export async function removeQueueRecord(id: string) {
   const db = await database();
   await db.runAsync("DELETE FROM sync_queue WHERE id = ?", id);
+}
+
+export async function cachedValuesWithPrefix<T>(prefix: string): Promise<T[]> {
+  const db = await database();
+  const rows = await db.getAllAsync<{ payload: string }>("SELECT payload FROM cache_entries WHERE cache_key LIKE ?", `${prefix}%`);
+  return rows.flatMap(row => JSON.parse(row.payload) as T[]);
 }

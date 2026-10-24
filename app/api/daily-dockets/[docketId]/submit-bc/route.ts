@@ -1,3 +1,4 @@
+import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
@@ -597,6 +598,9 @@ export async function POST(
     }
 
     const docket = docketData as DocketRow;
+    if (docket.docket_date && isFutureDocketDate(docket.docket_date, new Date(), _request.headers.get("X-TTTracker-Timezone"))) {
+      return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
+    }
 
     const allowedStatuses = new Set([
       "draft",

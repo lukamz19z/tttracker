@@ -1,3 +1,6 @@
+import { SafeAreaView } from "react-native-safe-area-context";
+import { getTowerProgress } from "@/lib/api/tower-progress";
+import type { ResolvedMobileTowerProgress } from "@/types/daily-dockets";
 import { Ionicons } from "@expo/vector-icons";
 import { router, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -8,7 +11,6 @@ import {
   Modal,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -188,45 +190,6 @@ function naturalTowerSort(a: Tower, b: Tower): number {
   );
 }
 
-function getDocketProgress(docket: DocketRow): number {
-  const assembly = safeNumber(docket.assembly_percent, 0);
-  const erection = safeNumber(docket.erection_percent, 0);
-
-  return clampPercent(
-    Math.round(assembly * 0.5 + erection * 0.5),
-  );
-}
-
-function getTowerProgress(dockets: DocketRow[]): number {
-  return dockets.reduce(
-    (maximum, docket) =>
-      Math.max(maximum, getDocketProgress(docket)),
-    0,
-  );
-}
-
-function getLatestAssembly(dockets: DocketRow[]): number {
-  return dockets.reduce(
-    (maximum, docket) =>
-      Math.max(
-        maximum,
-        clampPercent(safeNumber(docket.assembly_percent, 0)),
-      ),
-    0,
-  );
-}
-
-function getLatestErection(dockets: DocketRow[]): number {
-  return dockets.reduce(
-    (maximum, docket) =>
-      Math.max(
-        maximum,
-        clampPercent(safeNumber(docket.erection_percent, 0)),
-      ),
-    0,
-  );
-}
-
 function getProgressStatus(
   progress: number,
 ): Exclude<StatusFilter, "All"> {
@@ -360,6 +323,7 @@ export default function TowerProgressScreen() {
   const [statusFilter, setStatusFilter] =
     useState<StatusFilter>("All");
 
+  const [resolvedProgress, setResolvedProgress] = useState<Record<string, ResolvedMobileTowerProgress>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -433,6 +397,14 @@ export default function TowerProgressScreen() {
         return;
       }
 
+      try {
+        const result = await getTowerProgress(selectedProjectId);
+        setResolvedProgress(result.progress);
+      } catch (error) {
+        Alert.alert("Could not load tower progress", error instanceof Error ? error.message : "Please try again.");
+        setResolvedProgress({}); setTowers([]); setDockets([]); setLoading(false); return;
+      }
+
       setTowers(
         ((towerResponse.data ?? []) as Tower[]).sort(
           naturalTowerSort,
@@ -483,13 +455,11 @@ export default function TowerProgressScreen() {
     const map: Record<string, number> = {};
 
     towers.forEach((tower) => {
-      map[tower.id] = getTowerProgress(
-        docketsByTower[tower.id] ?? [],
-      );
+      map[tower.id] = resolvedProgress[tower.id]?.totalProgressPercent ?? 0;
     });
 
     return map;
-  }, [docketsByTower, towers]);
+  }, [resolvedProgress, towers]);
 
   const summary = useMemo(() => {
     const values = towers.map(
@@ -714,12 +684,10 @@ export default function TowerProgressScreen() {
   }
 
   const overviewStats = useMemo(() => {
-    const progress =
-      getTowerProgress(towerDockets);
-    const assembly =
-      getLatestAssembly(towerDockets);
-    const erection =
-      getLatestErection(towerDockets);
+    const resolved = selectedTower ? resolvedProgress[selectedTower.id] : undefined;
+    const progress = resolved?.totalProgressPercent ?? 0;
+    const assembly = resolved?.assemblyPercent ?? 0;
+    const erection = resolved?.erectionPercent ?? 0;
 
     const latestDocket =
       towerDockets[0] ?? null;
@@ -804,9 +772,7 @@ export default function TowerProgressScreen() {
       erection,
       status:
         getProgressStatus(progress),
-      latestDate:
-        latestDocket?.docket_date ??
-        null,
+      latestDate: resolved?.latestDocketDate ?? null,
       latestCrew:
         latestDocket?.crew ||
         latestDocket?.leading_hand ||
@@ -834,7 +800,7 @@ export default function TowerProgressScreen() {
     defects,
     deliveryItems,
     requiredBundles,
-    towerDockets,
+    towerDockets, resolvedProgress, selectedTower,
   ]);
 
   const bodyExtension =
@@ -1020,6 +986,11 @@ export default function TowerProgressScreen() {
           </Text>
         </View>
 
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, paddingVertical: 8 }}>
+          <Text>Assembly {resolvedProgress[item.id]?.assemblyPercent ?? 0}%</Text>
+          <Text>Erection {resolvedProgress[item.id]?.erectionPercent ?? 0}%</Text>
+          <Text>Overall {progress}%</Text>
+        </View>
         <View style={styles.progressTrack}>
           <View
             style={[

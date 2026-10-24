@@ -82,6 +82,8 @@ export default function Bundles() {
   const [expandedBundleId, setExpandedBundleId] = useState(
     clean(params.bundleId),
   );
+  const [showArrived, setShowArrived] = useState(false);
+  const [showOutstanding, setShowOutstanding] = useState(true);
   const [visibleCount, setVisibleCount] = useState(6);
   const [actionBundle, setActionBundle] = useState<BundleRecord | null>(null);
   const [memberAction, setMemberAction] = useState<MemberRecord | null>(null);
@@ -243,6 +245,9 @@ export default function Bundles() {
       .map((row) => row.bundle);
   }, [deferredQuery, indexedBundles, section, towerId]);
 
+  const outstandingRows = rows.filter((bundle) => deriveBundleStatus(bundle) !== "arrived");
+  const arrivedRows = rows.filter((bundle) => deriveBundleStatus(bundle) === "arrived");
+
   const summary = useMemo(() => {
     let checked = 0;
     let outstanding = 0;
@@ -370,7 +375,9 @@ export default function Bundles() {
         </View>
       ) : null}
 
-      {rows.slice(0, visibleCount).map((bundle, index) => {
+      {[{ title: "Outstanding", rows: outstandingRows, open: showOutstanding, toggle: () => setShowOutstanding((value) => !value) }, { title: "Arrived", rows: arrivedRows, open: showArrived, toggle: () => setShowArrived((value) => !value) }].map((group) => <View key={group.title}>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: group.open }} onPress={group.toggle} style={{ minHeight: 48, justifyContent: "center" }}><Text style={styles.emptyTitle}>{group.title} ({group.rows.length}) {group.open ? "-" : "+"}</Text></Pressable>
+      {(group.open ? group.rows.slice(0, visibleCount) : []).map((bundle, index) => {
         const actualBundleId = clean(bundle.id);
         const id =
           actualBundleId ||
@@ -484,7 +491,7 @@ export default function Bundles() {
                   )
                 }
               >
-                <Text style={styles.fullButtonText}>FULL</Text>
+                <Text style={styles.fullButtonText}>Delivered</Text>
               </Pressable>
             </View>
 
@@ -636,13 +643,15 @@ export default function Bundles() {
         );
       })}
 
-      {rows.length > visibleCount ? (
+      </View>)}
+
+      {((showOutstanding && outstandingRows.length > visibleCount) || (showArrived && arrivedRows.length > visibleCount)) ? (
         <Pressable
           style={styles.loadMore}
           onPress={() => setVisibleCount((count) => count + 6)}
         >
           <Text style={styles.loadMoreText}>
-            Load 6 more · {rows.length - visibleCount} remaining
+            Load 6 more · {(showOutstanding ? Math.max(0, outstandingRows.length - visibleCount) : 0) + (showArrived ? Math.max(0, arrivedRows.length - visibleCount) : 0)} remaining
           </Text>
         </Pressable>
       ) : null}

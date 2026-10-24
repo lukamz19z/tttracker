@@ -24,6 +24,9 @@ export type RevisionPdfPhoto = {
 };
 
 export type RevisionPdfItem = {
+  assignedFlag?: string | null;
+  leg?: string | null;
+  itemReference?: string | null;
   itemNumber: number;
   issueType: string;
   towerSegment?: string | null;
@@ -95,7 +98,6 @@ function imageFormat(mimeType: string, dataUrl: string) {
 export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const pageWidth = 210;
-  const pageHeight = 297;
   const margin = 13;
   const contentWidth = pageWidth - margin * 2;
 
@@ -235,7 +237,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       setText(C.muted);
-      doc.text("No photo", x + width / 2, y + height / 2, { align: "center" });
+      doc.text(title.toLowerCase().includes("after") ? "After evidence pending" : "Before evidence pending", x + width / 2, y + height / 2, { align: "center" });
       return;
     }
 
@@ -377,8 +379,11 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     keyValue(margin + 96, iy + 24, "Status", item.status, 70);
     iy += 53;
 
-    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, "Before");
-    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, "After");
+    doc.setFontSize(8);
+    doc.text([item.itemReference, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
+    iy += 8;
+    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, "BEFORE");
+    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, "AFTER");
     iy += 84;
 
     doc.setFont("helvetica", "bold");

@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import {
   useCallback,
@@ -17,7 +18,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -1136,7 +1136,7 @@ export default function SitePrestartScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safe}>
         <View style={styles.loading}>
           <ActivityIndicator size="large" color="#2563EB" />
           <Text style={styles.loadingText}>

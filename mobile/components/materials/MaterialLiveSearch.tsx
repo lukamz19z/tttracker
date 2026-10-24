@@ -1,5 +1,6 @@
+import { compareBundles } from "@/lib/materials-sort";
 import { Search, X } from "lucide-react-native";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -15,11 +16,8 @@ import {
   MaterialsShell,
 } from "@/components/materials/MaterialsShell";
 import { TowerPicker } from "@/components/materials/TowerPicker";
-import { useAuth } from "@/contexts/AuthContext";
 import { useMaterials } from "@/contexts/MaterialsContext";
 import {
-  cachedMaterialSearch,
-  searchMaterials,
   type MaterialMemberSearchField,
   type MaterialSearchKind,
   type MaterialSearchResult,
@@ -27,17 +25,17 @@ import {
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
-const KIND_OPTIONS: Array<{ value: MaterialSearchKind; label: string }> = [
+const KIND_OPTIONS: { value: MaterialSearchKind; label: string }[] = [
   { value: "all", label: "All" },
   { value: "member", label: "Members" },
   { value: "bundle", label: "Bundles" },
   { value: "bolt", label: "Bolts" },
 ];
 
-const MEMBER_FIELD_OPTIONS: Array<{
+const MEMBER_FIELD_OPTIONS: {
   value: MaterialMemberSearchField;
   label: string;
-}> = [
+}[] = [
   { value: "all", label: "All fields" },
   { value: "mark", label: "Member No." },
   { value: "pn", label: "Part No." },
@@ -66,6 +64,7 @@ function memberMatches(
     );
   }
 
+  if (typeof row.search_text === "string") return row.search_text.includes(query);
   return [
     row.mark_no,
     row.pn_final,
@@ -215,7 +214,7 @@ function FilterChips<T extends string>({
   onChange,
 }: {
   label: string;
-  options: Array<{ value: T; label: string }>;
+  options: { value: T; label: string }[];
   value: T;
   onChange: (value: T) => void;
 }) {
@@ -265,153 +264,39 @@ export function MaterialLiveSearch({
   limit?: number;
   showKind?: boolean;
 }) {
-  const { profile } = useAuth();
   const { data, online, towerName } = useMaterials();
-  const projectId = profile?.projectId ?? "";
 
   const [query, setQuery] = useState("");
   const [towerId, setTowerId] = useState("");
   const [kindFilter, setKindFilter] = useState<MaterialSearchKind>(kind);
   const [memberField, setMemberField] =
     useState<MaterialMemberSearchField>("all");
-  const [results, setResults] = useState<MaterialSearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const requestSequence = useRef(0);
+  const deferredQuery = useDeferredValue(query);
+  const searching = false;
+  const message = !online ? "Offline - searching cached project materials." : null;
 
   const towers = useMemo(() => data?.towers ?? [], [data?.towers]);
   const effectiveKind = kind === "all" ? kindFilter : kind;
   const effectiveMemberField =
     effectiveKind === "member" ? memberField : "all";
 
-  useEffect(() => {
-    if (kind !== "all") setKindFilter(kind);
-  }, [kind]);
-
-  const localFallback = useMemo(
-    () =>
-      localResults(
-        effectiveKind,
-        data,
-        query,
-        limit,
-        towerName,
-        towerId,
-        effectiveMemberField,
-      ),
-    [
-      data,
-      effectiveKind,
-      effectiveMemberField,
-      limit,
-      query,
-      towerId,
-      towerName,
-    ],
-  );
-
-  useEffect(() => {
-    const trimmed = query.trim();
-    const sequence = ++requestSequence.current;
-
-    if (trimmed.length < 2) {
-      setResults([]);
-      setSearching(false);
-      setMessage(null);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      void (async () => {
-        setSearching(true);
-        setMessage(null);
-
-        const filters = {
-          towerId,
-          memberField: effectiveMemberField,
-        } as const;
-
-        try {
-          if (!projectId) {
-            setResults([]);
-            setMessage("Select a project first.");
-            return;
-          }
-
-          if (!online) {
-            const cached = await cachedMaterialSearch(
-              projectId,
-              trimmed,
-              effectiveKind,
-              filters,
-            );
-            if (sequence !== requestSequence.current) return;
-
-            const offlineResults = cached?.value.results?.length
-              ? cached.value.results
-              : localFallback;
-
-            setResults(offlineResults.slice(0, limit));
-            setMessage(
-              offlineResults.length
-                ? "Offline · showing cached material matches."
-                : "Offline · no cached matches for these filters.",
-            );
-            return;
-          }
-
-          try {
-            const payload = await searchMaterials(
-              projectId,
-              trimmed,
-              effectiveKind,
-              limit,
-              filters,
-            );
-            if (sequence !== requestSequence.current) return;
-            setResults(payload.results ?? []);
-          } catch (error) {
-            const cached = await cachedMaterialSearch(
-              projectId,
-              trimmed,
-              effectiveKind,
-              filters,
-            );
-            if (sequence !== requestSequence.current) return;
-
-            const fallback = cached?.value.results?.length
-              ? cached.value.results
-              : localFallback;
-
-            setResults(fallback.slice(0, limit));
-            setMessage(
-              fallback.length
-                ? "Live search was unavailable · showing cached matches."
-                : error instanceof Error
-                  ? error.message
-                  : "Material search could not be completed.",
-            );
-          }
-        } finally {
-          if (sequence === requestSequence.current) setSearching(false);
-        }
-      })();
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [
-    effectiveKind,
-    effectiveMemberField,
-    limit,
-    localFallback,
-    online,
-    projectId,
-    query,
-    towerId,
-  ]);
+  const indexed = useMemo(() => ({
+    ...data,
+    members: (data?.members || []).map((row) => ({ ...row, search_text: [row.mark_no, row.pn_final, row.bundle_reference, row.drawing_number, row.section, row.tower_segment].map(clean).join(" ").toLowerCase() })),
+    bundles: [...(data?.bundles || [])].sort(compareBundles),
+    bolts: data?.bolts || [],
+  }), [data]);
+  const results = useMemo(() => localResults(effectiveKind, indexed as NonNullable<typeof data>, deferredQuery, limit, towerName, towerId, effectiveMemberField), [indexed, deferredQuery, effectiveKind, limit, towerName, towerId, effectiveMemberField]);
 
   return (
-    <MaterialsShell title={title} subtitle={subtitle}>
+    <MaterialsShell title={title} subtitle={subtitle} items={results.map((result, index) => (
+        <MaterialCard
+          key={`${result.kind}:${result.id || index}`}
+          title={showKind ? `${kindLabel(result.kind)}: ${result.title}` : result.title}
+          subtitle={result.subtitle}
+          meta={result.meta}
+        />
+      ))}>
       <View style={styles.filterCard}>
         <TowerPicker
           towers={towers}
@@ -495,14 +380,6 @@ export function MaterialLiveSearch({
         </Text>
       ) : null}
 
-      {results.map((result, index) => (
-        <MaterialCard
-          key={`${result.kind}:${result.id || index}`}
-          title={showKind ? `${kindLabel(result.kind)}: ${result.title}` : result.title}
-          subtitle={result.subtitle}
-          meta={result.meta}
-        />
-      ))}
     </MaterialsShell>
   );
 }

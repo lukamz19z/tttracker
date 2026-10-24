@@ -1,3 +1,4 @@
+import { compareBundles } from "@/lib/materials-sort";
 import { useMemo, useState } from "react";
 import {
   Modal,
@@ -50,7 +51,7 @@ export function BundlePicker({
             .includes(q),
         );
 
-    return filtered.slice(0, 8);
+    return [...filtered].sort(compareBundles).slice(0, 8);
   }, [bundles, query, towerName]);
 
   const choose = (bundleId: string) => {

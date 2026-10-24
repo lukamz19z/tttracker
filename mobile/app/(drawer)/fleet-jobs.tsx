@@ -1,5 +1,6 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import Constants from "expo-constants";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -12,7 +13,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -940,7 +940,7 @@ export default function FleetJobsScreen() {
 
         const isExpoGo =
           Constants.executionEnvironment ===
-          Constants.ExecutionEnvironment.StoreClient;
+          ExecutionEnvironment.StoreClient;
 
         if (!isExpoGo) {
           try {

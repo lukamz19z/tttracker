@@ -1,3 +1,6 @@
+import { mobileProgressContext } from "@/lib/dockets/mobile-progress-context";
+import { calculateDailyProductivity } from "@/lib/dockets/daily-productivity";
+import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // app/api/mobile/daily-dockets/save/route.ts
@@ -760,54 +763,6 @@ function allocationPayload(
   ];
 }
 
-async function recalcTower(
-  service: any,
-  towerId: string,
-) {
-  const { data, error } = await service
-    .from("tower_daily_dockets")
-    .select(
-      "assembly_percent,erection_percent",
-    )
-    .eq("tower_id", towerId);
-
-  if (error) throw new Error(error.message);
-
-  const progress = (data ?? []).reduce(
-    (max: number, row: any) =>
-      Math.max(
-        max,
-        Math.round(
-          num(row.assembly_percent) * 0.5 +
-            num(row.erection_percent) *
-              0.5,
-        ),
-      ),
-    0,
-  );
-
-  const status =
-    progress >= 100
-      ? "Complete"
-      : progress > 0
-        ? "In Progress"
-        : "Not Started";
-
-  const { error: updateError } =
-    await service
-      .from("towers")
-      .update({
-        progress,
-        status,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", towerId);
-
-  if (updateError) {
-    throw new Error(updateError.message);
-  }
-}
-
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as SaveBody;
@@ -838,6 +793,10 @@ export async function POST(request: Request) {
         { error: "Docket date is required." },
         { status: 400 },
       );
+    }
+
+    if (isFutureDocketDate(normaliseIsoDate(draft.docketDate), new Date(), request.headers.get("X-TTTracker-Timezone"))) {
+      return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
     }
 
     if (!clean(draft.leadingHand)) {
@@ -931,6 +890,18 @@ export async function POST(request: Request) {
 
     const progress =
       progressTotals(draft);
+
+    const workedIds = [...new Set([towerId, ...(draft.additionalTowerWork || []).map((work: any) => clean(work.target_tower_id)).filter(Boolean)])];
+    const { data: workedTowers, error: workedError } = await service.from("towers").select("id,extra_data,progress").eq("project_id", projectId).in("id", workedIds);
+    if (workedError) throw new Error(workedError.message);
+    if (workedTowers?.length !== workedIds.length) throw new Error("A worked tower could not be found in this project.");
+    const baseline = await mobileProgressContext(service, projectId, workedTowers, { excludeDocketId: clean(draft.docketId) || undefined, throughDate: clean(draft.docketDate) });
+    const productivity = calculateDailyProductivity({
+      rawManhours: labourTotals.rawManhours, productionManhours: labourTotals.productionManhours,
+      towers: baseline.productivityTowers,
+      work: [{ towerId, progress: { progressModel: draft.progressModel, sectionV2Rows: draft.sectionV2Rows || [], legacyRows: draft.legacyProgressRows || [], hasBodyExtension: draft.hasBodyExtension } },
+        ...(draft.additionalTowerWork || []).map((work: any) => ({ towerId: clean(work.target_tower_id), progress: { progressModel: "section_v2" as const, sectionV2Rows: work.progress_rows || [], legacyRows: [], hasBodyExtension: work.has_body_extension } }))],
+    });
 
     const header = docketPayload({
       draft: {
@@ -1134,7 +1105,12 @@ export async function POST(request: Request) {
       newDefects: draft.newDefects ?? [],
     });
 
-    await recalcTower(service, towerId);
+    const current = await mobileProgressContext(service, projectId, workedTowers);
+    for (const tower of workedTowers) {
+      const next = Math.max(num(tower.progress), current.resolved.get(tower.id)?.totalProgressPercent || 0);
+      const { error } = await service.from("towers").update({ progress: Math.round(next), status: next >= 100 ? "Complete" : next > 0 ? "In Progress" : "Not Started", updated_at: new Date().toISOString() }).eq("id", tower.id).eq("project_id", projectId);
+      if (error) throw new Error(`Daily docket saved, but tower progress could not be recalculated: ${error.message}`);
+    }
 
     return NextResponse.json({
       success: true,
@@ -1151,6 +1127,7 @@ export async function POST(request: Request) {
         progress.erectionPercent,
       overallProgressPercent:
         progress.totalProgressPercent,
+      productivity,
       warnings: [],
     });
   } catch (error) {

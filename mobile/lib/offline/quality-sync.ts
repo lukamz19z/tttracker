@@ -1,3 +1,5 @@
+import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
+import { queueRows } from "./db";
 import { apiJson } from "@/lib/api/client";
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
 import { removeOfflineFile } from "@/lib/offline/files";
@@ -17,6 +19,8 @@ export type OfflineDefectCreate = {
   clientMutationId: string;
   projectId: string;
   towerId: string;
+  leg?: string | null;
+  assignedFlag?: string | null;
   issueTypeId: string | null;
   memberNumber: string | null;
   segment: string | null;
@@ -39,9 +43,11 @@ export type OfflineRevisionCreate = {
   clientCompany: string | null;
   clientReference: string | null;
   notes: string | null;
-  findings: Array<{
+  findings: {
     clientMutationId: string;
-    issueTypeId: string | null;
+    leg?: string | null;
+  assignedFlag?: string | null;
+  issueTypeId: string | null;
     otherIssueText: string | null;
     towerSegment: string | null;
     memberNumber: string | null;
@@ -51,11 +57,13 @@ export type OfflineRevisionCreate = {
     status: RevisionItemStatus;
     beforePhotos: LocalQualityPhoto[];
     afterPhotos: LocalQualityPhoto[];
-  }>;
+  }[];
   /** Backward-compatible with queue records created before the RECT/FLI upgrade. */
   firstFinding?: null | {
     clientMutationId: string;
-    issueTypeId: string | null;
+    leg?: string | null;
+  assignedFlag?: string | null;
+  issueTypeId: string | null;
     otherIssueText: string | null;
     towerSegment: string | null;
     memberNumber: string | null;
@@ -73,6 +81,8 @@ export type OfflineRevisionItemCreate = {
   revisionId: string;
   projectId: string;
   towerId: string;
+  leg?: string | null;
+  assignedFlag?: string | null;
   issueTypeId: string | null;
   otherIssueText: string | null;
   towerSegment: string | null;
@@ -86,11 +96,14 @@ export type OfflineRevisionItemCreate = {
 };
 
 export type OfflineRevisionItemUpdate = {
+  workspaceCreatedAt?: string;
   clientMutationId: string;
   revisionId: string;
   itemId: string;
   projectId: string;
   towerId: string;
+  leg?: string | null;
+  assignedFlag?: string | null;
   rectificationComment: string;
   status: RevisionItemStatus;
   afterPhotos: LocalQualityPhoto[];
@@ -116,11 +129,9 @@ export async function enqueueRevisionCreate(
     "clientMutationId" | "findings" | "firstFinding"
   > & {
     clientMutationId?: string;
-    findings?: Array<
-      Omit<OfflineRevisionCreate["findings"][number], "clientMutationId"> & {
+    findings?: (Omit<OfflineRevisionCreate["findings"][number], "clientMutationId"> & {
         clientMutationId?: string;
-      }
-    >;
+      })[];
   },
 ) {
   const clientMutationId =
@@ -169,14 +180,9 @@ export async function enqueueRevisionItemCreate(
 }
 
 export async function enqueueRevisionItemUpdate(
-  input: Omit<
-    OfflineRevisionItemUpdate,
-    "clientMutationId"
-  >,
+  input: Omit<OfflineRevisionItemUpdate, "clientMutationId"> & { clientMutationId?: string },
 ) {
-  const clientMutationId = mutationId(
-    "revision-rectification",
-  );
+  const clientMutationId = input.clientMutationId || mutationId("revision-rectification");
 
   await enqueue(
     "quality_revision_item_update",
@@ -190,7 +196,7 @@ export async function enqueueRevisionItemUpdate(
   return clientMutationId;
 }
 
-async function cleanup(
+export async function cleanupQualityPhotos(
   photos: LocalQualityPhoto[],
 ) {
   for (const photo of photos) {
@@ -230,10 +236,12 @@ async function uploadPhotos({
       name: photo.name,
       mimeType: photo.mimeType,
       capturedAt: photo.capturedAt,
+      clientMutationId: photo.id,
+      watermarkPosition: photo.watermarkPosition,
     });
   }
 
-  await cleanup(photos);
+  // Cleanup happens only after the whole operation and workspace reconciliation.
 }
 
 async function syncDefect(
@@ -295,6 +303,8 @@ async function createRevisionItem(
     role: "after_photo",
     photos: payload.afterPhotos,
   });
+  if (payload.status === "Rectified") await apiJson(`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(result.item.id)}`, { method: "PATCH", body: JSON.stringify({ status: "Rectified", rectificationComment: payload.rectificationComment }) });
+
 }
 
 async function syncRevision(
@@ -314,6 +324,10 @@ async function syncRevision(
     },
   );
 
+  const workspaces = await listRevisionWorkspaces(payload.projectId);
+  for (const workspace of workspaces.filter(row => row.clientMutationId === payload.clientMutationId)) {
+    await saveRevisionWorkspace({ ...workspace, serverRevisionId: result.revision.id });
+  }
   const findings =
     payload.findings?.length
       ? payload.findings
@@ -334,18 +348,7 @@ async function syncRevision(
 async function syncRevisionItemUpdate(
   payload: OfflineRevisionItemUpdate,
 ) {
-  await apiJson<{ item: { id: string } }>(
-    `/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({
-        rectificationComment:
-          payload.rectificationComment,
-        status: payload.status,
-      }),
-    },
-  );
-
+  await apiJson(`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`, { method: "PATCH", body: JSON.stringify({ leg: payload.leg, assignedFlag: payload.assignedFlag, rectificationComment: payload.rectificationComment }) });
   await uploadPhotos({
     projectId: payload.projectId,
     towerId: payload.towerId,
@@ -354,40 +357,68 @@ async function syncRevisionItemUpdate(
     role: "after_photo",
     photos: payload.afterPhotos,
   });
+  await apiJson<{ item: { id: string } }>(
+    `/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        leg: payload.leg, assignedFlag: payload.assignedFlag,
+        rectificationComment:
+          payload.rectificationComment,
+        status: payload.status,
+      }),
+    },
+  );
+
+
 }
 
-export async function syncQualityQueueRecord(
-  record: QueueRecord,
-) {
-  if (record.kind === "quality_defect_create") {
-    return syncDefect(
-      record.payload as OfflineDefectCreate,
-    );
+export async function syncQualityQueueRecord(record: QueueRecord) {
+  const payload = { ...(record.payload as OfflineRevisionItemCreate & OfflineRevisionItemUpdate) };
+  const workspaces = await listRevisionWorkspaces(payload.projectId);
+  const workspace = workspaces.find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
+  if (payload.revisionId?.startsWith("local-")) {
+    if (!workspace?.serverRevisionId) throw new Error("Parent Revision must sync before its findings.");
+    payload.revisionId = workspace.serverRevisionId;
   }
-
-  if (record.kind === "quality_revision_create") {
-    return syncRevision(
-      record.payload as OfflineRevisionCreate,
-    );
+  if (record.kind === "quality_revision_finalise") {
+    const dependencies = (await queueRows()).filter(row => row.id !== record.id && row.kind.startsWith("quality_") && ((row.payload as { revisionId?: string }).revisionId === (record.payload as { revisionId: string }).revisionId || (workspace?.clientMutationId && (row.payload as { clientMutationId?: string }).clientMutationId === workspace.clientMutationId)));
+    if (dependencies.length || workspace?.findings.length || workspace?.pendingUpdates.length) throw new Error("Finalisation is waiting for all findings and evidence to sync.");
+    const result = await apiJson<{ revision: { finalised_at: string } }>(`/api/quality/revisions/${encodeURIComponent(payload.revisionId)}/finalise`, { method: "POST" });
+    if (workspace) await saveRevisionWorkspace({ ...workspace, finalisedAt: result.revision.finalised_at, finaliseRequested: false });
+    return;
   }
-
-  if (
-    record.kind === "quality_revision_item_create"
-  ) {
-    return createRevisionItem(
-      record.payload as OfflineRevisionItemCreate,
-    );
+  if (record.kind === "quality_defect_create") await syncDefect(record.payload as OfflineDefectCreate);
+  else if (record.kind === "quality_revision_create") { await syncRevision(record.payload as OfflineRevisionCreate); return; }
+  else if (record.kind === "quality_revision_item_create") await createRevisionItem(payload);
+  else if (record.kind === "quality_revision_item_update") await syncRevisionItemUpdate(payload);
+  else throw new Error(`Unsupported Quality queue item: ${record.kind}`);
+  if (workspace) await saveRevisionWorkspace({ ...workspace,
+    reconciledFindingIds: [...(workspace.reconciledFindingIds || []), payload.clientMutationId],
+    reconciledUpdateKeys: [...(workspace.reconciledUpdateKeys || []), ...workspace.pendingUpdates.filter(row => row.itemId === payload.itemId && (!payload.workspaceCreatedAt || row.createdAt === payload.workspaceCreatedAt)).map(row => `${row.itemId}:${row.createdAt}`)],
+    findings: workspace.findings.filter(row => row.clientMutationId !== payload.clientMutationId),
+    pendingUpdates: workspace.pendingUpdates.filter(row => row.itemId !== payload.itemId || (payload.workspaceCreatedAt && row.createdAt !== payload.workspaceCreatedAt)),
+  });
+  // Files are cleaned by SyncContext only after queue deletion succeeds.
+}
+export async function cleanupQualityRecord(record: QueueRecord) {
+  const photos: LocalQualityPhoto[] = [];
+  function collect(value: unknown) {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(collect); return; }
+    const row = value as Record<string, unknown>;
+    if (typeof row.uri === "string" && typeof row.mimeType === "string") photos.push(row as LocalQualityPhoto);
+    else Object.values(row).forEach(collect);
   }
-
-  if (
-    record.kind === "quality_revision_item_update"
-  ) {
-    return syncRevisionItemUpdate(
-      record.payload as OfflineRevisionItemUpdate,
-    );
-  }
-
-  throw new Error(
-    `Unsupported Quality queue item: ${record.kind}`,
-  );
+  collect(record.payload);
+  const referenced = new Set<string>();
+  const findReferences = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(findReferences); return; }
+    const row = value as Record<string, unknown>;
+    if (typeof row.uri === "string") referenced.add(row.uri);
+    else Object.values(row).forEach(findReferences);
+  };
+  (await queueRows()).forEach(row => findReferences(row.payload));
+  await cleanupQualityPhotos(photos.filter(photo => !referenced.has(photo.uri)));
 }

@@ -485,7 +485,16 @@ export type DocketUserIdentity = {
   display: string;
 };
 
+export type ResolvedMobileTowerProgress = {
+  assemblyPercent: number; erectionPercent: number; totalProgressPercent: number;
+  status: "Not Started" | "In Progress" | "Complete"; latestDocketDate: string | null;
+  sectionV2Rows?: SectionV2ProgressRow[];
+};
 export type DailyDocketEditorPayload = {
+  resolvedDefaults: { prestartMinutes: string; lunchBreakMinutes: string };
+  recommendedDocketDate: string;
+  productivityTowers: { id: string; weightTonnes: number | null; baselinePercent: number }[];
+  towerProgress: Record<string, ResolvedMobileTowerProgress>;
   project: DocketProjectSummary;
   towers: DocketTowerOption[];
   crews: DocketCrewOption[];
@@ -505,6 +514,7 @@ export type DailyDocketEditorPayload = {
 };
 
 export type SaveDailyDocketResult = {
+  productivity: { completedTonnes: number | null; productionMhPerTonne: number | null; rawMhPerTonne: number | null };
   success: true;
   docketId: string;
   approvalStatus: DocketApprovalStatus;

@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import type { ReactNode } from "react";
 import {
+  FlatList,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -25,10 +26,11 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 8,
     gap: 12,
   },
   back: {
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
@@ -47,7 +49,7 @@ const styles = StyleSheet.create({
     color: "#2563eb",
   },
   heading: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "900",
     color: "#0f172a",
   },
@@ -103,34 +105,19 @@ export function MaterialsShell({
   subtitle,
   children,
   root = false,
+  items,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   root?: boolean;
+  items?: ReactNode[];
 }) {
   const { refreshing, refresh, cachedAt, error, pendingSyncCount } = useMaterials();
   const { profile } = useAuth();
   const insets = useSafeAreaInsets();
 
-  return (
-    <SafeAreaView
-      style={styles.safe}
-      edges={["top", "left", "right"]}
-    >
-      <ScrollView
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void refresh()}
-          />
-        }
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: Math.max(insets.bottom, 12) + 28 },
-        ]}
-      >
+  const header = <>
         {!root ? (
           <Pressable
             onPress={() => router.back()}
@@ -173,7 +160,14 @@ export function MaterialsShell({
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         {children}
-      </ScrollView>
+  </>;
+
+  return (
+    <SafeAreaView
+      style={styles.safe}
+      edges={["top", "left", "right"]}
+    >
+      {items ? <FlatList data={items} keyExtractor={(_, index) => String(index)} renderItem={({ item }) => <>{item}</>} ListHeaderComponent={header} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5} /> : <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]}>{header}</ScrollView>}
     </SafeAreaView>
   );
 }

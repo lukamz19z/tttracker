@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as Notifications from "expo-notifications";
 import { Stack } from "expo-router";
 import {
@@ -26,7 +27,6 @@ import {
   Linking,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,

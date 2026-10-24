@@ -1,3 +1,4 @@
+import { manuallyOffline } from "@/lib/offline/connectivity";
 import type { Session } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
@@ -72,7 +73,10 @@ async function performFetch(
     ...requestInit
   } = init;
 
+  if (manuallyOffline()) throw new Error("This action requires a connection.");
   const headers = new Headers(requestInit.headers);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (timeZone) headers.set("X-TTTracker-Timezone", timeZone);
 
   if (session?.access_token) {
     headers.set("Authorization", `Bearer ${session.access_token}`);
@@ -125,6 +129,7 @@ export async function apiFetch(
   input: string,
   init: ApiRequestInit = {},
 ): Promise<Response> {
+  if (manuallyOffline()) throw new Error("This action requires a connection.");
   const session = await currentSession();
   return performFetch(input, init, session);
 }
@@ -189,9 +194,7 @@ export async function jsonBody<T>(
         payload = JSON.parse(text);
       } catch {
         if (!value.ok) {
-          throw new Error(
-            text.trim() || `${fallback} (${value.status}).`,
-          );
+          throw new Error(`TTTracker service returned HTTP ${value.status} instead of JSON. Check that the website API has been deployed.`);
         }
 
         throw new Error(
@@ -203,9 +206,7 @@ export async function jsonBody<T>(
     if (!value.ok) {
       throw new Error(
         payloadError(payload) ||
-          (text.trim()
-            ? text.trim()
-            : `${fallback} (${value.status}).`),
+          `${fallback} (${value.status}).`,
       );
     }
 
@@ -238,6 +239,7 @@ export async function apiJson<T>(
   input: string,
   init: ApiRequestInit = {},
 ): Promise<T> {
+  if (manuallyOffline()) throw new Error("This action requires a connection.");
   const method = String(init.method ?? "GET").toUpperCase();
   const canDedupe =
     init.dedupe !== false &&

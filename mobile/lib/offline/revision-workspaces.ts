@@ -9,6 +9,8 @@ import type {
 export type PendingRevisionFinding = {
   clientMutationId: string;
   queuedAt: string | null;
+  leg?: string | null;
+  assignedFlag?: string | null;
   issueTypeId: string | null;
   otherIssueText: string | null;
   towerSegment: string | null;
@@ -24,6 +26,8 @@ export type PendingRevisionFinding = {
 
 export type PendingRevisionUpdate = {
   itemId: string;
+  leg?: string | null;
+  assignedFlag?: string | null;
   rectificationComment: string;
   status: RevisionItemStatus;
   afterPhotos: LocalQualityPhoto[];
@@ -32,6 +36,10 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  reconciledFindingIds?: string[];
+  reconciledUpdateKeys?: string[];
+  finaliseRequested?: boolean;
+  finalisedAt?: string | null;
   routeKey: string;
   projectId: string;
   towerId: string;
@@ -71,16 +79,22 @@ export async function listRevisionWorkspaces(projectId: string) {
   return cached?.value ?? [];
 }
 
-export async function saveRevisionWorkspace(
-  workspace: RevisionWorkspace,
-) {
-  const current = await listRevisionWorkspaces(workspace.projectId);
-  const next = [
-    workspace,
-    ...current.filter((row) => row.routeKey !== workspace.routeKey),
-  ];
-  await setCache(key(workspace.projectId), next);
-  return workspace;
+let workspaceWrite: Promise<unknown> = Promise.resolve();
+export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<RevisionWorkspace> {
+  const task = workspaceWrite.catch(() => undefined).then(async () => {
+    const current = await listRevisionWorkspaces(workspace.projectId);
+    const previous = current.find(row => row.routeKey === workspace.routeKey);
+    const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
+    const reconciledUpdateKeys = [...new Set([...(previous?.reconciledUpdateKeys || []), ...(workspace.reconciledUpdateKeys || [])])];
+    const next = { ...workspace, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
+      findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
+      pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
+    };
+    await setCache(key(workspace.projectId), [next, ...current.filter(row => row.routeKey !== workspace.routeKey)]);
+    return next;
+  });
+  workspaceWrite = task;
+  return task;
 }
 
 export async function removeRevisionWorkspace(
@@ -171,6 +185,8 @@ export function createLocalRevisionWorkspace(input: {
 }
 
 export function createPendingFinding(input: {
+  leg?: string | null;
+  assignedFlag?: string | null;
   issueTypeId: string | null;
   otherIssueText: string | null;
   towerSegment: string | null;

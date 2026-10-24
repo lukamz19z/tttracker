@@ -1,7 +1,7 @@
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
-import { apiFetch, apiJson } from "@/lib/api/client";
+import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
   DefectAssignee,
@@ -449,6 +449,8 @@ export async function uploadQualityPhoto(input: {
   uri: string;
   name: string;
   mimeType: string;
+  clientMutationId?: string;
+  watermarkPosition?: string;
   capturedAt?: string;
 }) {
   const form = new FormData();
@@ -469,6 +471,8 @@ export async function uploadQualityPhoto(input: {
   }
 
   form.append("fileRole", input.fileRole);
+  if (input.clientMutationId) form.append("clientMutationId", input.clientMutationId);
+  form.append("watermarkPosition", input.watermarkPosition || "bottom-left");
   form.append(
     "capturedAt",
     input.capturedAt ?? new Date().toISOString(),
@@ -492,16 +496,7 @@ export async function uploadQualityPhoto(input: {
     },
   );
 
-  const data = (await response
-    .json()
-    .catch(() => null)) as { error?: string } | null;
-
-  if (!response.ok) {
-    throw new Error(
-      data?.error ??
-        "Quality evidence could not be uploaded.",
-    );
-  }
+  const data = await jsonBody<{ file: { id: string } }>(response, "Quality evidence could not be uploaded.");
 
   return data;
 }

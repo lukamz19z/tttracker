@@ -17,8 +17,8 @@ export function AppFooter({ compact = false }: { compact?: boolean }) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { alignItems: "center", paddingHorizontal: 20, paddingVertical: 18 },
-  compact: { paddingVertical: 10 },
+  wrap: { alignItems: "center", paddingHorizontal: 20, paddingVertical: 10 },
+  compact: { paddingVertical: 4 },
   text: { color: "#94a3b8", fontSize: 11, fontWeight: "700", textAlign: "center" },
   subtext: { color: "#cbd5e1", fontSize: 10, marginTop: 3 },
 });

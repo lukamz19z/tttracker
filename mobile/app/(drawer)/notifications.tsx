@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Redirect,
   router,
@@ -15,7 +16,6 @@ import {
   Modal,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,

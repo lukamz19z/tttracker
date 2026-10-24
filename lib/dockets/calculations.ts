@@ -639,3 +639,14 @@ export function buildTowerProgressStatus(
   if (progress > 0) return "In Progress";
   return "Not Started";
 }
+
+/** Normalise field-entered time without changing incomplete/invalid input. */
+export function normalizeTimeInput(value: string): string {
+  const raw = value.trim().replace(/[^\d:]/g, "");
+  if (!raw) return "";
+  const parts = raw.includes(":") ? raw.split(":") : raw.length <= 2 ? [raw, "0"] : raw.length === 3 ? [raw.slice(0, 1), raw.slice(1)] : [raw.slice(0, 2), raw.slice(2, 4)];
+  const hour = Number(parts[0]);
+  const minute = Number(parts[1] || 0);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return raw;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}

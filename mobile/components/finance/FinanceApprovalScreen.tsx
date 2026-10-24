@@ -1,9 +1,9 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -38,9 +38,9 @@ type Detail = {
     canMarkPaid?: boolean;
   };
   submission: Record<string, unknown>;
-  items: Array<Record<string, unknown>>;
-  attachments: Array<Record<string, unknown>>;
-  categories: Array<{ id: string; name: string }>;
+  items: Record<string, unknown>[];
+  attachments: Record<string, unknown>[];
+  categories: { id: string; name: string }[];
   project: {
     id: string;
     name: string;

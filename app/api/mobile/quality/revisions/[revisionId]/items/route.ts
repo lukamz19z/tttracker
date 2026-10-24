@@ -74,6 +74,8 @@ export async function POST(
       }
     }
 
+    const leg = clean(body.leg) || null;
+    if (leg && !["A","B","C","D"].includes(leg)) return NextResponse.json({ error: "Select Leg A, B, C or D." }, { status: 400 });
     const issueTypeId = clean(body.issueTypeId) || null;
     const otherIssueText =
       clean(body.otherIssueText) || null;
@@ -95,6 +97,7 @@ export async function POST(
         revision_id: revisionId,
         project_id: revision.project_id,
         tower_id: revision.tower_id,
+        leg, assigned_flag: clean(body.assignedFlag) || null,
         issue_type_id: issueTypeId,
         other_issue_text: otherIssueText,
         tower_segment: clean(body.towerSegment) || null,
@@ -103,10 +106,7 @@ export async function POST(
         finding,
         rectification_comment:
           clean(body.rectificationComment) || null,
-        status:
-          clean(body.status) === "Rectified"
-            ? "Rectified"
-            : "Open",
+        status: "Open",
         created_by: user.id,
         mobile_client_mutation_id:
           clientMutationId || null,
@@ -127,6 +127,7 @@ export async function POST(
         .eq("status", "Draft");
     }
 
+    await service.from("tower_revisions").update({ finalised_at: null }).eq("id", revisionId);
     return NextResponse.json({ item });
   } catch (error) {
     const apiError = qualityApiError(error);

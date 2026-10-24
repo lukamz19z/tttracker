@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import {
@@ -14,7 +15,6 @@ import {
   Modal,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -195,6 +195,8 @@ function validateDraft(
   if (!clean(draft.docketDate)) {
     return "Enter the Daily Docket date.";
   }
+  if (draft.docketDate > localDate()) return "Daily Docket date cannot be in the future.";
+
 
   if (!clean(draft.leadingHand)) {
     return "Enter the Leading Hand.";
@@ -725,7 +727,7 @@ export default function DailyDocketScreen() {
   if (loading) {
     return (
       <PermissionScreen permission="mobile.daily_dockets">
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safe}>
           <View style={styles.loading}>
             <ActivityIndicator size="large" color="#2563eb" />
             <Text style={styles.loadingText}>Loading Daily Dockets…</Text>

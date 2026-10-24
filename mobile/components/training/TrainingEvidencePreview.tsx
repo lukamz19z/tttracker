@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Image } from "expo-image";
 import * as FileSystemLegacy from "expo-file-system/legacy";
@@ -14,7 +15,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,

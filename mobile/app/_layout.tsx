@@ -1,3 +1,4 @@
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import "react-native-gesture-handler";
 import "react-native-url-polyfill/auto";
 
@@ -14,7 +15,7 @@ enableFreeze(true);
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
+    <SafeAreaProvider><AuthProvider>
       <AccessProvider>
         <SyncProvider>
           <PushProvider>
@@ -35,6 +36,6 @@ export default function RootLayout() {
           </PushProvider>
         </SyncProvider>
       </AccessProvider>
-    </AuthProvider>
+    </AuthProvider></SafeAreaProvider>
   );
 }

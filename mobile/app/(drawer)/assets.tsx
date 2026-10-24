@@ -1,3 +1,4 @@
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -10,7 +11,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -800,7 +800,7 @@ export default function AssetsScreen() {
   const [bulkTagSaving, setBulkTagSaving] = useState(false);
 
   const [addVisible, setAddVisible] = useState(false);
-  const [addKind, setAddKind] = useState<AssetKind | null>(null);
+  const [, setAddKind] = useState<AssetKind | null>(null);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [editVehicle, setEditVehicle] = useState<VehicleForm | null>(null);
   const [editPlant, setEditPlant] = useState<PlantForm | null>(null);
@@ -1696,7 +1696,7 @@ export default function AssetsScreen() {
     );
   }
 
-  const listProps = useMemo(() => {
+  const listProps = (() => {
     if (register === "Vehicles") {
       return {
         data: visibleVehicles,
@@ -1714,14 +1714,7 @@ export default function AssetsScreen() {
       return { data: visibleGear, renderItem: renderGear, key: "gear" };
     }
     return { data: visibleLadders, renderItem: renderLadder, key: "ladders" };
-  }, [
-    register,
-    visibleVehicles,
-    visiblePlant,
-    visibleTorque,
-    visibleGear,
-    visibleLadders,
-  ]);
+  })();
 
   if (loading) {
     return (
@@ -2401,7 +2394,7 @@ function EquipmentDetail({
 }: {
   title: string;
   status: string;
-  fields: Array<[string, string]>;
+  fields: [string, string][];
   onEdit: () => void;
 }) {
   return (
@@ -2828,11 +2821,11 @@ function AddChooser({
   onClose: () => void;
   onChoose: (kind: AssetKind) => void;
 }) {
-  const options: Array<{
+  const options: {
     kind: AssetKind;
     icon: keyof typeof Ionicons.glyphMap;
     detail: string;
-  }> = [
+  }[] = [
     { kind: "Vehicle", icon: "car-outline", detail: "Light vehicle, heavy vehicle or trailer" },
     { kind: "Plant", icon: "construct-outline", detail: "Crane, telehandler or other plant" },
     { kind: "Torque Wrench", icon: "build-outline", detail: "Calibration-controlled torque wrench" },
@@ -3075,11 +3068,11 @@ function DetailHero({
 function StatusGrid({
   items,
 }: {
-  items: Array<{
+  items: {
     label: string;
     value: string;
     state: { label: string; tone: Tone; detail: string };
-  }>;
+  }[];
 }) {
   return (
     <View style={styles.statusGrid}>
@@ -3113,7 +3106,7 @@ function DetailSection({
   );
 }
 
-function DetailRows({ rows }: { rows: Array<[string, string]> }) {
+function DetailRows({ rows }: { rows: [string, string][] }) {
   return (
     <View>
       {rows.map(([label, value]) => (

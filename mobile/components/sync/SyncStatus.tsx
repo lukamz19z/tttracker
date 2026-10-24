@@ -1,10 +1,11 @@
-import { CloudOff, RefreshCw, TriangleAlert } from "lucide-react-native";
+import { Circle, CloudOff, RefreshCw, TriangleAlert } from "lucide-react-native";
 import { Pressable, StyleSheet, Text } from "react-native";
 
 import { useSync } from "@/contexts/SyncContext";
 
 export function SyncStatus({ compact = false }: { compact?: boolean }) {
   const {
+    forcedOffline, networkOnline, lastError,
     online,
     syncing,
     pendingCount,
@@ -12,12 +13,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
     syncNow,
   } = useSync();
 
-  /* Healthy sync is intentionally silent. */
-  if (online && !syncing && pendingCount === 0 && failedCount === 0) {
-    return null;
-  }
-
-  const label = !online
+  const label = !networkOnline ? `No Connection - ${pendingCount} pending` : forcedOffline ? `Offline Mode - ${pendingCount} pending` : !online
     ? pendingCount
       ? `Offline · ${pendingCount} saved locally`
       : "Offline"
@@ -27,13 +23,13 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
         : "Syncing…"
       : failedCount
         ? `${failedCount} sync issue${failedCount === 1 ? "" : "s"}`
-        : `${pendingCount} waiting to sync`;
+        : pendingCount ? `${pendingCount} waiting to sync` : "Online";
 
   const Icon = !online
     ? CloudOff
     : failedCount > 0
       ? TriangleAlert
-      : RefreshCw;
+      : syncing ? RefreshCw : Circle;
 
   return (
     <Pressable
@@ -42,7 +38,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
     >
       <Icon
         size={compact ? 13 : 15}
-        color={failedCount > 0 ? "#b45309" : "#64748b"}
+        color={failedCount > 0 || !online ? "#b45309" : "#15803d"}
       />
       <Text
         style={[
@@ -52,7 +48,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
           failedCount > 0 && styles.warning,
         ]}
       >
-        {label}
+        {label}{lastError ? " - Last sync failed, tap to retry" : ""}
       </Text>
     </Pressable>
   );
@@ -60,6 +56,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
 
 const styles = StyleSheet.create({
   wrap: {
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
@@ -82,3 +79,8 @@ const styles = StyleSheet.create({
     color: "#b45309",
   },
 });
+
+export function OfflineModeButton() {
+  const { forcedOffline, setForcedOffline } = useSync();
+  return <Pressable style={{ minHeight: 44, justifyContent: "center", backgroundColor: "#f1f5f9", paddingHorizontal: 12, borderRadius: 10 }} onPress={() => void setForcedOffline(!forcedOffline)}><Text style={{ fontWeight: "800", color: forcedOffline ? "#b45309" : "#15803d" }}>{forcedOffline ? "Go Online" : "Work Offline"}</Text></Pressable>;
+}
