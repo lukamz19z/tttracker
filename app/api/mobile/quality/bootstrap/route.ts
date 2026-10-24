@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const started = performance.now();
   try {
     const { service, identity } = await requireMobileUser(request);
     const projectId =
@@ -130,7 +131,7 @@ export async function GET(request: NextRequest) {
           "Other",
         ],
       },
-    });
+    }, { headers: { "Server-Timing": `bootstrap;dur=${(performance.now() - started).toFixed(1)}` } });
   } catch (error) {
     const apiError = mobileApiError(error);
     const denied =

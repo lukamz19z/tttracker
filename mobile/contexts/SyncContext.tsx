@@ -24,6 +24,7 @@ import { syncRevisionQueueRecord } from "@/lib/offline/revision-sync";
 import { syncQualityQueueRecord, cleanupQualityRecord } from "@/lib/offline/quality-sync";
 
 type SyncState = {
+  ready: boolean;
   online: boolean;
   effectiveOnline: boolean;
   networkOnline: boolean;
@@ -62,6 +63,7 @@ async function processRecord(record: QueueRecord) {
 }
 
 export function SyncProvider({ children }: PropsWithChildren) {
+  const [ready, setReady] = useState(false);
   const [online, setOnline] = useState(false);
   const [forcedOffline, setForcedOfflineState] = useState(false);
   const [materialPendingCount, setMaterialPendingCount] = useState(0);
@@ -83,6 +85,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
   const mountedRef = useRef(true);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const syncAgainRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncInvokerRef = useRef<null | (() => Promise<void>)>(null);
 
   const applyQueueState = useCallback((rows: QueueRecord[]) => {
@@ -158,7 +161,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
               ? error.message
               : "Offline item could not be synced.";
 
-          await updateQueueStatus(record.id, "failed", message);
+          await updateQueueStatus(record.id, /must sync before|waiting for all findings/.test(message) ? "blocked" : "failed", message);
 
           if (mountedRef.current) {
             setLastError(message);
@@ -169,6 +172,12 @@ export function SyncProvider({ children }: PropsWithChildren) {
     } finally {
       const remaining = await queueRows();
       applyQueueState(remaining);
+      const retryable = remaining.filter(row => row.status === "failed" && row.attempts <= 2);
+      if (retryable.length && !manuallyOffline() && mountedRef.current) {
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        const delay = retryable.some(row => row.attempts > 1) ? 30_000 : 5_000;
+        retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; void syncInvokerRef.current?.(); }, delay);
+      }
 
       if (mountedRef.current) {
         setSyncing(false);
@@ -183,6 +192,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       return syncPromiseRef.current;
     }
 
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     const task = runSync().catch(error => { if (mountedRef.current) setLastError(error instanceof Error ? error.message : "Sync failed. Tap to retry."); });
     const tracked = task.finally(() => {
       if (syncPromiseRef.current === tracked) {
@@ -206,7 +216,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
      * Initial status check. syncNow() exits locally when the queue is empty,
      * so normal app startup does not create a pointless upload cycle.
      */
-    void getCache<boolean>("sync:forced-offline").then(async (cached) => { setManualOffline(Boolean(cached?.value)); setForcedOfflineState(Boolean(cached?.value)); await refresh(); await syncNow(); });
+    void getCache<boolean>("sync:forced-offline").then(async (cached) => { setManualOffline(Boolean(cached?.value)); setForcedOfflineState(Boolean(cached?.value)); await refresh(); if (mountedRef.current) setReady(true); await syncNow(); }).catch(error => { console.warn("TTTracker connectivity initialization failed:", error); if (mountedRef.current) setReady(true); });
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") {
@@ -232,6 +242,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
 
     return () => {
       mountedRef.current = false;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       appListener.remove();
       networkListener.remove();
     };
@@ -241,6 +252,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
 
   const value = useMemo(
     () => ({
+      ready,
       online: online && !forcedOffline,
       effectiveOnline: online && !forcedOffline,
       networkOnline: online,
@@ -253,6 +265,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       syncNow,
     }),
     [
+      ready,
       online,
       syncing,
       pendingCount,

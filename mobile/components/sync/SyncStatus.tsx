@@ -48,7 +48,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
           failedCount > 0 && styles.warning,
         ]}
       >
-        {label}{lastError ? " - Last sync failed, tap to retry" : ""}
+        {label}{lastError ? ` ? ${lastError} ? Tap to retry` : ""}
       </Text>
     </Pressable>
   );
@@ -65,6 +65,8 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   text: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#64748b",
     fontSize: 11,
     fontWeight: "700",

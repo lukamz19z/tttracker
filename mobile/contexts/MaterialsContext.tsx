@@ -240,7 +240,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   }, [performFlush]);
 
   const runLoad = useCallback(
-    async (forceRefresh = false) => {
+    async (forceRefresh = false, summaryOnly = false) => {
       if (!projectId) {
         projectRef.current = null;
         dataRef.current = null;
@@ -323,7 +323,13 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           }
 
           try {
-            const latest = await refreshMaterials(projectId);
+            const latest = await refreshMaterials(projectId, snapshot => {
+              if (projectRef.current !== projectId) return;
+              dataRef.current = snapshot;
+              setData(snapshot);
+              setLoading(false);
+              setRefreshing(true);
+            }, summaryOnly);
             if (projectRef.current !== projectId) return;
 
             const now = new Date().toISOString();
@@ -358,7 +364,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   );
 
   const load = useCallback(
-    (forceRefresh = false): Promise<void> => {
+    (forceRefresh = false, summaryOnly = false): Promise<void> => {
       const key = projectId ?? "";
 
       if (
@@ -368,7 +374,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
         return loadPromiseRef.current.promise;
       }
 
-      const task = runLoad(forceRefresh);
+      const task = runLoad(forceRefresh, summaryOnly);
       const tracked = task.finally(() => {
         if (loadPromiseRef.current?.promise === tracked) {
           loadPromiseRef.current = null;
@@ -1104,7 +1110,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(input.sourceBundleId);
       try {
         await createMaterialTransfer(input);
-        await load(true);
+        await load(true, true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1121,7 +1127,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(id);
       try {
         await receiveMaterialTransfer(id);
-        await load(true);
+        await load(true, true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1138,7 +1144,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(id);
       try {
         await cancelMaterialTransfer(id);
-        await load(true);
+        await load(true, true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1152,7 +1158,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyIssueKey(input.issueKey);
       try {
         await recordMissingReceiptApi(input);
-        await load(true);
+        await load(true, true);
       } finally {
         setBusyIssueKey(null);
       }

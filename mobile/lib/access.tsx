@@ -1,3 +1,5 @@
+import { useSync } from "@/contexts/SyncContext";
+import { manuallyOffline } from "@/lib/offline/connectivity";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createContext,
@@ -12,7 +14,7 @@ import {
 import { AppState } from "react-native";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { apiJson } from "@/lib/api/client";
+import { apiJson, apiUrl } from "@/lib/api/client";
 
 export type DynamicRole = {
   id: string;
@@ -69,7 +71,7 @@ export type ApprovalCounts = {
 type AccessMePayload = {
   error?: string;
   roles?: DynamicRole[];
-  projects?: Array<{ project_id?: string; id?: string }>;
+  projects?: { project_id?: string; id?: string }[];
   project_ids?: string[];
   permissions?: {
     all?: string[];
@@ -94,6 +96,7 @@ type AccessCache = {
 };
 
 type AccessState = {
+  stale: boolean;
   loading: boolean;
   error: string | null;
   roles: DynamicRole[];
@@ -202,6 +205,11 @@ async function writeAccessCache(userId: string, cache: AccessCache) {
 
 export function AccessProvider({ children }: PropsWithChildren) {
   const { session, loading: authLoading } = useAuth();
+  const { ready, effectiveOnline, forcedOffline } = useSync();
+  const connectivityRef = useRef({ ready, effectiveOnline });
+  connectivityRef.current = { ready, effectiveOnline };
+  const [stale, setStale] = useState(false);
+  const [cacheUserId, setCacheUserId] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
   const activeUserIdRef = useRef<string | null>(null);
@@ -237,6 +245,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
     setCapabilities(EMPTY_CAPABILITIES);
     setApprovalCounts(EMPTY_COUNTS);
     setError(null);
+    setStale(false);
   }, []);
 
   const applyAccess = useCallback((access: AccessMePayload) => {
@@ -271,9 +280,18 @@ export function AccessProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    if (mountedRef.current) {
-      setError(null);
+    if (!connectivityRef.current.ready || !connectivityRef.current.effectiveOnline || manuallyOffline()) {
+      if (__DEV__) console.debug("TTTracker access refresh skipped", { offlineMode: manuallyOffline(), cachedAccessRetained: Boolean(latestAccessRef.current) });
+      if (mountedRef.current) {
+        setLoading(false);
+        setStale(Boolean(latestAccessRef.current));
+        if (!latestAccessRef.current) setError("Connect to load TTTracker access, then retry.");
+      }
+      return;
     }
+    if (mountedRef.current) setError(null);
+    const startedAt = Date.now();
+    if (__DEV__) console.debug("TTTracker access refresh", { url: apiUrl("/api/access/me") });
 
     const requestedUserId = userId;
 
@@ -311,6 +329,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
         );
       }
 
+      setStale(false);
       lastServerRefreshRef.current = Date.now();
 
       await writeAccessCache(requestedUserId, {
@@ -327,13 +346,16 @@ export function AccessProvider({ children }: PropsWithChildren) {
           ? refreshError.message
           : "Could not load mobile access.";
 
-      console.error("TTTracker access refresh failed:", refreshError);
-
-      if (mountedRef.current) {
-        setError(message);
-      }
+      if (!mountedRef.current || activeUserIdRef.current !== requestedUserId) return;
+      const cachedAccessRetained = Boolean(latestAccessRef.current);
+      const operational = /timed? out|timeout|network|fetch failed|failed to fetch|connection|offline|internet|aborted/i.test(message);
+      if (operational) console.warn("TTTracker access refresh unavailable:", message);
+      else console.error("TTTracker access refresh failed:", refreshError);
+      if (__DEV__) console.debug("TTTracker access refresh fallback", { durationMs: Date.now() - startedAt, cachedAccessRetained });
+      setStale(cachedAccessRetained);
+      setError(cachedAccessRetained ? null : message);
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && activeUserIdRef.current === requestedUserId) {
         setLoading(false);
       }
     }
@@ -368,6 +390,12 @@ export function AccessProvider({ children }: PropsWithChildren) {
     const userId = session?.user.id ?? null;
     const previousUserId = activeUserIdRef.current;
     activeUserIdRef.current = userId;
+    if (previousUserId !== userId) {
+      clear();
+      setCacheUserId(null);
+      refreshPromiseRef.current = null;
+      if (previousUserId) void AsyncStorage.removeItem(cacheKey(previousUserId));
+    }
 
     if (!userId) {
       clear();
@@ -400,7 +428,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       }
 
       /* Always revalidate after cold start, but never block cached UI on it. */
-      void refresh();
+      setCacheUserId(userId);
     })();
 
     return () => {
@@ -414,6 +442,10 @@ export function AccessProvider({ children }: PropsWithChildren) {
     refresh,
     session?.user.id,
   ]);
+
+  useEffect(() => {
+    if (ready && !authLoading && cacheUserId === session?.user.id) void refresh();
+  }, [ready, effectiveOnline, forcedOffline, authLoading, cacheUserId, session?.user.id, refresh]);
 
   useEffect(() => {
     if (!session?.user.id) return;
@@ -466,6 +498,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
 
   const value = useMemo<AccessState>(
     () => ({
+      stale,
       loading,
       error,
       roles,
@@ -492,6 +525,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       },
     }),
     [
+      stale,
       loading,
       error,
       roles,

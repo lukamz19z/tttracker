@@ -122,11 +122,11 @@ export default function RevisionsScreen() {
   );
 
   const revisionStatuses = data?.workflow?.revisionStatuses ?? [];
-  const inspectionStages = data?.workflow?.inspectionStages ?? [
+  const inspectionStages = useMemo(() => data?.workflow?.inspectionStages ?? [
     "Post Assembly",
     "Post Erection",
     "Other",
-  ];
+  ], [data?.workflow?.inspectionStages]);
 
   const towerOptions = useMemo<QualitySelectorOption[]>(
     () => [
@@ -683,7 +683,7 @@ function FilterSelect({
     >
       <View style={{ flex: 1 }}>
         <Text style={styles.selectorLabel}>{label}</Text>
-        <Text numberOfLines={1} style={styles.selectorValue}>
+        <Text  style={styles.selectorValue}>
           {value}
         </Text>
       </View>

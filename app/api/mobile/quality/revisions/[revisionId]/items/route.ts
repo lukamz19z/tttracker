@@ -114,7 +114,14 @@ export async function POST(
       .select("*")
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (error.code === "23505" && clientMutationId) {
+        const existing = await service.from("tower_revision_items").select("*").eq("revision_id", revisionId).eq("mobile_client_mutation_id", clientMutationId).maybeSingle();
+        if (existing.error) throw new Error(existing.error.message);
+        if (existing.data) return NextResponse.json({ item: existing.data });
+      }
+      throw new Error(error.message);
+    }
 
     if (revision.status === "Draft") {
       await service

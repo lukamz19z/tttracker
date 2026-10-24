@@ -1425,7 +1425,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="Before photos"
-              context={{ Tower: tower?.name || towerId, Revision: title, Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.beforePhotos}
               onChange={(beforePhotos) =>
                 setFindingForm((current) => ({
@@ -1439,7 +1439,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="After photos"
-              context={{ Tower: tower?.name || towerId, Revision: title, Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.afterPhotos}
               onChange={(afterPhotos) =>
                 setFindingForm((current) => ({
@@ -1594,7 +1594,7 @@ export default function RevisionDetailScreen() {
 
               <QualityPhotoPicker
                 label="After photos"
-                context={{ Tower: tower?.name || towerId, Revision: title, Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
+                context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": clean(rectification.item.fli_number) || `FLI-${String(rectification.item.item_number).padStart(3, "0")}`, Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
                 photos={
                   rectification.afterPhotos
                 }
@@ -1683,7 +1683,7 @@ export default function RevisionDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  grow: { flex: 1 },
+  grow: { flex: 1, minWidth: 0, flexShrink: 1 },
   revisionCard: {
     backgroundColor: "#fff",
     borderWidth: 1,
@@ -1702,16 +1702,21 @@ const styles = StyleSheet.create({
   },
   head: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 10,
   },
   title: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#0f172a",
     fontWeight: "900",
     fontSize: 16,
   },
   fli: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#2563eb",
     fontWeight: "900",
     fontSize: 15,
@@ -1723,26 +1728,36 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   issueName: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#0f172a",
     fontWeight: "800",
     fontSize: 13,
   },
   meta: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#64748b",
     fontSize: 11,
     fontWeight: "700",
   },
   notes: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#475569",
     fontSize: 13,
     lineHeight: 19,
   },
   finding: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#334155",
     fontSize: 13,
     lineHeight: 19,
   },
   rectificationText: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#047857",
     backgroundColor: "#ecfdf5",
     padding: 10,
@@ -1919,6 +1934,8 @@ const styles = StyleSheet.create({
   },
   selectorTitle: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
     color: "#0f172a",
     fontWeight: "800",
   },
@@ -1955,6 +1972,8 @@ const styles = StyleSheet.create({
     height: "82%",
   },
   previewName: {
+    flexShrink: 1,
+    minWidth: 0,
     color: "#fff",
     fontSize: 12,
     marginTop: 12,

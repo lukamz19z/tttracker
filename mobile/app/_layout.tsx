@@ -16,8 +16,8 @@ enableFreeze(true);
 export default function RootLayout() {
   return (
     <SafeAreaProvider><AuthProvider>
-      <AccessProvider>
-        <SyncProvider>
+      <SyncProvider>
+        <AccessProvider>
           <PushProvider>
             <StatusBar style="dark" />
             <Stack screenOptions={{ headerShown: false }}>
@@ -34,8 +34,8 @@ export default function RootLayout() {
               <Stack.Screen name="project" />
             </Stack>
           </PushProvider>
-        </SyncProvider>
-      </AccessProvider>
+        </AccessProvider>
+      </SyncProvider>
     </AuthProvider></SafeAreaProvider>
   );
 }

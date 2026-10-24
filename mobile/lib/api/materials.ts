@@ -25,22 +25,29 @@ async function catalogue(projectId: string, kind: "member" | "bolt") {
   const rows: Record<string, unknown>[] = [];
   for (let offset = 0; ; offset += 500) {
     const page = await apiJson<{ rows: Record<string, unknown>[] }>(`/api/mobile/materials/catalogue?projectId=${encodeURIComponent(projectId)}&kind=${kind}&offset=${offset}`);
-    rows.push(...page.rows);
+    rows.push(...page.rows.map(row => ({ ...row, search_text: Object.values(row).filter(value => typeof value === "string").join(" ").toLowerCase() })));
     if (page.rows.length < 500) return rows;
   }
 }
-export async function refreshMaterials(projectId: string) {
-  const [raw, members, bolts] = await Promise.all([
-    apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 45_000 }),
-    catalogue(projectId, "member"), catalogue(projectId, "bolt"),
-  ]);
+export async function refreshMaterials(projectId: string, onSnapshot?: (data: MaterialPayload) => void, summaryOnly = false) {
+  const started = Date.now();
+  const raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 45_000 });
+  const cached = await getCache<MaterialPayload>(materialCacheKey(projectId));
+  const snapshot = { ...raw, members: cached?.value.members || [], bolts: cached?.value.bolts || [] };
+  await setCache(materialCacheKey(projectId), { ...snapshot, cataloguePending: summaryOnly ? Boolean((cached?.value as MaterialPayload & { cataloguePending?: boolean } | undefined)?.cataloguePending) : true });
+  onSnapshot?.(snapshot);
+  if (__DEV__) console.debug("Materials useful snapshot", { durationMs: Date.now() - started, bundles: raw.bundles.length });
+  if (summaryOnly) return snapshot;
+  // Catalogue download is background work: never gate the working bundle register.
+  const [members, bolts] = await Promise.all([catalogue(projectId, "member"), catalogue(projectId, "bolt")]);
   const data = { ...raw, members, bolts } as MaterialPayload;
   await setCache(materialCacheKey(projectId), data);
+  if (__DEV__) console.debug("Materials catalogue ready", { durationMs: Date.now() - started, members: members.length, bolts: bolts.length });
   return data;
 }
 export async function cachedMaterials(projectId: string) {
   const current = await getCache<MaterialPayload>(materialCacheKey(projectId));
-  if (current) return current;
+  if (current) return (current.value as MaterialPayload & { cataloguePending?: boolean }).cataloguePending ? { ...current, requiresCatalogueRefresh: true } : current;
   const legacy = await getCache<MaterialPayload>(`materials:v2:${projectId}`) || await getCache<MaterialPayload>(legacyMaterialCacheKey(projectId));
   // Render legacy bundle/check data now, but download the missing catalogues in background.
   return legacy ? { ...legacy, requiresCatalogueRefresh: true } : null;

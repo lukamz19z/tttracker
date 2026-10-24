@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+globalThis.__DEV__ = false;
 const nodeRequire = createRequire(import.meta.url);
 const fs=nodeRequire('fs'),path=nodeRequire('path'),assert=nodeRequire('assert/strict'),ts=nodeRequire(path.resolve('node_modules/typescript'));
 function moduleLoad(file,mocks={}){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText)(n=>{assert.ok(n in mocks,n);return mocks[n]},exports);return exports;}

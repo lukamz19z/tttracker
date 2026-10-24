@@ -47,8 +47,10 @@ export function QualityProvider({
   children,
 }: PropsWithChildren) {
   const { profile } = useAuth();
-  const { online } = useSync();
+  const { online, syncNow } = useSync();
   const projectId = profile?.projectId ?? null;
+
+  useEffect(() => { if (projectId && online) void syncNow(); }, [online, projectId, syncNow]);
 
   const [data, setData] =
     useState<QualityPayload | null>(null);

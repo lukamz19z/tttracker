@@ -36,6 +36,7 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  serverItems?: Record<string, { id: string; fli_number: string | null; item_number?: number | null }>;
   reconciledFindingIds?: string[];
   reconciledUpdateKeys?: string[];
   finaliseRequested?: boolean;
@@ -86,7 +87,7 @@ export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<Rev
     const previous = current.find(row => row.routeKey === workspace.routeKey);
     const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
     const reconciledUpdateKeys = [...new Set([...(previous?.reconciledUpdateKeys || []), ...(workspace.reconciledUpdateKeys || [])])];
-    const next = { ...workspace, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
+    const next = { ...workspace, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
       findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
       pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
     };

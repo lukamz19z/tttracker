@@ -1,9 +1,9 @@
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
-import { queueRows } from "./db";
+import { queueRows, getCache, setCache } from "./db";
 import { apiJson } from "@/lib/api/client";
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
-import { removeOfflineFile } from "@/lib/offline/files";
-import { uploadQualityPhoto } from "@/lib/api/quality";
+import { removeOfflineFile, offlineFileExists } from "@/lib/offline/files";
+import { uploadQualityPhoto, refreshQualityRevisionDetail } from "@/lib/api/quality";
 import type {
   DefectSeverity,
   InspectionStage,
@@ -225,7 +225,11 @@ async function uploadPhotos({
   photos: LocalQualityPhoto[];
 }) {
   for (const photo of photos) {
-    await uploadQualityPhoto({
+    const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
+    if (await getCache<{ id: string }>(receiptKey)) continue;
+    if (!offlineFileExists(photo.uri)) throw new Error("Local evidence file could not be found.");
+    if (__DEV__) console.debug("Quality sync stage", { stage: role, clientMutationId: photo.id, serverRevisionId: revisionId, serverItemId: revisionItemId });
+    const uploaded = await uploadQualityPhoto({
       projectId,
       towerId,
       revisionId,
@@ -239,6 +243,8 @@ async function uploadPhotos({
       clientMutationId: photo.id,
       watermarkPosition: photo.watermarkPosition,
     });
+    if (!uploaded.file?.id) throw new Error("Evidence upload returned no server file ID.");
+    await setCache(receiptKey, uploaded.file);
   }
 
   // Cleanup happens only after the whole operation and workspace reconciliation.
@@ -272,8 +278,10 @@ async function syncDefect(
 async function createRevisionItem(
   payload: OfflineRevisionItemCreate,
 ) {
-  const result = await apiJson<{
-    item: { id: string };
+  const workspaces = await listRevisionWorkspaces(payload.projectId);
+  const known = workspaces.find(row => row.serverRevisionId === payload.revisionId || row.routeKey === payload.revisionId)?.serverItems?.[payload.clientMutationId] || (await getCache<{ id: string; fli_number: string | null; item_number?: number | null }>(`quality:item-mapping:${payload.projectId}:${payload.clientMutationId}`))?.value;
+  const result = known ? { item: known } : await apiJson<{
+    item: { id: string; fli_number: string | null; item_number?: number | null };
   }>(
     `/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items`,
     {
@@ -286,6 +294,15 @@ async function createRevisionItem(
     },
   );
 
+  if (!result.item?.id) throw new Error("Finding creation returned no server item ID.");
+  await setCache(`quality:item-mapping:${payload.projectId}:${payload.clientMutationId}`, result.item);
+  // Commit mapping before evidence: retries after a crash reuse this exact FLI.
+  for (const workspace of await listRevisionWorkspaces(payload.projectId)) {
+    if (workspace.serverRevisionId === payload.revisionId || workspace.routeKey === payload.revisionId) {
+      await saveRevisionWorkspace({ ...workspace, serverItems: { ...workspace.serverItems, [payload.clientMutationId]: result.item } });
+    }
+  }
+  if (__DEV__) console.debug("Quality sync stage", { stage: "finding-mapped-before-evidence", clientMutationId: payload.clientMutationId, serverRevisionId: payload.revisionId, serverItemId: result.item.id, fli: result.item.fli_number });
   await uploadPhotos({
     projectId: payload.projectId,
     towerId: payload.towerId,
@@ -310,7 +327,8 @@ async function createRevisionItem(
 async function syncRevision(
   payload: OfflineRevisionCreate,
 ) {
-  const result = await apiJson<{
+  const existingWorkspace = (await listRevisionWorkspaces(payload.projectId)).find(row => row.clientMutationId === payload.clientMutationId);
+  const result = existingWorkspace?.serverRevisionId ? { revision: { id: existingWorkspace.serverRevisionId } } : await apiJson<{
     revision: { id: string };
   }>(
     "/api/mobile/quality/revisions",
@@ -373,13 +391,24 @@ async function syncRevisionItemUpdate(
 
 }
 
-export async function syncQualityQueueRecord(record: QueueRecord) {
+async function applyQualityQueueRecord(record: QueueRecord) {
   const payload = { ...(record.payload as OfflineRevisionItemCreate & OfflineRevisionItemUpdate) };
   const workspaces = await listRevisionWorkspaces(payload.projectId);
   const workspace = workspaces.find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
+  const mappedItem = workspace?.serverItems?.[payload.itemId] || (payload.itemId ? (await getCache<{ id: string }>(`quality:item-mapping:${payload.projectId}:${payload.itemId}`))?.value : null);
+  if (mappedItem) payload.itemId = mappedItem.id;
+  if (payload.itemId?.startsWith("revision-item-") && !mappedItem) throw new Error("Finding must sync before its rectification.");
   if (payload.revisionId?.startsWith("local-")) {
     if (!workspace?.serverRevisionId) throw new Error("Parent Revision must sync before its findings.");
     payload.revisionId = workspace.serverRevisionId;
+  }
+  if (record.kind === "quality_revision_item_update") {
+    const dependencies = await queueRows();
+    if (dependencies.some(row => row.kind === "quality_revision_item_create" &&
+      ((row.payload as OfflineRevisionItemCreate).clientMutationId === (record.payload as OfflineRevisionItemUpdate).itemId ||
+       workspace?.serverItems?.[(row.payload as OfflineRevisionItemCreate).clientMutationId]?.id === payload.itemId))) {
+      throw new Error("Finding and Before evidence must sync before its rectification.");
+    }
   }
   if (record.kind === "quality_revision_finalise") {
     const dependencies = (await queueRows()).filter(row => row.id !== record.id && row.kind.startsWith("quality_") && ((row.payload as { revisionId?: string }).revisionId === (record.payload as { revisionId: string }).revisionId || (workspace?.clientMutationId && (row.payload as { clientMutationId?: string }).clientMutationId === workspace.clientMutationId)));
@@ -395,9 +424,9 @@ export async function syncQualityQueueRecord(record: QueueRecord) {
   else throw new Error(`Unsupported Quality queue item: ${record.kind}`);
   if (workspace) await saveRevisionWorkspace({ ...workspace,
     reconciledFindingIds: [...(workspace.reconciledFindingIds || []), payload.clientMutationId],
-    reconciledUpdateKeys: [...(workspace.reconciledUpdateKeys || []), ...workspace.pendingUpdates.filter(row => row.itemId === payload.itemId && (!payload.workspaceCreatedAt || row.createdAt === payload.workspaceCreatedAt)).map(row => `${row.itemId}:${row.createdAt}`)],
+    reconciledUpdateKeys: [...(workspace.reconciledUpdateKeys || []), ...workspace.pendingUpdates.filter(row => row.itemId === (record.payload as OfflineRevisionItemUpdate).itemId && (!payload.workspaceCreatedAt || row.createdAt === payload.workspaceCreatedAt)).map(row => `${row.itemId}:${row.createdAt}`)],
     findings: workspace.findings.filter(row => row.clientMutationId !== payload.clientMutationId),
-    pendingUpdates: workspace.pendingUpdates.filter(row => row.itemId !== payload.itemId || (payload.workspaceCreatedAt && row.createdAt !== payload.workspaceCreatedAt)),
+    pendingUpdates: workspace.pendingUpdates.filter(row => row.itemId !== (record.payload as OfflineRevisionItemUpdate).itemId || (payload.workspaceCreatedAt && row.createdAt !== payload.workspaceCreatedAt)),
   });
   // Files are cleaned by SyncContext only after queue deletion succeeds.
 }
@@ -421,4 +450,25 @@ export async function cleanupQualityRecord(record: QueueRecord) {
   };
   (await queueRows()).forEach(row => findReferences(row.payload));
   await cleanupQualityPhotos(photos.filter(photo => !referenced.has(photo.uri)));
+}
+
+export async function syncQualityQueueRecord(record: QueueRecord) {
+  const payload = record.payload as Partial<OfflineRevisionItemUpdate>;
+  const startedAt = Date.now();
+  const workspace = (await listRevisionWorkspaces(payload.projectId || "")).find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
+  const details = { operation: record.kind, clientMutationId: payload.clientMutationId || record.id, localRevisionId: payload.revisionId || workspace?.routeKey, serverRevisionId: workspace?.serverRevisionId, localItemId: payload.itemId, serverItemId: workspace?.serverItems?.[payload.itemId || payload.clientMutationId || ""]?.id, retryCount: record.attempts };
+  if (__DEV__) console.debug("Quality sync operation", { ...details, stage: "start" });
+  try {
+    await applyQualityQueueRecord(record);
+    const current = (await listRevisionWorkspaces(payload.projectId || "")).find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
+    const revisionId = current?.serverRevisionId || payload.revisionId;
+    if (payload.projectId && revisionId && !revisionId.startsWith("local-")) {
+      try { await refreshQualityRevisionDetail(payload.projectId, revisionId); }
+      catch (error) { if (__DEV__) console.warn("Quality sync confirmed; detail refresh deferred", error instanceof Error ? error.message : "Refresh unavailable"); }
+    }
+    if (__DEV__) console.debug("Quality sync operation", { ...details, stage: "complete", durationMs: Date.now() - startedAt });
+  } catch (error) {
+    if (__DEV__) console.warn("Quality sync operation", { ...details, stage: "failed", durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : "Quality sync failed" });
+    throw error;
+  }
 }

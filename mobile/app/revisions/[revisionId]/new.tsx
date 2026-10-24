@@ -400,7 +400,7 @@ export default function NewFindingScreen() {
         required
         photos={beforePhotos}
         onChange={setBeforePhotos}
-        prefix="revision-before"
+        prefix="revision-before" context={{ "FLI #": "Pending FLI", Tower: tower?.name, Issue: issue?.name, Member: member?.memberNumber, Segment: member?.towerSegment, Drawing: member?.drawingNumber }}
       />
 
       <Text style={q.fieldLabel}>
@@ -418,7 +418,7 @@ export default function NewFindingScreen() {
         label="After photos (if rectified now)"
         photos={afterPhotos}
         onChange={setAfterPhotos}
-        prefix="revision-after"
+        prefix="revision-after" context={{ "FLI #": "Pending FLI", Tower: tower?.name, Issue: issue?.name, Member: member?.memberNumber, Segment: member?.towerSegment, Drawing: member?.drawingNumber }}
       />
 
       <Pressable

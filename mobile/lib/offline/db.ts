@@ -60,7 +60,7 @@ export type QueueRecord<T = unknown> = {
   id: string;
   kind: string;
   payload: T;
-  status: "pending" | "syncing" | "failed";
+  status: "pending" | "syncing" | "failed" | "blocked";
   attempts: number;
   lastError: string | null;
   createdAt: string;
@@ -88,7 +88,7 @@ export async function queueRows(): Promise<QueueRecord[]> {
     id: string;
     kind: string;
     payload: string;
-    status: "pending" | "syncing" | "failed";
+    status: "pending" | "syncing" | "failed" | "blocked";
     attempts: number;
     last_error: string | null;
     created_at: string;
@@ -99,7 +99,7 @@ export async function queueRows(): Promise<QueueRecord[]> {
     id: string;
     kind: string;
     payload: string;
-    status: "pending" | "syncing" | "failed";
+    status: "pending" | "syncing" | "failed" | "blocked";
     attempts: number;
     last_error: string | null;
     created_at: string;

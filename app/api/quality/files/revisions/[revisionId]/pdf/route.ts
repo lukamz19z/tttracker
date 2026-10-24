@@ -1,3 +1,4 @@
+import { revisionItemFli } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
 
 import { loadSystemPdfBranding } from "@/lib/branding/server";
@@ -208,7 +209,7 @@ export async function POST(request: Request, context: RouteContext) {
 
       pdfItems.push({
         itemNumber: Number(item.item_number),
-        assignedFlag: item.assigned_flag, leg: item.leg, itemReference: item.fli_number,
+        assignedFlag: item.assigned_flag, leg: item.leg, itemReference: revisionItemFli(item),
         issueType:
           issueTypeMap.get(item.issue_type_id) ||
           String(item.other_issue_text ?? "").trim() ||

@@ -56,6 +56,8 @@ export function QualityStatusPill({
 const styles = StyleSheet.create({
   pill: {
     alignSelf: "flex-start",
+    flexShrink: 1,
+    maxWidth: "100%",
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 4,

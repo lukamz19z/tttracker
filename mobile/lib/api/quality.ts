@@ -1,3 +1,4 @@
+import { offlineFileExists } from "@/lib/offline/files";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
@@ -453,6 +454,7 @@ export async function uploadQualityPhoto(input: {
   watermarkPosition?: string;
   capturedAt?: string;
 }) {
+  if (!offlineFileExists(input.uri)) throw new Error("Local evidence file could not be found.");
   const form = new FormData();
 
   form.append("projectId", input.projectId);

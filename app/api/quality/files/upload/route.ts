@@ -1,3 +1,4 @@
+import { revisionItemFli } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { NextResponse } from "next/server";
@@ -238,10 +239,11 @@ export async function POST(request: Request) {
           );
         }
 
+        if (!revisionItemFli(revisionItem)) return NextResponse.json({ error: "The finding does not have a controlled FLI number yet. Retry after the finding has synced." }, { status: 409 });
         itemNumber = Number(revisionItem.item_number);
         const issue = revisionItem.issue_type_id ? await service.from("project_field_issue_types").select("name").eq("id", revisionItem.issue_type_id).maybeSingle() : null;
         if (issue?.error) throw new Error(issue.error.message);
-        evidenceContext = { phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", tower: towerLabel, reference: `${revision.fli_number} / ${revisionItem.fli_number || itemNumber}`, assignedFlag: revisionItem.assigned_flag, issue: issue?.data?.name || revisionItem.other_issue_text, leg: revisionItem.leg, segment: revisionItem.tower_segment, member: revisionItem.member_number, drawing: revisionItem.drawing_number, capturedAt };
+        evidenceContext = { phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", tower: towerLabel, reference: revision.fli_number, fli: revisionItemFli(revisionItem), assignedFlag: revisionItem.assigned_flag, issue: issue?.data?.name || revisionItem.other_issue_text, leg: revisionItem.leg, segment: revisionItem.tower_segment, member: revisionItem.member_number, drawing: revisionItem.drawing_number, capturedAt };
 
 
         folder = await ensureRevisionPhotoFolder({

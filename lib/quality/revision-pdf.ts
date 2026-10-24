@@ -380,7 +380,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     iy += 53;
 
     doc.setFontSize(8);
-    doc.text([item.itemReference, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
+    doc.text([item.itemReference && `FLI # ${item.itemReference}`, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
     iy += 8;
     drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, "BEFORE");
     drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, "AFTER");

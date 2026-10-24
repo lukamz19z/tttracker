@@ -34,6 +34,7 @@ async function paged(
 }
 
 export async function GET(request: NextRequest) {
+  const started = performance.now();
   try {
     const { service, identity } = await requireMobilePermission(
       request,
@@ -164,7 +165,7 @@ export async function GET(request: NextRequest) {
         service
           .from("tower_material_events")
           .select(
-            "*,tower_material_event_items(*),tower_material_event_people(*),tower_material_event_plant(*)",
+            "id,project_id,docket_id,tower_id,event_type,source_tower_id,destination_tower_id,occurred_at,affected_work,work_outcome,affected_activity,affected_section,current_effect,notes,tower_material_event_items(id,event_id,bundle_id,bundle_no,bundle_section,source_table,source_record_id,material_type,bolt_size,item_reference,item_description,quantity,unit,notes,issue_key,source_issue_key)",
           )
           .eq("project_id", projectId)
           .order("occurred_at", { ascending: false })
@@ -173,7 +174,7 @@ export async function GET(request: NextRequest) {
       paged((from, to) =>
         service
           .from("tower_material_transfers")
-          .select("*")
+          .select("id,project_id,source_tower_id,destination_tower_id,source_bundle_id,destination_bundle_id,bundle_no,bundle_section,quantity,status,transferred_by,transferred_by_name,transferred_at,received_by,received_by_name,received_at,cancelled_by,cancelled_by_name,cancelled_at,notes")
           .eq("project_id", projectId)
           .order("transferred_at", { ascending: false })
           .range(from, to),
@@ -217,7 +218,7 @@ export async function GET(request: NextRequest) {
       deliveries,
       materialEvents: events,
       transfers,
-    });
+    }, { headers: { "Server-Timing": `bootstrap;dur=${(performance.now() - started).toFixed(1)}` } });
   } catch (error) {
     const apiError = mobileApiError(error);
     return NextResponse.json(

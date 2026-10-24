@@ -9,14 +9,11 @@ export type ApiRequestInit = RequestInit & {
   dedupe?: boolean;
 };
 
-function canonicalBase(value: string) {
-  const trimmed = value.trim().replace(/\/+$/, "");
-
-  if (/^https:\/\/tttracker\.com\.au$/i.test(trimmed)) {
-    return "https://www.tttracker.com.au";
-  }
-
-  return trimmed;
+export function canonicalBase(value: string) {
+  return value.trim().replace(
+    /^https?:\/\/(?:www\.)?tttracker\.com\.au(?=\/|$)/i,
+    "https://www.tttracker.com.au",
+  ).replace(/\/+$/, "");
 }
 
 export const API_BASE_URL = canonicalBase(
@@ -29,10 +26,7 @@ export function apiUrl(input: string) {
   const value = input.trim();
 
   if (/^https?:\/\//i.test(value)) {
-    return value.replace(
-      /^https:\/\/tttracker\.com\.au(?=\/|$)/i,
-      "https://www.tttracker.com.au",
-    );
+    return canonicalBase(value);
   }
 
   return `${API_BASE_URL}${value.startsWith("/") ? "" : "/"}${value}`;
@@ -106,12 +100,27 @@ async function performFetch(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(apiUrl(input), {
+    const url = apiUrl(input);
+    const startedAt = Date.now();
+    const options: RequestInit = {
       ...requestInit,
       headers,
       cache: "no-store",
       signal: controller.signal,
-    });
+    };
+    let response = await fetch(url, options);
+    // Safety only: a redirected authenticated GET may lose its Authorization.
+    // Never forward credentials to an arbitrary redirect host or retry writes.
+    if (response.status === 401 && response.redirected &&
+        response.url.startsWith("https://www.tttracker.com.au/") &&
+        canonicalBase(response.url) === canonicalBase(url) &&
+        String(requestInit.method ?? "GET").toUpperCase() === "GET") {
+      response = await fetch(canonicalBase(response.url), options);
+    }
+    if (__DEV__ && (new URL(url).pathname === "/api/access/me" || /\/api\/(mobile\/)?quality\//.test(new URL(url).pathname))) {
+      console.debug("TTTracker API response", { url: url.split("?")[0], status: response.status, durationMs: Date.now() - startedAt });
+    }
+    return response;
   } catch (error) {
     if (controller.signal.aborted && !externalSignal?.aborted) {
       throw new Error(

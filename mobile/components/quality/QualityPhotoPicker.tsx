@@ -83,12 +83,12 @@ export function QualityPhotoPicker({
         const position = photo.watermarkPosition || "bottom-left";
         const lines = [label.toLowerCase().includes("after") ? "AFTER" : "BEFORE", ...Object.entries(context || {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`), new Date(photo.capturedAt).toLocaleString()];
         return <View key={photo.id} style={{ gap: 8 }}>
-          <View style={{ width: "100%", maxWidth: 320, aspectRatio: (photo.width || 4) / (photo.height || 3), alignSelf: "center" }}>
+          <View style={{ width: "100%", maxWidth: 320, minHeight: 320 * (photo.height || 3) / (photo.width || 4), alignSelf: "center" }}>
             <Image source={{ uri: photo.uri }} style={StyleSheet.absoluteFillObject} resizeMode="contain" />
-            {context ? <View pointerEvents="none" style={{ position: "absolute", maxWidth: "48%", padding: 5, backgroundColor: "rgba(0,0,0,0.65)", ...(position.startsWith("top") ? { top: 4 } : { bottom: 4 }), ...(position.endsWith("right") ? { right: 4 } : { left: 4 }) }}>{lines.map((line, i) => <Text key={i} numberOfLines={1} style={{ color: "white", fontSize: 9, fontWeight: i ? "400" : "900" }}>{line}</Text>)}</View> : null}
+            {context ? <View pointerEvents="none" style={{ alignSelf: position.endsWith("right") ? "flex-end" : "flex-start", marginTop: position.startsWith("top") ? 4 : "auto", maxWidth: "48%", padding: 5, backgroundColor: "rgba(0,0,0,0.65)", margin: 4 }}>{lines.map((line, i) => <Text key={i}  style={{ color: "white", fontSize: 9, flexShrink: 1, fontWeight: i ? "400" : "900" }}>{line}</Text>)}</View> : null}
           </View>
           {context ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>{(["top-left","top-right","bottom-left","bottom-right"] as const).map(corner => <Pressable key={corner} onPress={() => onChange(photos.map(row => row.id === photo.id ? { ...row, watermarkPosition: corner } : row))} style={{ minHeight: 44, padding: 8, justifyContent: "center", borderRadius: 8, backgroundColor: corner === position ? "#dbeafe" : "#f1f5f9" }}><Text>{corner.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join(" ")}</Text></Pressable>)}</View> : null}
-          <View style={styles.photoRow}><Text style={styles.photoName} numberOfLines={1}>{index + 1}. {photo.name}</Text><Pressable hitSlop={12} onPress={() => void remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
+          <View style={styles.photoRow}><Text style={styles.photoName} >{index + 1}. {photo.name}</Text><Pressable hitSlop={12} onPress={() => void remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
         </View>;
       })}
       {required && photos.length === 0 ? <Text style={styles.required}>At least one photo is required.</Text> : null}
@@ -103,6 +103,6 @@ const styles = StyleSheet.create({
   button: { flexDirection: "row", alignItems: "center", gap: 7, borderWidth: 1, borderColor: "#cbd5e1", backgroundColor: "#fff", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12 },
   buttonText: { color: "#0f172a", fontWeight: "800", fontSize: 12 },
   photoRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 11, backgroundColor: "#f8fafc", borderRadius: 11 },
-  photoName: { flex: 1, color: "#475569", fontSize: 12, fontWeight: "700" },
+  photoName: { flex: 1, minWidth: 0, flexShrink: 1, color: "#475569", fontSize: 12, fontWeight: "700" },
   required: { color: "#be123c", fontSize: 11, fontWeight: "700" },
 });

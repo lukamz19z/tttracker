@@ -151,7 +151,7 @@ export default function RevisionItemScreen() {
         item.rectification_comment ?? "",
       );
     }
-  }, [item?.id, item?.rectification_comment]);
+  }, [item]);
 
   if (loading && !detail) {
     return (
@@ -262,6 +262,8 @@ export default function RevisionItemScreen() {
       } · ${tower?.name || "Tower"}`}
     >
       <View style={q.card}>
+        <Text style={q.cardTitle}>FLI # {item.fli_number || `FLI-${String(item.item_number).padStart(3, "0")}`}</Text>
+        <Text style={q.muted}>{[item.assigned_flag && `Flag ${item.assigned_flag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" ? ")}</Text>
         <View style={q.row}>
           <QualityStatusPill
             value={item.status}
@@ -374,6 +376,7 @@ export default function RevisionItemScreen() {
           photos={afterPhotos}
           onChange={setAfterPhotos}
           prefix="revision-after"
+          context={{ Tower: tower?.name, "FLI #": item.fli_number || `FLI-${String(item.item_number).padStart(3, "0")}`, Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
         />
 
         <Pressable
