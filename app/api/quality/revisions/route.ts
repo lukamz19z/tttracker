@@ -59,6 +59,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Tower not found in this project." }, { status: 404 });
     }
 
+    const clientMutationId = clean(body.clientMutationId);
+    const findExisting = async () => {
+      if (!clientMutationId) return null;
+      const result = await service.from("tower_revisions").select("*")
+        .eq("project_id", projectId).eq("mobile_client_mutation_id", clientMutationId).maybeSingle();
+      if (result.error) throw new Error(result.error.message);
+      return result.data;
+    };
+    const existingResponse = (existing: { created_by: string | null; tower_id: string }) =>
+      existing.created_by === user.id && existing.tower_id === towerId
+        ? NextResponse.json({ revision: existing })
+        : NextResponse.json({ error: "This mutation is already associated with another Revision. Reconcile before retrying.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
+    const existing = await findExisting();
+    if (existing) return existingResponse(existing);
+
     const { data: authUser } = await service.auth.admin.getUserById(user.id);
     const actorLabel =
       clean(authUser.user?.user_metadata?.full_name) ||
@@ -69,6 +84,7 @@ export async function POST(request: Request) {
     const { data: revision, error } = await service
       .from("tower_revisions")
       .insert({
+        fli_number: null, // RECT is allocated in revision_number by the shared DB trigger.
         project_id: projectId,
         tower_id: towerId,
         inspection_stage: clean(body.inspectionStage) || "Post Erection",
@@ -80,48 +96,21 @@ export async function POST(request: Request) {
         status: "Draft",
         created_by: user.id,
         created_by_label: actorLabel,
-        mobile_client_mutation_id: clean(body.clientMutationId) || null,
+        mobile_client_mutation_id: clientMutationId || null,
       })
       .select("*")
       .single();
 
     if (error) {
-      // Older schemas may not yet have mobile_client_mutation_id.
-      if (error.message.includes("mobile_client_mutation_id")) {
-        const retry = await service
-          .from("tower_revisions")
-          .insert({
-            project_id: projectId,
-            tower_id: towerId,
-            inspection_stage: clean(body.inspectionStage) || "Post Erection",
-            inspection_date: localDate(body.inspectionDate),
-            client_inspector: clean(body.clientInspector) || null,
-            client_company: clean(body.clientCompany) || null,
-            client_reference: clean(body.clientReference) || null,
-            notes: clean(body.notes) || null,
-            status: "Draft",
-            created_by: user.id,
-            created_by_label: actorLabel,
-          })
-          .select("*")
-          .single();
-        if (retry.error || !retry.data) throw new Error(retry.error?.message || "Revision could not be created.");
-
-        const notification = await notifyRevisionEvent({
-          service,
-          revision: retry.data,
-          event: "created",
-          actorLabel,
-        }).catch((notificationError) => ({
-          recipients: 0, inApp: 0, email: 0, push: 0,
-          warning: notificationError instanceof Error ? notificationError.message : "Notification warning.",
-        }));
-
-        return NextResponse.json({ revision: retry.data, notification });
+      if (error.code === "23505") {
+        const existing = await findExisting();
+        if (existing) return existingResponse(existing);
+        console.warn("Revision identifier conflict", { code: error.code, constraint: error.message.match(/constraint "([^"]+)"/)?.[1] });
+        return NextResponse.json({ error: "The Revision number conflicts with an existing record. Reconcile Quality numbering before retrying.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
       }
-
       throw new Error(error.message);
     }
+    if (!revision?.id || !revision.revision_number) throw new Error("Revision creation did not return its server ID and RECT number.");
 
     const notification = await notifyRevisionEvent({
       service,

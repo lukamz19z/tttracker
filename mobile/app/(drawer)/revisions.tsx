@@ -274,7 +274,7 @@ function RevisionsScreenContent() {
             <View style={styles.cardHead}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.number}>
-                  {[projectCode, towerById.get(clean(row.tower_id)), clean(row.revision_number) || `RECT-${String(Number(row.sequence_no ?? 1)).padStart(2, "0")}`].filter(Boolean).join(" ")}
+                  {[projectCode, towerById.get(clean(row.tower_id)), clean(row.revision_number) || clean(row.fli_number) || `RECT-${String(Number(row.sequence_no ?? 1)).padStart(2, "0")}`].filter(Boolean).join(" ")}
                 </Text>
 
                 <Text style={styles.tower}>

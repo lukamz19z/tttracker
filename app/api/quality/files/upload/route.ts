@@ -1,4 +1,4 @@
-import { revisionItemFli } from "@/lib/quality/fli";
+import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { NextResponse } from "next/server";
@@ -200,7 +200,7 @@ export async function POST(request: Request) {
 
       const { data: revision, error: revisionError } = await service
         .from("tower_revisions")
-        .select("id,project_id,tower_id,fli_number")
+        .select("id,project_id,tower_id,revision_number,fli_number,sequence_no")
         .eq("id", revisionId)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
@@ -210,9 +210,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Revision could not be found." }, { status: 404 });
       }
 
-      if (!revision.fli_number) {
+      const parentReference = revisionReference(revision);
+      if (!parentReference) {
         return NextResponse.json(
-          { error: "The Revision does not have a controlled FLI number." },
+          { error: "The Revision does not have a controlled RECT number." },
           { status: 409 },
         );
       }
@@ -243,28 +244,28 @@ export async function POST(request: Request) {
         itemNumber = Number(revisionItem.item_number);
         const issue = revisionItem.issue_type_id ? await service.from("project_field_issue_types").select("name").eq("id", revisionItem.issue_type_id).maybeSingle() : null;
         if (issue?.error) throw new Error(issue.error.message);
-        evidenceContext = { phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", tower: towerLabel, reference: revision.fli_number, fli: revisionItemFli(revisionItem), assignedFlag: revisionItem.assigned_flag, issue: issue?.data?.name || revisionItem.other_issue_text, leg: revisionItem.leg, segment: revisionItem.tower_segment, member: revisionItem.member_number, drawing: revisionItem.drawing_number, capturedAt };
+        evidenceContext = { phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", tower: towerLabel, reference: parentReference, fli: revisionItemFli(revisionItem), assignedFlag: revisionItem.assigned_flag, issue: issue?.data?.name || revisionItem.other_issue_text, leg: revisionItem.leg, segment: revisionItem.tower_segment, member: revisionItem.member_number, drawing: revisionItem.drawing_number, capturedAt };
 
 
         folder = await ensureRevisionPhotoFolder({
           driveId: project.sharepoint_drive_id,
           projectFolderId: project.sharepoint_folder_id,
           towerLabel,
-          fliNumber: revision.fli_number,
+          fliNumber: parentReference,
           photoType: fileRole === "before_photo" ? "before" : "after",
         });
 
         const typePart = fileRole === "before_photo" ? "BEFORE" : "AFTER";
-        finalName = `${safeQualitySharePointPart(revision.fli_number)}-ITEM-${String(itemNumber).padStart(3, "0")}-${typePart}-${timestampPart(capturedAt)}-${safeOriginalName(file.name)}`;
+        finalName = `${safeQualitySharePointPart(parentReference)}-ITEM-${String(itemNumber).padStart(3, "0")}-${typePart}-${timestampPart(capturedAt)}-${safeOriginalName(file.name)}`;
       } else {
         folder = await ensureRevisionPhotoFolder({
           driveId: project.sharepoint_drive_id,
           projectFolderId: project.sharepoint_folder_id,
           towerLabel,
-          fliNumber: revision.fli_number,
+          fliNumber: parentReference,
           photoType: "supporting",
         });
-        finalName = `${safeQualitySharePointPart(revision.fli_number)}-${timestampPart(capturedAt)}-${safeOriginalName(file.name)}`;
+        finalName = `${safeQualitySharePointPart(parentReference)}-${timestampPart(capturedAt)}-${safeOriginalName(file.name)}`;
       }
     }
 

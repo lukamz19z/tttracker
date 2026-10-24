@@ -327,6 +327,7 @@ export async function resolveQualityRevision(
   return apiJson<{
     revision: {
       id: string;
+      revision_number?: string | null;
       project_id: string;
       tower_id: string;
       mobile_client_mutation_id: string | null;

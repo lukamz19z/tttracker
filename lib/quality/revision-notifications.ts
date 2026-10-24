@@ -12,6 +12,7 @@ type RevisionRow = {
   project_id: string;
   tower_id: string;
   revision_number?: string | null;
+  fli_number?: string | null;
   sequence_no?: number | null;
 };
 
@@ -45,7 +46,7 @@ function appUrl() {
 
 function rectCode(revision: RevisionRow) {
   return (
-    clean(revision.revision_number) ||
+    clean(revision.revision_number) || clean(revision.fli_number) ||
     `RECT-${String(Number(revision.sequence_no ?? 1)).padStart(2, "0")}`
   );
 }

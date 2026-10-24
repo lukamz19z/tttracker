@@ -50,7 +50,7 @@ export function QualityProvider({
   const { online, syncNow } = useSync();
   const projectId = profile?.projectId ?? null;
 
-  useEffect(() => { if (projectId && online) void syncNow(); }, [online, projectId, syncNow]);
+  useEffect(() => { if (projectId && online) void syncNow({ manual: false }); }, [online, projectId, syncNow]);
 
   const [data, setData] =
     useState<QualityPayload | null>(null);

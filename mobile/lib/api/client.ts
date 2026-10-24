@@ -3,6 +3,13 @@ import type { Session } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
 
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 export type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
   /** Set false only when two identical GETs must intentionally run separately. */
@@ -203,7 +210,7 @@ export async function jsonBody<T>(
         payload = JSON.parse(text);
       } catch {
         if (!value.ok) {
-          throw new Error(`TTTracker service returned HTTP ${value.status} instead of JSON. Check that the website API has been deployed.`);
+          throw new ApiRequestError(`TTTracker service returned HTTP ${value.status} instead of JSON. Check that the website API has been deployed.`, value.status);
         }
 
         throw new Error(
@@ -213,9 +220,9 @@ export async function jsonBody<T>(
     }
 
     if (!value.ok) {
-      throw new Error(
-        payloadError(payload) ||
-          `${fallback} (${value.status}).`,
+      throw new ApiRequestError(
+        payloadError(payload) || `${fallback} (${value.status}).`, value.status,
+        payload && typeof payload === "object" && "code" in payload ? String(payload.code) : undefined,
       );
     }
 

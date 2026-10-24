@@ -61,7 +61,7 @@ export async function POST(
         await service
           .from("tower_revision_items")
           .select("*")
-          .eq("revision_id", revisionId)
+          .eq("project_id", revision.project_id)
           .eq("mobile_client_mutation_id", clientMutationId)
           .maybeSingle();
 
@@ -70,6 +70,7 @@ export async function POST(
       }
 
       if (existing) {
+        if (existing.revision_id !== revisionId || existing.created_by !== user.id) return NextResponse.json({ error: "This mutation belongs to another finding. Reconcile before retrying.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
         return NextResponse.json({ item: existing });
       }
     }
@@ -116,12 +117,17 @@ export async function POST(
 
     if (error) {
       if (error.code === "23505" && clientMutationId) {
-        const existing = await service.from("tower_revision_items").select("*").eq("revision_id", revisionId).eq("mobile_client_mutation_id", clientMutationId).maybeSingle();
+        const existing = await service.from("tower_revision_items").select("*").eq("project_id", revision.project_id).eq("mobile_client_mutation_id", clientMutationId).maybeSingle();
         if (existing.error) throw new Error(existing.error.message);
-        if (existing.data) return NextResponse.json({ item: existing.data });
+        if (existing.data && existing.data.revision_id === revisionId && existing.data.created_by === user.id) return NextResponse.json({ item: existing.data });
+      }
+      if (error.code === "23505") {
+        console.warn("Finding identifier conflict", { code: error.code, constraint: error.message.match(/constraint "([^"]+)"/)?.[1] });
+        return NextResponse.json({ error: "The finding number conflicts with an existing record. Reconcile before retrying.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
       }
       throw new Error(error.message);
     }
+    if (!item?.id || !item.fli_number) throw new Error("Finding creation did not return its server ID and FLI number.");
 
     if (revision.status === "Draft") {
       await service

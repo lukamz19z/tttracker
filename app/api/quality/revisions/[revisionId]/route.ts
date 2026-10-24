@@ -1,3 +1,4 @@
+import { revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
 
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
@@ -165,7 +166,7 @@ export async function DELETE(
       );
     }
 
-    const revisionNumber = clean(revision.fli_number);
+    const revisionNumber = revisionReference(revision);
 
     if (!revisionNumber) {
       return NextResponse.json(

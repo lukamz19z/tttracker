@@ -211,7 +211,7 @@ export default function RevisionDetailScreen() {
     "Project";
 
   const rectCode = serverRevision
-    ? clean(serverRevision.revision_number) ||
+    ? clean(serverRevision.revision_number) || clean(serverRevision.fli_number) ||
       `RECT-${String(
         Number(serverRevision.sequence_no ?? 1),
       ).padStart(2, "0")}`
@@ -369,6 +369,7 @@ export default function RevisionDetailScreen() {
         const next = touchWorkspace({
           ...workspace,
           serverRevisionId: revisionId,
+          serverRevisionNumber: result.revision?.revision_number,
         });
 
         await saveRevisionWorkspace(next);
@@ -405,6 +406,7 @@ export default function RevisionDetailScreen() {
         found = await ensureServerRevisionWorkspace({
           projectId,
           revisionId: serverRevision.id,
+          revisionNumber: serverRevision.revision_number,
           towerId: serverRevision.tower_id,
           inspectionStage:
             serverRevision.inspection_stage,
@@ -423,11 +425,12 @@ export default function RevisionDetailScreen() {
       if (
         found &&
         serverRevision &&
-        found.serverRevisionId !== serverRevision.id
+        (found.serverRevisionId !== serverRevision.id || found.serverRevisionNumber !== serverRevision.revision_number)
       ) {
         found = touchWorkspace({
           ...found,
           serverRevisionId: serverRevision.id,
+          serverRevisionNumber: serverRevision.revision_number,
         });
         await saveRevisionWorkspace(found);
       }
@@ -697,7 +700,7 @@ export default function RevisionDetailScreen() {
       await saveRevisionWorkspace(next);
       setWorkspace(next);
 
-      await refreshSync(); if (online) void syncNow();
+      await refreshSync(); if (online) void syncNow({ manual: false });
       setFindingModalOpen(false);
       setFindingForm(BLANK_FINDING);
   
@@ -757,7 +760,7 @@ export default function RevisionDetailScreen() {
 
       await saveRevisionWorkspace(next);
       setWorkspace(next);
-      await refreshSync(); if (online) void syncNow();
+      await refreshSync(); if (online) void syncNow({ manual: false });
       setRectification(null);
     } catch (error) {
       Alert.alert(
@@ -814,7 +817,7 @@ export default function RevisionDetailScreen() {
       const next = touchWorkspace({ ...workspace, finaliseRequested: true });
       await saveRevisionWorkspace(next); setWorkspace(next);
       await enqueue("quality_revision_finalise", { revisionId: workspace.serverRevisionId || workspace.routeKey, projectId: workspace.projectId }, `quality-finalise:${workspace.routeKey}`);
-      await refreshSync(); if (online) await syncNow();
+      await refreshSync(); if (online) await syncNow({ manual: false });
       const saved = (await listRevisionWorkspaces(workspace.projectId)).find(row => row.routeKey === workspace.routeKey);
       if (saved) setWorkspace(saved);
       Alert.alert(saved?.finalisedAt ? "Finalised" : "Pending sync", saved?.finalisedAt ? "Ready to submit for review." : "Finalisation will run after all findings and evidence sync.");

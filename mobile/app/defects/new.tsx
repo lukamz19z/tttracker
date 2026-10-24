@@ -460,7 +460,7 @@ function NewDefectContent() {
 
       await clearDefectWorkingDraft(projectId);
       await refresh();
-      void syncNow();
+      void syncNow({ manual: false });
 
       const defectNumber =
         clean(payload.defect?.defect_number) ||

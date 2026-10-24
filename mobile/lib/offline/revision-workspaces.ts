@@ -45,6 +45,7 @@ export type RevisionWorkspace = {
   projectId: string;
   towerId: string;
   clientMutationId: string | null;
+  serverRevisionNumber?: string | null;
   serverRevisionId: string | null;
   inspectionStage: InspectionStage;
   inspectionDate: string;
@@ -87,7 +88,7 @@ export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<Rev
     const previous = current.find(row => row.routeKey === workspace.routeKey);
     const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
     const reconciledUpdateKeys = [...new Set([...(previous?.reconciledUpdateKeys || []), ...(workspace.reconciledUpdateKeys || [])])];
-    const next = { ...workspace, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
+    const next = { ...workspace, serverRevisionNumber: workspace.serverRevisionNumber || previous?.serverRevisionNumber || null, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
       findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
       pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
     };
@@ -112,6 +113,7 @@ export async function removeRevisionWorkspace(
 export async function ensureServerRevisionWorkspace(input: {
   projectId: string;
   revisionId: string;
+  revisionNumber?: string | null;
   towerId: string;
   inspectionStage: InspectionStage;
   inspectionDate: string;
@@ -127,7 +129,7 @@ export async function ensureServerRevisionWorkspace(input: {
       row.serverRevisionId === input.revisionId,
   );
 
-  if (existing) return existing;
+  if (existing) return input.revisionNumber && existing.serverRevisionNumber !== input.revisionNumber ? saveRevisionWorkspace({ ...existing, serverRevisionNumber: input.revisionNumber }) : existing;
 
   const now = new Date().toISOString();
   const workspace: RevisionWorkspace = {
@@ -136,6 +138,7 @@ export async function ensureServerRevisionWorkspace(input: {
     towerId: input.towerId,
     clientMutationId: null,
     serverRevisionId: input.revisionId,
+    serverRevisionNumber: input.revisionNumber,
     inspectionStage: input.inspectionStage,
     inspectionDate: input.inspectionDate,
     clientInspector: input.clientInspector ?? null,

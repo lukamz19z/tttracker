@@ -1,3 +1,4 @@
+import { automaticRetryDue, classifySyncError, safeSyncMessage } from "@/lib/offline/sync-errors";
 import { prepareRevisionQueue, qualityQueuePriority } from "@/lib/offline/revision-sync-plan";
 import { getCache, setCache } from "@/lib/offline/db";
 import { manuallyOffline, setManualOffline } from "@/lib/offline/connectivity";
@@ -17,6 +18,7 @@ import * as Network from "expo-network";
 import {
   queueRows,
   removeQueueRecord,
+  resetQueueFailures,
   updateQueueStatus,
   type QueueRecord,
 } from "@/lib/offline/db";
@@ -37,7 +39,7 @@ type SyncState = {
   failedCount: number;
   lastError: string | null;
   refresh: () => Promise<void>;
-  syncNow: () => Promise<void>;
+  syncNow: (options?: { manual?: boolean }) => Promise<void>;
 };
 
 const SyncContext = createContext<SyncState | null>(null);
@@ -86,14 +88,14 @@ export function SyncProvider({ children }: PropsWithChildren) {
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const syncAgainRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const syncInvokerRef = useRef<null | (() => Promise<void>)>(null);
+  const syncInvokerRef = useRef<null | ((options?: { manual?: boolean }) => Promise<void>)>(null);
 
   const applyQueueState = useCallback((rows: QueueRecord[]) => {
     if (!mountedRef.current) return;
 
     setPendingCount(rows.length);
     setFailedCount(
-      rows.filter((row) => row.status === "failed").length,
+      rows.filter((row) => ["failed", "retryable_failure", "requires_reconciliation"].includes(row.status)).length,
     );
   }, []);
 
@@ -114,13 +116,13 @@ export function SyncProvider({ children }: PropsWithChildren) {
     applyQueueState(rows);
   }, [applyQueueState]);
 
-  const runSync = useCallback(async () => {
+  const runSync = useCallback(async (manual: boolean) => {
     /*
      * Check the local queue first. If nothing is waiting there is no reason to
      * perform a network call or show a syncing state.
      */
     await prepareRevisionQueue();
-    const rows = await queueRows();
+    let rows = await queueRows();
     applyQueueState(rows);
 
     if (!rows.length && !materialSyncRef.current) {
@@ -138,6 +140,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     }
 
     if (!connected || manuallyOffline()) return;
+    if (manual) { await resetQueueFailures(); rows = await queueRows(); applyQueueState(rows); }
 
     if (mountedRef.current) {
       setSyncing(true);
@@ -150,6 +153,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       });
       for (const record of ordered) {
         if (manuallyOffline()) break;
+        if (!manual && !automaticRetryDue(record)) continue;
         try {
           await updateQueueStatus(record.id, "syncing", null);
           await processRecord(record);
@@ -161,10 +165,10 @@ export function SyncProvider({ children }: PropsWithChildren) {
               ? error.message
               : "Offline item could not be synced.";
 
-          await updateQueueStatus(record.id, /must sync before|waiting for all findings/.test(message) ? "blocked" : "failed", message);
+          await updateQueueStatus(record.id, classifySyncError(error), message);
 
           if (mountedRef.current) {
-            setLastError(message);
+            setLastError(safeSyncMessage(message));
           }
         }
       }
@@ -172,11 +176,12 @@ export function SyncProvider({ children }: PropsWithChildren) {
     } finally {
       const remaining = await queueRows();
       applyQueueState(remaining);
-      const retryable = remaining.filter(row => row.status === "failed" && row.attempts <= 2);
+      if (mountedRef.current) setLastError(safeSyncMessage(remaining.find(row => ["failed", "retryable_failure", "requires_reconciliation"].includes(row.status))?.lastError || null));
+      const retryable = remaining.filter(row => row.status === "retryable_failure" && row.attempts <= 2);
       if (retryable.length && !manuallyOffline() && mountedRef.current) {
         if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
         const delay = retryable.some(row => row.attempts > 1) ? 30_000 : 5_000;
-        retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; void syncInvokerRef.current?.(); }, delay);
+        retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; void syncInvokerRef.current?.({ manual: false }); }, delay);
       }
 
       if (mountedRef.current) {
@@ -185,7 +190,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     }
   }, [applyQueueState]);
 
-  const syncNow = useCallback((): Promise<void> => {
+  const syncNow = useCallback((options?: { manual?: boolean }): Promise<void> => {
     /* One queue processor at a time, regardless of how many screens request it. */
     if (syncPromiseRef.current) {
       syncAgainRef.current = true;
@@ -193,13 +198,13 @@ export function SyncProvider({ children }: PropsWithChildren) {
     }
 
     if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
-    const task = runSync().catch(error => { if (mountedRef.current) setLastError(error instanceof Error ? error.message : "Sync failed. Tap to retry."); });
-    const tracked = task.finally(() => {
+    const task = runSync(options?.manual !== false).catch(error => { if (mountedRef.current) setLastError(error instanceof Error ? error.message : "Sync failed. Tap to retry."); });
+    const tracked = task.finally(async () => {
       if (syncPromiseRef.current === tracked) {
         syncPromiseRef.current = null;
         if (syncAgainRef.current && !manuallyOffline()) {
           syncAgainRef.current = false;
-          queueMicrotask(() => { void syncInvokerRef.current?.(); });
+          if ((await queueRows()).some(row => row.status === "pending")) queueMicrotask(() => { void syncInvokerRef.current?.({ manual: false }); });
         }
       }
     });
@@ -216,11 +221,11 @@ export function SyncProvider({ children }: PropsWithChildren) {
      * Initial status check. syncNow() exits locally when the queue is empty,
      * so normal app startup does not create a pointless upload cycle.
      */
-    void getCache<boolean>("sync:forced-offline").then(async (cached) => { setManualOffline(Boolean(cached?.value)); setForcedOfflineState(Boolean(cached?.value)); await refresh(); if (mountedRef.current) setReady(true); await syncNow(); }).catch(error => { console.warn("TTTracker connectivity initialization failed:", error); if (mountedRef.current) setReady(true); });
+    void getCache<boolean>("sync:forced-offline").then(async (cached) => { setManualOffline(Boolean(cached?.value)); setForcedOfflineState(Boolean(cached?.value)); await refresh(); if (mountedRef.current) setReady(true); await syncNow({ manual: false }); }).catch(error => { console.warn("TTTracker connectivity initialization failed:", error); if (mountedRef.current) setReady(true); });
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") {
-        void refresh().then(() => void syncNow());
+        void refresh().then(() => void syncNow({ manual: false }));
       }
     });
 
@@ -236,7 +241,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
       }
 
       if (connected) {
-        void syncNow();
+        void syncNow({ manual: false });
       }
     });
 
@@ -248,7 +253,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     };
   }, [refresh, syncNow]);
 
-  useEffect(() => { if (!forcedOffline && online) void syncNow(); }, [forcedOffline, online, syncNow]);
+  useEffect(() => { if (!forcedOffline && online) void syncNow({ manual: false }); }, [forcedOffline, online, syncNow]);
 
   const value = useMemo(
     () => ({

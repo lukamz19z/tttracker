@@ -1,4 +1,4 @@
-import { revisionItemFli } from "@/lib/quality/fli";
+import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
 
 import { loadSystemPdfBranding } from "@/lib/branding/server";
@@ -95,7 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
     const { data: revision, error: revisionError } = await service
       .from("tower_revisions")
       .select(
-        "id,project_id,tower_id,fli_number,inspection_stage,inspection_date,client_inspector,client_company,client_reference,notes,status,pdf_revision",
+        "id,project_id,tower_id,revision_number,fli_number,sequence_no,inspection_stage,inspection_date,client_inspector,client_company,client_reference,notes,status,pdf_revision",
       )
       .eq("id", revisionId)
       .single();
@@ -237,7 +237,7 @@ export async function POST(request: Request, context: RouteContext) {
       projectName: project.name || "",
       projectNumber: project.project_number || "",
       towerName: qualityTowerLabel(tower),
-      fliNumber: revision.fli_number,
+      fliNumber: revisionReference(revision),
       reportRevision,
       inspectionStage: revision.inspection_stage,
       inspectionDate: revision.inspection_date,
@@ -267,10 +267,10 @@ export async function POST(request: Request, context: RouteContext) {
       driveId: project.sharepoint_drive_id,
       projectFolderId: project.sharepoint_folder_id,
       towerLabel: qualityTowerLabel(tower),
-      fliNumber: revision.fli_number,
+      fliNumber: revisionReference(revision),
     });
 
-    const fileName = `${safeQualitySharePointPart(revision.fli_number)}-R${String(reportRevision).padStart(2, "0")}.pdf`;
+    const fileName = `${safeQualitySharePointPart(revisionReference(revision))}-R${String(reportRevision).padStart(2, "0")}.pdf`;
     const uploaded = await uploadQualityFile({
       driveId: project.sharepoint_drive_id,
       folderId: revisionFolder.id,

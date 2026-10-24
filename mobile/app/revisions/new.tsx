@@ -206,6 +206,7 @@ export default function NewRevisionScreen() {
       if (online) {
         try {
           const result = await createQualityRevision(payload);
+          await saveRevisionWorkspace({ ...createLocalRevisionWorkspace(payload), serverRevisionId: result.revision.id, serverRevisionNumber: result.revision.revision_number });
 
           await clearRevisionWorkingDraft(projectId);
 

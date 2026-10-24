@@ -298,7 +298,7 @@ export default function NewFindingScreen() {
       });
 
       if (online) {
-        await syncNow();
+        await syncNow({ manual: false });
         try {
           await refreshQualityRevisionDetail(
             revision!.project_id,
@@ -341,8 +341,8 @@ export default function NewFindingScreen() {
       permission="mobile.rectifications"
       title="Add Finding"
       subtitle={`${
-        revision.fli_number ||
         revision.revision_number ||
+        revision.fli_number ||
         "Revision"
       } · ${tower?.name || "Tower"}`}
     >

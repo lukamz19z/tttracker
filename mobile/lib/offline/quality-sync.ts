@@ -1,3 +1,4 @@
+import { DependencyBlockedError } from "./sync-errors";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
 import { queueRows, getCache, setCache } from "./db";
 import { apiJson } from "@/lib/api/client";
@@ -328,8 +329,9 @@ async function syncRevision(
   payload: OfflineRevisionCreate,
 ) {
   const existingWorkspace = (await listRevisionWorkspaces(payload.projectId)).find(row => row.clientMutationId === payload.clientMutationId);
-  const result = existingWorkspace?.serverRevisionId ? { revision: { id: existingWorkspace.serverRevisionId } } : await apiJson<{
-    revision: { id: string };
+  const cachedParent = (await getCache<{ id: string; revision_number?: string | null }>(`quality:parent-mapping:${payload.projectId}:${payload.clientMutationId}`))?.value;
+  const result = existingWorkspace?.serverRevisionId ? { revision: { id: existingWorkspace.serverRevisionId, revision_number: existingWorkspace.serverRevisionNumber } } : cachedParent ? { revision: cachedParent } : await apiJson<{
+    revision: { id: string; revision_number?: string | null };
   }>(
     "/api/mobile/quality/revisions",
     {
@@ -342,9 +344,11 @@ async function syncRevision(
     },
   );
 
+  if (!result.revision?.id) throw new Error("Revision creation returned no server ID.");
+  await setCache(`quality:parent-mapping:${payload.projectId}:${payload.clientMutationId}`, result.revision);
   const workspaces = await listRevisionWorkspaces(payload.projectId);
   for (const workspace of workspaces.filter(row => row.clientMutationId === payload.clientMutationId)) {
-    await saveRevisionWorkspace({ ...workspace, serverRevisionId: result.revision.id });
+    await saveRevisionWorkspace({ ...workspace, serverRevisionId: result.revision.id, serverRevisionNumber: result.revision.revision_number });
   }
   const findings =
     payload.findings?.length
@@ -397,9 +401,9 @@ async function applyQualityQueueRecord(record: QueueRecord) {
   const workspace = workspaces.find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
   const mappedItem = workspace?.serverItems?.[payload.itemId] || (payload.itemId ? (await getCache<{ id: string }>(`quality:item-mapping:${payload.projectId}:${payload.itemId}`))?.value : null);
   if (mappedItem) payload.itemId = mappedItem.id;
-  if (payload.itemId?.startsWith("revision-item-") && !mappedItem) throw new Error("Finding must sync before its rectification.");
+  if (payload.itemId?.startsWith("revision-item-") && !mappedItem) throw new DependencyBlockedError("Finding must sync before its rectification.");
   if (payload.revisionId?.startsWith("local-")) {
-    if (!workspace?.serverRevisionId) throw new Error("Parent Revision must sync before its findings.");
+    if (!workspace?.serverRevisionId) throw new DependencyBlockedError("Parent Revision must sync before its findings.");
     payload.revisionId = workspace.serverRevisionId;
   }
   if (record.kind === "quality_revision_item_update") {
@@ -407,12 +411,12 @@ async function applyQualityQueueRecord(record: QueueRecord) {
     if (dependencies.some(row => row.kind === "quality_revision_item_create" &&
       ((row.payload as OfflineRevisionItemCreate).clientMutationId === (record.payload as OfflineRevisionItemUpdate).itemId ||
        workspace?.serverItems?.[(row.payload as OfflineRevisionItemCreate).clientMutationId]?.id === payload.itemId))) {
-      throw new Error("Finding and Before evidence must sync before its rectification.");
+      throw new DependencyBlockedError("Finding and Before evidence must sync before its rectification.");
     }
   }
   if (record.kind === "quality_revision_finalise") {
     const dependencies = (await queueRows()).filter(row => row.id !== record.id && row.kind.startsWith("quality_") && ((row.payload as { revisionId?: string }).revisionId === (record.payload as { revisionId: string }).revisionId || (workspace?.clientMutationId && (row.payload as { clientMutationId?: string }).clientMutationId === workspace.clientMutationId)));
-    if (dependencies.length || workspace?.findings.length || workspace?.pendingUpdates.length) throw new Error("Finalisation is waiting for all findings and evidence to sync.");
+    if (dependencies.length || workspace?.findings.length || workspace?.pendingUpdates.length) throw new DependencyBlockedError("Finalisation is waiting for all findings and evidence to sync.");
     const result = await apiJson<{ revision: { finalised_at: string } }>(`/api/quality/revisions/${encodeURIComponent(payload.revisionId)}/finalise`, { method: "POST" });
     if (workspace) await saveRevisionWorkspace({ ...workspace, finalisedAt: result.revision.finalised_at, finaliseRequested: false });
     return;

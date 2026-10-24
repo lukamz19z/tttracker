@@ -60,7 +60,7 @@ export type QueueRecord<T = unknown> = {
   id: string;
   kind: string;
   payload: T;
-  status: "pending" | "syncing" | "failed" | "blocked";
+  status: "pending" | "syncing" | "failed" | "blocked" | "blocked_by_dependency" | "retryable_failure" | "requires_reconciliation";
   attempts: number;
   lastError: string | null;
   createdAt: string;
@@ -88,7 +88,7 @@ export async function queueRows(): Promise<QueueRecord[]> {
     id: string;
     kind: string;
     payload: string;
-    status: "pending" | "syncing" | "failed" | "blocked";
+    status: "pending" | "syncing" | "failed" | "blocked" | "blocked_by_dependency" | "retryable_failure" | "requires_reconciliation";
     attempts: number;
     last_error: string | null;
     created_at: string;
@@ -99,7 +99,7 @@ export async function queueRows(): Promise<QueueRecord[]> {
     id: string;
     kind: string;
     payload: string;
-    status: "pending" | "syncing" | "failed" | "blocked";
+    status: "pending" | "syncing" | "failed" | "blocked" | "blocked_by_dependency" | "retryable_failure" | "requires_reconciliation";
     attempts: number;
     last_error: string | null;
     created_at: string;
@@ -124,7 +124,7 @@ export async function updateQueueStatus(
   const db = await database();
   await db.runAsync(
     `UPDATE sync_queue
-     SET status=?, attempts=attempts+CASE WHEN ?='failed' THEN 1 ELSE 0 END, last_error=?, updated_at=?
+     SET status=?, attempts=attempts+CASE WHEN ? IN ('failed','retryable_failure','requires_reconciliation') THEN 1 ELSE 0 END, last_error=?, updated_at=?
      WHERE id=?`,
     status,
     status,
@@ -143,4 +143,10 @@ export async function cachedValuesWithPrefix<T>(prefix: string): Promise<T[]> {
   const db = await database();
   const rows = await db.getAllAsync<{ payload: string }>("SELECT payload FROM cache_entries WHERE cache_key LIKE ?", `${prefix}%`);
   return rows.flatMap(row => JSON.parse(row.payload) as T[]);
+}
+
+/** Explicit Retry starts a bounded attempt cycle; successes are deleted normally. */
+export async function resetQueueFailures() {
+  const db = await database();
+  await db.runAsync("UPDATE sync_queue SET attempts=0, status='pending', last_error=NULL WHERE status IN ('failed','retryable_failure','requires_reconciliation')");
 }

@@ -158,7 +158,7 @@ function today() {
 }
 
 function rectCode(revision: RevisionRow) {
-  return revision.revision_number?.trim() ||
+  return revision.revision_number?.trim() || revision.fli_number?.trim() ||
     `RECT-${String(Number(revision.sequence_no ?? 1)).padStart(2, "0")}`;
 }
 
@@ -696,7 +696,7 @@ export default function TowerRevisionsPage() {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            confirm: revision.fli_number || rectCode(revision),
+            confirm: rectCode(revision),
             projectId,
             towerId,
           }),

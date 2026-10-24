@@ -209,7 +209,7 @@ export default function RevisionItemScreen() {
       });
 
       if (online) {
-        await syncNow();
+        await syncNow({ manual: false });
         try {
           await refreshQualityRevisionDetail(
             revision!.project_id,

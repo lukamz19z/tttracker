@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await service
       .from("tower_revisions")
       .select(
-        "id,project_id,tower_id,mobile_client_mutation_id",
+        "id,project_id,tower_id,revision_number,mobile_client_mutation_id",
       )
       .eq("project_id", projectId)
       .eq("mobile_client_mutation_id", clientMutationId)
