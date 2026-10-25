@@ -1,4 +1,6 @@
-import { router, type Href } from "expo-router";
+import { QualityLegField } from "@/components/quality/QualityLegField";
+import { qualityDisplayName } from "../../../lib/quality/display-name";
+import { router } from "expo-router";
 import {
   ChevronDown,
   Save,
@@ -32,9 +34,7 @@ import {
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
 import {
-  createDefect,
   getDefectAssignees,
-  uploadDefectPhoto,
   type DefectAssignee,
   type MobileDefectSeverity,
 } from "@/lib/api/defects";
@@ -51,6 +51,7 @@ function clean(value: unknown) {
 }
 
 type FormState = {
+  leg:string|null;
   towerId: string;
   issueTypeId: string | null;
   memberNumber: string;
@@ -65,6 +66,7 @@ type FormState = {
 };
 
 const BLANK: FormState = {
+  leg:null,
   towerId: "",
   issueTypeId: null,
   memberNumber: "",
@@ -79,7 +81,7 @@ const BLANK: FormState = {
 };
 
 function NewDefectContent() {
-  const { data, refresh } = useQuality();
+  const { data } = useQuality();
   const { profile } = useAuth();
   const { online, syncNow } = useSync();
 
@@ -177,8 +179,8 @@ function NewDefectContent() {
       },
       ...assignees.map((user) => ({
         id: user.id,
-        label: user.name,
-        subtitle: [user.role, user.email]
+        label: qualityDisplayName(user.name),
+        subtitle: [user.role]
           .filter(Boolean)
           .join(" · "),
       })),
@@ -215,6 +217,7 @@ function NewDefectContent() {
       if (active && saved) {
         setForm({
           towerId: saved.towerId,
+          leg:saved.leg || null,
           issueTypeId: saved.issueTypeId,
           memberNumber: saved.memberNumber,
           segment: saved.segment,
@@ -374,10 +377,10 @@ function NewDefectContent() {
     setSaving(true);
 
     try {
-      if (!online) {
         await enqueueDefectCreate({
           projectId,
           towerId: form.towerId,
+          leg:form.leg,
           issueTypeId:
             clean(form.issueTypeId) || null,
           memberNumber:
@@ -396,99 +399,9 @@ function NewDefectContent() {
           photos: form.photos,
         });
 
-        await clearDefectWorkingDraft(projectId);
-
-        Alert.alert(
-          "Defect saved offline",
-          "The Defect and its photos are queued. TTTracker will create the controlled Defect and upload the evidence when connection returns.",
-          [
-            {
-              text: "OK",
-              onPress: () => router.back(),
-            },
-          ],
-        );
-        return;
-      }
-
-      const payload = await createDefect({
-        projectId,
-        towerId: form.towerId,
-        issueTypeId:
-          clean(form.issueTypeId) || null,
-        memberNumber:
-          clean(form.memberNumber) || null,
-        segment: clean(form.segment) || null,
-        drawingNumber:
-          clean(form.drawingNumber) || null,
-        description: form.description.trim(),
-        responsibility:
-          clean(form.responsibility) || null,
-        clientReference:
-          clean(form.clientReference) || null,
-        severity: form.severity,
-        assignedToUserId:
-          clean(form.assignedToUserId) || null,
-      });
-
-      const defectId = clean(payload.defect?.id);
-
-      if (!defectId) {
-        throw new Error(
-          "The Defect was created but its ID was not returned.",
-        );
-      }
-
-      let photoWarning: string | null = null;
-
-      for (const photo of form.photos) {
-        try {
-          await uploadDefectPhoto({
-            projectId,
-            towerId: form.towerId,
-            defectId,
-            photo,
-          });
-        } catch (error) {
-          photoWarning =
-            error instanceof Error
-              ? error.message
-              : "One or more photos could not be uploaded.";
-          break;
-        }
-      }
-
       await clearDefectWorkingDraft(projectId);
-      await refresh();
-      void syncNow({ manual: false });
-
-      const defectNumber =
-        clean(payload.defect?.defect_number) ||
-        "Defect";
-
-      Alert.alert(
-        `${defectNumber} created`,
-        [
-          payload.warning,
-          photoWarning
-            ? `The Defect exists, but photo upload needs attention: ${photoWarning}`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n\n") ||
-          "The Defect is now in the shared register.",
-        [
-          {
-            text: "Open",
-            onPress: () =>
-              router.replace(
-                `/defects/${encodeURIComponent(
-                  defectId,
-                )}` as Href,
-              ),
-          },
-        ],
-      );
+      if(online) await syncNow({manual:false});
+      Alert.alert("Defect saved", "Details and evidence are saved locally. Pending changes remain queued until the server confirms them.",[{text:"OK",onPress:()=>router.back()}]);
     } catch (error) {
       Alert.alert(
         "Could not save Defect",
@@ -657,7 +570,9 @@ function NewDefectContent() {
         style={[styles.input, styles.multiline]}
       />
 
+      <QualityLegField value={form.leg} onChange={leg=>setForm(current=>({...current,leg}))} />
       <QualityPhotoPicker
+        context={{kind:"defect",phase:"BEFORE",leg:form.leg,reference:"Pending DEF",tower:towerLabel,segment:form.segment,member:form.memberNumber,drawing:form.drawingNumber,assignedFlag:form.clientReference,issue:issueOptions.find(row=>row.id===form.issueTypeId)?.label}}
         label="Defect photos"
         photos={form.photos}
         onChange={(photos) =>

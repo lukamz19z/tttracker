@@ -1,4 +1,5 @@
 import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence";
+import { deleteQualityFinding } from "@/lib/offline/quality-deletion";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
 import { enqueue, queueRows } from "@/lib/offline/db";
@@ -815,7 +816,7 @@ export default function RevisionDetailScreen() {
     try {
       const ids = [workspace.routeKey, workspace.serverRevisionId];
       const unresolved = (await queueRows()).some(row => row.kind.startsWith("quality_") && row.kind !== "quality_revision_finalise" && ids.includes((row.payload as { revisionId?: string }).revisionId || ""));
-      if (syncing || failedCount || unresolved || workspace.findings.length || workspace.pendingUpdates.length || !workspace.serverRevisionId) {
+      if (syncing || failedCount || unresolved || workspace.findings.length || workspace.pendingUpdates.length || !workspace.serverRevisionId || revisionItems.some(item=>!item.id || !item.fli_number)) {
         Alert.alert("Pending Quality changes", "Sync pending changes before finalising.");
         return;
       }
@@ -828,6 +829,26 @@ export default function RevisionDetailScreen() {
       Alert.alert(saved?.finalisedAt ? "Finalised" : "Pending sync", saved?.finalisedAt ? "Ready to submit for review." : "Finalisation will run after all findings and evidence sync.");
       if (online) await reloadDetail(true);
     } catch (error) { Alert.alert("Finalisation pending", error instanceof Error ? error.message : "Tap Sync now to retry."); }
+  }
+
+  function confirmDeleteFinding(label: string, itemId?: string, clientMutationId?: string) {
+    Alert.alert(`Delete ${label}?`,"This will remove the flagged issue and its Before/After evidence.",[
+      {text:"Cancel",style:"cancel"},
+      {text:"Delete Flagged Issue",style:"destructive",onPress:()=>{ void (async()=>{
+        try {
+          if(syncing) throw new Error("Wait for sync to finish before deleting.");
+          await deleteQualityFinding({projectId,routeKey:workspace?.routeKey || routeRevisionId,itemId,clientMutationId,confirm:label,online});
+          setDetail(current=>{
+            if(!current) return current;
+            const removed=new Set(current.items.filter(item=>item.id===itemId || Boolean(clientMutationId && item.mobile_client_mutation_id===clientMutationId)).map(item=>item.id));
+            return {...current,items:current.items.filter(item=>!removed.has(item.id)),files:current.files.filter(file=>!file.revision_item_id || !removed.has(file.revision_item_id))};
+          });
+          const saved=(await listRevisionWorkspaces(projectId)).find(row=>row.routeKey===workspace?.routeKey);
+          if(saved) setWorkspace(saved);
+          await refreshSync();if(online) await reloadDetail(true);
+        }catch(error){Alert.alert("Finding was not deleted",error instanceof Error?error.message:"Please retry.");}
+      })();}},
+    ]);
   }
 
   async function submit() {
@@ -976,6 +997,7 @@ export default function RevisionDetailScreen() {
             key={finding.clientMutationId}
             style={styles.card}
           >
+            <Pressable accessibilityLabel="Finding actions" hitSlop={8} style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>confirmDeleteFinding("pending FLI",undefined,finding.clientMutationId)}><Text style={{fontSize:24}}>⋯</Text></Pressable>
             <View style={styles.head}>
               <View>
                 <Text style={styles.fli}>
@@ -1098,6 +1120,7 @@ export default function RevisionDetailScreen() {
 
         return (
           <View key={item.id} style={styles.card}>
+            <Pressable accessibilityLabel={`${fli} actions`} hitSlop={8} style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>confirmDeleteFinding(fli,item.id,item.mobile_client_mutation_id || undefined)}><Text style={{fontSize:24}}>⋯</Text></Pressable>
             <View style={styles.head}>
               <View style={styles.grow}>
                 <Text style={styles.fli}>

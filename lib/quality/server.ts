@@ -165,6 +165,8 @@ export function qualityTowerLabel(tower: QualityTowerRow) {
 
 export function qualityApiError(error: unknown) {
   const message = error instanceof Error ? error.message : "Quality request failed.";
+  const providerStatus=message.match(/Microsoft Graph .*failed \((429|502|503|504)\b/);
+  if(providerStatus) return {status:Number(providerStatus[1]),message:"Quality evidence storage is temporarily unavailable. Your pending changes are retained for retry."};
 
   if (message === "UNAUTHENTICATED") {
     return { status: 401, message: "You must be signed in." };

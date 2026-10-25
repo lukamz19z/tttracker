@@ -1,4 +1,4 @@
-import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { defectEvidenceContext, revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
@@ -19,7 +19,9 @@ import {
   safeQualitySharePointPart,
   uploadQualityFile,
 } from "@/lib/sharepoint/quality";
-import { deleteDriveItem } from "@/lib/sharepoint/graph";
+import { deleteDriveItem, downloadDriveItemContent, graphRequest } from "@/lib/sharepoint/graph";
+import { verifyQualityUpload } from "@/lib/quality/upload-ticket";
+import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,10 +69,39 @@ export async function POST(request: Request) {
   let uploadedDriveId: string | null = null;
   let uploadedItemId: string | null = null;
   let uploadedAnnotatedItemId: string | null = null;
+  let staging: {driveId:string;itemId:string} | null = null;
+  let cleanupTransfer: (()=>Promise<void>) | null = null;
+  let transferId: string|null=null;
+  let transferConfirmed=false;
 
   try {
     const { service, user, role } = await requireQualityUser(request);
-    const formData = await request.formData();
+    let formData: FormData;
+    if (request.headers.get("content-type")?.includes("application/json")) {
+      const body=await request.json();
+      let ticket;
+      try {ticket=verifyQualityUpload(String(body.ticket || ""),user.id);}
+      catch {return NextResponse.json({error:"Evidence upload session is invalid or expired. Retry this photo."},{status:403});}
+      await assertQualityProjectAccess({service,userId:user.id,role,projectId:ticket.projectId});
+      const existing=await service.from("tower_quality_files").select("*").eq("project_id",ticket.projectId).eq("mobile_client_mutation_id",`${ticket.revisionItemId || ticket.defectId}:${ticket.fileRole}:${ticket.clientMutationId}`).maybeSingle();
+      if(existing.error) throw new Error(existing.error.message);
+      if(existing.data) return NextResponse.json({success:true,file:existing.data});
+      const transfer=await service.from("tower_quality_upload_sessions").select("id").eq("id",ticket.sessionId).eq("user_id",user.id).eq("project_id",ticket.projectId).maybeSingle();
+      if(transfer.error) throw new Error(transfer.error.message);
+      if(!transfer.data) return NextResponse.json({error:"Evidence session no longer exists. Retry the pending photo."},{status:409});
+      transferId=ticket.sessionId;
+      cleanupTransfer=()=>cleanupQualityUploadSessions(service,{sessionId:ticket.sessionId,preservePublished:true});
+      const item=await graphRequest<{id:string;size:number;parentReference:{id:string}}>(`/drives/${encodeURIComponent(ticket.driveId)}/items/${encodeURIComponent(ticket.folderId)}:/${encodeURIComponent(ticket.stagingName)}`);
+      if(item.size!==ticket.size || item.size>MAX_FILE_BYTES || item.parentReference.id!==ticket.folderId) return NextResponse.json({error:"Uploaded evidence size or destination does not match its authorised session."},{status:400});
+      staging={driveId:ticket.driveId,itemId:item.id};
+      const source=await downloadDriveItemContent(staging);
+      formData=new FormData();
+      for(const key of ["projectId","towerId","defectId","revisionId","revisionItemId","fileRole","clientMutationId","watermarkPosition","capturedAt","evidencePhase"] as const) formData.set(key,ticket[key]);
+      formData.set("file",new File([Buffer.from(source.content)],ticket.name,{type:ticket.mimeType}));
+    } else {
+      if(Number(request.headers.get("content-length"))>4_000_000) return NextResponse.json({error:"Use the Quality direct upload session for large evidence.",code:"DIRECT_UPLOAD_REQUIRED"},{status:413});
+      formData = await request.formData();
+    }
 
     const projectId = field(formData, "projectId");
     const towerId = field(formData, "towerId");
@@ -85,7 +116,8 @@ export async function POST(request: Request) {
     const capturedAt = normaliseCapturedAt(field(formData, "capturedAt"));
     const displayValue = formData.get("file");
     const originalValue = formData.get("originalFile");
-    // New mobile uploads carry both; historical clients send only the original.
+    // Legacy multipart clients may carry both; direct sessions carry only
+    // untouched original bytes. Derivatives are generated here before publishing.
     // Canonical server rendering always starts from untouched original bytes.
     const fileValue = originalValue instanceof File ? originalValue : displayValue;
     if (originalValue instanceof File && (!(displayValue instanceof File) || !PHOTO_TYPES.has(displayValue.type) || displayValue.size > MAX_FILE_BYTES)) return NextResponse.json({error:"Invalid annotated evidence image."},{status:400});
@@ -104,8 +136,8 @@ export async function POST(request: Request) {
 
     if (file.size > MAX_FILE_BYTES) {
       return NextResponse.json(
-        { error: "Quality files must be 25 MB or smaller." },
-        { status: 400 },
+        { error: "Quality files must be 25 MB or smaller. The original is retained locally." },
+        { status: 413 },
       );
     }
 
@@ -171,7 +203,7 @@ export async function POST(request: Request) {
 
       const { data: defect, error: defectError } = await service
         .from("tower_defects")
-        .select("id,project_id,tower_id,defect_number")
+        .select("*")
         .eq("id", defectId)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
@@ -187,6 +219,7 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
+      if(defect.status==="Closed") return NextResponse.json({error:"Reopen the Defect before changing evidence."},{status:409});
 
       folder = await ensureDefectPhotosFolder({
         driveId: project.sharepoint_drive_id,
@@ -196,6 +229,9 @@ export async function POST(request: Request) {
       });
 
       finalName = `${safeQualitySharePointPart(defect.defect_number)}-${timestampPart(capturedAt)}-${safeOriginalName(file.name)}`;
+      const issue=defect.issue_type_id ? await service.from("project_field_issue_types").select("name").eq("id",defect.issue_type_id).maybeSingle() : null;
+      if(issue?.error) throw new Error(issue.error.message);
+      evidenceContext={...defectEvidenceContext(defect,towerLabel,issue?.data?.name),phase:["BEFORE","AFTER","EVIDENCE"].includes(field(formData,"evidencePhase"))?field(formData,"evidencePhase"):"EVIDENCE",project:project.project_number,capturedAt};
     } else {
       if (!revisionId) {
         return NextResponse.json(
@@ -206,7 +242,7 @@ export async function POST(request: Request) {
 
       const { data: revision, error: revisionError } = await service
         .from("tower_revisions")
-        .select("id,project_id,tower_id,revision_number,fli_number,sequence_no")
+        .select("id,project_id,tower_id,revision_number,fli_number,sequence_no,status,finalised_at")
         .eq("id", revisionId)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
@@ -215,6 +251,7 @@ export async function POST(request: Request) {
       if (revisionError || !revision) {
         return NextResponse.json({ error: "Revision could not be found." }, { status: 404 });
       }
+      if(revision.finalised_at || !["Draft","Open","In Progress"].includes(revision.status)) return NextResponse.json({error:"Controlled Revision evidence cannot be changed."},{status:409});
 
       const parentReference = revisionReference(revision);
       if (!parentReference) {
@@ -250,7 +287,7 @@ export async function POST(request: Request) {
         itemNumber = Number(revisionItem.item_number);
         const issue = revisionItem.issue_type_id ? await service.from("project_field_issue_types").select("name").eq("id", revisionItem.issue_type_id).maybeSingle() : null;
         if (issue?.error) throw new Error(issue.error.message);
-        evidenceContext = { ...revisionEvidenceContext(revision,revisionItem,towerLabel,issue?.data?.name), phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", capturedAt };
+        evidenceContext = { ...revisionEvidenceContext(revision,revisionItem,towerLabel,issue?.data?.name), project:project.project_number,phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", capturedAt };
 
 
         folder = await ensureRevisionPhotoFolder({
@@ -282,6 +319,7 @@ export async function POST(request: Request) {
     finalName = keyedName === finalName ? `${finalName}-${evidenceKey}` : keyedName;
     const bytes = new Uint8Array(await file.arrayBuffer());
     const annotatedBytes = evidenceContext ? await annotateEvidence(bytes,evidenceContext,watermarkPosition) : null;
+    console.info("Quality evidence size",{operation:"quality_evidence_upload",fileRole,originalBytes:bytes.byteLength,annotatedBytes:annotatedBytes?.byteLength,transport:staging?"SharePoint upload session":"multipart"});
     const uploaded = await uploadQualityFile({
       driveId: project.sharepoint_drive_id,
       folderId: folder.id,
@@ -292,12 +330,14 @@ export async function POST(request: Request) {
 
     uploadedDriveId = project.sharepoint_drive_id;
     uploadedItemId = uploaded.id;
+    if(transferId) {const saved=await service.from("tower_quality_upload_sessions").update({published_item_id:uploaded.id}).eq("id",transferId);if(saved.error) throw new Error(saved.error.message);}
 
     let annotatedItemId: string | null = null;
     if (annotatedBytes) {
       const annotated = annotatedBytes;
       const derivative = await uploadQualityFile({ driveId: project.sharepoint_drive_id, folderId: folder.id, fileName: `ANNOTATED-${finalName.replace(/\.[^.]+$/, "")}.jpg`, content: annotated, contentType: "image/jpeg" });
       annotatedItemId = derivative.id; uploadedAnnotatedItemId = derivative.id;
+      if(transferId) {const saved=await service.from("tower_quality_upload_sessions").update({annotated_item_id:derivative.id}).eq("id",transferId);if(saved.error) throw new Error(saved.error.message);}
     }
     const { data: savedFile, error: fileError } = await service
       .from("tower_quality_files")
@@ -331,7 +371,7 @@ export async function POST(request: Request) {
         // the unique-key race. Never delete a file another metadata row owns.
         const existing = await service.from("tower_quality_files").select("*").eq("project_id", projectId).eq("mobile_client_mutation_id", mutationKey).maybeSingle();
         uploadedItemId = null; uploadedAnnotatedItemId = null;
-        if (existing.data) return NextResponse.json({ success: true, file: existing.data });
+        if (existing.data) {transferConfirmed=true;return NextResponse.json({ success: true, file: existing.data });}
         throw new Error(fileError?.message || "Evidence association could not be confirmed. Retry the pending upload.");
       }
       await deleteDriveItem({
@@ -343,6 +383,7 @@ export async function POST(request: Request) {
 
     // Both files are now durably associated. Do not delete them on a later timestamp-update error.
     uploadedItemId = null; uploadedAnnotatedItemId = null;
+    transferConfirmed=true;
     if (revisionItemId && (fileRole === "before_photo" || fileRole === "after_photo")) {
       const update: Record<string, unknown> = {};
 
@@ -362,7 +403,9 @@ export async function POST(request: Request) {
           .maybeSingle();
 
         if (String(item?.rectification_comment ?? "").trim()) {
-          update.status = "Rectified";
+          const before=await service.from("tower_quality_files").select("id").eq("revision_item_id",revisionItemId).eq("file_role","before_photo").limit(1);
+          if(before.error) throw new Error(before.error.message);
+          if(before.data?.length) update.status = "Rectified";
         }
       }
 
@@ -380,6 +423,7 @@ export async function POST(request: Request) {
       success: true,
       file: savedFile,
       item_number: itemNumber,
+      sizes:{originalBytes:bytes.byteLength,annotatedBytes:annotatedBytes?.byteLength || null},
     });
   } catch (error) {
     if (uploadedDriveId && uploadedAnnotatedItemId) await deleteDriveItem({ driveId: uploadedDriveId, itemId: uploadedAnnotatedItemId }).catch(() => undefined);
@@ -393,5 +437,7 @@ export async function POST(request: Request) {
     console.error("QUALITY FILE UPLOAD ERROR", error);
     const apiError = qualityApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
+  } finally {
+    if(cleanupTransfer && transferConfirmed) await cleanupTransfer().catch(()=>console.warn("Quality staging cleanup pending; durable receipt retained",{itemId:staging?.itemId}));
   }
 }

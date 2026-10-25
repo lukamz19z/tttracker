@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { qualityDisplayName } from "@/lib/quality/display-name";
+import { defectEvidenceContext } from "@/lib/quality/evidence-context";
 
 import { assertMobileProjectAccess } from "@/lib/mobile/quality";
 import {
@@ -68,10 +70,17 @@ export async function GET(
       );
     }
 
+    const defect=defectResult.data;
+    const [tower,issue]=await Promise.all([
+      service.from("towers").select("name").eq("id",defect.tower_id).eq("project_id",projectId).maybeSingle(),
+      defect.issue_type_id ? service.from("project_field_issue_types").select("name").eq("id",defect.issue_type_id).maybeSingle() : Promise.resolve({data:null,error:null}),
+    ]);
+    if(tower.error || issue.error) throw new Error(tower.error?.message || issue.error?.message);
     return NextResponse.json({
       projectId,
       generatedAt: new Date().toISOString(),
-      defect: defectResult.data,
+      defect: {...defect,assigned_to_label:defect.assigned_to_label ? qualityDisplayName(defect.assigned_to_label):null},
+      evidenceContext:defectEvidenceContext(defect,tower.data?.name,issue.data?.name),
       files: filesResult.data ?? [],
     });
   } catch (error) {

@@ -1,5 +1,6 @@
 import { revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
+import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
 
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
 import {
@@ -199,6 +200,7 @@ export async function DELETE(
     if (filesError) throw new Error(filesError.message);
 
     const files = (qualityFiles ?? []) as QualityFileRow[];
+    await cleanupQualityUploadSessions(service,{revisionId});
     const sharePointWarnings: string[] = [];
 
     /*

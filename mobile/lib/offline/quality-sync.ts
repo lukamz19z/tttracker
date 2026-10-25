@@ -1,11 +1,11 @@
 import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
 import { DependencyBlockedError } from "./sync-errors";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
-import { queueRows, getCache, setCache } from "./db";
+import { queueRows, getCache, setCache,removeCache } from "./db";
 import { apiJson } from "@/lib/api/client";
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
 import { removeOfflineFile, offlineFileExists } from "@/lib/offline/files";
-import { uploadQualityPhoto, refreshQualityRevisionDetail } from "@/lib/api/quality";
+import { uploadQualityPhoto, refreshQualityRevisionDetail, updateDefect } from "@/lib/api/quality";
 import type {
   DefectSeverity,
   InspectionStage,
@@ -34,6 +34,10 @@ export type OfflineDefectCreate = {
   assignedToUserId: string | null;
   photos: LocalQualityPhoto[];
 };
+export type OfflineDefectUpdate = {projectId:string;towerId:string;defectId:string;photos:LocalQualityPhoto[];patch?:Parameters<typeof updateDefect>[1]};
+export async function enqueueDefectUpdate(input:OfflineDefectUpdate) {
+  return enqueue("quality_defect_update",{...input,photos:await Promise.all(input.photos.map(photo=>annotateQualityPhoto(photo,photoContext({...photo.watermarkContext,kind:"defect"},String(photo.watermarkContext?.phase || "AFTER"),photo.capturedAt))))});
+}
 
 export type OfflineRevisionCreate = {
   clientMutationId: string;
@@ -118,7 +122,7 @@ export async function enqueueDefectCreate(
 
   await enqueue(
     "quality_defect_create",
-    { ...input, clientMutationId },
+    { ...input, photos: await Promise.all(input.photos.map(photo=>annotateQualityPhoto(photo,photoContext({...photo.watermarkContext,kind:"defect"},"BEFORE",photo.capturedAt)))), clientMutationId },
     clientMutationId,
   );
 
@@ -241,11 +245,14 @@ async function uploadPhotos({
       qualityDiagnostic: { operation: "quality_evidence_context", stage: role, clientMutationId: photos[0]?.id },
     });
     context = response.evidenceContext;
+  } else if(defectId) {
+    const response=await apiJson<{evidenceContext:Record<string,unknown>}>(`/api/mobile/quality/details/defects/${encodeURIComponent(defectId)}?projectId=${encodeURIComponent(projectId)}`);
+    context=response.evidenceContext;
   }
   for (const photo of photos) {
     const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
     if (await getCache<{ id: string }>(receiptKey)) continue;
-    if (context) Object.assign(photo,await annotateQualityPhoto(photo,photoContext(context,role === "after_photo" ? "AFTER" : "BEFORE",photo.capturedAt)));
+    if (context) Object.assign(photo,await annotateQualityPhoto(photo,photoContext(context,role === "after_photo" || photo.watermarkContext?.phase === "AFTER" ? "AFTER" : "BEFORE",photo.capturedAt)));
     if (context) await persistEvidencePhoto(projectId,photo);
     if (!offlineFileExists(photo.originalUri || photo.uri)) throw new Error("Local evidence file could not be found.");
     if (__DEV__) console.debug("Quality sync stage", { stage: role, clientMutationId: photo.id, serverRevisionId: revisionId, serverItemId: revisionItemId });
@@ -263,6 +270,7 @@ async function uploadPhotos({
       capturedAt: photo.capturedAt,
       clientMutationId: photo.id,
       watermarkPosition: photo.watermarkPosition,
+      evidencePhase: String(photo.watermarkContext?.phase || "BEFORE"),
     });
     if (!uploaded.file?.id) throw new Error("Evidence upload returned no server file ID.");
     await setCache(receiptKey, uploaded.file);
@@ -274,7 +282,8 @@ async function uploadPhotos({
 async function syncDefect(
   payload: OfflineDefectCreate,
 ) {
-  const result = await apiJson<{
+  const known=(await getCache<{id:string}>(`quality:defect-mapping:${payload.projectId}:${payload.clientMutationId}`))?.value;
+  const result = known ? {defect:known} : await apiJson<{
     defect: { id: string };
   }>(
     "/api/mobile/quality/defects",
@@ -282,11 +291,13 @@ async function syncDefect(
       method: "POST",
       body: JSON.stringify({
         ...payload,
+        source:"mobile",
         photos: undefined,
       }),
     },
   );
-
+  if(!result.defect?.id) throw new Error("Defect create did not return its server ID.");
+  await setCache(`quality:defect-mapping:${payload.projectId}:${payload.clientMutationId}`,result.defect);
   await uploadPhotos({
     projectId: payload.projectId,
     towerId: payload.towerId,
@@ -441,7 +452,12 @@ async function applyQualityQueueRecord(record: QueueRecord) {
     if (workspace) await saveRevisionWorkspace({ ...workspace, finalisedAt: result.revision.finalised_at, finaliseRequested: false });
     return;
   }
-  if (record.kind === "quality_defect_create") await syncDefect(record.payload as OfflineDefectCreate);
+  if (record.kind === "quality_defect_update") {
+    const update=record.payload as OfflineDefectUpdate;
+    await uploadPhotos({...update,role:"defect_photo"});
+    if(update.patch) await apiJson(`/api/quality/defects/${encodeURIComponent(update.defectId)}`,{method:"PATCH",body:JSON.stringify(update.patch)});
+  }
+  else if (record.kind === "quality_defect_create") await syncDefect(record.payload as OfflineDefectCreate);
   else if (record.kind === "quality_revision_create") { await syncRevision(record.payload as OfflineRevisionCreate); return; }
   else if (record.kind === "quality_revision_item_create") await createRevisionItem(payload);
   else if (record.kind === "quality_revision_item_update") await syncRevisionItemUpdate(payload);
@@ -473,7 +489,15 @@ export async function cleanupQualityRecord(record: QueueRecord) {
     else Object.values(row).forEach(findReferences);
   };
   (await queueRows()).forEach(row => findReferences(row.payload));
-  await cleanupQualityPhotos(photos.filter(photo => !referenced.has(photo.uri)));
+  const projectId=(record.payload as {projectId?:string}).projectId;
+  if(projectId) (await listRevisionWorkspaces(projectId)).forEach(row=>findReferences([row.findings,row.pendingUpdates]));
+  const removable=photos.filter(photo=>!referenced.has(photo.uri));
+  for(const photo of removable) {
+    const cached=(await getCache<LocalQualityPhoto>(`quality:photo-annotation:${photo.id}`))?.value;
+    if(cached) await cleanupQualityPhotos([cached]);
+    await removeCache(`quality:photo-annotation:${photo.id}`);
+  }
+  await cleanupQualityPhotos(removable);
 }
 
 export async function syncQualityQueueRecord(record: QueueRecord) {

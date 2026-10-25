@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { qualityDisplayName } from "@/lib/quality/display-name";
+import { resolveSystemUserIdentityById } from "@/lib/dockets/system-user-identity";
 
 import { notifyDefectEvent } from "@/lib/quality/defect-notifications";
 import {
@@ -15,6 +17,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type CreateBody = {
+  leg?: string|null;
+  clientMutationId?: string;
   projectId?: string;
   towerId?: string;
   issueTypeId?: string | null;
@@ -41,18 +45,8 @@ async function userLabel(
   const id = clean(userId);
   if (!id) return null;
 
-  const { data } = await service.auth.admin.getUserById(id);
-  const user = data.user;
-
-  if (!user) return null;
-
-  return (
-    clean(
-      user.user_metadata?.full_name ||
-        user.user_metadata?.name ||
-        user.email,
-    ) || "TTTracker User"
-  );
+  const identity=await resolveSystemUserIdentityById(service,id);
+  return identity?qualityDisplayName(identity.name):null;
 }
 
 async function issueTypeName(
@@ -90,6 +84,8 @@ export async function POST(request: Request) {
     const issueTypeId = clean(body.issueTypeId) || null;
     const assignedToUserId = clean(body.assignedToUserId) || null;
     const sourceDocketId = clean(body.sourceDocketId) || null;
+    const leg=clean(body.leg) || null;
+    if(leg && !["A","B","C","D"].includes(leg)) return NextResponse.json({error:"Select Leg A, B, C or D."},{status:400});
 
     if (!projectId || !towerId) {
       return NextResponse.json(
@@ -111,6 +107,16 @@ export async function POST(request: Request) {
       role,
       projectId,
     });
+    const clientMutationId=clean(body.clientMutationId);
+    const findExisting=async()=> {
+      if(!clientMutationId) return null;
+      const result=await service.from("tower_defects").select("*").eq("project_id",projectId).eq("mobile_client_mutation_id",clientMutationId).maybeSingle();
+      if(result.error) throw new Error(result.error.message);
+      return result.data;
+    };
+    const existingResponse=(existing: {tower_id:string;identified_by:string|null})=> existing.tower_id===towerId && existing.identified_by===user.id ? NextResponse.json({defect:existing,idempotent:true}) : NextResponse.json({error:"This mutation belongs to another Defect."},{status:409});
+    const existing=await findExisting();
+    if(existing) return existingResponse(existing);
 
     const [project, tower, assignedToLabel, issueName] =
       await Promise.all([
@@ -151,6 +157,8 @@ export async function POST(request: Request) {
     const { data: defect, error: insertError } = await service
       .from("tower_defects")
       .insert({
+        leg,
+        mobile_client_mutation_id:clientMutationId || null,
         project_id: projectId,
         tower_id: towerId,
         issue_type_id: issueTypeId,
@@ -175,6 +183,10 @@ export async function POST(request: Request) {
       .single();
 
     if (insertError || !defect) {
+      if(insertError?.code==="23505") {
+        const existing=await findExisting();if(existing) return existingResponse(existing);
+        return NextResponse.json({error:"A conflicting Defect identifier prevented creation. Your pending record is retained.",code:"RECONCILIATION_REQUIRED"},{status:409});
+      }
       throw new Error(insertError?.message || "Defect could not be created.");
     }
 

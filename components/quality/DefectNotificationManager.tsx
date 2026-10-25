@@ -20,7 +20,6 @@ type ApiFetch = (
 type UserOption = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };
 
@@ -328,7 +327,7 @@ export default function DefectNotificationManager({
                       {availableUsers.map((user) => (
                         <option key={user.id} value={user.id}>
                           {user.name}
-                          {user.email ? ` · ${user.email}` : ""}
+
                         </option>
                       ))}
                     </select>
@@ -400,7 +399,7 @@ export default function DefectNotificationManager({
                                 {user?.name || "TTTracker User"}
                               </div>
                               <div className="mt-0.5 text-xs text-slate-400">
-                                {user?.email || "No email"} ·{" "}
+                                {""} ·{" "}
                                 {roleLabel(user?.role || "user")}
                               </div>
                             </td>

@@ -53,6 +53,7 @@ export type QualityMember = {
 };
 
 export type QualityDefect = {
+  leg?:string|null;
   id: string;
   project_id: string;
   tower_id: string;
@@ -230,6 +231,5 @@ export type LocalQualityPhoto = {
 export type DefectAssignee = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };

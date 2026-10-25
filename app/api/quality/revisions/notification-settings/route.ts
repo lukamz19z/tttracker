@@ -1,3 +1,4 @@
+import { qualityDisplayName } from "@/lib/quality/display-name";
 import { NextResponse } from "next/server";
 
 import {
@@ -32,13 +33,12 @@ async function getUsers(service: Awaited<ReturnType<typeof requireQualityUser>>[
       const name =
         clean(user.user_metadata?.full_name) ||
         clean(user.user_metadata?.name) ||
-        clean(user.email) ||
+
         userId;
 
       return {
         id: userId,
-        name,
-        email: clean(user.email),
+        name: qualityDisplayName(name),
         role:
           clean((userRows ?? []).find((row) => row.user_id === userId)?.role) ||
           "user",

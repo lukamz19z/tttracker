@@ -2631,7 +2631,7 @@ export function DailyDocketSiteEvents({
                 ...defectAssignees.map((user) => ({
                   value: user.id,
                   label: user.name,
-                  subtitle: [user.role, user.email]
+                  subtitle: [user.role]
                     .filter(Boolean)
                     .join(" · "),
                 })),

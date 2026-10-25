@@ -1,13 +1,7 @@
-import { supabase } from "@/lib/supabase";
+import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
+import { annotateQualityPhoto, photoContext } from "@/lib/quality-evidence";
+import { uploadQualityPhoto } from "@/lib/api/quality";
 import type { LocalQualityPhoto } from "@/types/quality";
-
-const RAW_WEB_BASE_URL =
-  process.env.EXPO_PUBLIC_TTTRACKER_WEB_URL ||
-  "https://www.tttracker.com.au";
-
-const WEB_BASE_URL = RAW_WEB_BASE_URL
-  .replace(/^https:\/\/tttracker\.com\.au(?=\/|$)/i, "https://www.tttracker.com.au")
-  .replace(/\/+$/, "");
 
 export type MobileDefectSeverity = "Minor" | "Major" | "Critical";
 export type MobileDefectStatus = "Open" | "In Progress" | "Fixed" | "Closed";
@@ -15,7 +9,6 @@ export type MobileDefectStatus = "Open" | "In Progress" | "Fixed" | "Closed";
 export type DefectAssignee = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };
 
@@ -29,61 +22,8 @@ export type DefectActionRow = {
 
 type JsonObject = Record<string, unknown>;
 
-async function authenticatedFetch(
-  path: string,
-  init: RequestInit = {},
-): Promise<Response> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new Error("Your TTTracker session has expired. Sign in again.");
-  }
-
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${session.access_token}`);
-
-  if (
-    init.body &&
-    typeof init.body === "string" &&
-    !headers.has("Content-Type")
-  ) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  return fetch(`${WEB_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  });
-}
-
-async function readJson<T>(
-  response: Response,
-  fallback: string,
-): Promise<T> {
-  const text = await response.text();
-  let payload: unknown = {};
-
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch {
-    if (!response.ok) throw new Error(text || fallback);
-  }
-
-  if (!response.ok) {
-    const error =
-      payload &&
-      typeof payload === "object" &&
-      "error" in payload
-        ? String((payload as { error?: unknown }).error ?? "")
-        : "";
-
-    throw new Error(error || fallback);
-  }
-
-  return payload as T;
-}
+const authenticatedFetch = apiFetch;
+const readJson = jsonBody;
 
 export async function createDefect(body: {
   projectId: string;
@@ -115,6 +55,7 @@ export async function createDefect(body: {
 export async function patchDefect(
   defectId: string,
   patch: {
+    leg?:string|null;
     issueTypeId?: string | null;
     memberNumber?: string | null;
     segment?: string | null;
@@ -197,37 +138,7 @@ export async function uploadDefectPhoto(args: {
   defectId: string;
   photo: LocalQualityPhoto;
 }) {
-  const form = new FormData();
-  const capturedAt =
-    String(
-      (args.photo as { capturedAt?: unknown }).capturedAt ?? "",
-    ).trim() || new Date().toISOString();
-
-  form.append("projectId", args.projectId);
-  form.append("towerId", args.towerId);
-  form.append("defectId", args.defectId);
-  form.append("fileRole", "defect_photo");
-  form.append("capturedAt", capturedAt);
-
-  form.append(
-    "file",
-    {
-      uri: args.photo.uri,
-      name: photoName(args.photo),
-      type: photoMime(args.photo),
-    } as unknown as Blob,
-  );
-
-  const response = await authenticatedFetch(
-    "/api/quality/files/upload",
-    {
-      method: "POST",
-      body: form,
-    },
-  );
-
-  return readJson<JsonObject>(
-    response,
-    "Defect photo could not be uploaded.",
-  );
+  const result=await apiJson<{evidenceContext:Record<string,unknown>}>(`/api/mobile/quality/details/defects/${encodeURIComponent(args.defectId)}?projectId=${encodeURIComponent(args.projectId)}`);
+  const photo=await annotateQualityPhoto(args.photo,photoContext(result.evidenceContext,String(args.photo.watermarkContext?.phase || "BEFORE"),args.photo.capturedAt));
+  return uploadQualityPhoto({projectId:args.projectId,towerId:args.towerId,defectId:args.defectId,fileRole:"defect_photo",uri:photo.originalUri || photo.uri,annotatedUri:photo.annotatedUri,name:photoName(photo),mimeType:photoMime(photo),clientMutationId:photo.id,watermarkPosition:photo.watermarkPosition,capturedAt:photo.capturedAt,evidencePhase:String(photo.watermarkContext?.phase || "BEFORE")});
 }

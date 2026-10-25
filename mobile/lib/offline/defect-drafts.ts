@@ -2,6 +2,7 @@ import { getCache, setCache } from "@/lib/offline/db";
 import type { LocalQualityPhoto } from "@/types/quality";
 
 export type DefectWorkingDraft = {
+  leg?:string|null;
   projectId: string;
   towerId: string;
   issueTypeId: string | null;

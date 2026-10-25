@@ -17,7 +17,6 @@ type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respon
 type UserOption = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };
 
@@ -185,7 +184,7 @@ export default function RevisionNotificationManager({
               <option value="">Select user…</option>
               {availableUsers.map((user) => (
                 <option key={user.id} value={user.id}>
-                  {user.name}{user.email ? ` · ${user.email}` : ""}
+                  {user.name}
                 </option>
               ))}
             </select>
@@ -216,7 +215,7 @@ export default function RevisionNotificationManager({
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="font-black text-slate-900">{user?.name || rule.user_id}</div>
-                    <div className="text-xs text-slate-500">{user?.email || "No email"}{user?.role ? ` · ${user.role}` : ""}</div>
+                    <div className="text-xs text-slate-500">{""}{user?.role ? ` · ${user.role}` : ""}</div>
                   </div>
                   <div className="flex gap-2">
                     <button type="button" onClick={() => void save(rule)} disabled={!rule.dirty || busyId === rule.user_id} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">

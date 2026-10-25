@@ -32,7 +32,7 @@ export async function mobileAssigneeLabel(service: AccessService, userId: string
   const { data } = await service.from("employees").select("full_name").eq("user_id", userId).maybeSingle();
   if (qualityClean(data?.full_name)) return qualityClean(data?.full_name);
   const { data: auth } = await service.auth.admin.getUserById(userId);
-  return qualityClean(auth.user?.user_metadata?.full_name) || qualityClean(auth.user?.user_metadata?.name) || qualityClean(auth.user?.email) || null;
+  return qualityClean(auth.user?.user_metadata?.full_name) || qualityClean(auth.user?.user_metadata?.name) || "TTTracker User";
 }
 
 export function qualityRouteError(error: unknown) {

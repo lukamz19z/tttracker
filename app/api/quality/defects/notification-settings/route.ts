@@ -1,3 +1,4 @@
+import { qualityDisplayName } from "@/lib/quality/display-name";
 import { NextResponse } from "next/server";
 
 import {
@@ -80,7 +81,6 @@ async function availableProjectUsers(
   const users: Array<{
     id: string;
     name: string;
-    email: string;
     role: string;
   }> = [];
 
@@ -88,20 +88,18 @@ async function availableProjectUsers(
     const { data } = await service.auth.admin.getUserById(userId);
     if (!data.user) continue;
 
-    const email = clean(data.user.email);
     const name =
       employeeMap.get(userId) ||
       clean(
         data.user.user_metadata?.full_name ||
           data.user.user_metadata?.name ||
-          email,
+          "",
       ) ||
       "TTTracker User";
 
     users.push({
       id: userId,
-      name,
-      email,
+      name: qualityDisplayName(name),
       role: roleMap.get(userId) || "user",
     });
   }

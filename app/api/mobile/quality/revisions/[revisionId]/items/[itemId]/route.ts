@@ -1,4 +1,5 @@
 import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
+export { deleteFinding as DELETE } from "@/lib/quality/delete-finding";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextRequest, NextResponse } from "next/server";
 import { assertMobileProjectAccess, qualityClean, qualityRouteError } from "@/lib/mobile/quality";

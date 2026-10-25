@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { qualityDisplayName } from "@/lib/quality/display-name";
+import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
 
 import { notifyDefectEvent } from "@/lib/quality/defect-notifications";
 import {
@@ -23,6 +25,7 @@ type RouteContext = {
 };
 
 type PatchBody = {
+  leg?:string|null;
   issueTypeId?: string | null;
   memberNumber?: string | null;
   segment?: string | null;
@@ -47,6 +50,7 @@ type QualityFileDeleteRow = {
   file_name?: string | null;
   sharepoint_drive_id?: string | null;
   sharepoint_item_id?: string | null;
+  annotated_sharepoint_item_id?: string | null;
   drive_id?: string | null;
   item_id?: string | null;
 };
@@ -74,7 +78,7 @@ async function userLabel(
   if (!userId) return null;
 
   const identity = await resolveSystemUserIdentityById(service, userId);
-  return identity ? identity.display : null;
+  return identity ? qualityDisplayName(identity.name) : null;
 }
 
 async function issueName(
@@ -135,6 +139,8 @@ export async function PATCH(
     });
 
     const actorIdentity = await resolveSystemUserIdentity(service, user);
+    const nextLeg=body.leg===undefined?current.leg:clean(body.leg)||null;
+    if(nextLeg && !["A","B","C","D"].includes(nextLeg)) return NextResponse.json({error:"Select Leg A, B, C or D."},{status:400});
 
     const nextAssignedUserId =
       body.assignedToUserId === undefined
@@ -153,6 +159,7 @@ export async function PATCH(
       body.severity === undefined ? current.severity : body.severity;
 
     const patch = {
+      leg:nextLeg,
       issue_type_id:
         body.issueTypeId === undefined
           ? current.issue_type_id
@@ -332,10 +339,9 @@ export async function DELETE(
     if (defectError) throw new Error(defectError.message);
 
     if (!defect) {
-      return NextResponse.json(
-        { error: "Defect could not be found." },
-        { status: 404 },
-      );
+      const projectId=clean(body.projectId);
+      if(projectId) await assertQualityProjectAccess({service,userId:user.id,role,projectId});
+      return NextResponse.json({success:true,defectId,alreadyDeleted:true});
     }
 
     await assertQualityProjectAccess({
@@ -369,6 +375,7 @@ export async function DELETE(
     }
 
     const confirmationLabel = clean(defect.defect_number) || defect.id;
+    if(["Closed","Fixed"].includes(defect.status)) return NextResponse.json({error:"Reopen the controlled Defect before deleting it."},{status:409});
 
     if (clean(body.confirm) !== confirmationLabel) {
       return NextResponse.json(
@@ -380,11 +387,12 @@ export async function DELETE(
     }
 
     const warningParts: string[] = [];
+    await cleanupQualityUploadSessions(service,{defectId});
 
     /*
      * 1. Remove SharePoint evidence linked through tower_quality_files.
-     *    Failure to remove a physical SharePoint file does not block the
-     *    TTTracker deletion; a warning is returned instead.
+     *    Keep relationships if provider cleanup fails so Retry can finish
+     *    without losing traceability to either original or derivative.
      */
     const { data: qualityFiles, error: qualityFileLoadError } = await service
       .from("tower_quality_files")
@@ -399,22 +407,9 @@ export async function DELETE(
       const { driveId, itemId } = qualityFileSharePointIds(file);
       if (!driveId || !itemId) continue;
 
-      try {
-        await deleteDriveItem({
-          driveId,
-          itemId,
-        });
-      } catch (error) {
-        console.error("Defect SharePoint delete warning", {
-          defectId,
-          fileId: file.id,
-          fileName: file.file_name,
-          error,
-        });
-
-        warningParts.push(
-          `SharePoint file "${clean(file.file_name) || file.id}" could not be removed`,
-        );
+      for(const evidenceId of new Set([itemId,file.annotated_sharepoint_item_id].filter(Boolean))) {
+        try {await deleteDriveItem({driveId,itemId:evidenceId as string});}
+        catch(error){if(!/\(404\b/.test(error instanceof Error?error.message:"")) throw new Error("Defect evidence could not be removed. The record remains available for retry.");}
       }
     }
 

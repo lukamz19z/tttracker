@@ -1,8 +1,11 @@
+import { fetch as binaryFetch } from "expo/fetch";
+import { Image as NativeImage } from "react-native";
+import { manuallyOffline } from "@/lib/offline/connectivity";
 import { offlineFileExists } from "@/lib/offline/files";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
-import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
+import { ApiRequestError, apiFetch, apiJson } from "@/lib/api/client";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
   DefectAssignee,
@@ -353,6 +356,7 @@ export async function getDefectAssignees(
 export async function updateDefect(
   defectId: string,
   patch: {
+    leg?:string|null;
     issueTypeId?: string | null;
     memberNumber?: string | null;
     segment?: string | null;
@@ -455,56 +459,42 @@ export async function uploadQualityPhoto(input: {
   clientMutationId?: string;
   watermarkPosition?: string;
   capturedAt?: string;
+  evidencePhase?: string;
 }) {
   if (!offlineFileExists(input.uri)) throw new Error("Local evidence file could not be found.");
-  const form = new FormData();
-
-  form.append("projectId", input.projectId);
-  form.append("towerId", input.towerId);
-
-  if (input.defectId) {
-    form.append("defectId", input.defectId);
-  }
-
-  if (input.revisionId) {
-    form.append("revisionId", input.revisionId);
-  }
-
-  if (input.revisionItemId) {
-    form.append("revisionItemId", input.revisionItemId);
-  }
-
-  form.append("fileRole", input.fileRole);
-  if (input.clientMutationId) form.append("clientMutationId", input.clientMutationId);
-  form.append("watermarkPosition", input.watermarkPosition || "bottom-left");
-  form.append(
-    "capturedAt",
-    input.capturedAt ?? new Date().toISOString(),
-  );
-
-  form.append(
-    "file",
-    {
-      uri: input.annotatedUri || input.uri,
-      name: input.annotatedUri ? `ANNOTATED-${input.name}.png` : input.name,
-      type: input.annotatedUri ? "image/png" : input.mimeType,
-    } as unknown as Blob,
-  );
-
-  if (input.annotatedUri) form.append("originalFile",{uri:input.uri,name:input.name,type:input.mimeType} as unknown as Blob);
-  const response = await apiFetch(
-    "/api/quality/files/upload",
-    {
-      method: "POST",
-      body: form,
-      timeoutMs: 120_000,
-      qualityDiagnostic: { operation: "quality_evidence_upload", stage: input.fileRole, clientMutationId: input.clientMutationId },
-    },
-  );
-
-  const data = await jsonBody<{ file: { id: string } }>(response, "Quality evidence could not be uploaded.");
-
-  return data;
+  const original = new File(input.uri);
+  const clientMutationId = input.clientMutationId || input.name;
+  const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => NativeImage.getSize(input.uri,(width,height)=>resolve({width,height}),reject));
+  const annotatedSize = input.annotatedUri && new File(input.annotatedUri).exists ? new File(input.annotatedUri).size : null;
+  if (__DEV__) console.debug("Quality upload payload", { operation: "quality_evidence_upload", method: "PUT", endpoint: "scoped SharePoint upload session", contentType: input.mimeType, transport: "binary chunks", originalBytes: original.size, localAnnotatedBytes: annotatedSize, uploadBytes: original.size, ...dimensions, clientMutationId });
+  const session = await apiJson<{uploadUrl?:string;ticket?:string;file?:{id:string}}>("/api/quality/files/upload-session", {
+    method: "POST", body: JSON.stringify({ ...input, uri: undefined, annotatedUri: undefined, size: original.size, clientMutationId }),
+    qualityDiagnostic: { operation: "quality_evidence_upload_session", stage: input.fileRole, clientMutationId },
+  });
+  if (session.file) return {file:session.file};
+  if (!session.uploadUrl || !session.ticket) throw new Error("Evidence upload session did not return its scoped capability.");
+  if (!session.uploadUrl.startsWith("https://")) throw new Error("Invalid evidence upload destination.");
+  const handle=original.open();
+  // Graph ranges (except the final range) must be multiples of 320 KiB.
+  const chunkSize=320*1024*5;
+  try {
+    for(let offset=0;offset<original.size;offset+=chunkSize) {
+      if(manuallyOffline()) throw new Error("This action requires a connection.");
+      handle.offset=offset;
+      const bytes=handle.readBytes(Math.min(chunkSize,original.size-offset));
+      const started=Date.now(),controller=new AbortController();
+      const timer=setTimeout(()=>controller.abort(),60_000);
+      let response: Response;
+      try {
+        // No TTTracker/Graph Authorization header: uploadUrl is narrowly scoped.
+        response=await binaryFetch(session.uploadUrl,{method:"PUT",headers:{"Content-Type":"application/octet-stream","Content-Range":`bytes ${offset}-${offset+bytes.length-1}/${original.size}`},body:bytes,signal:controller.signal});
+      } finally { clearTimeout(timer); }
+      if(__DEV__) console.debug("Quality binary upload",{operation:"quality_evidence_upload",method:"PUT",endpoint:"scoped SharePoint upload session",clientMutationId,offset,bytes:bytes.length,status:response.status,durationMs:Date.now()-started});
+      if(!response.ok) throw new ApiRequestError(`Quality binary evidence upload failed (${response.status}).`,response.status);
+      if(offset+bytes.length===original.size && ![200,201].includes(response.status)) throw new Error("Quality evidence upload is not complete. Retry this photo.");
+    }
+  } finally {handle.close();}
+  return apiJson<{file:{id:string}}>("/api/quality/files/upload",{method:"POST",body:JSON.stringify({ticket:session.ticket}),timeoutMs:120_000,qualityDiagnostic:{operation:"quality_evidence_associate",stage:input.fileRole,clientMutationId}});
 }
 
 export async function shareQualityFile(

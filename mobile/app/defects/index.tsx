@@ -1,3 +1,7 @@
+import { qualityDisplayName } from "../../../lib/quality/display-name";
+import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
+import { queueRows, type QueueRecord } from "@/lib/offline/db";
+import type { OfflineDefectCreate } from "@/lib/offline/quality-sync";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, type Href } from "expo-router";
 import {
@@ -16,6 +20,7 @@ import {
 } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -48,9 +53,12 @@ function clean(value: unknown) {
 export default function DefectsScreen() {
   const { data, loading: metadataLoading } =
     useQuality();
-  const { online } = useSync();
+  const { online,syncing,refresh:refreshSync } = useSync();
 
   const projectId = clean(data?.projectId);
+  const [pendingDefects,setPendingDefects]=useState<QueueRecord<OfflineDefectCreate>[]>([]);
+  const loadPending=useCallback(async()=>setPendingDefects((await queueRows()).filter(row=>row.kind==="quality_defect_create" && (row.payload as OfflineDefectCreate).projectId===projectId) as QueueRecord<OfflineDefectCreate>[]),[projectId]);
+  useFocusEffect(useCallback(()=>{if(!syncing) void loadPending();},[loadPending,syncing]));
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] =
     useState("");
@@ -394,6 +402,11 @@ export default function DefectsScreen() {
       <View style={styles.syncRow}>
         <SyncStatus compact />
       </View>
+      {pendingDefects.map(row=><View key={row.id} style={{padding:12,borderWidth:1,borderColor:"#fbbf24",borderRadius:10,marginBottom:8}}>
+        <Text style={{fontWeight:"700"}}>Pending DEF · {row.status==="pending"?"Queued for sync":row.status}</Text>
+        <Text style={{flexShrink:1}}>{row.payload.description}</Text>
+        <Pressable accessibilityLabel="Pending Defect actions" style={{minHeight:44,justifyContent:"center",alignSelf:"flex-end"}} onPress={()=>Alert.alert("Delete pending Defect?","This will remove the draft and its evidence.",[{text:"Cancel",style:"cancel"},{text:"Delete Defect",style:"destructive",onPress:()=>{void(async()=>{try{if(syncing) throw new Error("Wait for sync to finish.");await deleteQualityDefect({projectId,clientMutationId:row.id,confirm:"pending Defect",online});await loadPending();await refreshSync();}catch(error){Alert.alert("Defect was not deleted",error instanceof Error?error.message:"Please retry.");}})();}}])}><Text>⋯</Text></Pressable>
+      </View>)}
 
       <View style={styles.topRow}>
         <View style={styles.search}>
@@ -575,7 +588,7 @@ export default function DefectsScreen() {
                     )}`
                   : "",
                 clean(row.assigned_to_label)
-                  ? `Assigned ${clean(
+                  ? `Assigned ${qualityDisplayName(
                       row.assigned_to_label,
                     )}`
                   : "",

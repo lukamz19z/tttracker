@@ -15,7 +15,7 @@ export function registerEvidenceRenderer(value: Renderer) {
   return () => { if (renderer === value) renderer = null; };
 }
 export function photoContext(context: EvidenceContext, phase: string, capturedAt: string): EvidenceContext {
-  return { phase, tower: context.tower || context.Tower, reference: context.reference || context.Revision || "Pending RECT",
+  return { kind:context.kind,project:context.project, phase, tower: context.tower || context.Tower, reference: context.reference || context.Revision || (context.kind==="defect"?"Pending DEF":"Pending RECT"),
     fli: context.fli || (context["FLI #"] === "Pending FLI" ? null : context["FLI #"]),
     assignedFlag: context.assignedFlag || context.Flag, leg: context.leg || context.Leg,
     segment: context.segment || context.Segment, member: context.member || context.Member,

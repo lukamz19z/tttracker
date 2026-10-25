@@ -45,7 +45,7 @@ export function QualityPhotoPicker({
   const [error,setError] = useState<string | null>(null);
   const [busy,setBusy] = useState(false);
   const contextKey = JSON.stringify(context || {});
-  const phase = label.toLowerCase().includes("after") ? "AFTER" : "BEFORE";
+  const phase = String(context?.phase || (label.toLowerCase().includes("after") ? "AFTER" : "BEFORE"));
   const collectAnnotation = (photo: LocalQualityPhoto) => context || prefix.startsWith("revision")
     ? annotateQualityPhoto(photo, photoContext(JSON.parse(contextKey),phase,photo.capturedAt)) : Promise.resolve(photo);
   useEffect(() => {

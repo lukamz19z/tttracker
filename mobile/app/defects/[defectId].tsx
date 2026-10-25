@@ -1,7 +1,12 @@
+import { QualityLegField } from "@/components/quality/QualityLegField";
+import { SyncStatus } from "@/components/sync/SyncStatus";
+import { enqueueDefectUpdate } from "@/lib/offline/quality-sync";
+import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
+import { qualityDisplayName } from "../../../lib/quality/display-name";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import {
-  useLocalSearchParams,
+  useLocalSearchParams, router,
 } from "expo-router";
 import {
   Camera,
@@ -50,8 +55,6 @@ import {
 import {
   addDefectAction,
   getDefectAssignees,
-  patchDefect,
-  uploadDefectPhoto,
   type DefectActionRow,
   type DefectAssignee,
   type MobileDefectSeverity,
@@ -74,6 +77,7 @@ function prettyDateTime(value: unknown) {
 }
 
 type EditState = {
+  leg:string|null;
   issueTypeId: string | null;
   memberNumber: string;
   segment: string;
@@ -100,7 +104,7 @@ function DefectDetailContent() {
   const defectId = clean(params.defectId);
 
   const { data, loading: metadataLoading } = useQuality();
-  const { online } = useSync();
+  const { online, syncing, syncNow, refresh:refreshSync } = useSync();
 
   const issueTypes = useMemo(
     () => (Array.isArray(data?.issueTypes) ? data.issueTypes : []),
@@ -275,8 +279,8 @@ function DefectDetailContent() {
       { id: "", label: "Unassigned" },
       ...assignees.map((user) => ({
         id: user.id,
-        label: user.name,
-        subtitle: [user.role, user.email]
+        label: qualityDisplayName(user.name),
+        subtitle: [user.role]
           .filter(Boolean)
           .join(" · "),
       })),
@@ -384,6 +388,7 @@ function DefectDetailContent() {
     if (!defect) return;
 
     setEdit({
+      leg:defect.leg || null,
       issueTypeId:
         clean(defect.issue_type_id) || null,
       memberNumber: clean(defect.member_number),
@@ -413,14 +418,6 @@ function DefectDetailContent() {
   async function saveEdit() {
     if (!edit || !defectId) return;
 
-    if (!online) {
-      Alert.alert(
-        "Connection required",
-        "Existing controlled Defects are updated through the server so assignment, close-out and notifications remain authoritative.",
-      );
-      return;
-    }
-
     if (!edit.description.trim()) {
       Alert.alert(
         "Description required",
@@ -431,9 +428,8 @@ function DefectDetailContent() {
 
     setEditSaving(true);
     try {
-      const payload = await patchDefect(
-        defectId,
-        {
+      await enqueueDefectUpdate({projectId,towerId,defectId,photos:[],patch:{
+          leg:edit.leg,
           issueTypeId:
             clean(edit.issueTypeId) || null,
           memberNumber:
@@ -451,18 +447,10 @@ function DefectDetailContent() {
             clean(edit.resolutionNotes) || null,
           assignedToUserId:
             clean(edit.assignedToUserId) || null,
-        },
-      );
-
+        }});
       setEdit(null);
-      await reloadDetail(true);
-
-      if (payload.warning) {
-        Alert.alert(
-          "Defect updated",
-          payload.warning,
-        );
-      }
+      if(online) {await syncNow({manual:false});await reloadDetail(true);}
+      Alert.alert("Changes saved", "Pending updates remain queued until the server confirms them.");
     } catch (error) {
       Alert.alert(
         "Could not update Defect",
@@ -556,14 +544,6 @@ function DefectDetailContent() {
       return;
     }
 
-    if (!online) {
-      Alert.alert(
-        "Connection required",
-        "Reconnect before changing the controlled Defect status.",
-      );
-      return;
-    }
-
     const targetStatus: MobileDefectStatus =
       mode === "fixed"
         ? "Fixed"
@@ -571,100 +551,15 @@ function DefectDetailContent() {
           ? "Closed"
           : "In Progress";
 
-    const actionText =
-      mode === "fixed"
-        ? `Marked Fixed — ${comment}`
-        : mode === "close"
-          ? `Closed — ${comment}`
-          : `Reopened — ${comment}`;
-
     setLifecycleSaving(true);
-
-    const warnings: string[] = [];
-
     try {
-      const patchPayload = await patchDefect(defectId, {
-        status: targetStatus,
-        ...(mode === "fixed" || mode === "close"
-          ? { resolutionNotes: comment }
-          : {}),
-      });
-
-      if (patchPayload.warning) {
-        warnings.push(patchPayload.warning);
-      }
-
-      try {
-        const actionPayload = await addDefectAction(
-          defectId,
-          actionText,
-        );
-        if (actionPayload.warning) {
-          warnings.push(actionPayload.warning);
-        }
-      } catch (actionError) {
-        console.warn(
-          "Defect status changed but lifecycle action comment could not be saved",
-          actionError,
-        );
-        warnings.push(
-          "The status changed, but the lifecycle comment could not be added to the action history.",
-        );
-      }
-
-      if (
-        mode !== "reopen" &&
-        lifecyclePhotos.length > 0 &&
-        projectId &&
-        towerId
-      ) {
-        try {
-          for (const photo of lifecyclePhotos) {
-            await uploadDefectPhoto({
-              projectId,
-              towerId,
-              defectId,
-              photo,
-            });
-          }
-        } catch (photoError) {
-          console.warn(
-            "Defect status changed but close-out evidence could not be uploaded",
-            photoError,
-          );
-          warnings.push(
-            "The status changed, but one or more close-out photos could not be uploaded.",
-          );
-        }
-      }
-
-      await Promise.all([reloadDetail(true), loadActions()]);
-      setLifecycleMode(null);
-      setLifecycleComment("");
-      setLifecyclePhotos([]);
-
-      const title =
-        mode === "fixed"
-          ? "Defect marked Fixed"
-          : mode === "close"
-            ? "Defect closed"
-            : "Defect reopened";
-
-      if (warnings.length > 0) {
-        Alert.alert(title, warnings.join("\n\n"));
-      }
-    } catch (error) {
-      Alert.alert(
-        mode === "fixed"
-          ? "Could not mark Defect Fixed"
-          : mode === "close"
-            ? "Could not close Defect"
-            : "Could not reopen Defect",
-        error instanceof Error ? error.message : "Unknown error.",
-      );
-    } finally {
-      setLifecycleSaving(false);
-    }
+      await enqueueDefectUpdate({projectId,towerId,defectId,photos:lifecyclePhotos,patch:{status:targetStatus,...(mode!=="reopen"?{resolutionNotes:comment}:{})}});
+      if(online) await syncNow({manual:false});
+      setLifecycleMode(null);setLifecyclePhotos([]);setLifecycleComment("");
+      if(online) await reloadDetail(true);
+      Alert.alert("Saved for sync","Evidence is uploaded before the controlled status change. Pending work is retained until the server confirms it.");
+    }catch(error){Alert.alert("Changes remain pending",error instanceof Error?error.message:"Tap Sync now to retry.");}
+    finally{setLifecycleSaving(false);}
   }
 
   async function openFile(file: any) {
@@ -693,27 +588,12 @@ function DefectDetailContent() {
   async function savePhotos() {
     if (!defect || !projectId || !towerId) return;
 
-    if (!online) {
-      Alert.alert(
-        "Connection required",
-        "New evidence for an existing Defect is uploaded directly to the project quality folder. Reconnect before adding these photos.",
-      );
-      return;
-    }
-
     if (!newPhotos.length) return;
 
     setPhotoSaving(true);
     try {
-      for (const photo of newPhotos) {
-        await uploadDefectPhoto({
-          projectId,
-          towerId,
-          defectId,
-          photo,
-        });
-      }
-
+      await enqueueDefectUpdate({projectId,towerId,defectId,photos:newPhotos});
+      if(online) await syncNow({manual:false});
       setNewPhotos([]);
       setPhotoModalOpen(false);
       await reloadDetail(true);
@@ -758,6 +638,8 @@ function DefectDetailContent() {
       }
       subtitle={`${towerLabel} · ${issueName}`}
     >
+      <SyncStatus compact />
+      <Pressable accessibilityLabel="Defect actions" style={{alignSelf:"flex-end",minHeight:44,minWidth:44,justifyContent:"center",alignItems:"center"}} onPress={()=>Alert.alert(`Delete ${defect.defect_number}?`,"This will remove the Defect and its evidence.",[{text:"Cancel",style:"cancel"},{text:"Delete Defect",style:"destructive",onPress:()=>{void(async()=>{try{if(syncing) throw new Error("Wait for sync to finish.");await deleteQualityDefect({projectId,defectId,clientMutationId:defect.mobile_client_mutation_id || undefined,confirm:defect.defect_number || defectId,online});await refreshSync();router.back();}catch(error){Alert.alert("Defect was not deleted",error instanceof Error?error.message:"Please retry.");}})();}}])}><Text style={{fontSize:24}}>⋯</Text></Pressable>
       <View style={styles.headRow}>
         <View style={styles.grow}>
           <Text style={styles.description}>
@@ -787,6 +669,7 @@ function DefectDetailContent() {
       </View>
 
       <View style={styles.infoCard}>
+        <Info label="Leg" value={defect.leg || "Not specified"} />
         <Info
           label="Segment"
           value={clean(defect.segment) || "—"}
@@ -806,8 +689,7 @@ function DefectDetailContent() {
         <Info
           label="Assigned"
           value={
-            clean(defect.assigned_to_label) ||
-            "Unassigned"
+            defect.assigned_to_user_id ? qualityDisplayName(defect.assigned_to_label) : "Unassigned"
           }
         />
         <Info
@@ -925,7 +807,6 @@ function DefectDetailContent() {
               color="#2563eb"
             />
             <Text
-              numberOfLines={2}
               style={styles.photoName}
             >
               {clean(file.file_name) ||
@@ -1224,7 +1105,8 @@ function DefectDetailContent() {
                 ]}
               />
 
-              <Pressable
+              <QualityLegField value={edit.leg} onChange={leg=>setEdit(current=>current?({...current,leg}):null)} />
+            <Pressable
                 style={[
                   styles.saveButton,
                   editSaving && styles.disabled,
@@ -1372,6 +1254,7 @@ function DefectDetailContent() {
             {lifecycleMode !== "reopen" ? (
               <>
                 <QualityPhotoPicker
+                  context={{kind:"defect",phase:"AFTER",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
                   label="Close-out / rectification photos (optional)"
                   photos={lifecyclePhotos}
                   onChange={setLifecyclePhotos}
@@ -1450,6 +1333,7 @@ function DefectDetailContent() {
             }
           >
             <QualityPhotoPicker
+              context={{kind:"defect",phase:"BEFORE",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
               label="Defect photos"
               photos={newPhotos}
               onChange={setNewPhotos}
@@ -1543,7 +1427,7 @@ function Info({
 }
 
 const styles = StyleSheet.create({
-  grow: { flex: 1 },
+  grow: { flex: 1, minWidth:0 },
   headRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1588,6 +1472,8 @@ const styles = StyleSheet.create({
   },
   infoItem: {
     minWidth: "45%",
+    maxWidth:"100%",
+    flexShrink:1,
     flexGrow: 1,
   },
   infoLabel: {
@@ -1597,6 +1483,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   infoValue: {
+    flexShrink:1,
     marginTop: 3,
     color: "#334155",
     fontWeight: "800",

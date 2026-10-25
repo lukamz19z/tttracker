@@ -315,7 +315,6 @@ export type DocketDefectIssueType = {
 export type DocketDefectAssignee = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };
 

@@ -114,6 +114,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
 
     setOnline(isOnlineState(network));
     applyQueueState(rows);
+    setLastError(safeSyncMessage(rows.find(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status))?.lastError || null));
   }, [applyQueueState]);
 
   const runSync = useCallback(async (manual: boolean) => {

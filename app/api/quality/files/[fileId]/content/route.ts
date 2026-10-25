@@ -1,4 +1,4 @@
-import { loadRevisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { loadDefectEvidenceContext, loadRevisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { NextResponse } from "next/server";
 
@@ -28,7 +28,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { data: file, error } = await service
       .from("tower_quality_files")
       .select(
-        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
+        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
       )
       .eq("id", fileId)
       .single();
@@ -64,9 +64,9 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     let bytes = await response.arrayBuffer();
-    const legacyAnnotation = annotated && !file.annotated_sharepoint_item_id && file.revision_id && file.revision_item_id && ["before_photo","after_photo"].includes(file.file_role);
+    const legacyAnnotation = annotated && !file.annotated_sharepoint_item_id && ((file.revision_id && file.revision_item_id && ["before_photo","after_photo"].includes(file.file_role)) || (file.defect_id && file.file_role==="defect_photo"));
     if (legacyAnnotation) {
-      const context=await loadRevisionEvidenceContext(service,file.project_id,file.revision_id,file.revision_item_id);
+      const context=file.defect_id ? await loadDefectEvidenceContext(service,file.project_id,file.defect_id) : await loadRevisionEvidenceContext(service,file.project_id,file.revision_id,file.revision_item_id);
       const selected=file.evidence_metadata?.position;
       const position: WatermarkPosition = WATERMARK_POSITIONS.includes(selected) ? selected : "bottom-left";
       bytes = Uint8Array.from(await annotateEvidence(new Uint8Array(bytes),{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},position)).buffer;

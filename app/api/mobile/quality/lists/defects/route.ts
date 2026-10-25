@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { qualityDisplayName } from "@/lib/quality/display-name";
 
 import { assertMobileProjectAccess } from "@/lib/mobile/quality";
 import {
@@ -168,6 +169,7 @@ export async function GET(request: NextRequest) {
 
     const rows = pageRows.map((row) => ({
       ...row,
+      assigned_to_label:row.assigned_to_label ? qualityDisplayName(row.assigned_to_label):null,
       evidenceCount:
         evidenceCounts.get(String(row.id ?? "")) ?? 0,
     }));

@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
+import { qualityDisplayName } from "@/lib/quality/display-name";
 
 import {
   AlertTriangle,
@@ -68,6 +69,7 @@ type DefectRow = {
   resolution_notes: string | null;
   assigned_to_user_id: string | null;
   assigned_to_label: string | null;
+  leg?: string | null;
   created_at: string;
   updated_at: string | null;
   completed_by: string | null;
@@ -980,7 +982,7 @@ export default function TowerDefectsPage() {
                   <option value="">Unassigned</option>
                   {assigneeOptions.map((user) => (
                     <option key={user.id} value={user.id}>
-                      {user.name}{user.email ? ` · ${user.email}` : ""}
+                      {user.name}
                     </option>
                   ))}
                 </select>
@@ -1011,7 +1013,7 @@ export default function TowerDefectsPage() {
               {filteredRows.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100 align-top hover:bg-slate-50/70">
                   <td className="px-4 py-4"><div className="font-black text-slate-950">{row.defect_number || "Legacy Defect"}</div><div className="mt-1 text-xs text-slate-500">{row.client_reference || "No client reference"}</div></td>
-                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {row.assigned_to_label}</div> : null}</td>
+                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {qualityDisplayName(row.assigned_to_label)}</div> : null}{row.leg ? <div className="mt-1 text-xs text-slate-500">Leg {row.leg}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600"><div><b>Segment:</b> {row.segment || "-"}</div><div><b>Member:</b> {row.member_number || "-"}</div><div><b>Drawing:</b> {row.drawing_number || "-"}</div></td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${severityClasses(row.severity)}`}>{row.severity}</span></td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClasses(row.status)}`}>{row.status}</span>{row.status === "Closed" ? <div className="mt-2 text-[11px] text-slate-500">{row.completed_by || "-"}<br />{prettyDateTime(row.completed_at)}</div> : null}</td>
@@ -1130,7 +1132,7 @@ export default function TowerDefectsPage() {
                 <option value="">Unassigned</option>
                 {assigneeOptions.map((user) => (
                   <option key={user.id} value={user.id}>
-                    {user.name}{user.email ? ` · ${user.email}` : ""}
+                    {user.name}
                   </option>
                 ))}
               </select>
