@@ -11,7 +11,6 @@ alter table public.v2_projects
   add column if not exists start_date date,
   add column if not exists end_date date,
   add column if not exists metadata jsonb not null default '{}'::jsonb;
-
 create table if not exists public.v2_project_identifier_configs (
   organisation_id uuid primary key
     references public.organisations(id)
@@ -39,7 +38,6 @@ create table if not exists public.v2_project_identifier_configs (
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb
 );
-
 create table if not exists public.v2_project_field_definitions (
   id uuid primary key default gen_random_uuid(),
 
@@ -77,7 +75,6 @@ create table if not exists public.v2_project_field_definitions (
 
   unique (organisation_id, field_key)
 );
-
 create table if not exists public.v2_project_field_values (
   project_id uuid not null
     references public.v2_projects(id)
@@ -93,7 +90,6 @@ create table if not exists public.v2_project_field_values (
 
   primary key (project_id, field_definition_id)
 );
-
 -- -------------------------------------------------------------------
 -- CONFIGURABLE NAVIGATION / MODULE SECTIONS
 -- -------------------------------------------------------------------
@@ -122,7 +118,6 @@ create table if not exists public.v2_section_definitions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_organisation_section_settings (
   organisation_id uuid not null
     references public.organisations(id)
@@ -142,7 +137,6 @@ create table if not exists public.v2_organisation_section_settings (
 
   primary key (organisation_id, section_key)
 );
-
 create table if not exists public.v2_project_section_settings (
   project_id uuid not null
     references public.v2_projects(id)
@@ -162,7 +156,6 @@ create table if not exists public.v2_project_section_settings (
 
   primary key (project_id, section_key)
 );
-
 -- -------------------------------------------------------------------
 -- TOWER FOUNDATION
 -- -------------------------------------------------------------------
@@ -192,7 +185,6 @@ create table if not exists public.v2_tower_types (
 
   unique (project_id, name)
 );
-
 create table if not exists public.v2_tower_field_definitions (
   id uuid primary key default gen_random_uuid(),
 
@@ -234,7 +226,6 @@ create table if not exists public.v2_tower_field_definitions (
 
   unique (project_id, field_key)
 );
-
 create table if not exists public.v2_towers (
   id uuid primary key default gen_random_uuid(),
 
@@ -265,7 +256,6 @@ create table if not exists public.v2_towers (
 
   unique (project_id, tower_identifier)
 );
-
 create table if not exists public.v2_tower_field_values (
   tower_id uuid not null
     references public.v2_towers(id)
@@ -281,27 +271,22 @@ create table if not exists public.v2_tower_field_values (
 
   primary key (tower_id, field_definition_id)
 );
-
 create index if not exists idx_v2_towers_project
   on public.v2_towers(project_id, sequence_number, tower_identifier);
-
 create index if not exists idx_v2_tower_types_project
   on public.v2_tower_types(project_id, is_active);
-
 create index if not exists idx_v2_project_field_defs_org
   on public.v2_project_field_definitions(
     organisation_id,
     is_active,
     sort_order
   );
-
 create index if not exists idx_v2_tower_field_defs_project
   on public.v2_tower_field_definitions(
     project_id,
     is_active,
     sort_order
   );
-
 -- -------------------------------------------------------------------
 -- RLS
 -- -------------------------------------------------------------------
@@ -316,21 +301,17 @@ alter table public.v2_tower_types enable row level security;
 alter table public.v2_tower_field_definitions enable row level security;
 alter table public.v2_towers enable row level security;
 alter table public.v2_tower_field_values enable row level security;
-
 -- Read-only authenticated policies. Writes remain server-side through service_role.
 
 drop policy if exists "authenticated can read section definitions"
   on public.v2_section_definitions;
-
 create policy "authenticated can read section definitions"
 on public.v2_section_definitions
 for select
 to authenticated
 using (true);
-
 drop policy if exists "organisation members can read project identifier config"
   on public.v2_project_identifier_configs;
-
 create policy "organisation members can read project identifier config"
 on public.v2_project_identifier_configs
 for select
@@ -344,10 +325,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read project field definitions"
   on public.v2_project_field_definitions;
-
 create policy "organisation members can read project field definitions"
 on public.v2_project_field_definitions
 for select
@@ -361,10 +340,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read project field values"
   on public.v2_project_field_values;
-
 create policy "organisation members can read project field values"
 on public.v2_project_field_values
 for select
@@ -380,10 +357,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read organisation section settings"
   on public.v2_organisation_section_settings;
-
 create policy "organisation members can read organisation section settings"
 on public.v2_organisation_section_settings
 for select
@@ -397,10 +372,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read project section settings"
   on public.v2_project_section_settings;
-
 create policy "organisation members can read project section settings"
 on public.v2_project_section_settings
 for select
@@ -416,10 +389,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read tower types"
   on public.v2_tower_types;
-
 create policy "organisation members can read tower types"
 on public.v2_tower_types
 for select
@@ -433,10 +404,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read tower field definitions"
   on public.v2_tower_field_definitions;
-
 create policy "organisation members can read tower field definitions"
 on public.v2_tower_field_definitions
 for select
@@ -450,10 +419,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read towers"
   on public.v2_towers;
-
 create policy "organisation members can read towers"
 on public.v2_towers
 for select
@@ -467,10 +434,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation members can read tower field values"
   on public.v2_tower_field_values;
-
 create policy "organisation members can read tower field values"
 on public.v2_tower_field_values
 for select
@@ -486,9 +451,7 @@ using (
       and ou.status = 'active'
   )
 );
-
 grant usage on schema public to service_role;
-
 grant all privileges on table public.v2_project_identifier_configs to service_role;
 grant all privileges on table public.v2_project_field_definitions to service_role;
 grant all privileges on table public.v2_project_field_values to service_role;
@@ -499,7 +462,6 @@ grant all privileges on table public.v2_tower_types to service_role;
 grant all privileges on table public.v2_tower_field_definitions to service_role;
 grant all privileges on table public.v2_towers to service_role;
 grant all privileges on table public.v2_tower_field_values to service_role;
-
 -- -------------------------------------------------------------------
 -- UPDATED_AT TRIGGER
 -- -------------------------------------------------------------------
@@ -515,7 +477,6 @@ begin
   return new;
 end;
 $$;
-
 do $$
 declare
   tbl text;
@@ -545,7 +506,6 @@ begin
   end loop;
 end;
 $$;
-
 -- -------------------------------------------------------------------
 -- INITIAL SECTION REGISTRY
 -- -------------------------------------------------------------------
@@ -596,7 +556,6 @@ set
   sort_order = excluded.sort_order,
   implementation_status = excluded.implementation_status,
   default_enabled = excluded.default_enabled;
-
 -- Every existing org receives a configurable project-number policy.
 insert into public.v2_project_identifier_configs (
   organisation_id,

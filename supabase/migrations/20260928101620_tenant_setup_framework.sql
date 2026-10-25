@@ -17,7 +17,6 @@ create table if not exists public.v2_setup_step_definitions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_organisation_setup_state (
   organisation_id uuid primary key
     references public.organisations(id)
@@ -39,7 +38,6 @@ create table if not exists public.v2_organisation_setup_state (
 
   metadata jsonb not null default '{}'::jsonb
 );
-
 create table if not exists public.v2_organisation_setup_steps (
   id uuid primary key default gen_random_uuid(),
 
@@ -76,37 +74,30 @@ create table if not exists public.v2_organisation_setup_steps (
 
   unique (organisation_id, step_key)
 );
-
 create index if not exists
   idx_v2_org_setup_steps_org_status
 on public.v2_organisation_setup_steps (
   organisation_id,
   status
 );
-
 create index if not exists
   idx_v2_setup_definitions_active_sort
 on public.v2_setup_step_definitions (
   is_active,
   sort_order
 );
-
 alter table public.v2_setup_step_definitions enable row level security;
 alter table public.v2_organisation_setup_state enable row level security;
 alter table public.v2_organisation_setup_steps enable row level security;
-
 drop policy if exists "authenticated users can read setup definitions"
   on public.v2_setup_step_definitions;
-
 create policy "authenticated users can read setup definitions"
 on public.v2_setup_step_definitions
 for select
 to authenticated
 using (is_active = true);
-
 drop policy if exists "organisation users can read setup state"
   on public.v2_organisation_setup_state;
-
 create policy "organisation users can read setup state"
 on public.v2_organisation_setup_state
 for select
@@ -120,10 +111,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "organisation users can read setup steps"
   on public.v2_organisation_setup_steps;
-
 create policy "organisation users can read setup steps"
 on public.v2_organisation_setup_steps
 for select
@@ -137,10 +126,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "platform admins can read setup state"
   on public.v2_organisation_setup_state;
-
 create policy "platform admins can read setup state"
 on public.v2_organisation_setup_state
 for select
@@ -150,10 +137,8 @@ using (
     array['owner', 'admin', 'support']::text[]
   )
 );
-
 drop policy if exists "platform admins can read setup steps"
   on public.v2_organisation_setup_steps;
-
 create policy "platform admins can read setup steps"
 on public.v2_organisation_setup_steps
 for select
@@ -163,21 +148,16 @@ using (
     array['owner', 'admin', 'support']::text[]
   )
 );
-
 grant usage on schema public to service_role;
-
 grant all privileges
 on table public.v2_setup_step_definitions
 to service_role;
-
 grant all privileges
 on table public.v2_organisation_setup_state
 to service_role;
-
 grant all privileges
 on table public.v2_organisation_setup_steps
 to service_role;
-
 create or replace function private.tttracker_v2_touch_setup_updated_at()
 returns trigger
 language plpgsql
@@ -189,31 +169,24 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists trg_v2_setup_step_definitions_updated_at
   on public.v2_setup_step_definitions;
-
 create trigger trg_v2_setup_step_definitions_updated_at
 before update on public.v2_setup_step_definitions
 for each row
 execute function private.tttracker_v2_touch_setup_updated_at();
-
 drop trigger if exists trg_v2_organisation_setup_state_updated_at
   on public.v2_organisation_setup_state;
-
 create trigger trg_v2_organisation_setup_state_updated_at
 before update on public.v2_organisation_setup_state
 for each row
 execute function private.tttracker_v2_touch_setup_updated_at();
-
 drop trigger if exists trg_v2_organisation_setup_steps_updated_at
   on public.v2_organisation_setup_steps;
-
 create trigger trg_v2_organisation_setup_steps_updated_at
 before update on public.v2_organisation_setup_steps
 for each row
 execute function private.tttracker_v2_touch_setup_updated_at();
-
 -- Initial setup catalogue.
 -- The UI is driven by form_schema and module_key rather than business names.
 

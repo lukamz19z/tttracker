@@ -29,7 +29,6 @@
 -- Requires migrations 013 and 014.
 
 begin;
-
 -- ---------------------------------------------------------------------------
 -- 0. Prerequisite checks
 -- ---------------------------------------------------------------------------
@@ -57,9 +56,7 @@ begin
   end if;
 end
 $$;
-
 create schema if not exists private;
-
 -- ---------------------------------------------------------------------------
 -- 1. Party-to-party access grants
 -- ---------------------------------------------------------------------------
@@ -115,7 +112,6 @@ create table if not exists public.v2_project_party_access_grants (
 
   check (grantor_project_party_id <> grantee_project_party_id)
 );
-
 create index if not exists v2_party_access_grants_grantee_idx
   on public.v2_project_party_access_grants(
     project_id,
@@ -123,7 +119,6 @@ create index if not exists v2_party_access_grants_grantee_idx
     status,
     permission_key
   );
-
 create index if not exists v2_party_access_grants_grantor_idx
   on public.v2_project_party_access_grants(
     project_id,
@@ -131,7 +126,6 @@ create index if not exists v2_party_access_grants_grantor_idx
     status,
     permission_key
   );
-
 create index if not exists v2_party_access_grants_record_idx
   on public.v2_project_party_access_grants(
     project_id,
@@ -139,7 +133,6 @@ create index if not exists v2_party_access_grants_record_idx
     record_id
   )
   where record_id is not null;
-
 -- ---------------------------------------------------------------------------
 -- 2. Access requests
 -- ---------------------------------------------------------------------------
@@ -188,7 +181,6 @@ create table if not exists public.v2_project_party_access_requests (
 
   check (requesting_project_party_id <> target_project_party_id)
 );
-
 create index if not exists v2_party_access_requests_target_idx
   on public.v2_project_party_access_requests(
     project_id,
@@ -196,7 +188,6 @@ create index if not exists v2_party_access_requests_target_idx
     status,
     requested_at desc
   );
-
 create index if not exists v2_party_access_requests_requestor_idx
   on public.v2_project_party_access_requests(
     project_id,
@@ -204,7 +195,6 @@ create index if not exists v2_party_access_requests_requestor_idx
     status,
     requested_at desc
   );
-
 -- ---------------------------------------------------------------------------
 -- 3. Access/sharing audit log
 -- ---------------------------------------------------------------------------
@@ -239,19 +229,16 @@ create table if not exists public.v2_project_party_access_events (
 
   details jsonb not null default '{}'::jsonb
 );
-
 create index if not exists v2_party_access_events_project_idx
   on public.v2_project_party_access_events(
     project_id,
     occurred_at desc
   );
-
 create index if not exists v2_party_access_events_party_idx
   on public.v2_project_party_access_events(
     target_project_party_id,
     occurred_at desc
   );
-
 -- ---------------------------------------------------------------------------
 -- 4. Add project-party ownership to shared records/publications
 -- ---------------------------------------------------------------------------
@@ -267,23 +254,17 @@ alter table public.v2_record_party_shares
     references public.v2_project_parties(id) on delete set null,
   add column if not exists shared_by_project_party_id uuid
     references public.v2_project_parties(id) on delete set null;
-
 alter table public.v2_project_party_publications
   add column if not exists source_project_party_id uuid
     references public.v2_project_parties(id) on delete set null;
-
 comment on column public.v2_record_party_shares.project_party_id is
   'Receiving project party retained for compatibility.';
-
 comment on column public.v2_record_party_shares.owner_project_party_id is
   'Project party that owns/originated the shared record.';
-
 comment on column public.v2_project_party_publications.project_party_id is
   'Receiving project party retained for compatibility.';
-
 comment on column public.v2_project_party_publications.source_project_party_id is
   'Project party publishing/owning the information.';
-
 -- Backfill existing contractor-first shares/publications to the project host.
 update public.v2_record_party_shares s
 set
@@ -294,7 +275,6 @@ where host_party.project_id = s.project_id
   and host_party.is_host = true
   and host_party.status <> 'removed'
   and s.owner_project_party_id is null;
-
 update public.v2_project_party_publications ppub
 set source_project_party_id = host_party.id
 from public.v2_project_parties host_party
@@ -302,7 +282,6 @@ where host_party.project_id = ppub.project_id
   and host_party.is_host = true
   and host_party.status <> 'removed'
   and ppub.source_project_party_id is null;
-
 create index if not exists v2_record_party_shares_owner_idx
   on public.v2_record_party_shares(
     project_id,
@@ -310,7 +289,6 @@ create index if not exists v2_record_party_shares_owner_idx
     record_type
   )
   where is_active = true;
-
 create index if not exists v2_project_party_publications_source_party_idx
   on public.v2_project_party_publications(
     project_id,
@@ -318,7 +296,6 @@ create index if not exists v2_project_party_publications_source_party_idx
     status,
     published_at desc
   );
-
 -- ---------------------------------------------------------------------------
 -- 5. Add origin_project_party_id to operational records when those tables exist
 -- ---------------------------------------------------------------------------
@@ -368,7 +345,6 @@ begin
   end loop;
 end
 $$;
-
 -- ---------------------------------------------------------------------------
 -- 6. Project-party administration permission catalogue
 -- ---------------------------------------------------------------------------
@@ -419,7 +395,6 @@ set
   description = excluded.description,
   module_key = excluded.module_key,
   sort_order = excluded.sort_order;
-
 -- ---------------------------------------------------------------------------
 -- 7. Cross-project party validation
 -- ---------------------------------------------------------------------------
@@ -468,19 +443,16 @@ begin
   return new;
 end
 $$;
-
 drop trigger if exists v2_party_access_grants_validate_scope
   on public.v2_project_party_access_grants;
 create trigger v2_party_access_grants_validate_scope
 before insert or update on public.v2_project_party_access_grants
 for each row execute function private.tttracker_v2_validate_party_access_scope();
-
 drop trigger if exists v2_party_access_requests_validate_scope
   on public.v2_project_party_access_requests;
 create trigger v2_party_access_requests_validate_scope
 before insert or update on public.v2_project_party_access_requests
 for each row execute function private.tttracker_v2_validate_party_access_scope();
-
 -- ---------------------------------------------------------------------------
 -- 8. Access helpers
 -- ---------------------------------------------------------------------------
@@ -507,7 +479,6 @@ as $$
       and pp.portal_enabled = true
   );
 $$;
-
 -- Resolve an active grant to one of the user's parties.
 -- Scope matching deliberately treats NULL supplied scope values as project-only
 -- checks so a record/section grant does not accidentally become project-wide.
@@ -561,7 +532,6 @@ as $$
       )
   );
 $$;
-
 -- Existing external party permission resolution remains the baseline.
 -- Active project-scoped bilateral grants can additionally grant the capability.
 create or replace function private.tttracker_v2_external_party_has_permission(
@@ -634,7 +604,6 @@ as $$
       p_user_id
     );
 $$;
-
 -- Host-agnostic scoped permission helper for future APIs.
 create or replace function private.tttracker_v2_user_has_project_party_access(
   p_project_id uuid,
@@ -665,7 +634,6 @@ as $$
       p_user_id
     );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- 9. Update portal-section helper to recognise section-scoped grants
 -- ---------------------------------------------------------------------------
@@ -725,7 +693,6 @@ as $$
       )
   );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- 10. Update record-sharing helper so both source and recipient can inspect a
 --     share, while recipient access remains limited to explicit shares.
@@ -760,7 +727,6 @@ as $$
       and recipient.portal_enabled = true
   );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- 11. RLS for bilateral access tables
 -- ---------------------------------------------------------------------------
@@ -768,7 +734,6 @@ $$;
 alter table public.v2_project_party_access_grants enable row level security;
 alter table public.v2_project_party_access_requests enable row level security;
 alter table public.v2_project_party_access_events enable row level security;
-
 -- Existing party users can read grants involving their party; host members can
 -- inspect all project grants. Mutations remain server-side/service-role only.
 drop policy if exists "v2 bilateral grants read"
@@ -782,7 +747,6 @@ using (
   or private.tttracker_v2_is_party_user(grantor_project_party_id)
   or private.tttracker_v2_is_party_user(grantee_project_party_id)
 );
-
 drop policy if exists "v2 bilateral requests read"
   on public.v2_project_party_access_requests;
 create policy "v2 bilateral requests read"
@@ -794,7 +758,6 @@ using (
   or private.tttracker_v2_is_party_user(requesting_project_party_id)
   or private.tttracker_v2_is_party_user(target_project_party_id)
 );
-
 drop policy if exists "v2 bilateral access events read"
   on public.v2_project_party_access_events;
 create policy "v2 bilateral access events read"
@@ -812,7 +775,6 @@ using (
     and private.tttracker_v2_is_party_user(target_project_party_id)
   )
 );
-
 -- Expand existing share/publication read policies so the source/owner party can
 -- see the records it has shared, not only the receiving party.
 drop policy if exists "v2 record party shares read"
@@ -833,7 +795,6 @@ using (
     and private.tttracker_v2_is_party_user(shared_by_project_party_id)
   )
 );
-
 drop policy if exists "v2 project party publications read"
   on public.v2_project_party_publications;
 create policy "v2 project party publications read"
@@ -851,45 +812,34 @@ using (
     and private.tttracker_v2_is_party_user(source_project_party_id)
   )
 );
-
 -- ---------------------------------------------------------------------------
 -- 12. Grants
 -- ---------------------------------------------------------------------------
 
 grant usage on schema private to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_is_party_user(uuid, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_user_has_scoped_party_grant(uuid, text, text, text, uuid, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_external_party_has_permission(uuid, text, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_user_has_project_party_access(uuid, text, text, text, uuid, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_party_can_view_portal_section(uuid, text, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_record_is_shared_with_user(uuid, text, uuid, uuid)
 to authenticated, service_role;
-
 grant select on public.v2_project_party_access_grants to authenticated;
 grant select on public.v2_project_party_access_requests to authenticated;
 grant select on public.v2_project_party_access_events to authenticated;
-
 grant all privileges on public.v2_project_party_access_grants to service_role;
 grant all privileges on public.v2_project_party_access_requests to service_role;
 grant all privileges on public.v2_project_party_access_events to service_role;
-
 commit;
-
 notify pgrst, 'reload schema';

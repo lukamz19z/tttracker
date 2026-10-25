@@ -3,7 +3,6 @@
 -- Depends on Migration 001 and 002.
 
 begin;
-
 -- ---------------------------------------------------------------------------
 -- Projects
 -- ---------------------------------------------------------------------------
@@ -30,18 +29,14 @@ create table if not exists public.v2_projects (
   constraint v2_projects_name_not_blank check (btrim(name) <> ''),
   constraint v2_projects_org_code_unique unique (organisation_id, code)
 );
-
 create index if not exists v2_projects_org_status_idx
   on public.v2_projects (organisation_id, status);
-
 create index if not exists v2_projects_org_name_idx
   on public.v2_projects (organisation_id, name);
-
 drop trigger if exists v2_projects_set_updated_at on public.v2_projects;
 create trigger v2_projects_set_updated_at
 before update on public.v2_projects
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- ---------------------------------------------------------------------------
 -- Project memberships
 -- ---------------------------------------------------------------------------
@@ -66,21 +61,16 @@ create table if not exists public.v2_project_users (
 
   constraint v2_project_users_unique unique (project_id, user_id)
 );
-
 create index if not exists v2_project_users_user_idx
   on public.v2_project_users (user_id, status);
-
 create index if not exists v2_project_users_project_idx
   on public.v2_project_users (project_id, status);
-
 create index if not exists v2_project_users_org_idx
   on public.v2_project_users (organisation_id, status);
-
 drop trigger if exists v2_project_users_set_updated_at on public.v2_project_users;
 create trigger v2_project_users_set_updated_at
 before update on public.v2_project_users
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- Ensure organisation_id matches project organisation and user is org member.
 create or replace function private.tttracker_v2_validate_project_user()
 returns trigger
@@ -120,14 +110,11 @@ begin
   return new;
 end;
 $$;
-
 revoke all on function private.tttracker_v2_validate_project_user() from public;
-
 drop trigger if exists v2_project_users_validate on public.v2_project_users;
 create trigger v2_project_users_validate
 before insert or update on public.v2_project_users
 for each row execute function private.tttracker_v2_validate_project_user();
-
 -- ---------------------------------------------------------------------------
 -- Project settings
 -- ---------------------------------------------------------------------------
@@ -147,15 +134,12 @@ create table if not exists public.v2_project_settings (
   constraint v2_project_settings_key_not_blank check (btrim(setting_key) <> ''),
   constraint v2_project_settings_unique unique (project_id, setting_key)
 );
-
 create index if not exists v2_project_settings_project_idx
   on public.v2_project_settings (project_id);
-
 drop trigger if exists v2_project_settings_set_updated_at on public.v2_project_settings;
 create trigger v2_project_settings_set_updated_at
 before update on public.v2_project_settings
 for each row execute function private.tttracker_v2_set_updated_at();
-
 create or replace function private.tttracker_v2_validate_project_setting()
 returns trigger
 language plpgsql
@@ -180,14 +164,11 @@ begin
   return new;
 end;
 $$;
-
 revoke all on function private.tttracker_v2_validate_project_setting() from public;
-
 drop trigger if exists v2_project_settings_validate on public.v2_project_settings;
 create trigger v2_project_settings_validate
 before insert or update on public.v2_project_settings
 for each row execute function private.tttracker_v2_validate_project_setting();
-
 -- ---------------------------------------------------------------------------
 -- Project membership helpers
 -- ---------------------------------------------------------------------------
@@ -213,10 +194,8 @@ as $$
       and p.status <> 'archived'
   );
 $$;
-
 revoke all on function private.tttracker_v2_is_project_member(uuid) from public;
 grant execute on function private.tttracker_v2_is_project_member(uuid) to authenticated;
-
 create or replace function private.tttracker_v2_has_project_permission(
   target_organisation_id uuid,
   target_project_id uuid,
@@ -254,10 +233,8 @@ begin
   );
 end;
 $$;
-
 revoke all on function private.tttracker_v2_has_project_permission(uuid, uuid, text) from public;
 grant execute on function private.tttracker_v2_has_project_permission(uuid, uuid, text) to authenticated;
-
 -- ---------------------------------------------------------------------------
 -- Resource registry + permissions for project administration.
 -- ---------------------------------------------------------------------------
@@ -285,7 +262,6 @@ values
     'Project membership and access management.'
   )
 on conflict (resource_key) do nothing;
-
 insert into public.v2_permissions (
   resource_id,
   permission_code,
@@ -309,7 +285,6 @@ cross join (
 ) as a(action_key)
 where r.resource_key in ('project.settings', 'project.users')
 on conflict (permission_code) do nothing;
-
 -- Existing admin roles automatically inherit new permissions.
 insert into public.v2_role_permissions (
   organisation_id,
@@ -342,7 +317,6 @@ where r.code = 'admin'
   )
 on conflict (role_id, permission_id)
 do update set allowed = true;
-
 -- ---------------------------------------------------------------------------
 -- RLS
 -- ---------------------------------------------------------------------------
@@ -350,15 +324,12 @@ do update set allowed = true;
 alter table public.v2_projects enable row level security;
 alter table public.v2_project_users enable row level security;
 alter table public.v2_project_settings enable row level security;
-
 revoke all on table public.v2_projects from anon, authenticated;
 revoke all on table public.v2_project_users from anon, authenticated;
 revoke all on table public.v2_project_settings from anon, authenticated;
-
 grant select on table public.v2_projects to authenticated;
 grant select on table public.v2_project_users to authenticated;
 grant select on table public.v2_project_settings to authenticated;
-
 create policy "project members can read projects"
 on public.v2_projects
 for select
@@ -367,7 +338,6 @@ using (
   private.tttracker_v2_is_organisation_member(organisation_id)
   and private.tttracker_v2_is_project_member(id)
 );
-
 create policy "users can read own project memberships"
 on public.v2_project_users
 for select
@@ -376,7 +346,6 @@ using (
   user_id = (select auth.uid())
   and private.tttracker_v2_is_organisation_member(organisation_id)
 );
-
 create policy "project members can read project settings"
 on public.v2_project_settings
 for select
@@ -385,5 +354,4 @@ using (
   private.tttracker_v2_is_organisation_member(organisation_id)
   and private.tttracker_v2_is_project_member(project_id)
 );
-
 commit;

@@ -8,7 +8,6 @@ alter table public.v2_people add column if not exists start_date date;
 alter table public.v2_people add column if not exists end_date date;
 create unique index if not exists v2_people_org_id_uidx on public.v2_people(organisation_id,id);
 create index if not exists v2_people_org_status_idx on public.v2_people(organisation_id,employment_status,display_name,id);
-
 create table if not exists public.v2_person_types (
  id uuid primary key default gen_random_uuid(), organisation_id uuid not null references public.organisations(id),
  name text not null check(btrim(name)<>''), is_active boolean not null default true,
@@ -116,7 +115,6 @@ create table if not exists public.v2_site_prestart_attendees (
 );
 create index if not exists v2_site_prestarts_org_date_idx on public.v2_site_prestarts(organisation_id,prestart_date,id);
 create index if not exists v2_site_prestart_person_idx on public.v2_site_prestart_attendees(organisation_id,person_id);
-
 insert into public.v2_permissions(resource_id,permission_code,action_key,name)
 select r.id,p.code,p.action,p.label from public.v2_resources r cross join (values
  ('people.archive','archive','Archive people'),('people.private.view','private_view','View private People data'),
@@ -133,7 +131,6 @@ where r.is_system and r.is_active and r.code='admin' and p.is_active
  and (p.permission_code like 'people.%' or p.permission_code like 'training.%')
  and p.permission_code not like 'people.private.%' and p.permission_code not like 'people.confidential.%'
 on conflict(role_id,permission_id) do nothing;
-
 create or replace function private.tttracker_v2_require_people_permission(p_org uuid,p_permission text)
 returns void language plpgsql stable security definer set search_path='' as $$
 begin
@@ -144,7 +141,6 @@ begin
  raise exception 'PEOPLE_PERMISSION_DENIED' using errcode='42501'; end if;
 end $$;
 revoke all on function private.tttracker_v2_require_people_permission(uuid,text) from public,anon,authenticated;
-
 -- One projection for all operational callers. Legacy contacts/metadata never enter it.
 create or replace function private.tttracker_v2_operational_person(p public.v2_people)
 returns jsonb language sql stable set search_path='' as $$
@@ -164,7 +160,6 @@ when exists(select 1 from public.v2_training_records where person_id=p.id and or
  when exists(select 1 from public.v2_organisation_invitations i where i.organisation_id=p.organisation_id and i.status='pending' and i.expires_at>now() and lower(i.email)=lower(p.work_email)) then 'Invitation pending' else 'No TTTracker account' end);
 $$;
 revoke all on function private.tttracker_v2_operational_person(public.v2_people) from public,anon,authenticated;
-
 create or replace function public.tttracker_v2_people_read(p_organisation_id uuid,p_area text default 'people',p_query text default '',p_page integer default 1,p_person_id uuid default null,p_filter jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare rows jsonb; total bigint; v_permission text; v_offset integer:=greatest(0,least(coalesce(p_page,1),100000)-1)*20; v_q text:=btrim(coalesce(p_query,'')); v_person public.v2_people;
@@ -254,7 +249,6 @@ elsif p_area='prestarts' then
  else raise exception 'PEOPLE_INVALID_AREA'; end if;
  return jsonb_build_object('rows',rows,'total',total,'page',greatest(1,p_page),'page_size',20);
 end $$;
-
 create or replace function public.tttracker_v2_people_write(p_organisation_id uuid,p_action text,p_id uuid default null,p_data jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare v_permission text; v_person uuid; v_id uuid:=p_id; v_record public.v2_training_records; v_type public.v2_training_types; v_group uuid; v_expiry date; v_issue date; v_project uuid; v_name text; v_old text; v_status text;
@@ -388,7 +382,6 @@ when foreign_key_violation then raise exception 'PEOPLE_RELATIONSHIP_INVALID' us
 when check_violation or not_null_violation or invalid_text_representation or invalid_datetime_format or datetime_field_overflow or numeric_value_out_of_range then raise exception 'PEOPLE_INVALID_FIELDS' using errcode='22023';
 when unique_violation then if sqlerrm='PEOPLE_IDENTIFIER_EXISTS' then raise; end if; raise exception 'PEOPLE_DUPLICATE_RECORD' using errcode='23505';
 end $$;
-
 create or replace function public.tttracker_v2_people_classified(p_organisation_id uuid,p_person_id uuid,p_area text,p_data jsonb default null)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb;
@@ -404,7 +397,6 @@ if p_area='confidential' then result:=jsonb_build_object('available',false);
  insert into public.v2_people_audit(organisation_id,person_id,actor_id,action,data_area,target_id) values(p_organisation_id,p_person_id,auth.uid(),case when p_data is null then 'read' else 'edit' end,p_area,p_person_id);
  return coalesce(result,'{}');
 end $$;
-
 do $$ declare t text; begin
  foreach t in array array['v2_people_field_types','v2_people','v2_person_types','v2_person_private','v2_people_audit','v2_crews','v2_crew_members','v2_person_projects','v2_crew_projects','v2_training_types','v2_training_linked_types','v2_training_records','v2_people_documents','v2_site_prestarts','v2_site_prestart_attendees'] loop
  execute format('alter table public.%I enable row level security',t);

@@ -3,7 +3,6 @@
 -- project Defects, project-wide docket lookup and operational configuration.
 
 begin;
-
 -- TTTracker V2 Operations Control Centre.
 -- Requires the V2 foundation and migration 011 to already be applied.
 
@@ -34,7 +33,6 @@ begin
   end if;
 end
 $$;
-
 -- Migration 011 initially keyed production actuals at docket level. A Daily
 -- Docket can legitimately allocate production across multiple towers, so the
 -- analytics contract must be tower-aware.
@@ -42,8 +40,6 @@ drop index if exists public.v2_project_production_actuals_source_uidx;
 create unique index if not exists v2_project_production_actuals_source_tower_uidx
   on public.v2_project_production_actuals(project_id, source_type, source_id, tower_id)
   where source_id is not null and tower_id is not null;
-
-
 create table if not exists public.v2_people (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -65,7 +61,6 @@ create unique index if not exists v2_people_org_auth_user_uidx
   where auth_user_id is not null;
 create index if not exists v2_people_org_name_idx
   on public.v2_people(organisation_id, display_name);
-
 insert into public.v2_people (
   organisation_id,
   auth_user_id,
@@ -96,7 +91,6 @@ set
   email = excluded.email,
   display_name = excluded.display_name,
   employment_status = 'active';
-
 create table if not exists public.v2_project_progress_profiles (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -114,7 +108,6 @@ create table if not exists public.v2_project_progress_profiles (
   updated_at timestamptz not null default now(),
   unique(project_id)
 );
-
 create table if not exists public.v2_progress_stage_definitions (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -133,7 +126,6 @@ create table if not exists public.v2_progress_stage_definitions (
   updated_at timestamptz not null default now(),
   unique(project_id, stage_key, phase)
 );
-
 create table if not exists public.v2_tower_progress_stage_state (
   tower_id uuid not null references public.v2_towers(id) on delete cascade,
   stage_definition_id uuid not null references public.v2_progress_stage_definitions(id) on delete cascade,
@@ -144,7 +136,6 @@ create table if not exists public.v2_tower_progress_stage_state (
   updated_at timestamptz not null default now(),
   primary key (tower_id, stage_definition_id)
 );
-
 create table if not exists public.v2_project_option_definitions (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -159,7 +150,6 @@ create table if not exists public.v2_project_option_definitions (
   updated_at timestamptz not null default now(),
   unique(project_id, option_group, option_key)
 );
-
 create table if not exists public.v2_daily_dockets (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -192,7 +182,6 @@ create table if not exists public.v2_daily_dockets (
 );
 create index if not exists v2_daily_dockets_project_date_idx
   on public.v2_daily_dockets(project_id, docket_date desc);
-
 create table if not exists public.v2_docket_labour (
   id uuid primary key default gen_random_uuid(),
   docket_id uuid not null references public.v2_daily_dockets(id) on delete cascade,
@@ -212,7 +201,6 @@ create table if not exists public.v2_docket_labour (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_docket_delays (
   id uuid primary key default gen_random_uuid(),
   docket_id uuid not null references public.v2_daily_dockets(id) on delete cascade,
@@ -226,7 +214,6 @@ create table if not exists public.v2_docket_delays (
   notes text,
   created_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_docket_plant (
   id uuid primary key default gen_random_uuid(),
   docket_id uuid not null references public.v2_daily_dockets(id) on delete cascade,
@@ -242,7 +229,6 @@ create table if not exists public.v2_docket_plant (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_project_docket_review_settings (
   project_id uuid primary key references public.v2_projects(id) on delete cascade,
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -254,7 +240,6 @@ create table if not exists public.v2_project_docket_review_settings (
   settings jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
-
 create table if not exists public.v2_project_docket_reviewers (
   project_id uuid not null references public.v2_projects(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -263,7 +248,6 @@ create table if not exists public.v2_project_docket_reviewers (
   created_at timestamptz not null default now(),
   primary key(project_id,user_id,review_stage)
 );
-
 create table if not exists public.v2_docket_tower_allocations (
   id uuid primary key default gen_random_uuid(),
   docket_id uuid not null references public.v2_daily_dockets(id) on delete cascade,
@@ -282,7 +266,6 @@ create table if not exists public.v2_docket_tower_allocations (
   created_at timestamptz not null default now(),
   unique(docket_id,tower_id)
 );
-
 create table if not exists public.v2_docket_stage_progress (
   id uuid primary key default gen_random_uuid(),
   docket_id uuid not null references public.v2_daily_dockets(id) on delete cascade,
@@ -294,7 +277,6 @@ create table if not exists public.v2_docket_stage_progress (
   created_at timestamptz not null default now(),
   unique(docket_id,tower_id,stage_definition_id)
 );
-
 create table if not exists public.v2_material_register (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -317,7 +299,6 @@ create index if not exists v2_material_register_project_search_idx
   on public.v2_material_register(project_id,item_reference);
 create index if not exists v2_material_register_tower_idx
   on public.v2_material_register(tower_id);
-
 create table if not exists public.v2_material_events (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -341,7 +322,6 @@ create table if not exists public.v2_material_events (
 );
 create index if not exists v2_material_events_project_idx
   on public.v2_material_events(project_id,event_type,status);
-
 create table if not exists public.v2_defects (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -365,7 +345,6 @@ create table if not exists public.v2_defects (
 );
 create index if not exists v2_defects_project_idx
   on public.v2_defects(project_id,status,raised_at desc);
-
 insert into public.v2_section_definitions (
   section_key,scope,label,route_segment,module_key,icon_key,sort_order,
   implementation_status,default_enabled
@@ -380,14 +359,12 @@ set label=excluded.label, route_segment=excluded.route_segment, module_key=exclu
     icon_key=excluded.icon_key, sort_order=excluded.sort_order,
     implementation_status=excluded.implementation_status,
     default_enabled=excluded.default_enabled;
-
 insert into public.v2_project_docket_review_settings (
   project_id, organisation_id
 )
 select p.id, p.organisation_id
 from public.v2_projects p
 on conflict (project_id) do nothing;
-
 insert into public.v2_project_progress_profiles (
   organisation_id,project_id,name,assembly_share,erection_share,
   normalize_applicable_weights,mh_t_basis,requires_review
@@ -395,7 +372,6 @@ insert into public.v2_project_progress_profiles (
 select p.organisation_id,p.id,'Project Progress',50,50,true,'progress_earned_tonnes',true
 from public.v2_projects p
 on conflict (project_id) do nothing;
-
 -- Editable legacy-compatible starting point. Projects should review weights.
 insert into public.v2_progress_stage_definitions (
   organisation_id,project_id,progress_profile_id,stage_key,label,phase,weight,sort_order
@@ -418,7 +394,6 @@ cross join (
     ('EP','Earth Peaks / Peaks',5::numeric,100)
 ) as x(stage_key,label,weight,sort_order)
 on conflict (project_id,stage_key,phase) do nothing;
-
 insert into public.v2_project_option_definitions (
   organisation_id,project_id,option_group,option_key,label,sort_order
 )
@@ -460,7 +435,6 @@ cross join (
     ('material_unit','m','Metre',40)
 ) as x(option_group,option_key,label,sort_order)
 on conflict (project_id,option_group,option_key) do nothing;
-
 alter table public.v2_people enable row level security;
 alter table public.v2_project_progress_profiles enable row level security;
 alter table public.v2_progress_stage_definitions enable row level security;
@@ -477,11 +451,8 @@ alter table public.v2_docket_stage_progress enable row level security;
 alter table public.v2_material_register enable row level security;
 alter table public.v2_material_events enable row level security;
 alter table public.v2_defects enable row level security;
-
 grant usage on schema public to service_role;
 grant all privileges on all tables in schema public to service_role;
 grant all privileges on all sequences in schema public to service_role;
-
 commit;
-
 notify pgrst, 'reload schema';

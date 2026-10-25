@@ -21,7 +21,6 @@ begin
  insert into private.v2_confidential_audit(organisation_id,instance_id,external_session_id,action,purpose) values(i.organisation_id,i.id,sid,'EXTERNAL_SESSION_CREATED','onboarding_review');
  return jsonb_build_object('instance_id',i.id,'expires_at',expiry);
 end $$;
-
 revoke all on function public.tttracker_v2_onboarding_exchange(text,text) from public,anon,authenticated;
 grant execute on function public.tttracker_v2_onboarding_exchange(text,text) to service_role;
 notify pgrst,'reload schema';

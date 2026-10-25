@@ -511,3 +511,5 @@ grant execute on function public.tttracker_v2_save_material_import_profile(uuid,
 
 notify pgrst,'reload schema';
 commit;
+
+;

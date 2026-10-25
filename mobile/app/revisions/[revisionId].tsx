@@ -8,6 +8,7 @@ import { nextFindingLocation, savedFindingLocation } from "@/lib/offline/revisio
 import { enqueue, queueRows,getCache } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { Image } from "expo-image";
 import {
   Camera,
@@ -236,8 +237,8 @@ export default function RevisionDetailScreen() {
     .join(" ");
 
   const revisionItems = useMemo(
-    () => detail?.items ?? [],
-    [detail?.items],
+    () => (detail?.items ?? []).filter(item=>!workspace?.findings.some(finding=>item.mobile_client_mutation_id===finding.clientMutationId || workspace.serverItems?.[finding.clientMutationId]?.id===item.id)),
+    [detail?.items,workspace],
   );
 
   const revisionFiles = useMemo(
@@ -330,9 +331,7 @@ export default function RevisionDetailScreen() {
     ],
   );
 
-  useEffect(() => {
-    void reloadDetail(false);
-  }, [reloadDetail]);
+  useFocusEffect(useCallback(()=>{void reloadDetail(online);},[online,reloadDetail]));
 
   useEffect(() => {
     const wasSyncing = wasSyncingRef.current;
@@ -477,6 +476,17 @@ export default function RevisionDetailScreen() {
   useEffect(() => {
     void loadWorkspace();
   }, [loadWorkspace]);
+
+  useEffect(()=>{
+    let active=true;
+    const read=()=>{void listRevisionWorkspaces(projectId).then(rows=>{
+      const next=rows.find(row=>row.routeKey===routeRevisionId || row.serverRevisionId===routeRevisionId || row.legacyRouteKeys?.includes(routeRevisionId));
+      if(active && next)setWorkspace(next);
+    }).catch(()=>undefined);};
+    read();
+    const timer=syncing?setInterval(read,500):null;
+    return ()=>{active=false;if(timer)clearInterval(timer);};
+  },[syncing,projectId,routeRevisionId]);
 
   useEffect(() => {
     if (!projectId || !towerId) {
@@ -1041,7 +1051,7 @@ export default function RevisionDetailScreen() {
       </View>
 
       <Pressable style={[styles.addFinding, { backgroundColor: "#047857" }]} onPress={() => void finalise()}><Text style={styles.addFindingText}>{workspace?.finalisedAt || serverRevision?.finalised_at ? "Finalised - ready to submit" : workspace?.finaliseRequested ? "Pending sync - Finalise when synced" : online ? "Finalise Rectification" : "Finalise when synced"}</Text></Pressable>
-      <Pressable style={styles.addFinding} onPress={() => void syncNow()}><Text style={styles.addFindingText}>Sync now</Text></Pressable>
+      <Pressable style={styles.addFinding} onPress={() => void syncNow().then(()=>reloadDetail(online))}><Text style={styles.addFindingText}>Sync now</Text></Pressable>
       <Pressable
         style={styles.addFinding}
         onPress={openAddFinding}
@@ -1053,7 +1063,7 @@ export default function RevisionDetailScreen() {
       </Pressable>
 
       {workspace?.findings.map(
-        (finding, index) => (
+        (finding) => (
           <View
             key={finding.clientMutationId}
             style={styles.card}
@@ -1062,12 +1072,7 @@ export default function RevisionDetailScreen() {
             <View style={styles.head}>
               <View>
                 <Text style={styles.fli}>
-                  Pending FLI-
-                  {String(
-                    revisionItems.length +
-                      index +
-                      1,
-                  ).padStart(3, "0")}
+                  {workspace?.serverItems?.[finding.clientMutationId]?.fli_number || "Pending FLI"}
                 </Text>
                 <Text style={styles.pending}>
                   {finding.queuedAt

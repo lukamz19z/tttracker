@@ -2,10 +2,8 @@
 -- These functions are callable only by the authenticated server boundary.
 create index if not exists v2_email_mfa_challenges_user_created_idx
 on public.v2_email_mfa_challenges(user_id,created_at desc);
-
 revoke all on public.v2_email_mfa_challenges from anon,authenticated;
 revoke insert,update,delete,truncate,references,trigger on public.v2_security_session_verifications from anon,authenticated;
-
 create or replace function public.tttracker_v2_reserve_email_challenge(
  p_user_id uuid,p_session_id text,p_id uuid,p_email text,p_hash text,
  p_expiry_minutes integer,p_max_attempts integer
@@ -27,7 +25,6 @@ begin
  values(p_id,p_user_id,p_session_id,p_email,p_hash,now()+make_interval(mins=>p_expiry_minutes),p_max_attempts);
  return jsonb_build_object('challengeId',p_id,'expiresAt',now()+make_interval(mins=>p_expiry_minutes),'resendAfter',now()+interval '30 seconds','codeLength',6);
 end $$;
-
 create or replace function public.tttracker_v2_verify_email_challenge(
  p_user_id uuid,p_session_id text,p_id uuid,p_hash text,p_trusted_hours integer
 ) returns jsonb language plpgsql security definer set search_path='' as $$
@@ -56,7 +53,6 @@ begin
  on conflict(user_id,session_id,verification_type) do update set verified_at=excluded.verified_at,expires_at=excluded.expires_at;
  return jsonb_build_object('verified',true,'expiresAt',expiry);
 end $$;
-
 revoke all on function public.tttracker_v2_reserve_email_challenge(uuid,text,uuid,text,text,integer,integer) from public,anon,authenticated;
 revoke all on function public.tttracker_v2_verify_email_challenge(uuid,text,uuid,text,integer) from public,anon,authenticated;
 grant execute on function public.tttracker_v2_reserve_email_challenge(uuid,text,uuid,text,text,integer,integer) to service_role;

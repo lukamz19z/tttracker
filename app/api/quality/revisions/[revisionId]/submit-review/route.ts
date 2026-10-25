@@ -1,4 +1,4 @@
-import { validateRevisionEvidence } from "@/lib/quality/finalise-revision";
+import { atomicQualityError } from "@/lib/quality/atomic-error";
 import { NextResponse } from "next/server";
 
 import { notifyRevisionEvent } from "@/lib/quality/revision-notifications";
@@ -42,38 +42,9 @@ export async function POST(request: Request, context: RouteContext) {
       projectId: revision.project_id,
     });
 
-    const { count, error: itemError } = await service
-      .from("tower_revision_items")
-      .select("id", { count: "exact", head: true })
-      .eq("revision_id", revisionId);
-
-    if (itemError) throw new Error(itemError.message);
-    if (!count) {
-      return NextResponse.json(
-        { error: "Add at least one FLI before submitting this Revision for review." },
-        { status: 409 },
-      );
-    }
-
-    if (!revision.finalised_at) return NextResponse.json({ error: "Finalise this Revision before submitting for review." }, { status: 409 });
-    const validation = await validateRevisionEvidence(service, revisionId);
-    if (validation) return NextResponse.json({ error: validation }, { status: 409 });
-    if (revision.submitted_for_review_at) return NextResponse.json({ revision, notification: { recipients: 0 } });
-    const submittedAt = new Date().toISOString();
-    const { data: updated, error: updateError } = await service
-      .from("tower_revisions")
-      .update({
-        status: "Ready for Review",
-        submitted_for_review_at: submittedAt,
-        submitted_for_review_by: user.id,
-        updated_at: submittedAt,
-      })
-      .eq("id", revisionId)
-      .select("*")
-      .single();
-
-    if (updateError) throw new Error(updateError.message);
-
+    const {data:updated,error:updateError}=await service.rpc("finalise_v1_revision_atomic",{p_revision_id:revisionId,p_project_id:revision.project_id,p_actor_id:user.id,p_submit:true});
+    if(updateError){const result=atomicQualityError(updateError);return NextResponse.json({error:result.message},{status:result.status});}
+    if(revision.submitted_for_review_at)return NextResponse.json({revision:updated,notification:{recipients:0}});
     const { data: authUser } = await service.auth.admin.getUserById(user.id);
     const actorLabel =
       clean(authUser.user?.user_metadata?.full_name) ||

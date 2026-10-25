@@ -32,7 +32,6 @@ alter table public.v2_training_categories enable row level security;
 alter table public.v2_training_options enable row level security;
 alter table public.v2_training_type_options enable row level security;
 revoke all on public.v2_training_categories,public.v2_training_options,public.v2_training_type_options from public,anon,authenticated;
-
 create or replace function public.tttracker_v2_people_read(p_organisation_id uuid,p_area text default 'people',p_query text default '',p_page integer default 1,p_person_id uuid default null,p_filter jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb; rows jsonb; total bigint; off integer:=greatest(0,least(coalesce(p_page,1),100000)-1)*20; pid uuid:=nullif(p_filter->>'project_id','')::uuid;
@@ -365,5 +364,4 @@ end $$;
 revoke all on function public.tttracker_v2_onboarding_versions(uuid,uuid,integer) from public,anon;
 grant execute on function public.tttracker_v2_onboarding_versions(uuid,uuid,integer) to authenticated;
 notify pgrst,'reload schema';
-
 commit;

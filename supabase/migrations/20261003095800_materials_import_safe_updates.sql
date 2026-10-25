@@ -348,7 +348,5 @@ begin
  'addedRows',added,'mergedRows',merged,'unchangedRows',unchanged,'supersededRows',superseded,'rowErrors','[]'::jsonb);
 end;
 $function$;
-
 notify pgrst, 'reload schema';
 commit;
-

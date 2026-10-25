@@ -5,7 +5,6 @@
 -- the backend for external clients and future client / principal-contractor hosted projects.
 
 begin;
-
 -- ---------------------------------------------------------------------------
 -- 0. Prerequisites
 -- ---------------------------------------------------------------------------
@@ -29,9 +28,7 @@ begin
   end if;
 end
 $$;
-
 create schema if not exists private;
-
 -- ---------------------------------------------------------------------------
 -- 1. Explicit project host
 -- ---------------------------------------------------------------------------
@@ -44,23 +41,17 @@ alter table public.v2_projects
     references public.organisations(id) on delete restrict,
   add column if not exists hosting_model_key text not null
     default 'contractor_hosted';
-
 update public.v2_projects
 set host_organisation_id = organisation_id
 where host_organisation_id is null;
-
 alter table public.v2_projects
   alter column host_organisation_id set not null;
-
 create index if not exists v2_projects_host_org_idx
   on public.v2_projects(host_organisation_id, status);
-
 comment on column public.v2_projects.host_organisation_id is
   'Organisation hosting the project workspace. Existing V2 projects are contractor-hosted.';
-
 comment on column public.v2_projects.hosting_model_key is
   'Data-driven hosting model key. Initial supported model: contractor_hosted.';
-
 -- ---------------------------------------------------------------------------
 -- 2. Configurable project-party types
 -- ---------------------------------------------------------------------------
@@ -82,7 +73,6 @@ create table if not exists public.v2_project_party_type_definitions (
   updated_at timestamptz not null default now(),
   unique(host_organisation_id, party_type_key)
 );
-
 insert into public.v2_project_party_type_definitions (
   host_organisation_id,
   party_type_key,
@@ -108,7 +98,6 @@ cross join (
     ('other', 'Other', 'Other project participant configured by the host organisation.', 'other', 100)
 ) as seed(party_type_key, label, description, behaviour_key, sort_order)
 on conflict (host_organisation_id, party_type_key) do nothing;
-
 -- ---------------------------------------------------------------------------
 -- 3. Project parties
 -- ---------------------------------------------------------------------------
@@ -136,18 +125,14 @@ create table if not exists public.v2_project_parties (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create unique index if not exists v2_project_parties_one_host_uidx
   on public.v2_project_parties(project_id)
   where is_host = true and status <> 'removed';
-
 create unique index if not exists v2_project_parties_linked_org_uidx
   on public.v2_project_parties(project_id, linked_organisation_id)
   where linked_organisation_id is not null and status <> 'removed';
-
 create index if not exists v2_project_parties_project_idx
   on public.v2_project_parties(project_id, status, party_type_key);
-
 -- Backfill every existing V2 project with its contractor/host party.
 insert into public.v2_project_parties (
   project_id,
@@ -179,7 +164,6 @@ where not exists (
     and existing.is_host = true
     and existing.status <> 'removed'
 );
-
 -- ---------------------------------------------------------------------------
 -- 4. External party / client users
 -- ---------------------------------------------------------------------------
@@ -206,13 +190,10 @@ create table if not exists public.v2_project_party_users (
   updated_at timestamptz not null default now(),
   unique(project_party_id, user_id)
 );
-
 create index if not exists v2_project_party_users_user_idx
   on public.v2_project_party_users(user_id, status);
-
 create index if not exists v2_project_party_users_project_idx
   on public.v2_project_party_users(project_id, status);
-
 -- ---------------------------------------------------------------------------
 -- 5. Configurable external-party permission catalogue
 -- ---------------------------------------------------------------------------
@@ -235,7 +216,6 @@ create table if not exists public.v2_project_party_permission_definitions (
   updated_at timestamptz not null default now(),
   unique(host_organisation_id, permission_key)
 );
-
 insert into public.v2_project_party_permission_definitions (
   host_organisation_id,
   permission_key,
@@ -271,7 +251,6 @@ cross join (
     ('commercial.view_shared', 'View Shared Commercial Information', 'View only commercial information explicitly shared.', 'commercial', false, 130)
 ) as seed(permission_key, label, description, module_key, default_allowed, sort_order)
 on conflict (host_organisation_id, permission_key) do nothing;
-
 -- ---------------------------------------------------------------------------
 -- 6. Party permissions and individual overrides
 -- ---------------------------------------------------------------------------
@@ -285,7 +264,6 @@ create table if not exists public.v2_project_party_permissions (
   updated_at timestamptz not null default now(),
   primary key(project_party_id, permission_key)
 );
-
 create table if not exists public.v2_project_party_user_permission_overrides (
   project_party_user_id uuid not null
     references public.v2_project_party_users(id) on delete cascade,
@@ -295,7 +273,6 @@ create table if not exists public.v2_project_party_user_permission_overrides (
   updated_at timestamptz not null default now(),
   primary key(project_party_user_id, permission_key)
 );
-
 -- ---------------------------------------------------------------------------
 -- 7. Explicit record sharing
 -- ---------------------------------------------------------------------------
@@ -319,15 +296,12 @@ create table if not exists public.v2_record_party_shares (
   metadata jsonb not null default '{}'::jsonb,
   unique(project_party_id, record_type, record_id)
 );
-
 create index if not exists v2_record_party_shares_record_idx
   on public.v2_record_party_shares(project_id, record_type, record_id)
   where is_active = true;
-
 create index if not exists v2_record_party_shares_party_idx
   on public.v2_record_party_shares(project_party_id, record_type)
   where is_active = true;
-
 -- ---------------------------------------------------------------------------
 -- 8. Record ownership + visibility on operational tables
 -- ---------------------------------------------------------------------------
@@ -379,7 +353,6 @@ begin
   end loop;
 end
 $$;
-
 -- Initial application visibility values:
 --   origin_only
 --   host_and_origin
@@ -409,7 +382,6 @@ as $$
       and ou.status = 'active'
   );
 $$;
-
 create or replace function private.tttracker_v2_is_project_host_member(
   p_project_id uuid,
   p_user_id uuid default auth.uid()
@@ -430,7 +402,6 @@ as $$
       and ou.status = 'active'
   );
 $$;
-
 create or replace function private.tttracker_v2_is_external_party_user(
   p_project_id uuid,
   p_user_id uuid default auth.uid()
@@ -453,7 +424,6 @@ as $$
       and pp.portal_enabled = true
   );
 $$;
-
 create or replace function private.tttracker_v2_external_party_has_permission(
   p_project_id uuid,
   p_permission_key text,
@@ -516,7 +486,6 @@ as $$
     where allowed = true
   );
 $$;
-
 create or replace function private.tttracker_v2_record_is_shared_with_user(
   p_project_id uuid,
   p_record_type text,
@@ -546,7 +515,6 @@ as $$
       and pp.portal_enabled = true
   );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- 10. RLS
 -- ---------------------------------------------------------------------------
@@ -561,7 +529,6 @@ alter table public.v2_project_party_permission_definitions enable row level secu
 alter table public.v2_project_party_permissions enable row level security;
 alter table public.v2_project_party_user_permission_overrides enable row level security;
 alter table public.v2_record_party_shares enable row level security;
-
 drop policy if exists "v2 party types read" on public.v2_project_party_type_definitions;
 create policy "v2 party types read"
 on public.v2_project_party_type_definitions
@@ -569,7 +536,6 @@ for select to authenticated
 using (
   private.tttracker_v2_is_active_org_member(host_organisation_id)
 );
-
 drop policy if exists "v2 project parties read" on public.v2_project_parties;
 create policy "v2 project parties read"
 on public.v2_project_parties
@@ -584,7 +550,6 @@ using (
       and pu.status = 'active'
   )
 );
-
 drop policy if exists "v2 project party users read" on public.v2_project_party_users;
 create policy "v2 project party users read"
 on public.v2_project_party_users
@@ -593,7 +558,6 @@ using (
   private.tttracker_v2_is_project_host_member(project_id)
   or user_id = auth.uid()
 );
-
 drop policy if exists "v2 party permission definitions read"
   on public.v2_project_party_permission_definitions;
 create policy "v2 party permission definitions read"
@@ -602,7 +566,6 @@ for select to authenticated
 using (
   private.tttracker_v2_is_active_org_member(host_organisation_id)
 );
-
 drop policy if exists "v2 project party permissions read"
   on public.v2_project_party_permissions;
 create policy "v2 project party permissions read"
@@ -625,7 +588,6 @@ using (
       )
   )
 );
-
 drop policy if exists "v2 party user permission overrides read"
   on public.v2_project_party_user_permission_overrides;
 create policy "v2 party user permission overrides read"
@@ -642,7 +604,6 @@ using (
       )
   )
 );
-
 drop policy if exists "v2 record party shares read"
   on public.v2_record_party_shares;
 create policy "v2 record party shares read"
@@ -658,13 +619,11 @@ using (
       and pu.status = 'active'
   )
 );
-
 -- ---------------------------------------------------------------------------
 -- 11. Grants
 -- ---------------------------------------------------------------------------
 
 grant usage on schema private to authenticated, service_role;
-
 grant execute on function private.tttracker_v2_is_active_org_member(uuid, uuid)
   to authenticated, service_role;
 grant execute on function private.tttracker_v2_is_project_host_member(uuid, uuid)
@@ -675,7 +634,6 @@ grant execute on function private.tttracker_v2_external_party_has_permission(uui
   to authenticated, service_role;
 grant execute on function private.tttracker_v2_record_is_shared_with_user(uuid, text, uuid, uuid)
   to authenticated, service_role;
-
 grant select on public.v2_project_party_type_definitions to authenticated;
 grant select on public.v2_project_parties to authenticated;
 grant select on public.v2_project_party_users to authenticated;
@@ -683,7 +641,6 @@ grant select on public.v2_project_party_permission_definitions to authenticated;
 grant select on public.v2_project_party_permissions to authenticated;
 grant select on public.v2_project_party_user_permission_overrides to authenticated;
 grant select on public.v2_record_party_shares to authenticated;
-
 grant all privileges on public.v2_project_party_type_definitions to service_role;
 grant all privileges on public.v2_project_parties to service_role;
 grant all privileges on public.v2_project_party_users to service_role;
@@ -691,7 +648,6 @@ grant all privileges on public.v2_project_party_permission_definitions to servic
 grant all privileges on public.v2_project_party_permissions to service_role;
 grant all privileges on public.v2_project_party_user_permission_overrides to service_role;
 grant all privileges on public.v2_record_party_shares to service_role;
-
 -- ---------------------------------------------------------------------------
 -- 12. Summary view for a future Project > Client / Parties page
 -- ---------------------------------------------------------------------------
@@ -734,9 +690,6 @@ group by
   pp.metadata,
   pp.created_at,
   pp.updated_at;
-
 grant select on public.v2_project_party_summary to authenticated, service_role;
-
 commit;
-
 notify pgrst, 'reload schema';

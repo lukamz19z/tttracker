@@ -6,7 +6,6 @@ revoke all on all tables in schema vault from public,anon,authenticated,service_
 revoke all on function vault.create_secret(text,text,text,uuid),vault.update_secret(uuid,text,text,text,uuid),
  vault._crypto_aead_det_decrypt(bytea,bytea,bigint,bytea,bytea) from public,anon,authenticated,service_role;
 revoke usage on schema vault from public,anon,authenticated,service_role;
-
 insert into public.v2_people_field_types(type_key,minimum_classification) values
  ('superannuation','confidential'),('payroll_reference','confidential'),('confidential_document','confidential')
 on conflict(type_key) do nothing;
@@ -84,14 +83,12 @@ create table if not exists private.v2_confidential_tickets (
  purpose text not null check(purpose in ('person_review','onboarding_review','payroll_review','document_review','key_rotation')),
  expires_at timestamptz not null default now()+interval '5 minutes',state text not null default 'issued' check(state in ('issued','redeemed','committed'))
 );
-
 do $$ declare t text; begin
  foreach t in array array['v2_secure_fields','v2_secure_onboarding_instances','v2_secure_instance_fields','v2_secure_tokens','v2_secure_sessions','v2_confidential_keys','v2_confidential_records','v2_confidential_versions','v2_confidential_audit','v2_confidential_tickets'] loop
  execute format('alter table private.%I enable row level security',t);
  execute format('revoke all on private.%I from public,anon,authenticated,service_role',t);
  end loop;
 end $$;
-
 -- Recheck the existing RBAC engine for the actual ticket actor, including explicit denies.
 -- This helper is private; no browser or service role can select an arbitrary actor through it.
 create or replace function private.tttracker_v2_secure_actor(p_org uuid,p_actor uuid,p_session text,p_permission text)
@@ -103,7 +100,6 @@ begin
  perform private.tttracker_v2_require_people_permission(p_org,p_permission);
  perform set_config('request.jwt.claim.sub',coalesce(previous_sub,''),true);
 end $$;
-
 create or replace function public.tttracker_v2_secure_configuration(p_org uuid,p_action text,p_data jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare v_id uuid;v_version integer; v_secret uuid;v_person uuid;v_expiry timestamptz;v_field uuid;
@@ -146,7 +142,6 @@ begin
  values(p_org,case when p_action<>'field' then v_id end,case when p_action='field' then v_id end,auth.uid(),upper(p_action),'onboarding_review');
  return jsonb_build_object('id',v_id);
 end $$;
-
 -- Internal tickets originate from the authenticated user's JWT, not browser-supplied actor IDs.
 create or replace function public.tttracker_v2_confidential_ticket(p_org uuid,p_action text,p_ticket_hash text,p_record uuid,p_person uuid,p_instance uuid,p_field uuid,p_purpose text,p_expected_revision integer default null)
 returns jsonb language plpgsql security definer set search_path='' as $$
@@ -175,7 +170,6 @@ begin
  values(p_ticket_hash,p_org,p_person,p_instance,p_field,p_record,v_revision,v_version,auth.uid(),v_session,p_action,p_purpose);
  return jsonb_build_object('record_id',p_record);
 end $$;
-
 create or replace function public.tttracker_v2_onboarding_exchange(p_token_hash text,p_session_hash text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare t private.v2_secure_tokens;i private.v2_secure_onboarding_instances;expiry timestamptz;sid uuid;
@@ -191,7 +185,6 @@ begin
  insert into private.v2_confidential_audit(organisation_id,instance_id,external_session_id,action,purpose) values(i.organisation_id,i.id,sid,'EXTERNAL_SESSION_CREATED','onboarding_review');
  return jsonb_build_object('instance_id',i.id,'expires_at',expiry);
 end $$;
-
 create or replace function private.tttracker_v2_secure_external(p_session uuid,p_org uuid,p_instance uuid,p_field uuid)
 returns void language plpgsql security definer set search_path='' as $$
 begin
@@ -201,7 +194,6 @@ begin
  where s.id=p_session and s.organisation_id=p_org and s.instance_id=p_instance and s.revoked_at is null and s.expires_at>now()
  and i.status in ('invited','in_progress') and i.expires_at>now() and f.field_id=p_field and k.is_active and k.classification='confidential') then raise exception 'ONBOARDING_SESSION_INVALID'; end if;
 end $$;
-
 create or replace function public.tttracker_v2_external_confidential_ticket(p_session_hash text,p_instance uuid,p_field uuid,p_record uuid,p_ticket_hash text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare s private.v2_secure_sessions;i private.v2_secure_onboarding_instances;v_revision integer;v_key integer;
@@ -221,7 +213,6 @@ begin
  values(p_ticket_hash,s.organisation_id,i.person_id,p_instance,p_field,p_record,v_revision+1,v_key,s.id,'write','onboarding_review');
  return jsonb_build_object('record_id',p_record);
 end $$;
-
 -- The only key-release RPC: server-only, one-time, scoped, re-authorised, audited.
 create or replace function public.tttracker_v2_confidential_redeem(p_ticket_hash text)
 returns jsonb language plpgsql security definer set search_path='' as $$
@@ -243,7 +234,6 @@ begin
  return jsonb_build_object('key_hex',key_hex,'context',jsonb_build_object('organisation_id',t.organisation_id,'person_id',t.person_id,'instance_id',t.instance_id,'field_id',t.field_id,'record_id',t.record_id,'revision',t.revision,'key_version',t.key_version,'semantic_type',f.semantic_type,'kind',f.kind),
  'payload',case when t.action='read' then jsonb_build_object('ciphertext',v.ciphertext,'nonce',v.nonce,'tag',v.tag,'object_key',v.object_key,'provider',v.provider) end);
 end $$;
-
 create or replace function public.tttracker_v2_confidential_commit(p_ticket_hash text,p_nonce text,p_tag text,p_ciphertext text default null,p_object_key text default null)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare t private.v2_confidential_tickets;f private.v2_secure_fields;r private.v2_confidential_records;
@@ -268,7 +258,6 @@ begin
  values(t.organisation_id,t.person_id,t.instance_id,t.field_id,t.record_id,t.actor_id,t.external_session_id,case when f.kind='document' then 'CONFIDENTIAL_DOCUMENT_WRITE' else 'CONFIDENTIAL_WRITE' end,t.purpose);
  return jsonb_build_object('record_id',t.record_id,'revision',t.revision,'key_version',t.key_version);
 end $$;
-
 revoke all on function private.tttracker_v2_secure_actor(uuid,uuid,text,text),private.tttracker_v2_secure_external(uuid,uuid,uuid,uuid) from public,anon,authenticated,service_role;
 revoke all on function public.tttracker_v2_secure_configuration(uuid,text,jsonb),public.tttracker_v2_confidential_ticket(uuid,text,text,uuid,uuid,uuid,uuid,text,integer) from public,anon,service_role;
 grant execute on function public.tttracker_v2_secure_configuration(uuid,text,jsonb),public.tttracker_v2_confidential_ticket(uuid,text,text,uuid,uuid,uuid,uuid,text,integer) to authenticated;

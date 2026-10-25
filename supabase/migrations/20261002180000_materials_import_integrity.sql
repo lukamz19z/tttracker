@@ -2,7 +2,6 @@
 -- Reconciles DDL previously shipped outside the root migration sequence (some
 -- development databases already have these columns from manual application).
 begin;
-
 alter table public.v2_material_import_batches
   add column if not exists target_tower_id uuid references public.v2_towers(id) on delete set null,
   add column if not exists import_category_key text,
@@ -38,7 +37,6 @@ create index if not exists v2_material_source_records_active_scope_idx
   where superseded_by_batch_id is null;
 create index if not exists v2_material_source_records_item_idx on public.v2_material_source_records(material_item_id);
 create index if not exists v2_material_source_records_target_bundle_idx on public.v2_material_source_records(bundle_id);
-
 -- Preserve old rows. Infer legacy document scope from its actual batch, never
 -- treat every document with the same source role as one Replace scope.
 update public.v2_material_import_batches
@@ -53,7 +51,6 @@ set source_scope_key = coalesce(s.source_scope_key,b.source_scope_key),
 from public.v2_material_import_batches b
 where b.id=s.import_batch_id and b.project_id=s.project_id and b.organisation_id=s.organisation_id
   and (s.source_scope_key is null or s.source_role_key is null or s.import_category_key is null);
-
 -- Fill legacy target links only when there is exactly one deterministic match.
 -- Unknown/ambiguous legacy ownership is deliberately left intact for review.
 update public.v2_material_source_records s set bundle_id = (
@@ -71,7 +68,6 @@ update public.v2_material_source_records s set material_item_id = (
     and (s.drawing_reference is null or m.drawing_reference is null or upper(btrim(m.drawing_reference))=upper(btrim(s.drawing_reference)))
   having count(*)=1
 ) where s.material_kind in ('member','bolt','packer') and s.material_item_id is null;
-
 -- Missing contextual values can be enriched; conflicting populated identity
 -- context distinguishes records. Numeric quantities/revisions are not keys.
 create or replace function private.tttracker_v2_material_import_compatible(a jsonb,b jsonb,category text)
@@ -86,7 +82,6 @@ returns boolean language sql immutable set search_path = '' as $$
   );
 $$;
 revoke all on function private.tttracker_v2_material_import_compatible(jsonb,jsonb,text) from public;
-
 create or replace function public.tttracker_v2_apply_material_import(
   p_project_id uuid, p_organisation_id uuid, p_tower_id uuid, p_actor_id uuid,
   p_category text, p_mode text, p_source_role text, p_source_scope text,

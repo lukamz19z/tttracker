@@ -134,6 +134,7 @@ export async function enqueueDefectCreate(
 async function enqueueRectOperation<T extends {projectId:string;revisionId?:string;clientMutationId?:string}>(kind:string,payload:T,id:string) {
   return withQualityOperation(async()=>{
     if(await revisionDeletion(payload.projectId,payload.revisionId,payload.clientMutationId))return;
+    if(kind==="quality_revision_item_create" && (await listRevisionWorkspaces(payload.projectId)).some(row=>(row.routeKey===payload.revisionId || row.serverRevisionId===payload.revisionId) && row.reconciledFindingIds?.includes(payload.clientMutationId || "")))return;
     await enqueue(kind,payload,id);
   });
 }
@@ -319,6 +320,7 @@ async function createRevisionItem(
   payload: OfflineRevisionItemCreate,
 ) {
   const workspaces = await listRevisionWorkspaces(payload.projectId);
+  if(workspaces.some(row=>(row.serverRevisionId===payload.revisionId || row.routeKey===payload.revisionId) && row.reconciledFindingIds?.includes(payload.clientMutationId)))return;
   const known = workspaces.find(row => row.serverRevisionId === payload.revisionId || row.routeKey === payload.revisionId)?.serverItems?.[payload.clientMutationId] || (await getCache<{ id: string; fli_number: string | null; item_number?: number | null }>(`quality:item-mapping:${payload.projectId}:${payload.clientMutationId}`))?.value;
   const result = known ? { item: known } : await apiJson<{
     item: { id: string; fli_number: string | null; item_number?: number | null };
@@ -334,7 +336,7 @@ async function createRevisionItem(
     },
   );
 
-  if (!result.item?.id) throw new Error("Finding creation returned no server item ID.");
+  if (!result.item?.id || !result.item.fli_number || !result.item.item_number) throw new Error("Finding creation returned no canonical server FLI.");
   await setCache(`quality:item-mapping:${payload.projectId}:${payload.clientMutationId}`, result.item);
   // Commit mapping before evidence: retries after a crash reuse this exact FLI.
   for (const workspace of await listRevisionWorkspaces(payload.projectId)) {
@@ -516,6 +518,7 @@ async function syncQualityRecord(record:QueueRecord) {
   const startedAt = Date.now();
   const workspace = (await listRevisionWorkspaces(payload.projectId || "")).find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
   if(payload.projectId && await revisionDeletion(payload.projectId,payload.revisionId,payload.clientMutationId,workspace?.routeKey,workspace?.serverRevisionId,workspace?.clientMutationId))return;
+  if(record.kind==="quality_revision_item_create" && workspace?.reconciledFindingIds?.includes(payload.clientMutationId || ""))return;
   const details = { operation: record.kind, clientMutationId: payload.clientMutationId || record.id, localRevisionId: payload.revisionId || workspace?.routeKey, serverRevisionId: workspace?.serverRevisionId, localItemId: payload.itemId, serverItemId: workspace?.serverItems?.[payload.itemId || payload.clientMutationId || ""]?.id, retryCount: record.attempts };
   if (__DEV__) console.debug("Quality sync operation", { ...details, stage: "start" });
   try {

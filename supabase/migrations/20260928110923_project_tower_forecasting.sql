@@ -4,7 +4,6 @@
 -- No company names, role names, project-number formats or CSV layouts are hard-coded.
 
 begin;
-
 -- ================================================================
 -- PROJECT DETAILS
 -- ================================================================
@@ -16,11 +15,9 @@ alter table public.v2_projects
   add column if not exists expected_tower_count integer,
   add column if not exists project_year integer,
   add column if not exists forecast_settings jsonb not null default '{}'::jsonb;
-
 alter table public.v2_project_identifier_configs
   add column if not exists template text not null default 'P-{CLIENT}-{YY}-{SEQ:3}',
   add column if not exists show_preview boolean not null default true;
-
 create table if not exists public.v2_project_status_definitions (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -35,7 +32,6 @@ create table if not exists public.v2_project_status_definitions (
   updated_at timestamptz not null default now(),
   unique (organisation_id, status_key)
 );
-
 -- ================================================================
 -- TOWER CORE
 -- ================================================================
@@ -46,7 +42,6 @@ alter table public.v2_towers
   add column if not exists assembly_percent numeric not null default 0,
   add column if not exists erection_percent numeric not null default 0,
   add column if not exists extra_data jsonb not null default '{}'::jsonb;
-
 do $$
 begin
   if not exists (
@@ -72,7 +67,6 @@ begin
   end if;
 end
 $$;
-
 -- ================================================================
 -- TOWER CSV IMPORT CONFIG
 -- ================================================================
@@ -106,15 +100,12 @@ create table if not exists public.v2_tower_import_field_definitions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create unique index if not exists v2_tower_import_fields_platform_uidx
 on public.v2_tower_import_field_definitions(field_key)
 where organisation_id is null;
-
 create unique index if not exists v2_tower_import_fields_org_uidx
 on public.v2_tower_import_field_definitions(organisation_id, field_key)
 where organisation_id is not null;
-
 create table if not exists public.v2_tower_import_batches (
   id uuid primary key default gen_random_uuid(),
 
@@ -141,10 +132,8 @@ create table if not exists public.v2_tower_import_batches (
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
-
 create index if not exists v2_tower_import_batches_project_idx
   on public.v2_tower_import_batches(project_id, created_at desc);
-
 -- Platform defaults. Organisations can override aliases and behaviour with
 -- organisation-scoped rows using the same field_key.
 insert into public.v2_tower_import_field_definitions (
@@ -270,7 +259,6 @@ values
     100
   )
 on conflict do nothing;
-
 -- ================================================================
 -- FORECASTING / PERFORMANCE FOUNDATION
 -- ================================================================
@@ -311,18 +299,13 @@ create table if not exists public.v2_project_production_actuals (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create index if not exists v2_project_production_actuals_project_date_idx
   on public.v2_project_production_actuals(project_id, actual_date);
-
 create index if not exists v2_project_production_actuals_crew_idx
   on public.v2_project_production_actuals(project_id, crew_key, actual_date);
-
 create unique index if not exists v2_project_production_actuals_source_uidx
   on public.v2_project_production_actuals(project_id, source_type, source_id)
   where source_id is not null;
-
-
 create table if not exists public.v2_project_forecast_benchmarks (
   id uuid primary key default gen_random_uuid(),
 
@@ -364,7 +347,6 @@ create table if not exists public.v2_project_forecast_benchmarks (
 
   unique (project_id, benchmark_key)
 );
-
 create table if not exists public.v2_project_forecast_snapshots (
   id uuid primary key default gen_random_uuid(),
 
@@ -391,10 +373,8 @@ create table if not exists public.v2_project_forecast_snapshots (
 
   created_at timestamptz not null default now()
 );
-
 create index if not exists v2_project_forecast_snapshots_project_idx
   on public.v2_project_forecast_snapshots(project_id, snapshot_date desc);
-
 -- ================================================================
 -- SECTION REGISTRY
 -- ================================================================
@@ -431,7 +411,6 @@ set
   sort_order = excluded.sort_order,
   implementation_status = excluded.implementation_status,
   default_enabled = excluded.default_enabled;
-
 -- ================================================================
 -- RLS
 -- ================================================================
@@ -442,10 +421,8 @@ alter table public.v2_tower_import_batches enable row level security;
 alter table public.v2_project_production_actuals enable row level security;
 alter table public.v2_project_forecast_benchmarks enable row level security;
 alter table public.v2_project_forecast_snapshots enable row level security;
-
 drop policy if exists "members read project status definitions"
 on public.v2_project_status_definitions;
-
 create policy "members read project status definitions"
 on public.v2_project_status_definitions
 for select
@@ -459,10 +436,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "members read tower import fields"
 on public.v2_tower_import_field_definitions;
-
 create policy "members read tower import fields"
 on public.v2_tower_import_field_definitions
 for select
@@ -477,10 +452,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "members read tower import batches"
 on public.v2_tower_import_batches;
-
 create policy "members read tower import batches"
 on public.v2_tower_import_batches
 for select
@@ -494,10 +467,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "members read production actuals"
 on public.v2_project_production_actuals;
-
 create policy "members read production actuals"
 on public.v2_project_production_actuals
 for select
@@ -511,10 +482,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "members read forecast benchmarks"
 on public.v2_project_forecast_benchmarks;
-
 create policy "members read forecast benchmarks"
 on public.v2_project_forecast_benchmarks
 for select
@@ -528,10 +497,8 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "members read forecast snapshots"
 on public.v2_project_forecast_snapshots;
-
 create policy "members read forecast snapshots"
 on public.v2_project_forecast_snapshots
 for select
@@ -545,7 +512,6 @@ using (
       and ou.status = 'active'
   )
 );
-
 grant usage on schema public to service_role;
 grant all privileges on table public.v2_project_status_definitions to service_role;
 grant all privileges on table public.v2_tower_import_field_definitions to service_role;
@@ -553,5 +519,4 @@ grant all privileges on table public.v2_tower_import_batches to service_role;
 grant all privileges on table public.v2_project_production_actuals to service_role;
 grant all privileges on table public.v2_project_forecast_benchmarks to service_role;
 grant all privileges on table public.v2_project_forecast_snapshots to service_role;
-
 commit;

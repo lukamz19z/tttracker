@@ -3,7 +3,6 @@
 -- Depends on Migration 004.
 
 begin;
-
 -- ---------------------------------------------------------------------------
 -- Feature catalogue
 -- Features are independent of plans, so modules can be released, beta-tested,
@@ -29,12 +28,10 @@ create table if not exists public.v2_features (
   constraint v2_features_key_not_blank check (btrim(feature_key) <> ''),
   constraint v2_features_name_not_blank check (btrim(name) <> '')
 );
-
 drop trigger if exists v2_features_set_updated_at on public.v2_features;
 create trigger v2_features_set_updated_at
 before update on public.v2_features
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- ---------------------------------------------------------------------------
 -- Plans + immutable-ish versions.
 -- Plan definitions may evolve; organisations pin to a plan version.
@@ -54,12 +51,10 @@ create table if not exists public.v2_subscription_plans (
   constraint v2_subscription_plans_key_not_blank check (btrim(plan_key) <> ''),
   constraint v2_subscription_plans_name_not_blank check (btrim(name) <> '')
 );
-
 drop trigger if exists v2_subscription_plans_set_updated_at on public.v2_subscription_plans;
 create trigger v2_subscription_plans_set_updated_at
 before update on public.v2_subscription_plans
 for each row execute function private.tttracker_v2_set_updated_at();
-
 create table if not exists public.v2_subscription_plan_versions (
   id uuid primary key default gen_random_uuid(),
   plan_id uuid not null references public.v2_subscription_plans(id) on delete cascade,
@@ -75,12 +70,10 @@ create table if not exists public.v2_subscription_plan_versions (
   constraint v2_subscription_plan_versions_version_positive check (version > 0),
   constraint v2_subscription_plan_versions_unique unique (plan_id, version)
 );
-
 drop trigger if exists v2_subscription_plan_versions_set_updated_at on public.v2_subscription_plan_versions;
 create trigger v2_subscription_plan_versions_set_updated_at
 before update on public.v2_subscription_plan_versions
 for each row execute function private.tttracker_v2_set_updated_at();
-
 create table if not exists public.v2_subscription_plan_entitlements (
   id uuid primary key default gen_random_uuid(),
   plan_version_id uuid not null references public.v2_subscription_plan_versions(id) on delete cascade,
@@ -92,12 +85,10 @@ create table if not exists public.v2_subscription_plan_entitlements (
   updated_at timestamptz not null default now(),
   constraint v2_subscription_plan_entitlements_unique unique (plan_version_id, feature_id)
 );
-
 drop trigger if exists v2_subscription_plan_entitlements_set_updated_at on public.v2_subscription_plan_entitlements;
 create trigger v2_subscription_plan_entitlements_set_updated_at
 before update on public.v2_subscription_plan_entitlements
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- ---------------------------------------------------------------------------
 -- Organisation subscription
 -- ---------------------------------------------------------------------------
@@ -118,15 +109,12 @@ create table if not exists public.v2_organisation_subscriptions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create index if not exists v2_organisation_subscriptions_org_idx
   on public.v2_organisation_subscriptions (organisation_id, status, starts_at desc);
-
 drop trigger if exists v2_organisation_subscriptions_set_updated_at on public.v2_organisation_subscriptions;
 create trigger v2_organisation_subscriptions_set_updated_at
 before update on public.v2_organisation_subscriptions
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- ---------------------------------------------------------------------------
 -- Organisation-specific overrides / add-ons / trials.
 -- An override may enable, disable, increase or decrease a plan entitlement.
@@ -147,12 +135,10 @@ create table if not exists public.v2_organisation_entitlement_overrides (
   constraint v2_organisation_entitlement_overrides_unique
     unique (organisation_id, feature_id)
 );
-
 drop trigger if exists v2_organisation_entitlement_overrides_set_updated_at on public.v2_organisation_entitlement_overrides;
 create trigger v2_organisation_entitlement_overrides_set_updated_at
 before update on public.v2_organisation_entitlement_overrides
 for each row execute function private.tttracker_v2_set_updated_at();
-
 -- ---------------------------------------------------------------------------
 -- Entitlement resolver.
 -- Returns one JSON document:
@@ -256,10 +242,8 @@ begin
   );
 end;
 $$;
-
 revoke all on function private.tttracker_v2_get_entitlement(uuid, text) from public;
 grant execute on function private.tttracker_v2_get_entitlement(uuid, text) to authenticated;
-
 create or replace function private.tttracker_v2_has_feature(
   target_organisation_id uuid,
   target_feature_key text
@@ -275,10 +259,8 @@ as $$
     false
   );
 $$;
-
 revoke all on function private.tttracker_v2_has_feature(uuid, text) from public;
 grant execute on function private.tttracker_v2_has_feature(uuid, text) to authenticated;
-
 -- RLS: customer users can inspect their own effective commercial setup;
 -- only server/platform-admin paths will mutate it.
 alter table public.v2_features enable row level security;
@@ -287,41 +269,34 @@ alter table public.v2_subscription_plan_versions enable row level security;
 alter table public.v2_subscription_plan_entitlements enable row level security;
 alter table public.v2_organisation_subscriptions enable row level security;
 alter table public.v2_organisation_entitlement_overrides enable row level security;
-
 revoke all on table public.v2_features from anon, authenticated;
 revoke all on table public.v2_subscription_plans from anon, authenticated;
 revoke all on table public.v2_subscription_plan_versions from anon, authenticated;
 revoke all on table public.v2_subscription_plan_entitlements from anon, authenticated;
 revoke all on table public.v2_organisation_subscriptions from anon, authenticated;
 revoke all on table public.v2_organisation_entitlement_overrides from anon, authenticated;
-
 grant select on table public.v2_features to authenticated;
 grant select on table public.v2_subscription_plans to authenticated;
 grant select on table public.v2_subscription_plan_versions to authenticated;
 grant select on table public.v2_subscription_plan_entitlements to authenticated;
 grant select on table public.v2_organisation_subscriptions to authenticated;
 grant select on table public.v2_organisation_entitlement_overrides to authenticated;
-
 create policy "authenticated can read available feature catalogue"
 on public.v2_features
 for select to authenticated
 using (lifecycle_status <> 'disabled' or private.tttracker_v2_is_platform_admin());
-
 create policy "authenticated can read active plans"
 on public.v2_subscription_plans
 for select to authenticated
 using (status = 'active' or private.tttracker_v2_is_platform_admin());
-
 create policy "authenticated can read active plan versions"
 on public.v2_subscription_plan_versions
 for select to authenticated
 using (status = 'active' or private.tttracker_v2_is_platform_admin());
-
 create policy "authenticated can read plan entitlements"
 on public.v2_subscription_plan_entitlements
 for select to authenticated
 using (true);
-
 create policy "organisation members or platform admins can read subscriptions"
 on public.v2_organisation_subscriptions
 for select to authenticated
@@ -329,7 +304,6 @@ using (
   private.tttracker_v2_is_platform_admin()
   or private.tttracker_v2_is_organisation_member(organisation_id)
 );
-
 create policy "organisation members or platform admins can read entitlement overrides"
 on public.v2_organisation_entitlement_overrides
 for select to authenticated
@@ -337,5 +311,4 @@ using (
   private.tttracker_v2_is_platform_admin()
   or private.tttracker_v2_is_organisation_member(organisation_id)
 );
-
 commit;

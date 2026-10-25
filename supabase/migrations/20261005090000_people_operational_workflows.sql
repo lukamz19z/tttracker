@@ -314,7 +314,6 @@ select p_req.is_active and case p_req.applies_to when 'everyone' then true when 
 when 'position' then lower(p.position)=lower(p_req.position) when 'person' then p.id=p_req.person_id
 when 'crew_leader' then exists(select 1 from public.v2_crews c join public.v2_crew_projects cp on cp.crew_id=c.id and cp.organisation_id=c.organisation_id where c.organisation_id=p.organisation_id and c.leader_person_id=p.id and cp.project_id=p_req.project_id and cp.ended_at is null) else false end
 $$;
-
 create or replace function public.tttracker_v2_people_read(p_organisation_id uuid,p_area text default 'people',p_query text default '',p_page integer default 1,p_person_id uuid default null,p_filter jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb; rows jsonb; total bigint; off integer:=greatest(0,least(coalesce(p_page,1),100000)-1)*20; pid uuid:=nullif(p_filter->>'project_id','')::uuid;
@@ -413,7 +412,6 @@ elsif p_area='types' then
 end if;
 return result;
 end $$;
-
 create or replace function public.tttracker_v2_people_write(p_organisation_id uuid,p_action text,p_id uuid default null,p_data jsonb default '{}')
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb;r public.v2_training_records;k public.v2_training_types;v_id uuid;v_policy text;v_source text;
@@ -487,7 +485,6 @@ return jsonb_build_object('id',v_id);
 exception when foreign_key_violation then raise exception 'PEOPLE_RELATIONSHIP_INVALID';
 when check_violation or not_null_violation or invalid_text_representation then raise exception 'PEOPLE_INVALID_FIELDS';
 end $$;
-
 create or replace function private.tttracker_v2_confirm_training(p_org uuid,p_id uuid)
 returns void language plpgsql security definer set search_path='' as $$
 declare r public.v2_training_records;k public.v2_training_types;
@@ -502,7 +499,6 @@ else raise exception 'TRAINING_DOCUMENTS_REQUIRED';end if;end if;
 update public.v2_training_records set is_current=false,superseded_at=now() where organisation_id=p_org and person_id=r.person_id and training_type_id=r.training_type_id and is_current and id<>p_id;
 update public.v2_training_records set is_current=true,review_status='approved',reviewed_at=now(),reviewed_by=auth.uid() where organisation_id=p_org and id=p_id;
 end $$;
-
 create or replace function public.tttracker_v2_people_private_domain(p_org uuid,p_person uuid,p_domain text,p_values jsonb default null)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare result jsonb;
@@ -518,7 +514,6 @@ insert into public.v2_person_private_domains values(p_org,p_person,p_domain,p_va
 insert into public.v2_people_audit(organisation_id,person_id,actor_id,action,data_area) values(p_org,p_person,auth.uid(),case when p_values is null then 'domain_read' else 'domain_write' end,'private.'||p_domain);
 return coalesce(result,'{}');
 end $$;
-
 do $$ declare t text;begin foreach t in array array['v2_people_review_defaults','v2_people_document_rules','v2_project_training_requirements','v2_person_private_domains'] loop
 execute format('alter table public.%I enable row level security',t);execute format('revoke all on public.%I from public,anon,authenticated',t);end loop;end $$;
 revoke all on function private.tttracker_v2_training_state(uuid,uuid,uuid,boolean),private.tttracker_v2_requirement_applies(public.v2_project_training_requirements,public.v2_people),private.tttracker_v2_confirm_training(uuid,uuid) from public,anon,authenticated;
@@ -526,4 +521,3 @@ revoke all on function public.tttracker_v2_people_private_domain(uuid,uuid,text,
 grant execute on function public.tttracker_v2_people_private_domain(uuid,uuid,text,jsonb) to authenticated;
 notify pgrst,'reload schema';
 commit;
-

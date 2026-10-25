@@ -348,3 +348,5 @@ revoke all on function public.tttracker_v2_apply_material_import(uuid,uuid,uuid,
 grant execute on function public.tttracker_v2_apply_material_import(uuid,uuid,uuid,uuid,text,text,text,text,text,text,jsonb,jsonb) to service_role;
 notify pgrst,'reload schema';
 commit;
+
+;

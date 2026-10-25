@@ -11,7 +11,6 @@ cross join public.v2_permissions p
 where r.is_system and r.is_active and r.code='admin'
  and p.permission_code='projects.access_all' and p.is_active
 on conflict(role_id,permission_id) do nothing;
-
 -- Historical helper name retained for existing RLS and permission callers.
 -- It resolves host participation, explicit or permission-derived, without creating membership rows.
 create or replace function private.tttracker_v2_is_project_member(target_project_id uuid)

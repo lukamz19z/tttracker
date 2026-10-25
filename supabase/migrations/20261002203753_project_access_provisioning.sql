@@ -63,3 +63,5 @@ revoke all on function public.tttracker_v2_accessible_projects() from public,ano
 grant execute on function public.tttracker_v2_accessible_projects() to authenticated;
 notify pgrst,'reload schema';
 commit;
+
+;

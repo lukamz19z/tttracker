@@ -2,7 +2,6 @@
 begin;
 alter table public.v2_organisation_invitations add column if not exists accepted_at timestamptz;
 alter table public.v2_organisation_invitations add column if not exists intended_role_id uuid references public.v2_roles(id) on delete restrict;
-
 -- Existing bootstrap convention is the tenant system Administrator, not a separate owner identity.
 -- Create defaults only for organisations lacking that role; never reseed an existing role.
 with new_roles as (
@@ -17,7 +16,6 @@ update public.v2_roles set metadata=metadata || '{"initial_invitation_default":t
 where is_system and code='admin' and not (metadata ? 'initial_invitation_default');
 update public.v2_organisation_invitations i set intended_role_id=r.id
 from public.v2_roles r where i.intended_role_id is null and r.organisation_id=i.organisation_id and r.code=i.intended_role_code;
-
 create or replace function public.tttracker_v2_platform_invitation(
  p_actor uuid,p_action text,p_organisation_id uuid default null,p_role_id uuid default null,p_email text default null,p_invitation_id uuid default null
 ) returns jsonb language plpgsql security definer set search_path='' as $$
@@ -73,7 +71,6 @@ begin
 end; $$;
 revoke all on function public.tttracker_v2_platform_invitation(uuid,text,uuid,uuid,text,uuid) from public,anon,authenticated;
 grant execute on function public.tttracker_v2_platform_invitation(uuid,text,uuid,uuid,text,uuid) to service_role;
-
 create or replace function public.tttracker_v2_accept_organisation_invitation(p_invitation_id uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare i public.v2_organisation_invitations%rowtype; v_user uuid=auth.uid(); v_email text;

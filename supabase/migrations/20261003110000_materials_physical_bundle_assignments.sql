@@ -16,7 +16,6 @@ returns boolean language sql stable set search_path='' as $$
 $$;
 revoke all on function private.tttracker_v2_bundle_segment_candidate(uuid,text,text) from public,anon,authenticated;
 grant execute on function private.tttracker_v2_bundle_segment_candidate(uuid,text,text) to service_role;
-
 CREATE OR REPLACE FUNCTION public.tttracker_v2_apply_material_schedule(p_project_id uuid, p_organisation_id uuid, p_actor_id uuid, p_scope text, p_tower_ids uuid[], p_category text, p_mode text, p_source_role text, p_source_scope text, p_source_file text, p_profile_name text, p_mapping jsonb, p_rows jsonb, p_confirm_types boolean DEFAULT false, p_options jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -372,7 +371,6 @@ begin
  'addedRows',added,'mergedRows',merged,'unchangedRows',unchanged,'supersededRows',superseded,'rowErrors','[]'::jsonb);
 end;
 $function$;
-
 create or replace function public.tttracker_v2_reconcile_material_requirements(
  p_project_id uuid,p_organisation_id uuid,p_actor_id uuid,p_tower_ids uuid[] default null
 ) returns jsonb language plpgsql security definer set search_path='' set statement_timeout='120s' as $$
@@ -464,5 +462,4 @@ begin
  return jsonb_build_object('ok',true,'reevaluation',evaluation,'runId',run_id,'findingCount',n,'towerSummary',summaries);
 end;
 $$;
-
 notify pgrst, 'reload schema';

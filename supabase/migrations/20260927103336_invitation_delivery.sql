@@ -5,7 +5,6 @@ alter table public.v2_organisation_invitations
   add column if not exists last_error text,
   add column if not exists provider text,
   add column if not exists provider_message_id text;
-
 create table if not exists public.v2_invitation_delivery_attempts (
   id uuid primary key default gen_random_uuid(),
 
@@ -37,28 +36,23 @@ create table if not exists public.v2_invitation_delivery_attempts (
 
   metadata jsonb not null default '{}'::jsonb
 );
-
 create index if not exists
   idx_v2_invitation_delivery_attempts_invitation
 on public.v2_invitation_delivery_attempts (
   invitation_id,
   attempted_at desc
 );
-
 create index if not exists
   idx_v2_invitation_delivery_attempts_organisation
 on public.v2_invitation_delivery_attempts (
   organisation_id,
   attempted_at desc
 );
-
 alter table public.v2_invitation_delivery_attempts
 enable row level security;
-
 drop policy if exists
   "platform admins can read invitation delivery attempts"
 on public.v2_invitation_delivery_attempts;
-
 create policy
   "platform admins can read invitation delivery attempts"
 on public.v2_invitation_delivery_attempts
@@ -73,13 +67,10 @@ using (
     ]::text[]
   )
 );
-
 grant usage on schema public to service_role;
-
 grant all privileges
 on table public.v2_invitation_delivery_attempts
 to service_role;
-
 grant all privileges
 on table public.v2_organisation_invitations
 to service_role;

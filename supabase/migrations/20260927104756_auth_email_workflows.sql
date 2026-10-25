@@ -28,7 +28,6 @@ create table if not exists public.v2_auth_email_requests (
 
   metadata jsonb not null default '{}'::jsonb
 );
-
 create table if not exists public.v2_auth_email_delivery_attempts (
   id uuid primary key default gen_random_uuid(),
 
@@ -63,40 +62,30 @@ create table if not exists public.v2_auth_email_delivery_attempts (
 
   metadata jsonb not null default '{}'::jsonb
 );
-
 create index if not exists idx_v2_auth_email_requests_user
   on public.v2_auth_email_requests(user_id, created_at desc);
-
 create index if not exists idx_v2_auth_email_requests_status
   on public.v2_auth_email_requests(status, created_at desc);
-
 create index if not exists idx_v2_auth_email_delivery_request
   on public.v2_auth_email_delivery_attempts(request_id, attempted_at desc);
-
 alter table public.v2_auth_email_requests enable row level security;
 alter table public.v2_auth_email_delivery_attempts enable row level security;
-
 drop policy if exists "users can read own auth email requests"
   on public.v2_auth_email_requests;
-
 create policy "users can read own auth email requests"
 on public.v2_auth_email_requests
 for select
 to authenticated
 using (user_id = auth.uid());
-
 drop policy if exists "users can read own auth email deliveries"
   on public.v2_auth_email_delivery_attempts;
-
 create policy "users can read own auth email deliveries"
 on public.v2_auth_email_delivery_attempts
 for select
 to authenticated
 using (user_id = auth.uid());
-
 drop policy if exists "platform admins can read auth email requests"
   on public.v2_auth_email_requests;
-
 create policy "platform admins can read auth email requests"
 on public.v2_auth_email_requests
 for select
@@ -106,10 +95,8 @@ using (
     array['owner', 'admin', 'support']::text[]
   )
 );
-
 drop policy if exists "platform admins can read auth email deliveries"
   on public.v2_auth_email_delivery_attempts;
-
 create policy "platform admins can read auth email deliveries"
 on public.v2_auth_email_delivery_attempts
 for select
@@ -119,17 +106,13 @@ using (
     array['owner', 'admin', 'support']::text[]
   )
 );
-
 grant usage on schema public to service_role;
-
 grant all privileges
 on table public.v2_auth_email_requests
 to service_role;
-
 grant all privileges
 on table public.v2_auth_email_delivery_attempts
 to service_role;
-
 create or replace function private.tttracker_v2_touch_auth_email_request()
 returns trigger
 language plpgsql
@@ -141,10 +124,8 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists trg_v2_auth_email_requests_updated_at
   on public.v2_auth_email_requests;
-
 create trigger trg_v2_auth_email_requests_updated_at
 before update on public.v2_auth_email_requests
 for each row

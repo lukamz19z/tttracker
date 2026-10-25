@@ -455,3 +455,5 @@ grant execute on function public.tttracker_v2_reconcile_material_requirements(uu
 
 notify pgrst,'reload schema';
 commit;
+
+;

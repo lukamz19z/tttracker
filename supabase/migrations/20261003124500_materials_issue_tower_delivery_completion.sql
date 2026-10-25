@@ -14,7 +14,6 @@ end $$;
 drop trigger if exists v2_material_issue_affected_tower_guard on public.v2_material_issues;
 create trigger v2_material_issue_affected_tower_guard before insert or update on public.v2_material_issues
 for each row execute function private.tttracker_v2_issue_affected_tower_guard();
-
 alter table public.v2_material_deliveries add column if not exists completed_at timestamptz;
 alter table public.v2_material_deliveries add column if not exists completed_by uuid references auth.users(id) on delete set null;
 alter table public.v2_material_deliveries add column if not exists completed_by_name text;
@@ -22,7 +21,6 @@ alter table public.v2_material_deliveries add column if not exists metadata json
 -- Existing delivery timestamps are retained; historical completing actors are not guessed.
 update public.v2_material_deliveries set completed_at=delivered_at
 where status in ('delivered','delivered_with_issues') and completed_at is null and delivered_at is not null;
-
 create or replace function public.tttracker_v2_delivery_transition(
  p_project_id uuid,p_delivery_id uuid,p_item_id uuid,p_action text,p_status text,
  p_quantity numeric,p_actor uuid,p_actor_name text,p_reason text,p_expected_status text

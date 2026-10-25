@@ -1,5 +1,4 @@
 begin;
-
 do $$
 begin
   if to_regclass('public.v2_material_bundles') is null then
@@ -9,12 +8,10 @@ begin
     raise exception 'Missing prerequisite: public.v2_material_bundle_checks';
   end if;
 end $$;
-
 create table if not exists public.v2_material_delivery_counters (
   project_id uuid primary key references public.v2_projects(id) on delete cascade,
   next_number bigint not null default 1
 );
-
 create or replace function public.tttracker_v2_next_material_delivery_number(
   p_project_id uuid
 )
@@ -35,7 +32,6 @@ begin
   return 'DEL-' || lpad(v_number::text, 5, '0');
 end;
 $$;
-
 create table if not exists public.v2_material_deliveries (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -57,10 +53,8 @@ create table if not exists public.v2_material_deliveries (
   updated_at timestamptz not null default now(),
   unique(project_id, delivery_number)
 );
-
 create index if not exists v2_material_deliveries_project_status_idx
   on public.v2_material_deliveries(project_id, status, created_at desc);
-
 create table if not exists public.v2_material_delivery_items (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -79,29 +73,22 @@ create table if not exists public.v2_material_delivery_items (
   updated_at timestamptz not null default now(),
   unique(delivery_id, bundle_id)
 );
-
 create index if not exists v2_material_delivery_items_project_idx
   on public.v2_material_delivery_items(project_id, tower_id, bundle_id);
-
 create index if not exists v2_material_delivery_items_delivery_idx
   on public.v2_material_delivery_items(delivery_id, status);
-
 alter table public.v2_material_bundle_checks
   add column if not exists delivery_item_id uuid
     references public.v2_material_delivery_items(id) on delete set null;
-
 create index if not exists v2_material_bundle_checks_delivery_item_idx
   on public.v2_material_bundle_checks(delivery_item_id)
   where delivery_item_id is not null;
-
 alter table public.v2_material_delivery_counters enable row level security;
 alter table public.v2_material_deliveries enable row level security;
 alter table public.v2_material_delivery_items enable row level security;
-
 grant execute on function public.tttracker_v2_next_material_delivery_number(uuid) to service_role;
 grant all privileges on public.v2_material_delivery_counters to service_role;
 grant all privileges on public.v2_material_deliveries to service_role;
 grant all privileges on public.v2_material_delivery_items to service_role;
-
 commit;
 notify pgrst, 'reload schema';

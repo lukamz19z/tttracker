@@ -3,7 +3,6 @@
 -- Safe to run after the Materials Traceability and Delivery migrations.
 
 begin;
-
 do $$
 begin
   if to_regclass('public.v2_project_option_definitions') is null then
@@ -13,10 +12,8 @@ begin
     raise exception 'Missing prerequisite: public.v2_material_delivery_items';
   end if;
 end $$;
-
 alter table public.v2_material_delivery_items
   add column if not exists driver_checked_by_name text;
-
 -- Project-level feature switch. Existing projects stay enabled by default,
 -- but each project can turn Delivery Management off in Configuration > Materials.
 insert into public.v2_project_option_definitions (
@@ -40,7 +37,6 @@ select
   '{"description":"Delivery docket planning, driver bundle confirmation and site second-check reporting"}'::jsonb
 from public.v2_projects p
 on conflict (project_id, option_group, option_key) do nothing;
-
 -- Ensure the default Materials option catalogue is present for every project.
 -- These are editable project defaults, not hard-coded customer values.
 insert into public.v2_project_option_definitions (
@@ -139,7 +135,5 @@ cross join (
     ('material_issue_event_type','receipt_reversed','Receipt Reversed',100,'{"reverses_quantity":true}'::jsonb)
 ) as x(option_group, option_key, label, sort_order, settings)
 on conflict (project_id, option_group, option_key) do nothing;
-
 commit;
-
 notify pgrst, 'reload schema';

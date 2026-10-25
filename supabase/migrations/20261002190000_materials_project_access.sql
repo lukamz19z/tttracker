@@ -28,7 +28,6 @@ insert into public.v2_project_party_permission_definitions(host_organisation_id,
 select o.id,p.permission_code,p.name,'materials',false from public.organisations o
 cross join public.v2_permissions p where p.permission_code like 'materials.%'
 on conflict(host_organisation_id,permission_key) do nothing;
-
 -- Narrow the existing party engine to ONE party when resolving its portal configuration.
 -- This prevents a permission on a disabled party from enabling another party's section.
 create or replace function private.tttracker_v2_party_user_has_scoped_permission(
@@ -61,7 +60,6 @@ begin
 end $$;
 revoke all on function private.tttracker_v2_party_user_has_scoped_permission(uuid,text,text,uuid) from public,anon,authenticated;
 grant execute on function private.tttracker_v2_party_user_has_scoped_permission(uuid,text,text,uuid) to service_role;
-
 -- Authenticated caller only; no caller-supplied user identity. Private helpers remain canonical.
 create or replace function public.tttracker_v2_project_access(p_project_id uuid)
 returns jsonb language plpgsql stable security definer set search_path = '' as $$

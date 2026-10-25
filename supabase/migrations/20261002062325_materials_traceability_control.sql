@@ -17,9 +17,7 @@
 --   * Client visibility is controlled by the existing project-party sharing layer.
 
 begin;
-
 create schema if not exists private;
-
 do $$
 begin
   if to_regclass('public.v2_projects') is null then
@@ -38,7 +36,6 @@ begin
     raise exception 'Missing prerequisite: public.v2_project_option_definitions';
   end if;
 end $$;
-
 -- ---------------------------------------------------------------------------
 -- Bundle master + packing relationships
 -- ---------------------------------------------------------------------------
@@ -67,7 +64,6 @@ create index if not exists v2_material_bundles_project_idx
   on public.v2_material_bundles(project_id, tower_id, bundle_reference);
 create index if not exists v2_material_bundles_type_idx
   on public.v2_material_bundles(project_id, tower_type, segment);
-
 alter table public.v2_material_register
   add column if not exists bundle_id uuid references public.v2_material_bundles(id) on delete set null,
   add column if not exists tower_type text,
@@ -86,18 +82,15 @@ alter table public.v2_material_register
   add column if not exists is_active boolean not null default true,
   add column if not exists origin_organisation_id uuid references public.organisations(id) on delete restrict,
   add column if not exists visibility_scope text not null default 'origin_only';
-
 update public.v2_material_register
 set origin_organisation_id = organisation_id
 where origin_organisation_id is null;
-
 create index if not exists v2_material_register_bundle_idx
   on public.v2_material_register(bundle_id);
 create index if not exists v2_material_register_drawing_segment_idx
   on public.v2_material_register(project_id, drawing_reference, segment);
 create index if not exists v2_material_register_kind_reference_idx
   on public.v2_material_register(project_id, material_kind, item_reference);
-
 create table if not exists public.v2_material_bundle_members (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -117,7 +110,6 @@ create index if not exists v2_material_bundle_members_bundle_idx
   on public.v2_material_bundle_members(bundle_id, member_reference);
 create index if not exists v2_material_bundle_members_item_idx
   on public.v2_material_bundle_members(material_item_id);
-
 -- ---------------------------------------------------------------------------
 -- Check-off state
 -- ---------------------------------------------------------------------------
@@ -136,7 +128,6 @@ create table if not exists public.v2_material_bundle_checks (
   updated_at timestamptz not null default now(),
   unique(bundle_id)
 );
-
 create table if not exists public.v2_material_member_checks (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -153,7 +144,6 @@ create table if not exists public.v2_material_member_checks (
   updated_at timestamptz not null default now(),
   unique(bundle_id, member_reference)
 );
-
 -- ---------------------------------------------------------------------------
 -- Configurable locations
 -- ---------------------------------------------------------------------------
@@ -172,7 +162,6 @@ create table if not exists public.v2_material_locations (
 );
 create index if not exists v2_material_locations_project_idx
   on public.v2_material_locations(project_id, is_active, name);
-
 -- ---------------------------------------------------------------------------
 -- Issue numbering
 -- ---------------------------------------------------------------------------
@@ -180,7 +169,6 @@ create table if not exists public.v2_material_issue_counters (
   project_id uuid primary key references public.v2_projects(id) on delete cascade,
   next_number bigint not null default 1
 );
-
 create or replace function public.tttracker_v2_next_material_issue_number(
   p_project_id uuid
 )
@@ -201,7 +189,6 @@ begin
   return 'MAT-' || lpad(v_number::text, 5, '0');
 end;
 $$;
-
 -- ---------------------------------------------------------------------------
 -- Missing / excess / damaged / incorrect issue lifecycle
 -- ---------------------------------------------------------------------------
@@ -244,7 +231,6 @@ create index if not exists v2_material_issues_project_status_idx
   on public.v2_material_issues(project_id, status, issue_type_key, raised_at desc);
 create index if not exists v2_material_issues_tower_idx
   on public.v2_material_issues(tower_id, status);
-
 create table if not exists public.v2_material_issue_events (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -268,7 +254,6 @@ create table if not exists public.v2_material_issue_events (
 );
 create index if not exists v2_material_issue_events_issue_idx
   on public.v2_material_issue_events(issue_id, occurred_at, created_at);
-
 -- Resolve quantity is derived from the event ledger.
 create or replace function public.tttracker_v2_recalculate_material_issue(
   p_issue_id uuid
@@ -324,7 +309,6 @@ begin
   where id = p_issue_id;
 end;
 $$;
-
 create or replace function private.tttracker_v2_material_issue_event_touch()
 returns trigger
 language plpgsql
@@ -336,12 +320,10 @@ begin
   return coalesce(new, old);
 end;
 $$;
-
 drop trigger if exists v2_material_issue_events_recalculate on public.v2_material_issue_events;
 create trigger v2_material_issue_events_recalculate
 after insert or update or delete on public.v2_material_issue_events
 for each row execute function private.tttracker_v2_material_issue_event_touch();
-
 -- ---------------------------------------------------------------------------
 -- Material movement ledger + reservations
 -- ---------------------------------------------------------------------------
@@ -381,7 +363,6 @@ create index if not exists v2_material_movements_project_idx
   on public.v2_material_movements(project_id, status, created_at desc);
 create index if not exists v2_material_movements_issue_idx
   on public.v2_material_movements(issue_id);
-
 create table if not exists public.v2_material_reservations (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -405,7 +386,6 @@ create table if not exists public.v2_material_reservations (
 );
 create index if not exists v2_material_reservations_project_idx
   on public.v2_material_reservations(project_id, status, reserved_at desc);
-
 -- ---------------------------------------------------------------------------
 -- Controlled amendments / redlines
 -- ---------------------------------------------------------------------------
@@ -438,7 +418,6 @@ create table if not exists public.v2_material_amendments (
 );
 create index if not exists v2_material_amendments_project_idx
   on public.v2_material_amendments(project_id, status_key, effective_from);
-
 create table if not exists public.v2_material_amendment_items (
   id uuid primary key default gen_random_uuid(),
   amendment_id uuid not null references public.v2_material_amendments(id) on delete cascade,
@@ -464,7 +443,6 @@ create table if not exists public.v2_material_amendment_items (
 );
 create index if not exists v2_material_amendment_items_amendment_idx
   on public.v2_material_amendment_items(amendment_id);
-
 -- ---------------------------------------------------------------------------
 -- Import profiles, batches, raw normalized source records
 -- ---------------------------------------------------------------------------
@@ -483,7 +461,6 @@ create table if not exists public.v2_material_import_profiles (
 );
 create unique index if not exists v2_material_import_profiles_scope_name_uidx
   on public.v2_material_import_profiles(organisation_id, coalesce(project_id,'00000000-0000-0000-0000-000000000000'::uuid), lower(name));
-
 create table if not exists public.v2_material_import_batches (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -505,7 +482,6 @@ create table if not exists public.v2_material_import_batches (
 );
 create index if not exists v2_material_import_batches_project_idx
   on public.v2_material_import_batches(project_id, created_at desc);
-
 create table if not exists public.v2_material_source_records (
   id uuid primary key default gen_random_uuid(),
   organisation_id uuid not null references public.organisations(id) on delete cascade,
@@ -531,10 +507,8 @@ create index if not exists v2_material_source_records_project_idx
   on public.v2_material_source_records(project_id, source_type_key, item_reference);
 create index if not exists v2_material_source_records_bundle_idx
   on public.v2_material_source_records(project_id, bundle_reference, segment);
-
 alter table public.v2_material_register
   add column if not exists source_import_batch_id uuid references public.v2_material_import_batches(id) on delete set null;
-
 -- ---------------------------------------------------------------------------
 -- Reconciliation runs/findings
 -- ---------------------------------------------------------------------------
@@ -548,7 +522,6 @@ create table if not exists public.v2_material_reconciliation_runs (
   created_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb
 );
-
 create table if not exists public.v2_material_reconciliation_findings (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.v2_material_reconciliation_runs(id) on delete cascade,
@@ -570,7 +543,6 @@ create table if not exists public.v2_material_reconciliation_findings (
 );
 create index if not exists v2_material_reconciliation_findings_project_idx
   on public.v2_material_reconciliation_findings(project_id, status, severity, created_at desc);
-
 -- ---------------------------------------------------------------------------
 -- Configurable options. These are seeds, not hard-coded UI restrictions.
 -- ---------------------------------------------------------------------------
@@ -630,7 +602,6 @@ cross join (
     ('material_import_source','custom','Custom',100,'{}'::jsonb)
 ) as x(option_group, option_key, label, sort_order, settings)
 on conflict (project_id, option_group, option_key) do nothing;
-
 -- ---------------------------------------------------------------------------
 -- Compatibility: copy existing material_events into issues where sensible.
 -- Does not delete or rewrite legacy V2 events.
@@ -685,7 +656,6 @@ begin
     end if;
   end loop;
 end $$;
-
 -- ---------------------------------------------------------------------------
 -- RLS: direct client mutation is blocked. Server routes use service_role after
 -- requireProjectContext has authorised the caller. Read-only direct policies
@@ -707,11 +677,9 @@ alter table public.v2_material_import_batches enable row level security;
 alter table public.v2_material_source_records enable row level security;
 alter table public.v2_material_reconciliation_runs enable row level security;
 alter table public.v2_material_reconciliation_findings enable row level security;
-
 grant usage on schema private to service_role;
 grant execute on function public.tttracker_v2_next_material_issue_number(uuid) to service_role;
 grant execute on function public.tttracker_v2_recalculate_material_issue(uuid) to service_role;
-
 grant all privileges on public.v2_material_bundles to service_role;
 grant all privileges on public.v2_material_bundle_members to service_role;
 grant all privileges on public.v2_material_bundle_checks to service_role;
@@ -728,8 +696,6 @@ grant all privileges on public.v2_material_import_batches to service_role;
 grant all privileges on public.v2_material_source_records to service_role;
 grant all privileges on public.v2_material_reconciliation_runs to service_role;
 grant all privileges on public.v2_material_reconciliation_findings to service_role;
-
 grant all privileges on all sequences in schema public to service_role;
-
 commit;
 notify pgrst, 'reload schema';

@@ -25,15 +25,12 @@ create table if not exists public.v2_security_policies (
     (scope_type = 'organisation' and organisation_id is not null)
   )
 );
-
 create unique index if not exists v2_security_policy_platform_uidx
 on public.v2_security_policies(scope_type)
 where scope_type = 'platform';
-
 create unique index if not exists v2_security_policy_org_uidx
 on public.v2_security_policies(organisation_id)
 where scope_type = 'organisation';
-
 create table if not exists public.v2_email_mfa_challenges (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -51,7 +48,6 @@ create table if not exists public.v2_email_mfa_challenges (
   created_at timestamptz not null default now(),
   verified_at timestamptz
 );
-
 create table if not exists public.v2_security_session_verifications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -62,20 +58,15 @@ create table if not exists public.v2_security_session_verifications (
   metadata jsonb not null default '{}'::jsonb,
   unique (user_id, session_id, verification_type)
 );
-
 create index if not exists idx_v2_email_mfa_challenges_user_session
 on public.v2_email_mfa_challenges(user_id, session_id, created_at desc);
-
 create index if not exists idx_v2_security_session_verifications
 on public.v2_security_session_verifications(user_id, session_id, expires_at);
-
 alter table public.v2_security_policies enable row level security;
 alter table public.v2_email_mfa_challenges enable row level security;
 alter table public.v2_security_session_verifications enable row level security;
-
 drop policy if exists "authenticated users can read security policies"
 on public.v2_security_policies;
-
 create policy "authenticated users can read security policies"
 on public.v2_security_policies
 for select
@@ -90,19 +81,15 @@ using (
       and ou.status = 'active'
   )
 );
-
 drop policy if exists "users can read own security verifications"
 on public.v2_security_session_verifications;
-
 create policy "users can read own security verifications"
 on public.v2_security_session_verifications
 for select
 to authenticated
 using (user_id = auth.uid());
-
 drop policy if exists "platform admins can read security policies"
 on public.v2_security_policies;
-
 create policy "platform admins can read security policies"
 on public.v2_security_policies
 for select
@@ -112,12 +99,10 @@ using (
     array['owner', 'admin', 'support']::text[]
   )
 );
-
 grant usage on schema public to service_role;
 grant all privileges on table public.v2_security_policies to service_role;
 grant all privileges on table public.v2_email_mfa_challenges to service_role;
 grant all privileges on table public.v2_security_session_verifications to service_role;
-
 create or replace function private.tttracker_v2_touch_security_policy()
 returns trigger
 language plpgsql
@@ -129,15 +114,12 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists trg_v2_security_policy_updated_at
 on public.v2_security_policies;
-
 create trigger trg_v2_security_policy_updated_at
 before update on public.v2_security_policies
 for each row
 execute function private.tttracker_v2_touch_security_policy();
-
 insert into public.v2_security_policies (
   scope_type,
   organisation_id,
@@ -149,7 +131,6 @@ insert into public.v2_security_policies (
 )
 values ('platform', null, 'required', 'optional', 10, 5, 12)
 on conflict do nothing;
-
 insert into public.v2_security_policies (
   scope_type,
   organisation_id,

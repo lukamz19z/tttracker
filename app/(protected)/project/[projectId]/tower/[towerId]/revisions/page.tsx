@@ -119,6 +119,7 @@ type RevisionDraft = {
 };
 
 type FindingDraft = {
+  clientMutationId?: string;
   revision_id: string;
   issue_type_id: string;
   other_issue_text: string;
@@ -474,7 +475,7 @@ export default function TowerRevisionsPage() {
   }
 
   function openFinding(revisionId: string) {
-    setFindingDraft({ ...BLANK_FINDING, revision_id: revisionId });
+    setFindingDraft({ ...BLANK_FINDING, revision_id: revisionId, clientMutationId: crypto.randomUUID() });
   }
 
   async function saveFinding() {
@@ -494,35 +495,21 @@ export default function TowerRevisionsPage() {
     setFindingSaving(true);
     setMessage(null);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const hasAfter = findingDraft.afterFiles.length > 0;
-      const status: RevisionItem["status"] = hasAfter ? "Rectified" : "Open";
-
-      const { data, error } = await supabase
-        .from("tower_revision_items")
-        .insert({
-          revision_id: findingDraft.revision_id,
-          project_id: projectId,
-          tower_id: towerId,
-          issue_type_id: isOtherIssue ? null : findingDraft.issue_type_id,
-          other_issue_text: isOtherIssue
-            ? findingDraft.other_issue_text.trim()
-            : null,
-          tower_segment: findingDraft.tower_segment.trim() || null,
-          member_number: findingDraft.member_number.trim() || null,
-          drawing_number: findingDraft.drawing_number.trim() || null,
-          finding: findingDraft.finding.trim() || null,
-          rectification_comment:
-            findingDraft.rectification_comment.trim() || null,
-          status,
-          created_by: user?.id ?? null,
-        })
-        .select("*")
-        .single();
-      if (error || !data) throw new Error(error?.message || "Finding could not be saved.");
-
+      const response=await apiFetch(`/api/quality/revisions/${encodeURIComponent(findingDraft.revision_id)}/items`,{
+        method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          clientMutationId:findingDraft.clientMutationId,
+          issueTypeId:isOtherIssue?null:findingDraft.issue_type_id,
+          otherIssueText:isOtherIssue?findingDraft.other_issue_text:null,
+          towerSegment:findingDraft.tower_segment,memberNumber:findingDraft.member_number,
+          drawingNumber:findingDraft.drawing_number,finding:findingDraft.finding,
+          rectificationComment:findingDraft.rectification_comment,
+        }),
+      });
+      const text=await response.text();
+      if(!response.headers.get("content-type")?.includes("application/json"))throw new Error(`Finding service returned HTTP ${response.status} instead of JSON.`);
+      const result=JSON.parse(text);
+      if(!response.ok || !result.item?.id)throw new Error(result.error || "Finding could not be saved.");
+      const data=result.item as RevisionItem;
       if (findingDraft.beforeFiles.length) {
         await uploadFindingPhotos({
           revisionId: findingDraft.revision_id,
@@ -540,12 +527,10 @@ export default function TowerRevisionsPage() {
         });
       }
 
-      await supabase
-        .from("tower_revisions")
-        .update({ status: "In Progress" })
-        .eq("id", findingDraft.revision_id)
-        .eq("status", "Draft");
-
+      if(findingDraft.afterFiles.length) {
+        const updated=await supabase.from("tower_revision_items").update({status:"Rectified",rectification_comment:findingDraft.rectification_comment.trim() || null}).eq("id",data.id).eq("revision_id",findingDraft.revision_id);
+        if(updated.error)throw new Error("Finding saved, but rectification status could not be updated. Retry to complete it.");
+      }
       setFindingDraft(null);
       setMessage({ tone: "success", text: `${fliCode(data as RevisionItem)} added.` });
       await load();

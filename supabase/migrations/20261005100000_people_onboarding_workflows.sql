@@ -45,7 +45,6 @@ create table private.v2_onboarding_history (
  foreign key(organisation_id,instance_id) references private.v2_secure_onboarding_instances(organisation_id,id)
 );
 create index v2_onboarding_register_idx on private.v2_secure_onboarding_instances(organisation_id,status,created_at,id);
-
 create or replace function private.tttracker_v2_validate_template(p_org uuid,p_definition jsonb,p_publish boolean)
 returns void language plpgsql security definer set search_path='' as $$
 #variable_conflict use_column
@@ -71,7 +70,6 @@ if f ? 'condition' and (jsonb_typeof(f->'condition')<>'object' or not ((f->'cond
 if f->>'type' in ('single_select','multi_select') and (jsonb_typeof(f->'options')<>'array' or jsonb_array_length(f->'options')<1) then raise exception 'PEOPLE_TEMPLATE_INVALID';end if;
 end loop;end loop;
 end $$;
-
 create or replace function public.tttracker_v2_onboarding_admin(p_org uuid,p_action text,p_id uuid default null,p_data jsonb default '{}',p_page integer default 1,p_query text default '')
 returns jsonb language plpgsql security definer set search_path='' as $$
 #variable_conflict use_column
@@ -199,7 +197,6 @@ insert into public.v2_people_audit(organisation_id,actor_id,action,data_area,tar
 return jsonb_build_object('id',v_id);
 exception when foreign_key_violation then raise exception 'PEOPLE_RELATIONSHIP_INVALID';when check_violation or invalid_text_representation or not_null_violation then raise exception 'PEOPLE_INVALID_FIELDS';
 end $$;
-
 create or replace function private.tttracker_v2_onboarding_complete(p_org uuid,p_id uuid,p_actor uuid)
 returns void language plpgsql security definer set search_path='' as $$
 #variable_conflict use_column
@@ -249,7 +246,6 @@ end if;end if;end loop;
 update private.v2_secure_onboarding_instances set person_id=pid,status='completed',completed_at=now() where organisation_id=p_org and id=p_id;
 insert into public.v2_people_audit(organisation_id,person_id,actor_id,action,data_area,target_id) values(p_org,pid,p_actor,'onboarding_mapping_applied','operational',p_id);
 end $$;
-
 create or replace function public.tttracker_v2_onboarding_external(p_session_hash text,p_action text,p_field text default null,p_value jsonb default null)
 returns jsonb language plpgsql security definer set search_path='' as $$
 #variable_conflict use_column
@@ -303,7 +299,6 @@ else raise exception 'ONBOARDING_INVALID_REQUEST';end if;
 insert into private.v2_onboarding_history(organisation_id,instance_id,action,external_session_id,field_key) values(i.organisation_id,i.id,p_action,sess.id,p_field);
 return jsonb_build_object('saved',true);
 end $$;
-
 alter table public.v2_onboarding_templates enable row level security;
 revoke all on public.v2_onboarding_templates from public,anon,authenticated;
 do $$ declare t text;begin foreach t in array array['v2_onboarding_versions','v2_onboarding_operational_answers','v2_onboarding_private_answers','v2_onboarding_documents','v2_onboarding_history'] loop

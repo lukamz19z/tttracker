@@ -6,7 +6,6 @@
 -- what is exposed to each external client/project party.
 
 begin;
-
 do $$
 begin
   if to_regclass('public.v2_project_parties') is null then
@@ -18,7 +17,6 @@ begin
   end if;
 end
 $$;
-
 -- ---------------------------------------------------------------------------
 -- External client invitations
 -- ---------------------------------------------------------------------------
@@ -46,14 +44,11 @@ create table if not exists public.v2_project_party_invitations (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create unique index if not exists v2_project_party_invitation_active_email_uidx
   on public.v2_project_party_invitations(project_party_id, lower(email))
   where status = 'pending';
-
 create index if not exists v2_project_party_invitations_project_idx
   on public.v2_project_party_invitations(project_id, status, invited_at desc);
-
 -- ---------------------------------------------------------------------------
 -- Dynamic Client Portal section catalogue
 -- ---------------------------------------------------------------------------
@@ -77,7 +72,6 @@ create table if not exists public.v2_client_portal_section_definitions (
   updated_at timestamptz not null default now(),
   unique(host_organisation_id, section_key)
 );
-
 insert into public.v2_client_portal_section_definitions (
   host_organisation_id,
   section_key,
@@ -131,7 +125,6 @@ set
   module_key = excluded.module_key,
   permission_key = excluded.permission_key,
   sort_order = excluded.sort_order;
-
 -- Per-project-party/client overrides.
 create table if not exists public.v2_project_party_portal_sections (
   id uuid primary key default gen_random_uuid(),
@@ -151,10 +144,8 @@ create table if not exists public.v2_project_party_portal_sections (
   updated_at timestamptz not null default now(),
   unique(project_party_id, section_key)
 );
-
 create index if not exists v2_project_party_portal_sections_project_idx
   on public.v2_project_party_portal_sections(project_id, enabled, section_key);
-
 -- ---------------------------------------------------------------------------
 -- Expand external client permission catalogue
 -- ---------------------------------------------------------------------------
@@ -204,14 +195,12 @@ set
   description = excluded.description,
   module_key = excluded.module_key,
   sort_order = excluded.sort_order;
-
 -- ---------------------------------------------------------------------------
 -- Selected-record sharing + publication audit
 -- ---------------------------------------------------------------------------
 
 alter table public.v2_record_party_shares
   add column if not exists section_key text;
-
 create table if not exists public.v2_project_party_publications (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null
@@ -234,14 +223,10 @@ create table if not exists public.v2_project_party_publications (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create index if not exists v2_project_party_publications_party_idx
   on public.v2_project_party_publications(project_party_id, status, published_at desc);
-
 create index if not exists v2_project_party_publications_source_idx
   on public.v2_project_party_publications(project_id, source_record_type, source_record_id);
-
-
 -- ---------------------------------------------------------------------------
 -- Project-party membership helper
 -- ---------------------------------------------------------------------------
@@ -270,7 +255,6 @@ as $$
       and pp.portal_enabled = true
   );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- Portal section access helper
 -- ---------------------------------------------------------------------------
@@ -329,7 +313,6 @@ as $$
       )
   );
 $$;
-
 -- ---------------------------------------------------------------------------
 -- RLS
 -- ---------------------------------------------------------------------------
@@ -338,7 +321,6 @@ alter table public.v2_project_party_invitations enable row level security;
 alter table public.v2_client_portal_section_definitions enable row level security;
 alter table public.v2_project_party_portal_sections enable row level security;
 alter table public.v2_project_party_publications enable row level security;
-
 drop policy if exists "v2 project party invitations read"
   on public.v2_project_party_invitations;
 create policy "v2 project party invitations read"
@@ -349,7 +331,6 @@ using (
   private.tttracker_v2_is_project_host_member(project_id)
   or accepted_by_user_id = auth.uid()
 );
-
 drop policy if exists "v2 client portal section definitions read"
   on public.v2_client_portal_section_definitions;
 create policy "v2 client portal section definitions read"
@@ -359,7 +340,6 @@ to authenticated
 using (
   private.tttracker_v2_is_active_org_member(host_organisation_id)
 );
-
 drop policy if exists "v2 project party portal sections read"
   on public.v2_project_party_portal_sections;
 create policy "v2 project party portal sections read"
@@ -370,7 +350,6 @@ using (
   private.tttracker_v2_is_project_host_member(project_id)
   or private.tttracker_v2_is_party_user(project_party_id, auth.uid())
 );
-
 drop policy if exists "v2 project party publications read"
   on public.v2_project_party_publications;
 create policy "v2 project party publications read"
@@ -384,31 +363,24 @@ using (
     and private.tttracker_v2_is_party_user(project_party_id, auth.uid())
   )
 );
-
 -- ---------------------------------------------------------------------------
 -- Grants
 -- ---------------------------------------------------------------------------
 
 grant usage on schema private to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_is_party_user(uuid, uuid)
 to authenticated, service_role;
-
 grant execute on function
   private.tttracker_v2_party_can_view_portal_section(uuid, text, uuid)
 to authenticated, service_role;
-
 grant select on public.v2_project_party_invitations to authenticated;
 grant select on public.v2_client_portal_section_definitions to authenticated;
 grant select on public.v2_project_party_portal_sections to authenticated;
 grant select on public.v2_project_party_publications to authenticated;
-
 grant all privileges on public.v2_project_party_invitations to service_role;
 grant all privileges on public.v2_client_portal_section_definitions to service_role;
 grant all privileges on public.v2_project_party_portal_sections to service_role;
 grant all privileges on public.v2_project_party_publications to service_role;
-
 commit;
-
 notify pgrst, 'reload schema';

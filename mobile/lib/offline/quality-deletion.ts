@@ -53,7 +53,10 @@ export function deleteQualityRevision(input:{projectId:string;routeKey:string;se
 }
 
 /** Keep pending records until any server-side create outcome has been reconciled. */
-export async function deleteQualityFinding(input:{projectId:string;routeKey:string;itemId?:string;clientMutationId?:string;confirm:string;online:boolean}) {
+export function deleteQualityFinding(input:{projectId:string;routeKey:string;itemId?:string;clientMutationId?:string;confirm:string;online:boolean}) {
+  return withQualityOperation(()=>deleteFinding(input));
+}
+async function deleteFinding(input:{projectId:string;routeKey:string;itemId?:string;clientMutationId?:string;confirm:string;online:boolean}) {
   const rows=await queueRows();
   if(rows.some(row=>row.status==="syncing" && row.kind.startsWith("quality_"))) throw new Error("Wait for Quality sync to finish before deleting.");
   const workspace=(await listRevisionWorkspaces(input.projectId)).find(row=>row.routeKey===input.routeKey || row.serverRevisionId===input.routeKey);
